@@ -10,6 +10,20 @@ aliases:
   - child-serving-apis-03-input-validation-for-inference
 ---
 
+## Table of Contents
+
+1. [Validation Protects The Model Boundary](#validation-protects-the-model-boundary)
+2. [A Claim Severity API As A Supporting Example](#a-claim-severity-api-as-a-supporting-example)
+3. [Validate Types, Ranges, And Required Fields](#validate-types-ranges-and-required-fields)
+4. [Add Business Rules With Pydantic Validators](#add-business-rules-with-pydantic-validators)
+5. [Separate Client Errors From Service Errors](#separate-client-errors-from-service-errors)
+6. [Log Validation Failures Without Leaking Data](#log-validation-failures-without-leaking-data)
+7. [Monitor Validation Drift](#monitor-validation-drift)
+8. [Secure the Boundary Beyond Validation](#secure-the-boundary-beyond-validation)
+9. [Roll Out Validation Safely](#roll-out-validation-safely)
+10. [Putting It Together](#putting-it-together)
+11. [References](#references)
+
 ## Validation Protects The Model Boundary
 <!-- section-summary: Input validation checks inference requests before model execution so broken payloads never turn into misleading predictions. -->
 

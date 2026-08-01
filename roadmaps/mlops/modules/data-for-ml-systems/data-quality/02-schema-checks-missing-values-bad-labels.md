@@ -1,360 +1,532 @@
 ---
 title: "Data Quality Checks"
-description: "Implement structural, completeness, validity, uniqueness, referential, timeliness, label, and distribution checks for ML data."
-overview: "ML data quality is a set of dimensions tied to a protected decision and boundary. This article develops the complete check taxonomy, then maps SQL, dbt, Pandera, Great Expectations, and TFDV onto it."
+description: "Learn how structural validity, missing-value semantics, and label integrity protect ML datasets from silent failures."
+overview: "ML data quality asks whether a dataset has a trustworthy shape, whether unavailable information has a clear meaning, and whether labels represent mature, traceable outcomes. These three evidence layers guide investigation, repair, validation, quarantine, and backfill across warehouse, Python, Spark, and managed lakehouse pipelines."
 tags: ["MLOps", "core", "validation"]
 order: 2
 id: "article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels"
 ---
 
-## Data Quality Is Defined Against A Use
-<!-- section-summary: A quality check protects a particular dataset boundary, model use, and failure consequence. -->
+## Table of Contents
 
-**Data quality checks** test whether data is fit for a declared ML use. A value can be valid for analytics and unsafe for model training. A table can match its schema while arriving too late. A label can be present while still immature or produced under an obsolete policy.
+1. [What Data Quality Evidence Must Prove](#what-data-quality-evidence-must-prove)
+2. [The Three Evidence Layers](#the-three-evidence-layers)
+3. [Layer 1: Schema And Structural Validity](#layer-1-schema-and-structural-validity)
+4. [Schema Evolution Needs A Compatibility Policy](#schema-evolution-needs-a-compatibility-policy)
+5. [Layer 2: Missing-Value Semantics](#layer-2-missing-value-semantics)
+6. [Measure Missingness By Segment](#measure-missingness-by-segment)
+7. [Layer 3: Label Integrity](#layer-3-label-integrity)
+8. [Label Maturity, Revisions, And Adjudication](#label-maturity-revisions-and-adjudication)
+9. [Keep Label Leakage Out Of Features](#keep-label-leakage-out-of-features)
+10. [How Quality Failures Propagate](#how-quality-failures-propagate)
+11. [Quarantine, Repair, And Backfill](#quarantine-repair-and-backfill)
+12. [Where Industrial Quality Tools Fit](#where-industrial-quality-tools-fit)
+13. [Verify The Complete Quality Path](#verify-the-complete-quality-path)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-The check framework has eight dimensions:
+## What Data Quality Evidence Must Prove
+<!-- section-summary: Data quality evidence shows that a dataset has a trustworthy structure, meaningful missing states, and reliable labels. -->
 
-1. **Structure** — columns, types, nested shape, and schema version.
-2. **Completeness** — required values and acceptable missingness.
-3. **Validity** — domains, ranges, formats, and cross-field rules.
-4. **Uniqueness and cardinality** — keys, duplicates, and expected entity counts.
-5. **Referential integrity** — joins, foreign keys, and row preservation.
-6. **Timeliness** — freshness, event time, lateness, and observation windows.
-7. **Label quality** — definition, maturity, provenance, disagreement, and leakage.
-8. **Distribution and segments** — shifts, balance, coverage, and important slices.
+An ML pipeline can finish successfully and still produce a dangerous dataset. The files may open, every required column may exist, and the training job may report a higher accuracy score. None of those signals proves that the data still means what the model expects.
 
-Each check identifies the protected boundary, expected condition, observed value, severity, owner, evidence, and response. The previous article defines how validation gates use these results. This article develops what to test.
+Consider three ordinary failures:
+
+- A producer changes `parcel_weight_grams` from an integer to a formatted string. The ingestion job quietly converts unreadable values to null.
+- An income feature contains nulls from several causes: a customer withheld the value, a join failed, or the source is two months old.
+- A fraud label says “no chargeback” before the dispute window has closed. A later chargeback turns that apparent negative into a positive.
+
+The first failure changes the dataset's structure. The second collapses different kinds of missing information into one representation. The third gives the model an unreliable target. Each failure can survive a generic “job succeeded” check.
+
+At a high level, **data quality checks provide evidence that a dataset is fit for its declared ML use**. The word “declared” matters. A null may be acceptable for an optional profile field and unacceptable for a training key. A provisional outcome may be useful for an operations dashboard and unsafe as a final training label.
+
+Good evidence connects five things: the dataset and version, the rule being protected, the observed result, the affected rows or segments, and the action allowed after the check. That connection turns a test result into an operational decision.
+
+## The Three Evidence Layers
+<!-- section-summary: Structural validity, missing-value semantics, and label integrity protect different assumptions and need different repairs. -->
+
+The quality framework has three connected layers. Each layer protects a different assumption made by the training pipeline. Reading them in order helps the team find the first broken boundary before repairing downstream symptoms.
+
+**Schema and structural validity** asks whether producers and consumers agree on the shape of the data. Columns, types, nested fields, keys, units, allowed categories, and row grain belong here.
+
+**Missing-value semantics** asks why expected information is unavailable. An absent field describes delivery, while an unknown value describes knowledge and a stale value describes time. Null, inapplicable, and redacted states add other meanings that may require different model behaviour.
+
+**Label integrity** asks whether the target represents the intended outcome. Provenance, observation windows, maturity, ambiguity, revisions, adjudication, and leakage belong here.
 
 ```mermaid
-flowchart TB
-    Use["Dataset use and protected decision"] --> Boundary["Dataset boundary and contract"]
-    Boundary --> Shape["Structure and completeness"]
-    Boundary --> Meaning["Validity, keys, and joins"]
-    Boundary --> Time["Freshness, event time, and label maturity"]
-    Boundary --> Coverage["Distributions and important segments"]
-    Shape --> Result["Observed result, severity, owner, response"]
-    Meaning --> Result
-    Time --> Result
-    Coverage --> Result
+flowchart TD
+    A["Raw events, tables,<br/>files, and annotations"] --> B{"Layer 1<br/>Can every system read<br/>the same structure?"}
+    B -->|"No"| C["Quarantine structural failure<br/>and repair producer or adapter"]
+    B -->|"Yes"| D{"Layer 2<br/>Does unavailable information<br/>have a known meaning?"}
+    D -->|"No"| E["Trace source, joins,<br/>freshness, and segments"]
+    D -->|"Yes"| F{"Layer 3<br/>Is the target mature,<br/>traceable, and unambiguous?"}
+    F -->|"No"| G["Hold labels, adjudicate,<br/>or rebuild from outcome events"]
+    F -->|"Yes"| H["Release validated dataset<br/>for training or inference"]
+
+    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef repair fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A source
+    class B,D,F gate
+    class C,E,G repair
+    class H release
 ```
 
-The categories work together. A field can exist and use the correct type while carrying an impossible unit. A join can preserve valid values while dropping a whole region. A label can be present while its outcome window remains open. The response record turns each observation into an owned operational decision.
+The order gives an investigation a stable starting point. Label analysis has little value if a schema change shifted values into the wrong fields. Missingness analysis needs structural evidence so the team knows whether a value was truly null or lost during parsing. A reliable label needs both layers because a broken join can remove labels for one population.
 
-We will use a content-moderation training table to make the mechanics visible. Its grain is one row per `video_id` at `snapshot_at`. The model predicts whether a review will confirm a policy violation. Important fields include `creator_id`, `uploaded_at`, `snapshot_at`, `duration_seconds`, `caption_available`, `caption_language`, `label`, `label_mature_at`, and `policy_version`. This named schema lets us test whether a rule protects shape, meaning, time, or the target.
+## Layer 1: Schema And Structural Validity
+<!-- section-summary: Structural checks prove that rows, fields, types, keys, and meanings still match the contract expected by downstream systems. -->
 
-## Structural Checks Protect The Machine Contract
-<!-- section-summary: Schema checks verify required fields, types, shapes, versions, and compatibility before downstream code runs. -->
+Schema is the machine-readable shape of data. It says which fields exist, how they are encoded, and which types a reader should expect. Structural validity goes further by checking the row grain, keys, nested shape, category domain, and relationships that make the rows usable.
 
-Structural checks catch missing or renamed columns, changed types, reordered arrays, incompatible nested fields, and unsupported schema versions. They are the first boundary because later checks may be meaningless if the table shape changed.
+You can think of a schema as the plug shape between systems. A producer and consumer may both be healthy, yet they cannot exchange data safely if one side changes that plug without coordination.
 
-Compatibility policy should distinguish additive, breaking, and deprecated changes. A new optional column may be safe. Changing `amount_cents` from integer to formatted string is breaking. Silently casting can hide upstream defects.
+### A structural failure in practice
 
-dbt can enforce warehouse structure and key rules. Pandera can validate dataframes near Python training code. Great Expectations can produce validation results and documentation. TensorFlow Data Validation can infer and compare schemas at scale. The tool is secondary to a versioned contract and owned response.
+Suppose a delivery-time model uses `parcel_weight_grams` as a number. A source application starts sending values such as `"2.4 kg"` after a user-interface release. The warehouse loader keeps the column numeric by coercing those strings to null.
+
+The training table still opens. The training pipeline may even impute the new nulls. The real failure appears later: weight disappears mainly for parcels created through the updated application, so one channel receives poorer predictions. A schema check at ingestion would have exposed the type mismatch before it turned into a segment-specific model problem.
+
+### Physical schema and semantic contract
+
+A **physical schema** covers names, data types, nullability, nested fields, and encoding. A **semantic contract** covers meaning: unit, time zone, row grain, source, derivation, valid domain, applicability, and freshness.
+
+`parcel_weight` can remain a decimal in both versions while the producer changes the unit from grams to kilograms. The physical schema still matches. The semantic contract has broken.
+
+For ML data, a useful contract records:
+
+- one row represents which entity and logical time;
+- which fields form the key;
+- the type and unit of every model input;
+- whether null is allowed and which reasons are valid;
+- the event time and availability time;
+- the allowed category domain;
+- the owner and compatibility policy.
+
+### Investigation and industrial repair
+
+The investigation starts at the first boundary that observed the changed data. Compare the candidate batch schema with the registered producer schema and the consumer contract. Count parse failures and automatic casts. Group failures by source version, application channel, region, and partition. Check recent producer, connector, and transformation releases.
+
+If one application version changed the weight format, the team can stop publication, preserve the raw batch, and route that source version to quarantine. The preferred repair restores the producer contract. A temporary adapter may parse both versions during a coordinated migration, provided it records the source schema version and converts units explicitly.
+
+After repair, rebuild the affected partitions from immutable raw data. The corrected dataset receives a new version or snapshot and passes the same contract used for healthy data.
+
+### Prevention and verification with dbt
+
+dbt model contracts can verify that a SQL model produces the declared column names and data types. Data tests validate contents such as nullability, uniqueness, allowed values, and relationships. Constraint enforcement varies across data platforms, so the pipeline should keep content tests even where a constraint is present.
 
 ```yaml
 models:
-  - name: moderation_training_examples
+  - name: delivery_training_examples
+    config:
+      contract:
+        enforced: true
     columns:
-      - name: video_id
-        tests: [not_null, unique]
-      - name: duration_seconds
-        tests: [not_null]
-      - name: policy_violation_confirmed
-        tests: [not_null]
+      - name: training_example_id
+        data_type: string
+        constraints:
+          - type: not_null
+        data_tests:
+          - unique
+      - name: parcel_weight_grams
+        data_type: decimal(12, 3)
+        constraints:
+          - type: not_null
+      - name: source_schema_version
+        data_type: string
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["delivery-v3", "delivery-v4"]
 ```
 
-Built-in tests are a foundation. Types and richer shape rules may require warehouse constraints, contracts, or custom tests.
+CI should test a valid fixture, a missing column, a changed type, and a semantically invalid unit. A shadow read of the candidate producer version checks real serialization before rollout. Production verification confirms zero unexpected casts, expected row grain, and healthy coverage for every supported source version.
 
-Pandera can enforce the same boundary immediately before Python training code reads the dataframe. Current Pandera guidance uses `pandera.pandas`; the older top-level schema import is being deprecated. The model below checks types, hard ranges, categories, and one cross-field rule.
+## Schema Evolution Needs A Compatibility Policy
+<!-- section-summary: Schema evolution classifies changes by consumer compatibility and coordinates breaking semantic changes through versioning. -->
 
-```python
-from datetime import datetime
+Schemas need to change as products evolve. The safe question is, “Which existing producers and consumers can still exchange data after this change?”
 
-import pandas as pd
-import pandera.pandas as pa
-from pandera.typing import Series
+An additive optional field is often compatible because older consumers can ignore it. Removing or renaming a required field is usually breaking. Changing a number to a string is breaking for numerical consumers. Widening an integer type may be compatible on one platform and unsupported on another.
 
+Schema registries for Avro, Protobuf, or JSON Schema can enforce backward, forward, full, and transitive compatibility policies. Backward compatibility focuses on whether the new reader can consume older data. Forward compatibility focuses on whether the old reader can consume newly written data. Transitive checking compares a new schema against the full supported history instead of only the latest version.
 
-class ModerationExamples(pa.DataFrameModel):
-    video_id: Series[str] = pa.Field(unique=True, nullable=False)
-    creator_id: Series[str] = pa.Field(nullable=False)
-    uploaded_at: Series[datetime]
-    snapshot_at: Series[datetime]
-    duration_seconds: Series[float] = pa.Field(ge=0, le=43_200)
-    caption_available: Series[bool]
-    caption_language: Series[str] = pa.Field(nullable=True)
-    label: Series[int] = pa.Field(isin=[0, 1])
-    label_mature_at: Series[datetime]
-    policy_version: Series[str] = pa.Field(isin=["policy-2026-04"])
+Semantic changes need their own review because registries inspect encoded structure. A change in unit, category meaning, feature window, or entity grain can pass schema compatibility while changing the model input.
 
-    @pa.dataframe_check
-    def timestamps_follow_causality(cls, frame: pd.DataFrame) -> Series[bool]:
-        return frame["uploaded_at"] <= frame["snapshot_at"]
+```mermaid
+flowchart TD
+    A["Proposed producer change"] --> B{"Physical schema changes?"}
+    B -->|"Yes"| C["Run registry or contract<br/>compatibility checks"]
+    B -->|"No"| D["Review units, grain,<br/>time, domain, and meaning"]
+    C --> E{"All supported consumers<br/>remain compatible?"}
+    D --> F{"Feature meaning<br/>remains compatible?"}
+    E -->|"No"| G["Create a versioned migration<br/>and update consumers"]
+    F -->|"No"| G
+    E -->|"Yes"| H["Shadow-read candidate data"]
+    F -->|"Yes"| H
+    H --> I["Verify schema, semantics,<br/>segments, and rollback"]
 
-
-validated = ModerationExamples.validate(batch, lazy=True)
+    classDef change fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef migration fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef verify fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A change
+    class B,E,F gate
+    class C,D,H,I verify
+    class G migration
 ```
 
-`lazy=True` collects all observed failures in one run, which makes a diagnostic report more useful than stopping at the first bad row. The pipeline still treats the returned dataframe as untrusted until validation completes. Type coercion stays disabled here because converting the string `"unknown"` to a missing number would hide a source contract break.
+A coordinated breaking change normally runs both versions for a migration window. Consumers move deliberately, monitoring compares outputs, and the old version retires after usage reaches zero. This policy keeps an upstream release from silently redefining a feature.
 
-## Completeness Distinguishes Missing From Unknown
-<!-- section-summary: Missing-value checks define which fields may be absent, why, and what downstream behaviour follows. -->
+## Layer 2: Missing-Value Semantics
+<!-- section-summary: Missing-value checks preserve why information is unavailable so training and serving can apply the correct response. -->
 
-A null can mean unavailable, not applicable, delayed, redacted, failed to join, or not yet labelled. Replacing all nulls with zero erases these meanings and can create skew.
+A null is a storage state. The database knows that no value is present, while the team still needs evidence about the cause and the correct response.
 
-Completeness checks include required-field null rate, conditional requirements, group-level coverage, and unexpected missingness changes. A caption language may be optional when no caption exists and required when `caption_available=true`. A label may be null before its maturity window and invalid after it.
+Suppose a credit-risk feature called `annual_income` is empty for four applicants. One uses an older application that never sent the field. One submitted the field, but a join failed. One selected “prefer not to say.” One has an income value whose observation is too old for the lending policy.
 
-Defaults need a policy. The default value, trigger condition, missingness indicator, owner, and monitoring should be explicit. A serving fallback that training never saw creates another mismatch.
+Treating all four records as zero income tells the model a false story. Treating them all as the mean also hides the operational join failure and the policy decision around stale evidence.
 
-Coverage should be measured by important segment and source. A global two-percent null rate can hide a source that is missing ninety percent of values.
+### Null, absent, unknown, and stale
 
-SQL makes the segment problem easy to inspect. This query measures caption-language completeness only for rows where a caption exists, then groups it by upload client.
+These terms describe different states:
+
+- **Absent** means the field or source record never arrived at the expected boundary. A producer version may omit a JSON field, or a join may find no matching row.
+- **Null** means the field exists in the materialized schema and carries no value. It is the representation seen by SQL and dataframe systems.
+- **Unknown** means the system has established that the value cannot currently be determined. The state is known even though the value is unavailable.
+- **Stale** means a value exists, but its observation time falls outside the allowed age for the decision.
+
+Two other states often matter. **Not applicable** means the field has no meaning for that row. **Withheld or redacted** means policy or user choice prevents use of the value.
+
+The materialized dataset can preserve these meanings with separate fields:
+
+```text
+annual_income
+annual_income_status
+annual_income_observed_at
+annual_income_source
+annual_income_source_version
+```
+
+`annual_income_status` might allow `observed`, `unknown`, `not_applicable`, `withheld`, `source_missing`, and `join_failed`. A stale state can be calculated from `annual_income_observed_at` and the prediction time under a declared maximum age.
+
+### Investigation and industrial repair
+
+Start with the boundary where the value disappeared. Compare producer field presence, source row coverage, join match rate, parse failures, and feature age. Group each result by source, schema version, region, channel, customer type, and other protected product segments.
+
+A join failure calls for a source or key repair followed by a backfill. An optional field absent from an older producer may use a version-aware compatibility rule. An explicitly unknown value can remain as a governed category or missingness indicator. A stale value may use a last-known value only if the contract allows a maximum age and training uses the same rule.
+
+Imputation needs the same discipline as any learned transformation. Fit imputation statistics on the training split, store the fitted transformer with the model pipeline, and apply identical logic during serving. Evaluate the result by segment because global mean or median imputation can distort groups with different distributions.
+
+### Prevention with Lakeflow pipeline expectations
+
+Lakeflow pipeline expectations can enforce row-level SQL conditions inside managed Databricks pipelines. The expectation can warn and retain rows, drop invalid rows, or fail the pipeline update. Critical training semantics usually deserve a failed update or an explicit quarantine path.
 
 ```sql
-SELECT
-  upload_client,
-  COUNT(*) AS captioned_rows,
-  COUNT_IF(caption_language IS NULL) AS missing_language_rows,
-  COUNT_IF(caption_language IS NULL) / NULLIF(COUNT(*), 0) AS missing_rate
-FROM moderation_training_examples
-WHERE caption_available = TRUE
-GROUP BY upload_client
-HAVING missing_rate > 0.01;
-```
-
-A healthy global rate can coexist with output such as `legacy_tv, 2841, 2650, 0.9328`. That result points to one producer rather than a general imputation problem. The safe response quarantines or repairs the affected client rows, then recomputes class and segment coverage. Filling the values with `"unknown"` without recording the reason would make the training and serving paths disagree about missingness.
-
-## Validity Checks Protect Meaning
-<!-- section-summary: Domain, range, format, and cross-field checks reject values that fit the type but violate the feature definition. -->
-
-An integer duration can still be negative. A country code can be syntactically valid and unsupported. A timestamp can be in the future. A probability can exceed one. Validity checks encode these domain rules.
-
-Cross-field rules capture relationships: `event_end` follows `event_start`; a refund amount cannot exceed the order amount; a mature positive label needs a supporting outcome event; a numeric unit agrees with its unit field.
-
-Ranges can be hard physical limits, reviewed business limits, or statistical warnings. Keep them distinct. A physically impossible sensor value can block. A rare but plausible value may route to review rather than deletion.
-
-Category checks need an unknown-value strategy. New categories can indicate product growth, upstream drift, or a broken mapping. Alert and route them deliberately instead of automatically coercing them into an existing class.
-
-Validity failures need a sample that preserves the rule context. For a row with `caption_available=false` and `caption_language="en"`, the report should include both fields because neither value is invalid alone. The check can express that relationship directly:
-
-```python
-@pa.dataframe_check
-def caption_fields_agree(cls, frame: pd.DataFrame) -> Series[bool]:
-    has_language = frame["caption_language"].notna()
-    return (
-        (frame["caption_available"] & has_language)
-        | (~frame["caption_available"] & ~has_language)
+CONSTRAINT meaningful_income_state EXPECT (
+  (annual_income_status = 'observed' AND annual_income IS NOT NULL)
+  OR
+  (
+    annual_income_status IN (
+      'unknown',
+      'not_applicable',
+      'withheld',
+      'source_missing',
+      'join_failed'
     )
+    AND annual_income IS NULL
+  )
+) ON VIOLATION FAIL UPDATE
 ```
 
-The expression requires a language when a caption exists and requires null when it does not. A four-row unit fixture covers both valid combinations and both invalid combinations. The recovery path depends on the source of truth. If the caption service emitted the wrong availability flag, repair and replay that event range. If an old client legitimately sends a language without the flag, update the producer contract through a versioned compatibility change. Editing the validation rule until both interpretations pass would keep ambiguous feature meaning in the dataset.
+This rule checks agreement between the value and its status. It cannot decide whether the business should accept an unknown value or how long income remains fresh. Those policies belong in the dataset contract and release gate. Lakeflow records expectation metrics in the pipeline event log for supported policies, while a quarantine table preserves invalid rows and failure reasons for investigation.
 
-## Uniqueness And Cardinality Protect Entity Grain
-<!-- section-summary: Key and count checks ensure each row represents the intended entity and time without duplicates or collapse. -->
+Verification uses fixtures for every allowed state. It proves that observed values require a timestamp and source, join failures reach quarantine, stale values cross the threshold at the correct prediction time, and training and serving apply the same imputation or fallback logic.
 
-Every ML table has a grain: one row per transaction, customer-day, image, prediction, or entity-event time. The primary key should express that grain and be unique.
+## Measure Missingness By Segment
+<!-- section-summary: Segment-level checks reveal concentrated missingness that global averages hide. -->
 
-Duplicate rows can overweight examples, leak entities across splits, and inflate apparent label coverage. Unexpectedly low counts can indicate a dropped partition or failed filter. Unexpectedly high counts can indicate join multiplication.
+A global missing rate can look healthy while one population has almost no usable data. Imagine that two percent of all device-age values are unavailable. If ninety percent of those failures come from one mobile operating-system version, a global imputation policy hides a producer defect.
 
-Cardinality checks include total rows, distinct entities, rows per entity, category count, and group size. Compare them with recent healthy ranges and upstream manifests. A schema-valid empty partition is still unusable.
-
-Join multiplication often creates duplicates after the source table has already passed uniqueness checks. Record counts around each join make the exact boundary visible:
-
-```sql
-WITH joined AS (
-  SELECT e.video_id, COUNT(*) AS rows_after_join
-  FROM eligible_videos e
-  JOIN review_events r ON e.video_id = r.video_id
-  GROUP BY e.video_id
-)
-SELECT video_id, rows_after_join
-FROM joined
-WHERE rows_after_join <> 1
-ORDER BY rows_after_join DESC;
-```
-
-If one video has three review events, the team must choose a label rule such as latest approved review before the snapshot or final adjudicated review after the maturity window. Adding `DISTINCT` would remove duplicate rows while leaving the target definition unresolved. A regression fixture with multiple reviews should prove that the selected event is deterministic.
-
-## Referential Integrity Protects Joins And Lineage
-<!-- section-summary: Join checks verify key coverage, multiplicity, event-time correctness, and preservation of the intended row population. -->
-
-ML datasets often join events, profiles, labels, and features. A left join can introduce nulls. A many-to-many join can multiply rows. A current profile join can leak future information into historical training.
-
-Checks record left and right row counts, matched and unmatched keys, multiplicity, duplicate keys on each side, and post-join row count. Event-time joins verify that the selected feature record existed at prediction time.
-
-Referential rules should follow ownership. A missing creator profile may be expected for deleted accounts and critical for active accounts. The response may exclude, backfill, or preserve a missingness category depending on the target definition.
-
-Point-in-time integrity adds a temporal predicate to the join. The selected profile version must have `profile_effective_at <= snapshot_at`; when several versions qualify, the join chooses the latest one. Verification counts rows whose joined feature timestamp exceeds the snapshot, and the required result is zero. It also checks unmatched active creators separately from deleted creators, because those groups have different expected behaviour.
-
-The join needs to encode that rule rather than relying on a comment beside an ordinary key join:
-
-```sql
-WITH profile_candidates AS (
-  SELECT
-    e.video_id,
-    e.snapshot_at,
-    e.creator_status,
-    p.profile_version,
-    p.profile_effective_at,
-    p.follower_count,
-    ROW_NUMBER() OVER (
-      PARTITION BY e.video_id
-      ORDER BY p.profile_effective_at DESC, p.profile_version DESC
-    ) AS candidate_rank
-  FROM moderation_training_examples e
-  LEFT JOIN creator_profile_history p
-    ON e.creator_id = p.creator_id
-   AND p.profile_effective_at <= e.snapshot_at
-   AND p.ingested_at <= e.snapshot_at
-)
-SELECT *
-FROM profile_candidates
-WHERE candidate_rank = 1;
-```
-
-Both temporal predicates matter. `profile_effective_at` says when the profile state applies, while `ingested_at` says when the training system could have known it. The verification report for one release can read `future_profile_rows=0`, `unmatched_active_creators=0`, and `unmatched_deleted_creators=137`. A fixture with profile versions immediately before and after `snapshot_at` proves the query selects the earlier eligible version. Another fixture with an old event that arrived after the snapshot proves availability time also protects the join.
-
-## Timeliness Protects The Prediction-Time World
-<!-- section-summary: Freshness and event-time checks ensure data arrived and was observed within the period the model assumes. -->
-
-A table can be complete and valid while one day late. Timeliness checks compare expected and actual partition arrival, maximum event time, ingestion lag, feature age, and label maturity.
-
-Event time describes when something happened. Processing time describes when the system observed it. Both matter for late events and backfills. Training snapshots should use the information available at the historical prediction time rather than the latest corrected record unless the target explicitly allows it.
-
-Freshness thresholds follow feature meaning. Live driver location may tolerate seconds. Account age may tolerate a day. Alerts name the affected window, data source, downstream models, and fallback.
-
-A timeliness result needs both a watermark and a count. `MAX(event_time)` alone can look current when one fresh event arrived beside a missing partition. For the moderation table, record the expected partition list, observed partitions, maximum event time, ingestion delay percentiles, and number of labels whose `label_mature_at` falls after the snapshot. The release gate blocks while any training label remains inside its appeal window.
-
-The partition check can compare an owned manifest with the actual batch:
+The investigation should measure both **rate** and **coverage**. Rate says what fraction of rows in a segment lack usable values. Coverage says how many rows the segment contributes, which prevents a tiny sample from driving a misleading percentage.
 
 ```sql
 SELECT
-  m.upload_client,
-  m.expected_partition,
-  COUNT(e.video_id) AS observed_rows,
-  MAX(e.event_time) AS max_event_time,
-  MAX(e.ingested_at) AS max_ingested_at,
-  COUNT_IF(e.label_mature_at > TIMESTAMP '2026-07-14 00:00:00+00')
-    AS immature_labels
-FROM expected_moderation_partitions m
-LEFT JOIN moderation_training_examples e
-  ON m.upload_client = e.upload_client
- AND m.expected_partition = e.event_date
-WHERE m.release_id = 'moderation-2026-07-14-r1'
-GROUP BY m.upload_client, m.expected_partition
-HAVING observed_rows = 0 OR immature_labels > 0;
+  application_channel,
+  region,
+  COUNT(*) AS segment_rows,
+  COUNT_IF(annual_income_status <> 'observed') AS unavailable_rows,
+  COUNT_IF(annual_income_status = 'join_failed') AS join_failed_rows,
+  COUNT_IF(
+    annual_income_observed_at < :freshness_cutoff
+  ) AS stale_rows
+FROM credit_training_candidates
+GROUP BY application_channel, region
+HAVING
+  unavailable_rows > 0
+  OR stale_rows > 0;
 ```
 
-Output such as `legacy_tv, 2026-07-13, 0, null, null, 0` identifies a completely absent producer partition that a maximum timestamp would miss. Output such as `mobile, 2026-07-13, 892104, ..., ..., 412` shows that data arrived while 412 targets remain inside the appeal window. The former routes to the ingestion owner; the latter waits for label maturity or publishes a dataset whose cutoff excludes those rows. A repaired release uses a new immutable version and reruns the same expected-partition manifest.
+The report should compare the candidate with a recent healthy reference and with the intended training population. A segment may pass its own missing-rate threshold yet fall below minimum representation because upstream filtering removed most of its rows.
 
-## Label Checks Protect The Target
-<!-- section-summary: Label validation verifies definition, horizon, maturity, provenance, policy version, disagreement, and leakage boundaries. -->
+Industrial repair follows the cause. A channel-specific join failure routes to the integration owner and triggers a bounded backfill. A legitimate increase in withheld values may require model evaluation and policy review. A new region with limited historical data may need an explicit minimum-coverage gate before release.
 
-Labels deserve their own quality layer because they define what the model learns. Checks confirm allowed values, class prevalence, observation horizon, maturity, source mix, adjudication, correction rate, and policy version.
+SodaCL can operationalize warehouse-level missingness, validity, schema, and freshness checks in readable configuration. GX Core can validate Python or SQL-backed batches through Expectation Suites, Validation Definitions, and production Checkpoints. Both tools should emit dataset version, segment, observed metric, and failing-row references so the release system can act on their results.
 
-A label created after an appeal may supersede the first review. **Censoring** means the observation window ended before the outcome could be known. A video still inside its appeal window has a censored target, so a missing label cannot safely stand for the negative class. A sudden class shift may reflect new policy. Production-label articles develop this lifecycle in depth.
+## Layer 3: Label Integrity
+<!-- section-summary: Label integrity proves that each target has a definition, source, maturity state, revision history, and leakage-safe relationship to features. -->
 
-Leakage checks verify that label or post-outcome fields do not enter features. Suspiciously perfect correlations, feature timestamps after prediction, and explanation importance for downstream status fields are important signals.
+Labels tell the model what outcome to learn. A feature error affects part of the input; a systematic label error can teach the model the wrong task.
 
-Label checks should also reconstruct provenance. One released row might carry `label=1`, `label_source="appeal_adjudication"`, `label_event_id="rev_8821"`, `policy_version="policy-2026-04"`, and `label_mature_at="2026-06-15T00:00:00Z"`. Those fields let a reviewer answer which policy and event produced the target. A test fixture where an appeal changes `1` to `0` should prove that the release query selects the final eligible decision and excludes the earlier review.
+Consider a payment-fraud model trained to predict eventual chargebacks. A transaction has no chargeback event one week after purchase, so an early dataset marks it negative. The customer opens a dispute later, and the bank eventually confirms the chargeback. The early negative was an **immature label**: the observation window had not closed.
 
-The adjudication query can express the source priority and maturity cutoff directly:
+Label integrity asks more than whether the target column contains `0` or `1`. It asks where the value came from, which definition produced it, whether enough time has passed, whether reviewers agree, whether a later event revised it, and whether any feature revealed the outcome.
+
+### Provenance and definition
+
+Every released label should connect to evidence such as:
+
+- target definition and outcome horizon;
+- source event or annotation ID;
+- source system and policy version;
+- event time, recorded time, and maturity time;
+- label state and revision number;
+- prior label superseded by the current decision;
+- adjudication status and quality metadata.
+
+For human annotations, provenance can include task version, guideline version, annotator group, agreement result, and adjudicator decision. Sensitive worker identities should remain governed and access-controlled.
+
+A model release should reference the label dataset version alongside the final integer target. That reference lets an investigation reconstruct the outcome policy used during training.
+
+### Ambiguity is evidence
+
+Some examples genuinely support more than one interpretation. Two qualified reviewers may disagree because the policy boundary is unclear. Hiding that disagreement behind a majority vote removes useful quality information.
+
+Ambiguous examples can enter an adjudication queue. An adjudicator applies the current guideline, records the resolution and reason, and may identify a policy gap. Repeated disagreement in one category signals that the labeling guide or class definition needs repair.
+
+Agreement metrics need segment context. High overall agreement can hide poor agreement for one language, rare class, or borderline case. Sampling for verification should include those difficult segments instead of drawing only a uniform random sample.
+
+## Label Maturity, Revisions, And Adjudication
+<!-- section-summary: A label lifecycle keeps provisional outcomes separate from mature decisions and preserves every revision. -->
+
+A production label usually moves through several states. It may start as provisional, enter review, mature after an outcome window, and later receive a governed correction. Preserving those transitions prevents a current answer from erasing the evidence available to an earlier dataset.
+
+In production, the label builder usually reads an append-only event history. Each event identifies the example, decision, source, effective time, recorded time, maturity time, revision, and adjudication state. The release process selects the newest eligible final event available by its cutoff and keeps unresolved cases outside the final label table. The expected result is either one traceable label for an example or a recorded reason why that example remains unreleased.
+
+```mermaid
+flowchart TD
+    A["Outcome candidate observed"] --> B["Provisional label<br/>with source event"]
+    B --> C{"Observation window<br/>and review complete?"}
+    C -->|"No"| D["Hold outside final<br/>training labels"]
+    C -->|"Yes"| E{"Evidence or reviewers<br/>disagree?"}
+    E -->|"Yes"| F["Adjudication queue<br/>with guideline version"]
+    F --> G["Resolved mature label"]
+    E -->|"No"| G
+    G --> H["Versioned label release"]
+    H --> I{"Later correction<br/>or appeal?"}
+    I -->|"Yes"| J["Create revision and<br/>supersede prior label"]
+    J --> K["Backfill affected examples<br/>and reevaluate models"]
+    I -->|"No"| L["Retain release evidence"]
+
+    classDef event fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B event
+    class C,E,I gate
+    class D,F,J,K hold
+    class G,H,L release
+```
+
+A deterministic label-building query selects only evidence available by the declared cutoff. It also excludes unresolved ambiguity:
 
 ```sql
-WITH mature_videos AS (
-  SELECT video_id
-  FROM moderation_training_examples
-  WHERE label_mature_at <= TIMESTAMP '2026-07-14 00:00:00+00'
-),
-eligible_decisions AS (
+WITH eligible_labels AS (
   SELECT
-    r.video_id,
-    r.review_event_id,
-    r.decision,
-    r.decision_source,
-    r.policy_version,
-    r.decided_at,
+    example_id,
+    label_value,
+    label_event_id,
+    policy_version,
+    revision_number,
+    effective_at,
+    recorded_at,
     ROW_NUMBER() OVER (
-      PARTITION BY r.video_id
+      PARTITION BY example_id
       ORDER BY
-        CASE r.decision_source
-          WHEN 'appeal_adjudication' THEN 3
-          WHEN 'senior_review' THEN 2
-          WHEN 'initial_review' THEN 1
-        END DESC,
-        r.decided_at DESC,
-        r.review_event_id DESC
-    ) AS decision_rank
-  FROM mature_videos m
-  JOIN moderation_review_events r
-    ON r.video_id = m.video_id
-  WHERE r.decided_at <= TIMESTAMP '2026-07-14 00:00:00+00'
-    AND r.policy_version = 'policy-2026-04'
+        revision_number DESC,
+        effective_at DESC,
+        label_event_id DESC
+    ) AS revision_rank
+  FROM label_events
+  WHERE effective_at <= :label_cutoff
+    AND recorded_at <= :label_cutoff
+    AND maturity_at <= :label_cutoff
+    AND label_status = 'final'
+    AND adjudication_status IN ('not_required', 'resolved')
 )
-SELECT video_id, review_event_id, decision, decision_source, policy_version
-FROM eligible_decisions
-WHERE decision_rank = 1;
+SELECT
+  example_id,
+  label_value,
+  label_event_id,
+  policy_version,
+  revision_number
+FROM eligible_labels
+WHERE revision_rank = 1;
 ```
 
-For fixture `video_882`, an initial `remove` decision followed by an eligible appeal `allow` produces `label=0` from the appeal event. If the appeal finishes after the release cutoff, the video remains censored and the release query excludes it. Tests cover both timelines and assert the selected `review_event_id`, because checking only the final integer would lose provenance.
+The query uses both `effective_at` and `recorded_at`. An event may describe an earlier real-world outcome while arriving after the historical prediction. The recorded-time boundary prevents the rebuilt dataset from using knowledge the system lacked at that point.
 
-## Distribution Checks Protect Coverage And Behaviour
-<!-- section-summary: Distribution and segment checks detect material population changes that structural rules cannot see. -->
+Investigation compares label coverage, class balance, source mix, maturity rate, disagreement, revision rate, and join coverage by segment. Sample rows should trace from final target back to source events and adjudication records.
 
-Compare numerical distributions, category mix, missingness, label balance, and feature relationships with the training or recent healthy reference. **Effect size** measures the magnitude of a difference, while a significance test asks how surprising the difference would be under a statistical assumption. With millions of rows, a tiny operationally irrelevant change can have a small p-value. Review effect size together with sample count and product consequence.
+Repair may require waiting for maturity, correcting a label join, revising annotation guidance, or rerunning adjudication for an affected class. A label correction creates a new version and a bounded backfill. The team then reevaluates models trained on the affected label release.
 
-Segment checks protect regions, channels, devices, product types, classes, and policy groups known to matter. They also verify minimum representation in training, validation, and test splits.
+The prevention gate admits only mature labels with complete provenance and resolved adjudication state. Verification fixtures cover an immature outcome, two conflicting reviews, a resolved adjudication, and a later revision. Each fixture asserts both the selected value and the source event ID so provenance receives the same protection as the target.
 
-Distribution change is diagnostic. It does not automatically mean the data is bad. A new campaign can produce legitimate shift. The drift article explains how to interpret these signals with outcomes and context.
+## Keep Label Leakage Out Of Features
+<!-- section-summary: Leakage checks prevent outcome information and post-decision events from entering historical model inputs. -->
 
-For a numerical feature, a standardized mean difference divides the mean change by the pooled standard deviation. The result has no unit, which helps compare features measured on different scales:
+**Label leakage** occurs when a feature contains information that would only be known after the prediction decision or comes directly from the outcome process. Leakage produces impressive offline metrics because the model receives clues unavailable in production.
 
-```python
-import math
+For a chargeback model, fields such as `dispute_closed_at`, `chargeback_reason`, or `investigation_result` belong to the label process. They cannot appear in features calculated at transaction time. A customer profile update recorded after the transaction also needs an availability-time check even if its effective date points backward.
 
-import pandas as pd
+Two timestamps protect the boundary:
 
+- `event_time` says when the underlying fact happened.
+- `available_at` says when the feature system could use that fact.
 
-def standardized_mean_difference(
-    reference: pd.Series,
-    candidate: pd.Series,
-) -> float:
-    pooled_sd = math.sqrt((reference.var(ddof=1) + candidate.var(ddof=1)) / 2)
-    if pooled_sd == 0:
-        return 0.0 if reference.mean() == candidate.mean() else float("inf")
-    return float((candidate.mean() - reference.mean()) / pooled_sd)
+Historical feature rows should satisfy both `event_time <= prediction_time` and `available_at <= prediction_time`. Dataset splitting should also keep entities or time windows separated according to the evaluation design, because duplicated entities can leak nearly identical examples across train and test.
 
+```mermaid
+flowchart TD
+    A["Historical prediction time"] --> B["Features with event time<br/>at or before prediction"]
+    A --> C["Features available to the<br/>system by prediction"]
+    B --> D{"Both conditions pass?"}
+    C --> D
+    D -->|"Yes"| E["Eligible historical feature"]
+    D -->|"No"| F["Leakage candidate<br/>exclude and investigate"]
+    G["Outcome, dispute, review,<br/>or adjudication fields"] --> F
 
-duration_effect = standardized_mean_difference(
-    healthy["duration_seconds"],
-    candidate["duration_seconds"],
-)
+    classDef time fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef safe fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef leak fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C,G time
+    class D gate
+    class E safe
+    class F leak
 ```
 
-City and upload-client categories use absolute share deltas instead because their values have no numerical distance. One report might show `duration_seconds_smd=0.07`, `new_upload_client_share_delta=0.14`, and `policy_violation_rate_delta=0.002`. The contract can pass the duration change, open review for the new client population, and keep label balance visible without treating every shift as corruption. A segment fixture where only `legacy_tv` changes proves the report groups before aggregation and keeps the affected producer visible.
+Verification uses a fixture containing one feature event before prediction, one event after prediction, and one late-arriving event with an earlier effective time. Only the first row should qualify. Feature-name deny lists can catch obvious outcome fields, while lineage and timestamp tests protect derived or renamed versions.
 
-## Reports Connect Checks To Response
-<!-- section-summary: A quality report records observations, severity, affected assets, evidence, owners, and allowed action. -->
+## How Quality Failures Propagate
+<!-- section-summary: A defect in one evidence layer can change downstream missingness, label coverage, model behaviour, and production outcomes. -->
 
-A report should include dataset and schema versions, run and window, checks executed, observed values, thresholds, failures, review findings, affected segments, example references, downstream consumers, and owner.
+The three layers interact. A structural defect often appears downstream as missing data. Missing data can break a label join. A broken label join can change class balance and model behaviour.
 
-Blocking failures stop publication or training. Review findings may allow work only after the named owner records a decision. Quarantine preserves bad partitions for investigation while keeping them away from consumers. Automatic repair should be limited to transformations whose meaning is unambiguous and recorded.
+Suppose a producer changes `customer_id` from a fixed string to a nested object. The loader converts unreadable IDs to null. The label join loses those rows. If the change affects one mobile application version, that segment contributes fewer positive outcomes to training. The model learns from a distorted population and performs poorly for users of that application.
 
-During an incident, responders first contain downstream use, preserve the failed snapshot and report, identify the first broken dimension, repair the source or contract, rebuild deterministically, and rerun checks. A successful rerun should identify the new snapshot rather than overwrite the failed evidence.
+```mermaid
+flowchart TD
+    A["Producer changes<br/>customer_id structure"] --> B["Parser creates null IDs"]
+    B --> C["Label join loses matches"]
+    C --> D["One application segment<br/>loses positive examples"]
+    D --> E["Training class and<br/>segment coverage shift"]
+    E --> F["Offline metrics hide<br/>segment weakness"]
+    F --> G["Production decisions degrade<br/>for the affected segment"]
+    B --> H["Structural and missingness<br/>gates identify first break"]
+    C --> I["Label join and coverage<br/>checks show propagation"]
 
-## Tools Implement One Quality Framework
-<!-- section-summary: SQL, dbt, Pandera, Great Expectations, and TFDV serve different execution surfaces around shared quality dimensions. -->
+    classDef defect fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef impact fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C defect
+    class D,E,F,G impact
+    class H,I evidence
+```
 
-Warehouse SQL and dbt fit source and transformation checks close to tables. Pandera fits Python dataframe contracts and unit tests. Great Expectations fits reusable expectation suites and validation reports. TFDV fits large-scale schema, statistics, anomalies, and training-serving comparison in TensorFlow-oriented pipelines.
+This is why a quality report needs the first broken boundary and the downstream impact. A “label coverage low” alert alone sends the team toward the label system even though the producer schema caused the incident.
 
-A platform may use several. The same check ID, owner, severity, and dataset identity should connect their results. Collecting tools without one quality taxonomy creates duplicate rules and inconsistent gates.
+## Quarantine, Repair, And Backfill
+<!-- section-summary: Quarantine preserves failed evidence, repair fixes the owning boundary, and backfill rebuilds affected partitions under the same contract. -->
 
-A complete verification run should therefore answer four questions. Did the schema code reject a deliberately malformed fixture? Did warehouse queries detect duplicates, join loss, and immature labels? Did the gate preserve failing rows and stop dataset publication? Did the repaired immutable snapshot pass the same contract without changing thresholds? These checks cover implementation, data mechanics, orchestration, and recovery as separate failure boundaries.
+Quarantine separates suspect data from approved consumers while preserving it for diagnosis. A useful quarantine record keeps the dataset version, run ID, check ID, row or partition reference, source version, failure reason, and restricted pointer to the original data.
+
+Dropping bad rows without evidence can make quality metrics look healthier while reducing coverage. Critical keys, missing-state contradictions, and unresolved labels usually belong in quarantine or a failed update. A known invalid optional telemetry record may be safe to drop if the contract and metrics make that policy explicit.
+
+```mermaid
+flowchart TD
+    A["Candidate dataset fails<br/>a quality gate"] --> B["Preserve candidate,<br/>report, and source identity"]
+    B --> C["Quarantine affected<br/>rows or partitions"]
+    C --> D["Find the first broken<br/>producer or transformation"]
+    D --> E["Repair source, adapter,<br/>join, policy, or labels"]
+    E --> F["Backfill the bounded<br/>affected data range"]
+    F --> G["Run the unchanged<br/>quality contract"]
+    G --> H{"All layers pass<br/>with expected coverage?"}
+    H -->|"No"| C
+    H -->|"Yes"| I["Publish a new immutable<br/>dataset version"]
+    I --> J["Reevaluate affected<br/>training and model releases"]
+
+    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C fail
+    class D,E,F,G work
+    class H gate
+    class I,J release
+```
+
+The backfill should use the same input identities, deterministic logic, and checks as a normal build. Verification compares row counts, missing-state mix, label coverage, revision counts, and important segments with both the failed candidate and a healthy reference. The failed evidence remains available for the incident record.
+
+## Where Industrial Quality Tools Fit
+<!-- section-summary: Industrial tools evaluate checks on different execution surfaces while contracts, orchestration, storage, and owners retain distinct responsibilities. -->
+
+Several quality products can evaluate similar-looking rules, which makes the stack appear more complicated than the underlying work. Start with the place where the check must run: a SQL model, a Python batch, a distributed Spark dataset, or a managed data pipeline. Give each chosen tool a clear execution boundary and connect its result to one release decision.
+
+**dbt model contracts and data tests** fit warehouse and lakehouse SQL models. Contracts check the declared shape during model construction. Data tests query built data for failing rows, including nulls, duplicates, accepted values, relationships, and custom business rules. dbt remains strongest where transformations and evidence already live in SQL.
+
+**GX Core (Great Expectations)** is the current Python library for programmatic validation workflows. Expectations describe individual conditions, Expectation Suites group them, Validation Definitions associate suites with batches, and Checkpoints run production validations and actions. GX Core fits Python dataframes and SQL-backed batches that need reusable results and pipeline integration.
+
+**SodaCL and Soda scans** provide human-readable checks for schema, missingness, validity, duplicates, freshness, and reconciliation across supported data sources. Soda works well for teams that want check configuration close to data operations and shared monitoring around scan results.
+
+**Deequ** runs quality verification on Apache Spark. Its `VerificationSuite`, constraints, analyzers, and DQDL support large distributed datasets. AWS Glue Data Quality offers a managed, serverless path built on Deequ and uses DQDL rules. This family fits teams already processing data through Spark or AWS Glue.
+
+**Lakeflow pipeline expectations** evaluate row-level SQL conditions as data moves through managed Databricks pipelines. Warn retains records and records metrics, drop excludes invalid rows, and fail stops the update. Expectations fit constraints inside one pipeline; cross-dataset reconciliation, label maturity workflows, and adjudication still need dedicated transformations and operational processes.
+
+The validation library evaluates the rule. The orchestrator decides when the rule runs and whether publication can continue. The storage and catalog layer preserve candidate and approved dataset identities. Source owners repair producer defects. Data and model owners define missingness policies, label definitions, segments, and acceptance thresholds.
+
+One platform rarely needs every tool. A warehouse team may use dbt contracts and data tests plus Soda monitoring. A Python training pipeline may use dbt upstream and GX Core at the training boundary. A Spark lakehouse may use Deequ or managed Lakeflow expectations. Duplicating the same rule across tools without a shared check ID and owner creates conflicting evidence.
+
+## Verify The Complete Quality Path
+<!-- section-summary: Verification proves that checks detect known defects, gates contain them, repairs rebuild safely, and downstream consumers receive corrected data. -->
+
+A check is ready for production after the team has observed it fail on a controlled defect. Passing healthy data proves the happy path; rejecting a known-bad fixture proves that the rule can protect the release boundary. The operational test then confirms that the failed result reaches quarantine, blocks publication, and supports repair.
+
+Structural fixtures should cover a missing field, changed type, unsupported schema version, wrong unit, duplicate key, and changed row grain. Missingness fixtures should cover absent, null, unknown, stale, inapplicable, withheld, source-missing, and join-failed states. Label fixtures should cover provisional outcomes, mature outcomes, reviewer disagreement, adjudication, revisions, and post-prediction leakage.
+
+The pipeline test then proves the operational response. A blocking defect must prevent publication. Quarantined rows must retain check and source references. The previous approved dataset must remain available. A corrected bounded backfill must pass the unchanged contract and publish a new immutable identity.
+
+Finally, verify the downstream effect. Recompute segment coverage and class balance, rebuild the affected training dataset, and rerun model evaluation for impacted populations. A data repair is complete after the production decision path uses the corrected evidence.
+
+## The Main Idea
+<!-- section-summary: Trustworthy ML data needs evidence about structure, missing information, and labels at every release boundary. -->
+
+Data quality for ML rests on three questions. Can every system agree on the structure and meaning of each row? Does unavailable information carry a reason and freshness state? Does every label represent a mature, traceable, leakage-safe outcome?
+
+Schema checks, missing-value checks, and label checks protect different assumptions. Their evidence must reconnect at the release gate because one defect can propagate through all three layers.
+
+Industrial tools can execute the checks. Reliable operation also needs contract ownership and segment-aware investigation. Quarantine preserves evidence, deterministic repair fixes the owning boundary, and bounded backfill rebuilds affected data. Downstream model verification confirms that the repair restored the intended behaviour.
 
 ## References
 
-- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Pandera data validation](https://pandera.readthedocs.io/en/stable/)
-- [Pandera DataFrame models](https://pandera.readthedocs.io/en/latest/dataframe_models.html)
-- [Great Expectations expectations](https://docs.greatexpectations.io/docs/core/define_expectations/)
-- [TensorFlow Data Validation](https://www.tensorflow.org/tfx/data_validation/get_started)
+- [dbt documentation: Model contracts](https://docs.getdbt.com/docs/mesh/govern/model-contracts)
+- [dbt documentation: Data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [Great Expectations documentation: GX Core overview](https://docs.greatexpectations.io/docs/core/introduction/gx_overview/)
+- [Great Expectations documentation: Run a Checkpoint](https://docs.greatexpectations.io/docs/core/trigger_actions_based_on_results/run_a_checkpoint/)
+- [Soda documentation: Write SodaCL checks](https://docs.soda.io/soda-documentation/soda-v3/soda-cl-overview)
+- [Soda documentation: Schema checks](https://docs.soda.io/sodacl-reference/schema)
+- [Deequ repository and documentation](https://github.com/awslabs/deequ)
+- [AWS documentation: AWS Glue Data Quality](https://docs.aws.amazon.com/glue/latest/dg/glue-data-quality.html)
+- [Databricks documentation: Lakeflow pipeline expectations](https://docs.databricks.com/aws/en/ldp/expectations)
+- [Confluent documentation: Schema evolution and compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)

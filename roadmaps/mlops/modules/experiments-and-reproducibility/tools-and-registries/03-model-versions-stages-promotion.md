@@ -1,189 +1,378 @@
 ---
-title: "Registry Versions, Aliases, and Candidate Handoff"
-description: "Use a model registry to give candidates immutable identities, attach run and evaluation evidence, manage aliases, and create a reviewed handoff for release systems."
-overview: "A model registry preserves candidate identity and evidence before production release design begins. A supporting example follows a ticket-routing model through registration, alias resolution, evidence review, rejection, and a pinned candidate handoff."
+title: "Model Versions, Aliases, and Safe Promotion"
+description: "Promote an exact model version with validation evidence, governed approval, a pinned deployment reference, and a tested rollback target."
+overview: "Model promotion changes which validated model a production workflow is expected to use. This guide explains immutable model identity, mutable aliases, environment boundaries, approval evidence, current MLflow workflows, provider differences, and rollback."
 tags: ["MLOps", "registry", "promotion"]
 order: 3
 id: "article-mlops-experiments-and-reproducibility-model-versions-stages-promotion"
 aliases: ["model-versions-stages-promotion"]
 ---
 
-## A Registry Creates a Reviewed Candidate Handoff
-<!-- section-summary: A model registry preserves one candidate's identity and evidence so release systems receive an exact, reviewable input. -->
+## Table of Contents
 
-A training run produces files and metrics. A release system needs something more stable: one candidate that can be named, inspected, rejected, compared, and handed forward without changing underneath the reviewers. A **model registry** provides that boundary.
+1. [Promotion Changes Production Intent](#promotion-changes-production-intent)
+2. [Learn the Lifecycle Identities](#learn-the-lifecycle-identities)
+3. [Keep the Candidate Identity Stable](#keep-the-candidate-identity-stable)
+4. [Use Aliases as Movable Pointers](#use-aliases-as-movable-pointers)
+5. [Attach Validation Evidence to One Version](#attach-validation-evidence-to-one-version)
+6. [Record Approval Separately From Deployment](#record-approval-separately-from-deployment)
+7. [Move Beyond Deprecated MLflow Stages](#move-beyond-deprecated-mlflow-stages)
+8. [Choose an Environment Promotion Pattern](#choose-an-environment-promotion-pattern)
+9. [Run Promotion as a Governed Workflow](#run-promotion-as-a-governed-workflow)
+10. [Pin the Deployment Reference](#pin-the-deployment-reference)
+11. [Verify the Version That Entered Service](#verify-the-version-that-entered-service)
+12. [Read Managed-Provider Terms Carefully](#read-managed-provider-terms-carefully)
+13. [Roll Back to a Known Immutable Version](#roll-back-to-a-known-immutable-version)
+14. [Preserve the Release Record](#preserve-the-release-record)
+15. [The Main Idea](#the-main-idea)
+16. [References](#references)
 
-The registry article owns five responsibilities:
+## Promotion Changes Production Intent
+<!-- section-summary: Model promotion is a governed decision to let a specific validated version become the intended input to a production workflow. -->
 
-1. **Candidate identity** gives the model artifact and its required inference assets an immutable version.
-2. **Lineage** connects that version to the run, data, code, configuration, and build environment that produced it.
-3. **Evidence links** attach evaluation results, signatures, limitations, and ownership to the same version.
-4. **Aliases and review states** help people find current candidates without replacing immutable history.
-5. **Candidate handoff** resolves every movable reference and sends one pinned, reviewed record to the release process.
+At 10:00, a release owner receives the evaluation results for version `42` of a payment-fraud model. The current version, `41`, is blocking too many legitimate prepaid-card transactions. Version `42` improves that cohort without pushing the fraud-loss metric beyond its approved limit. A production change is scheduled for 15:00, so the release owner must decide which exact model the deployment controller may use.
 
-The registry stops at that handoff. It does not define the complete production release manifest, move bytes across an environment trust boundary, allocate traffic, or prove what runtime handled a request. Those responsibilities belong to the later Model Versioning, Artifact Promotion, and Model Release Strategies articles.
+The mistake would be costly in either direction. Promoting the wrong candidate could block valid payments or allow more fraud. Rejecting the candidate without understanding its evidence would leave the known false-positive problem in service. A successful release therefore needs stronger proof than a green dashboard: the approval names version `42`, the evaluation belongs to version `42`, the deployment loads version `42`, and version `41` remains available as a tested rollback target.
 
-This boundary matters because one mutable label cannot answer every lifecycle question. An alias called `candidate` can help reviewers find a version, but it cannot prove which serving image is compatible, whether production may read the artifact, or which model actually handled live predictions.
-
-```mermaid
-flowchart LR
-    Run["Training run and evidence"] --> Version["Immutable registry version"]
-    Version --> Review{"Risk-based review"}
-    Review -->|reject| Retain["Retain evidence and reason"]
-    Review -->|ready| Handoff["Pinned reviewed-candidate record"]
-    Handoff --> Release["Release system adds runtime, environment, and traffic decisions"]
-```
-
-Candidate identity, lineage, aliases, evidence, and the reviewed handoff form this article's framework. The next module adds production authority and running state without redefining the candidate.
-
-## A Version Preserves The Candidate
-<!-- section-summary: A registry version keeps the candidate artifact and the assets required to evaluate it stable while evidence accumulates. -->
-
-A **model version** is an immutable registry identity for one model candidate. The version should resolve to the same model bytes every time. It should also link to the training run, dataset snapshot, source commit, environment, input signature, evaluation report, and owner.
-
-The word “model” can hide an important evaluation detail. An estimator alone may be impossible to load or score consistently. A text classifier can require a tokenizer, label map, normalization rules, and input signature. A forecasting model can require preprocessing and post-processing assets. The registry candidate should therefore include or immutably reference everything needed to reproduce the behaviour that evaluation measured.
-
-Suppose a support team registers `ticket-router` version `18`. The review packet identifies these parts:
-
-| Candidate part | Stable registry evidence |
-| --- | --- |
-| Model | Registry name, version, artifact digest |
-| Data | dataset snapshot and label-policy version |
-| Code | source commit and training entry point |
-| Load contract | input signature, label map, required inference assets |
-| Environment | dependency lock or reproducible model environment |
-| Evaluation | report identity, slices, baseline, limitations |
-
-If the tokenizer or preprocessing changes after evaluation, the measured behaviour no longer belongs to the same candidate. The team should create a new candidate version and repeat the affected checks. Some registries store these pieces inside a packaged model. Others keep a candidate manifest in an artifact store and attach its digest to the registry version. Either design works when the references are immutable and verification can follow them.
-
-Registration should include a candidate load test. The test retrieves the version in a clean environment, verifies its digest and signature, sends a known fixture, and checks the output shape and label order. This is not a production capacity or compatibility test; it proves that the reviewed candidate is self-consistent enough for evaluation and release packaging. A registry row that points to a missing preprocessor has failed the handoff even though registration itself succeeded.
-
-## Aliases Are Movable Pointers
-<!-- section-summary: Aliases make current intent convenient to discover, while immutable versions protect evaluation, deployment, and incident evidence from races. -->
-
-An **alias** is a readable name that currently points to one model version. Names such as `candidate`, `champion`, or `rollback` can help reviewers and automation find relevant versions without memorising numbers. The pointer can later move from version `18` to version `19`.
-
-That movement creates a concurrency risk. Imagine a release job that evaluates `candidate` when it points to version `18`. Another job moves the alias to version `19` before deployment starts. If the release job resolves the alias a second time, it can deploy a model that never received the first job’s approval.
-
-The safe pattern has two steps. Resolve the alias once at the start of the handoff, then store and use the concrete version for every later check. The candidate record should carry `ticket-router:18`, the artifact and candidate-manifest digests, and the evidence identities. Release intake should receive those concrete values rather than resolving a moving alias again.
+At a high level, **model promotion** is the governed act of changing which immutable model version a downstream system is allowed or expected to use. The downstream system may be an online endpoint, a batch-scoring job, or a release pipeline. Promotion can move an alias, copy a model into a production-controlled registry namespace, update a deployment specification, or combine those actions.
 
 ```mermaid
-sequenceDiagram
-    participant R as Release job
-    participant G as Registry
-    participant D as Deployment controller
-    participant T as Runtime telemetry
-    R->>G: Resolve candidate alias
-    G-->>R: ticket-router version 18
-    R->>R: Verify approval for version 18
-    R->>D: Deploy pinned version 18
-    D->>T: Start canary release unit
-    T-->>R: Loaded version 18 and expected digests
+flowchart TD
+    A["Candidate Identity<br/>(exact logged model and registry version)"] --> B["Validation Evidence<br/>(quality, safety, and runtime checks)"]
+    B --> C{"Approval Decision<br/>(authorized release intent)"}
+    C -- "Reject" --> D["Retain Candidate<br/>(evidence and rejection reason)"]
+    C -- "Approve" --> E["Promotion Action<br/>(alias, environment copy, or deployment update)"]
+    E --> F["Runtime Verification<br/>(loaded version and health evidence)"]
+    F --> G["Rollback Readiness<br/>(known compatible prior release)"]
 ```
 
-Current MLflow Model Registry workflows use aliases and tags for this purpose. MLflow’s fixed Model Stages were deprecated starting in version 2.9. Aliases provide movable references, while tags can describe review status such as `pending`, `approved`, `rejected`, or `superseded`. Teams maintaining older stage-based workflows should plan a migration rather than extending stage names into new release logic.
+Approval, selection, and actual runtime state are separate claims. Each one needs its own evidence.
 
-## Review States Describe Candidate Readiness
-<!-- section-summary: A registry review state records whether one candidate's evidence is ready for release review, rejected, or superseded. -->
+## Learn the Lifecycle Identities
+<!-- section-summary: Logged models, registered versions, aliases, and deployments identify different parts of the lifecycle and change at different rates. -->
 
-A **review state** describes what happened to the candidate's evidence before the production release is assembled. Terms such as `under_review`, `reviewed_candidate`, `rejected_for_safety_slice`, and `superseded_before_review` communicate more than a generic `Production` stage.
+A registry workflow is much clearer once every identifier has one job. You can think of the system as a library: a logged model is one completed manuscript, a registered model is the series name, a version is a numbered edition, and an alias is a sign pointing readers toward the edition currently preferred.
 
-`reviewed_candidate` is deliberately narrower than `approved_for_production`. It means that the model identity is stable, the expected evaluation evidence exists, and the candidate can enter the release process. The release process must still pin a runtime and contracts, validate the target environment, obtain any required release authority, and choose a traffic scope.
+**A logged model** identifies one model output created during training. In MLflow 3, each logged model receives a unique `model_id`. Model artifacts live under that model identity, and model-specific metrics can be linked to it. This matters because one training run may log several checkpoints or model variants. The run explains the execution; the logged-model identity tells reviewers which output they are discussing.
 
-Review depth should follow product risk. A low-risk internal recommendation may use automated gates and an accountable model owner. A model that affects safety, credit, employment, or access to essential services usually needs domain, risk, legal, or compliance review defined by the organisation’s governance process. The registry can store the status and links, while the policy defines who has authority.
+**A registered model** is the governed family name, such as `prod.risk.fraud_detection`. It groups versions that solve the same production problem under one access and ownership boundary.
 
-The candidate packet should answer four groups of questions:
+**A model version** is a numbered entry inside that family. Version `42` should continue to resolve to the same logged model, artifact, signature, and required inference assets. Descriptions, tags, and aliases may change around the version, while its model identity remains stable.
 
-1. **Identity:** Which candidate artifact, data, code, load contract, and environment did reviewers inspect?
-2. **Quality:** Which baseline, metrics, slices, uncertainty, and failure examples support the decision?
-3. **Use:** Which intended use, population, exclusions, and known limitations did evaluation cover?
-4. **Handoff:** Which concrete version and digests must the release system consume without resolving aliases again?
+**An alias** is a readable pointer such as `Candidate`, `Champion`, or `Rollback`. It can move from one version to another. An alias expresses current intent. A durable release record preserves the history of each decision.
 
-A compact machine-readable record can carry the handoff:
+**A deployment revision** describes running infrastructure. It usually combines the model version with an image, dependency environment, feature contract, scaling policy, and endpoint configuration. The registry identifies the candidate. The deployment revision identifies the runnable release.
+
+```mermaid
+flowchart TD
+    A["Training Run<br/>(code, data, parameters, and execution)"] --> B["Logged Model<br/>(one model output with a model ID)"]
+    B --> C["Registered Version<br/>(numbered entry in a governed model family)"]
+    D["Alias<br/>(movable name for current intent)"] -. "points to" .-> C
+    C --> E["Deployment Revision<br/>(model plus serving configuration)"]
+    E --> F["Running Instances<br/>(workers handling predictions)"]
+```
+
+During an incident, these identifiers answer different questions. The run explains how training happened. The version identifies what reviewers approved. The alias shows current registry intent. The deployment revision and runtime telemetry show what served requests.
+
+## Keep the Candidate Identity Stable
+<!-- section-summary: A reviewed version must keep the same model bytes and load contract so every later decision refers to the behavior that validation measured. -->
+
+An immutable candidate is a model whose meaningful contents stay fixed after registration. In essence, the version acts as a sealed subject for testing and approval. If its tokenizer, preprocessing state, dependency requirements, label map, or weights change, the behavior under review has changed too.
+
+Create a new logged model and a new registered version for any change that could affect predictions or loading. Registry systems commonly allow mutable descriptions, tags, and aliases because those fields describe the version. That convenience should never be used to replace the artifact behind an approved version.
+
+MLflow 3 makes the logged-model identity visible in code:
+
+```python
+with mlflow.start_run():
+    model_info = mlflow.sklearn.log_model(
+        sk_model=model,
+        name="fraud-candidate",
+        signature=signature,
+        input_example=input_example,
+    )
+
+logged_model_id = model_info.model_id
+logged_model_uri = model_info.model_uri
+```
+
+The registry version should retain that `model_id` or an equally strong source reference. For artifact stores outside the registry, record a content digest as well. A path such as `s3://models/fraud/latest/` can point to different bytes after its contents are replaced. A version plus a digest makes accidental replacement detectable.
+
+A clean-environment load test provides the first useful check. Fetch the exact version, load its packaged dependencies or approved runtime, score a small fixture, and verify the input and output schema. This check catches missing tokenizers, changed class order, and incomplete packaging before promotion reaches a serving system.
+
+## Use Aliases as Movable Pointers
+<!-- section-summary: Release automation resolves a candidate alias once, stores the concrete version, and uses that version throughout the release. -->
+
+An alias gives humans and automation a stable word for a changing choice. `Candidate` can point to the version under review, and `Champion` can point to the version intended for normal production use. MLflow resolves an alias through `models:/<registered-model>@<alias>` or `get_model_version_by_alias()`.
+
+The registry guarantees that an alias resolves to one version inside that registered model at a given moment. The expected result of resolution is a concrete version number that the release job can preserve. Reassigning the alias later changes future resolutions; the stored version number and artifact stay fixed.
+
+```python
+from mlflow import MlflowClient
+
+client = MlflowClient()
+model_name = "prod.risk.fraud_detection"
+
+candidate = client.get_model_version_by_alias(model_name, "Candidate")
+candidate_version = candidate.version
+
+client.set_registered_model_alias(
+    name=model_name,
+    alias="Champion",
+    version=candidate_version,
+)
+```
+
+The important line is the resolution of `candidate.version`. Every validation query, approval check, deployment update, and audit event in that release should use the concrete value afterward.
+
+Consider two releases running close together. The first job resolves `Candidate` to version `42`. A second job later moves `Candidate` to version `43`. If the first job resolves the alias again during deployment, it may deploy version `43` using version `42`'s approval. A release controller prevents this race by storing the resolved version, serializing promotion for the same model, and checking that the expected old `Champion` still owns the alias before changing it. If the state changed, the controller stops and asks for reconciliation.
+
+Aliases also behave differently across workloads. A batch job that loads `@Champion` at startup can record the resolved version for that run. An online service may keep a model in memory for hours. Its running workers retain the loaded model until a deployment integration observes the alias change and creates a new serving revision.
+
+## Attach Validation Evidence to One Version
+<!-- section-summary: Validation evidence explains why one exact version is suitable for a defined use, population, and operating boundary. -->
+
+Validation asks a concrete question: *does this version meet the requirements for this intended use?* A single aggregate accuracy score rarely answers it. The release owner needs evidence about the important cohorts, the current baseline, runtime behavior, and the limits of the evaluation.
+
+For the payment-fraud candidate, the evidence may include:
+
+- the evaluation dataset identity and label-policy version;
+- metric definitions and acceptance thresholds;
+- fraud loss, false-positive rate, and calibration by payment type and region;
+- comparison with the running version `41` on the same examples;
+- schema and clean-load results;
+- latency, throughput, memory, and cost under the intended serving configuration;
+- known limitations, excluded uses, and the owner of each risk decision.
+
+A machine-readable result keeps the gate tied to the version:
 
 ```yaml
-candidate_review_id: review-2026-07-17-1842
-model: ticket-router
-version: "18"
-artifact_sha256: sha256:ee115a66...
-candidate_manifest_sha256: sha256:0d7493c1...
-status: reviewed_candidate
-intended_use: route non-safety-critical support tickets
-excluded_queues: [safety-critical]
-evaluation_report: eval-ticket-router-18
-known_limitations: [low evidence for newly launched locale]
+subject:
+  registered_model: prod.risk.fraud_detection
+  version: "42"
+  logged_model_id: m-7f3c...
+  artifact_sha256: sha256:91c4...
+evaluation:
+  report_id: eval-fraud-v42
+  dataset_snapshot: fraud-eval-q2-r3
+  policy_version: fraud-release-policy-v6
+  result: passed
+  limitation: insufficient labels for a newly launched payment method
 ```
 
-The release intake gate verifies this record against registry metadata before it builds a production release. A digest mismatch, missing slice report, or unresolved alias stops the handoff. Later release gates add runtime compatibility, environment policy, traffic, monitoring, and rollback evidence without silently rewriting what the candidate review concluded.
+The dataset name above identifies one snapshot. The report establishes its time coverage, label maturity, join coverage, uncertainty, and cohort definitions. The candidate receives approval only for the use that this evidence supports.
 
-## Build A Pinned Candidate Handoff
-<!-- section-summary: The handoff resolves aliases once, verifies registry evidence, and gives release automation one immutable candidate record. -->
+## Record Approval Separately From Deployment
+<!-- section-summary: Approval authorizes a specific release intent, while deployment and runtime verification prove that the intent was carried out. -->
 
-The handoff is a read boundary between experiment systems and release systems. It should not ask production automation to rediscover which run the team meant. The registry workflow resolves the selected alias once, reads the concrete version, verifies that required metadata and evidence links belong to that version, and emits a candidate record whose own digest can be checked later.
+Approval records an accountable decision about evidence. Deployment changes a technical system. Keeping them separate prevents a tag edit or alias move from silently becoming production authority.
 
-For `ticket-router:18`, the handoff process checks:
+For a low-risk internal model, an automated policy gate and an accountable service owner may provide sufficient approval. Higher-impact decisions need a broader review shaped by the product risk. A credit model, for example, may need domain and risk reviewers plus the legal or compliance roles defined in organizational policy. The registry displays the review state; the policy determines who has authority.
 
-| Check | Reason |
-| --- | --- |
-| Version and candidate-manifest digests resolve | The model under review has not moved or disappeared |
-| Training run, dataset, and source references exist | Release reviewers can trace where the candidate came from |
-| Input signature and load fixture pass | The release system receives a usable candidate rather than disconnected bytes |
-| Required evaluation report and slices exist | `reviewed_candidate` has concrete evidence behind it |
-| Intended use, exclusions, limitations, and owner are present | Later release decisions do not invent a broader claim |
+MLflow model-version tags are useful for visible state such as `validation_status=passed`. Tags are mutable metadata, so a durable approval record should also capture the actor, policy version, evidence digest, exact model version, decision, and reason. Many teams store this record in a deployment system, governed database, or append-only audit stream and link it back to the registry version.
 
-The operation should be idempotent. Retrying handoff for the same review ID returns the same candidate record. It must never resolve `candidate` again and silently pick up version `19`. If an alias or review state changed after the process began, the workflow pauses and requires a fresh review or explicit reconciliation.
+The wording of the decision matters. `validation_passed` says that required checks succeeded. `approved_for_release` says an authorized actor permits a defined promotion. `serving` should come from deployment state or runtime evidence. One status field should not carry all three meanings.
+
+## Move Beyond Deprecated MLflow Stages
+<!-- section-summary: Current MLflow workflows replace fixed registry stages with aliases, tags, and access-controlled registered models for each environment. -->
+
+Older MLflow tutorials often move a version through `Staging`, `Production`, and `Archived`. Those fixed Model Registry stages are deprecated and are planned for removal in a future major release. New workflows should use aliases and tags first. Models in Databricks Unity Catalog exclude the old stages entirely.
+
+The replacement separates responsibilities that the old stage field mixed together:
+
+- A model-version tag such as `validation_status=passed` describes review state.
+- An alias such as `Candidate` or `Champion` points to a selected version inside one registered model.
+- Separate registered models or governed namespaces represent environments with distinct access controls.
+- CI/CD or a deployment controller updates the production deployment and records the result.
+
+For example, old loading code may use `models:/fraud_detection/Production`. A current Unity Catalog workload can use `models:/prod.risk.fraud_detection@Champion` for a movable production selection or `models:/prod.risk.fraud_detection/42` for an exact version. Release automation should resolve the alias and pin the version before it performs approval-sensitive work.
+
+Legacy migration needs more than renaming `Production` to `Champion`. First determine whether the stage helped people discover a model or authorized an environment change. Then trace any deployment trigger attached to it. Replace each responsibility with its current mechanism before retiring `transition_model_version_stage()` and stage-based model URIs.
+
+## Choose an Environment Promotion Pattern
+<!-- section-summary: Teams either produce models inside each controlled environment or copy an exact validated version across an environment boundary. -->
+
+An **environment-qualified registered model** includes the environment in its governed name or namespace. `staging.risk.fraud_detection` and `prod.risk.fraud_detection` are separate model families with separate permissions. This design makes production write access explicit instead of treating a label inside one shared registry as the security boundary.
+
+### Produce the Model Inside Production
+
+The mature default is to promote code and pipeline definitions through source control and CI/CD, then train or register the production model inside the production environment. This keeps data access, feature computation, monitoring, and retraining under production controls.
+
+### Copy the Validated Artifact
+
+Some models are too expensive to retrain in every environment, or the reviewed artifact itself must cross the boundary. In that case, copy the exact version into the production-controlled registered model. Databricks Unity Catalog supports this with `copy_model_version()`:
+
+```python
+from mlflow import MlflowClient
+
+client = MlflowClient(registry_uri="databricks-uc")
+
+promoted = client.copy_model_version(
+    src_model_uri="models:/staging.risk.fraud_detection/18",
+    dst_name="prod.risk.fraud_detection",
+)
+
+production_version = promoted.version
+```
+
+The destination version number may differ from the source. The promotion record therefore keeps both identities and verifies that their model contents match. After the copy completes, run destination-side permission, digest, signature, and load checks. Only then should the production alias or deployment reference move.
 
 ```mermaid
-sequenceDiagram
-    participant H as Handoff job
-    participant G as Model registry
-    participant E as Evidence store
-    participant R as Release intake
-    H->>G: Resolve candidate alias once
-    G-->>H: ticket-router version 18 and digests
-    H->>E: Verify required report identities
-    E-->>H: Evidence belongs to version 18
-    H->>H: Sign pinned candidate record
-    H->>R: Submit reviewed candidate 18
+flowchart TD
+    A["Staging Version 18<br/>(validated source candidate)"] --> B["Authorized Copy<br/>(controlled environment boundary)"]
+    B --> C["Production Version 7<br/>(new destination registry identity)"]
+    C --> D["Destination Validation<br/>(digest, signature, access, and load)"]
+    D --> E["Production Selection<br/>(alias or deployment reference)"]
 ```
 
-The audit event records the concrete version, source alias at resolution time, candidate-review ID, evidence identities, actor or workload identity, time, and result. Failed and superseded handoffs remain in history because they explain why a candidate did not enter release planning.
+The copy is part of promotion. The deployment update and runtime verification establish that the destination endpoint uses the copied version.
 
-## Release Systems Add Production Meaning
-<!-- section-summary: After candidate handoff, other systems add the runtime, environment authority, traffic plan, live verification, and rollback release. -->
+## Run Promotion as a Governed Workflow
+<!-- section-summary: A reliable promotion resolves the candidate once, checks evidence, records approval, changes controlled references, and verifies the outcome. -->
 
-The registry record is an input to release management, not a production declaration. The Model Versioning article combines the candidate with a serving-image digest, request and response contracts, feature contract, decision policy, and rollback target to create a complete release identity. Artifact Promotion decides whether to copy or reference the exact artifact across an environment trust boundary and verifies the destination. Model Release Strategies control blue-green, canary, or shadow traffic. Monitoring records which release actually served each decision.
+Promotion works best as one idempotent workflow owned by release automation. *Idempotent* means a retry with the same release ID produces the same intended result instead of selecting a newer candidate or creating duplicate decisions.
 
-Keeping this boundary explicit prevents several common errors:
+The workflow follows a clear order:
 
-- A registry alias move cannot bypass a deployment review or alter running workers by itself.
-- A `reviewed_candidate` state cannot be mistaken for permission to send production traffic.
-- A release-specific image, threshold, feature contract, or fallback does not get written back as if training produced it.
-- Runtime telemetry remains the source of truth for what served users, while the registry remains the source of truth for which candidate and evidence entered the release process.
+1. Resolve `Candidate` once and store the concrete source version.
+2. Verify the logged-model identity, artifact digest, signature, and required assets.
+3. Confirm that evaluation evidence and approval refer to that exact version.
+4. Copy the version across the environment boundary if the operating model requires it.
+5. Verify the destination version and record the source-to-destination mapping.
+6. Create a release record with the intended deployment and rollback target.
+7. Re-read the current alias and deployment state to detect a competing release.
+8. Move the governed alias or update the deployment to the pinned version.
+9. Confirm that the runtime loaded the intended release and passed health checks.
 
-The handoff is complete when release intake can verify the candidate without trusting a mutable name. What happens to that candidate next belongs to the production release framework.
+```mermaid
+flowchart TD
+    A["Resolve Candidate<br/>(store one concrete version)"] --> B["Verify Evidence<br/>(identity, validation, and approval)"]
+    B --> C{"Environment Copy Needed?<br/>(separate production namespace)"}
+    C -- "Yes" --> D["Copy and Revalidate<br/>(verify destination identity)"]
+    C -- "No" --> E["Prepare Release Record<br/>(deployment and rollback references)"]
+    D --> E
+    E --> F["Check Current State<br/>(detect competing promotion)"]
+    F --> G["Update Governed Reference<br/>(alias or deployment revision)"]
+    G --> H["Verify Running Release<br/>(identity, health, and outcome)"]
+```
 
-## Rejection And Supersession Preserve Learning
-<!-- section-summary: Rejected and superseded candidates keep enough evidence to explain experiment decisions and prevent repeated mistakes. -->
+A failed step leaves the prior production reference intact whenever possible. The workflow records the failure and can resume from verified state. A retry never goes back to the `Candidate` alias to discover a different version.
 
-A rejected version still contains useful evidence. Its failed slice, incompatible schema, or excessive latency can prevent the same mistake in a later experiment. The review record should state the reason and the evidence that failed. `Rejected` means a decision occurred; `superseded` can describe a candidate that another version replaced before review finished.
+## Pin the Deployment Reference
+<!-- section-summary: Deployment automation uses a concrete model version so the running release cannot change through an unrelated alias update. -->
 
-Retention follows lifecycle meaning. Recently rejected candidates may need artifacts for investigation. Old exploratory versions may retain metadata while large disposable artifacts expire. Candidates referenced by a release or audit record need a dependency-aware retention decision. When bytes disappear, the registry must stop claiming that the version remains loadable or reproducible.
+The deployment specification should name the exact version that passed the release gate. This is the bridge between registry intent and running infrastructure.
 
-Deletion therefore queries release references, audit requests, legal holds, and retention policy before removing an artifact. The production modules define rollback retention and environment revocation in detail; the registry's job is to preserve truthful candidate history and expose dependencies.
+```yaml
+release_id: fraud-model-release-42
+model:
+  registered_name: prod.risk.fraud_detection
+  version: "42"
+  logged_model_id: m-7f3c...
+  artifact_sha256: sha256:91c4...
+serving:
+  image: registry.example/ml/fraud-serving@sha256:6bd1...
+  feature_contract: fraud-features-v12
+rollback_release: fraud-model-release-41
+```
 
-## The Complete Registry Handoff
-<!-- section-summary: A reliable registry workflow uses immutable versions for candidate identity, aliases for discovery, evidence-linked review states, and a pinned handoff. -->
+An online endpoint usually creates a new deployment revision containing this reference. Traffic can remain on the existing revision during smoke tests, then move gradually or all at once according to the release strategy. An alias may still show which version is the intended champion, but the endpoint configuration and runtime identity provide stronger evidence of what is serving.
 
-Registry versions give training and evaluation a shared subject. Aliases make current intent convenient to find. Review states record what happened to the candidate evidence. The handoff resolves those movable references into one immutable record that release systems can verify.
+Batch workflows have a slightly different boundary. A scheduled job can resolve `@Champion` at the beginning of each run, immediately store the resolved version in run metadata, and use that pinned value for every partition. This allows the next batch run to adopt a newly promoted version without mixing versions inside the current run.
 
-This separation gives a beginner a reliable way to inspect any registry. Ask which identity stays immutable, which pointer can move, what evidence belongs to the version, what `reviewed` actually promises, and whether the next system receives concrete versions and digests. Environment authority, traffic, runtime identity, and rollback begin after this handoff.
+## Verify the Version That Entered Service
+<!-- section-summary: Post-deployment verification connects the approved registry version to the deployment revision and the workers that actually handle predictions. -->
+
+Promotion is incomplete until the target system confirms the running identity. A successful registry update only proves that registry state changed.
+
+For an online service, inspect the deployment resource and startup telemetry. The deployment should report the registered name, concrete version, artifact or image digest, and release ID. Send a smoke request through the real endpoint path, then confirm that logs, metrics, or traces attribute it to the new release. Health checks cover load success, schema compatibility, latency, error rate, and resource behavior before broader traffic moves.
+
+Suppose `Champion` points to version `42`, while the endpoint still reports release `41`. That can be a temporary and intentional state during rollout. It can also reveal a failed deployment trigger. The release dashboard should display registry intent and serving reality as separate fields so operators can tell the difference.
+
+Prediction logging should preserve the model version or release ID for later outcome analysis. Without that field, a team can see that performance changed after a promotion but cannot reliably separate decisions made by the old and new versions.
+
+## Read Managed-Provider Terms Carefully
+<!-- section-summary: Managed registries use different names for versions, approval, aliases, lifecycle state, and deployments, so teams should map each object to its actual responsibility. -->
+
+Cloud platforms implement the same lifecycle responsibilities with different objects. Copying their vocabulary without checking its behavior can blur approval and deployment again.
+
+**Amazon SageMaker AI** groups numbered model packages inside a Model Package Group. `ModelApprovalStatus` can move through states such as `PendingManualApproval`, `Approved`, and `Rejected`, and an approval event can trigger CI/CD if the team configures that integration. SageMaker also has a configurable `ModelLifeCycle` stage and stage status with IAM controls and EventBridge events. This current SageMaker construct is separate from MLflow’s deprecated fixed stages. A release record should still keep the exact model-package ARN or version and the endpoint deployment that consumed it.
+
+**Vertex AI Model Registry** stores versions under a model and supports mutable version aliases. One version owns the `default` alias. An operation that omits the version can therefore select whichever version currently owns `default`. Release automation should pass the intended version explicitly, treat alias movement as a governed selection, and record deployment evidence separately.
+
+**Azure Machine Learning** stores registered model assets with explicit versions such as `azureml:<name>:<version>`. An online deployment points to a model asset, while the endpoint controls traffic across deployments. This separation is useful: the model version, serving deployment, and traffic decision remain visible as different resources.
+
+**Databricks Unity Catalog** uses three-level model names, permissions, lineage, model versions, aliases, and audit logs. Stages are unsupported. Environment-specific catalogs or schemas provide access boundaries, and `copy_model_version()` supports artifact promotion if production retraining is unsuitable.
+
+The product names differ, but the review questions stay stable: Which identity is immutable? Which pointer can move? Who may approve or change it? Which deployment consumed the version? Which telemetry proves that it ran?
+
+## Roll Back to a Known Immutable Version
+<!-- section-summary: Rollback restores a previously verified release by changing the deployment reference or traffic, then confirming that the prior version is running again. -->
+
+A rollback target is a known compatible release. The previous number in a registry qualifies only if its artifact remains available, its serving image and feature contract still work, and production evidence shows that it previously met the required operating limits. Version `41` satisfies those conditions in the payment-fraud release.
+
+Prepare that target before promotion. Retain its model artifact, image digest, configuration, feature contract, and deployment recipe. Run a periodic load check if rollback assets have a long retention period. A model-only rollback may fail after a breaking feature or request-schema change, so the rollback reference should identify the complete prior release.
+
+```mermaid
+flowchart TD
+    A["Release Regression<br/>(quality or service limit breached)"] --> B["Select Known-Good Release<br/>(verified model and serving contract)"]
+    B --> C["Restore Deployment Reference<br/>(prior revision or traffic target)"]
+    C --> D["Confirm Runtime Identity<br/>(workers loaded rollback version)"]
+    D --> E["Verify Recovery<br/>(health and guarded outcome signals)"]
+    E --> F["Preserve Failed Release<br/>(evidence for investigation)"]
+```
+
+For the payment-fraud release, operators direct traffic back to release `41`, confirm that workers report model version `41`, and watch request health plus the fastest trustworthy outcome signals. They may also move `Champion` back to version `41` so registry intent matches the recovered service. Reassigning the alias alone would be insufficient for workers that already loaded version `42`.
+
+Rollback history must remain visible. Keep the failed version, its evidence, the triggering alert, the actor, and the recovery result. Deleting the candidate removes the material needed to explain the incident and improve the next gate.
+
+## Preserve the Release Record
+<!-- section-summary: A durable release record connects immutable model identity, validation, approval, reference changes, runtime verification, and rollback. -->
+
+The release record is the lifecycle narrative in machine-readable form. It answers what changed, why the change was allowed, who authorized it, what the system actually ran, and how recovery would work.
+
+Create the record from resolved versions and avoid human-entered aliases. The record should exist before the deployment begins, because it gives every retry one stable release ID and one rollback target. Deployment automation can append observed results without changing the candidate or approval that started the release.
+
+```yaml
+release_id: fraud-model-release-42
+candidate:
+  source: staging.risk.fraud_detection/18
+  destination: prod.risk.fraud_detection/42
+  artifact_sha256: sha256:91c4...
+evidence:
+  evaluation_report: eval-fraud-v42
+  evaluation_sha256: sha256:c1a8...
+approval:
+  policy: fraud-release-policy-v6
+  decision: approved-by-ml-release-reviewer
+change:
+  previous_release: fraud-model-release-41
+  deployment_revision: fraud-green-42
+verification:
+  loaded_version: "42"
+  smoke_test: passed
+  rollout_state: canary
+```
+
+Store the record before traffic moves, then append deployment and verification results. If the release fails, append the failure and rollback outcome instead of rewriting the original approval. This preserves the difference between what the team intended and what the production system achieved.
+
+## The Main Idea
+<!-- section-summary: Safe promotion keeps immutable model identity, mutable intent, approval evidence, deployment state, and rollback evidence distinct but connected. -->
+
+Model promotion is a controlled change of intent and deployment, built around an exact model version. Logged-model identity and registry versions hold the candidate steady. Validation evidence explains its supported use. Approval grants authority. Aliases make current intent discoverable. Environment-qualified models enforce ownership boundaries. Deployment references and runtime telemetry prove what served predictions.
+
+A reliable review can follow five questions: Which exact version is under consideration? What evidence belongs to it? Who authorized the change? Which deployment loaded it? Which complete release can restore service? If every answer points to an immutable identity and a durable record, promotion and rollback remain understandable under pressure.
 
 ## References
 
+- [MLflow 3 migration guide](https://mlflow.org/docs/latest/ml/mlflow-3/)
 - [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
+- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
 - [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [AWS SageMaker AI Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
-- [Azure Machine Learning model management and deployment](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-management-and-deployment?view=azureml-api-2)
-- [Vertex AI Model Registry](https://cloud.google.com/vertex-ai/docs/model-registry/introduction)
+- [Databricks: Migrate workflows and models to Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/migrate-to-uc)
+- [Amazon SageMaker AI: Model Registry models and versions](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-models.html)
+- [Amazon SageMaker AI: Update model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
+- [Amazon SageMaker AI: Model lifecycle staging construct](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-staging-construct.html)
+- [Vertex AI: Model version aliases](https://cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Azure Machine Learning: Work with registered models](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-models?view=azureml-api-2)
+- [Azure Machine Learning: Deploy a model as an online endpoint](https://learn.microsoft.com/en-us/azure/machine-learning/tutorial-deploy-model?view=azureml-api-2)

@@ -1,7 +1,7 @@
 ---
 title: "Retrieval and Knowledge"
-description: "Build retrieval systems that bring the right knowledge into LLM context through governed sources, traceable chunks, permission filters, hybrid ranking, citations, and evaluation."
-overview: "Retrieval is an evidence pipeline, not a vector-database lookup. This article follows knowledge from authoritative sources through ingestion, indexing, search, reranking, context assembly, citation, evaluation, and incident recovery."
+description: "Build retrieval systems that turn governed source material into current, permission-safe, traceable evidence for model decisions."
+overview: "Retrieval gives a model access to external knowledge through a governed source-to-evidence lifecycle that connects sources, indexes, chunks, permissions, ranking, citations, evaluation, and production operations."
 tags: ["MLOps","LLMOps","production","context"]
 order: 2
 id: "article-mlops-llmops-retrieval-and-knowledge"
@@ -10,169 +10,672 @@ aliases:
   - child-context-engineering-03-retrieval-and-knowledge
 ---
 
-An LLM can write fluent prose without knowing the current policy, contract, product record, or incident. **Retrieval** gives an application a controlled way to find external knowledge and place selected evidence in the model's context before it answers.
+## Table of Contents
 
-The common label **RAG** means retrieval-augmented generation. It describes the connection between search and generation, but it can hide most of the real system. A production retrieval design also decides which sources are authoritative, how content is versioned, what one searchable unit means, when permissions apply, how results are ranked, how citations survive, and how failures are evaluated.
+1. [Retrieval Brings External Evidence Into a Model Decision](#retrieval-brings-external-evidence-into-a-model-decision)
+2. [Five Objects Keep the Knowledge System Honest](#five-objects-keep-the-knowledge-system-honest)
+3. [Govern the Source Lifecycle Before Tuning Search](#govern-the-source-lifecycle-before-tuning-search)
+4. [Parsing and Chunking Create Evidence Units](#parsing-and-chunking-create-evidence-units)
+5. [Retrieval Uses Several Search Signals](#retrieval-uses-several-search-signals)
+6. [Permissions Must Constrain the Search](#permissions-must-constrain-the-search)
+7. [Evidence Selection Handles Coverage, Conflict, and Abstention](#evidence-selection-handles-coverage-conflict-and-abstention)
+8. [Citations Need a Resolver](#citations-need-a-resolver)
+9. [Evaluate Retrieval Separately From Generation](#evaluate-retrieval-separately-from-generation)
+10. [Operate Retrieval as a Production Data System](#operate-retrieval-as-a-production-data-system)
+11. [References](#references)
 
-## Follow The Evidence, Not The Database
-<!-- section-summary: A retrieval system is an evidence lifecycle from source ownership to an answer whose supporting passages can be traced and checked. -->
+## Retrieval Brings External Evidence Into a Model Decision
+<!-- section-summary: Retrieval finds relevant external material and supplies selected evidence to a model without turning the model into the owner of that knowledge. -->
 
-Use PolicyDesk, an internal assistant for a medical-device manufacturer, as a supporting example. An employee asks, “May I accept a supplier's dinner invitation during the Munich trade show?” The answer may depend on a global gifts policy, a regional addendum, the employee's role, the current approval threshold, and the date of the event.
+At a high level, **retrieval** is the process of finding information outside a model and bringing the useful parts into one model decision. The external information might be a policy, product manual, source file, support record, research paper, or incident runbook.
 
-The evidence moves through six stages:
+This capability matters because a model's training cannot contain every private record or every recent change. Imagine a user asking:
+
+**“What is the current hotel expense limit for a trip to Berlin?”**
+
+A useful answer depends on information that the model may never have seen:
+
+- the organisation's active travel policy.
+- the employee's region and role.
+- the trip date.
+- a local exception for high-cost cities.
+- the approval rule for spending above the limit.
+
+The application searches governed sources, selects the passages that apply, and places them in the model's context. The model then explains the limit using those passages.
+
+This pattern is commonly called **retrieval-augmented generation**, or **RAG**. “Retrieval” finds external material. “Augmented” means that the material is added to the model input. “Generation” produces the answer.
 
 ```mermaid
-flowchart LR
-    S["Authoritative sources"] --> I["Ingest and version"]
-    I --> U["Create traceable retrieval units"]
-    U --> X["Build lexical and semantic indexes"]
-    X --> Q["Filter, retrieve, and rank"]
-    Q --> C["Assemble bounded context"]
-    C --> A["Answer with evidence links"]
-    A --> E["Evaluate and observe"]
-    E -. "findings improve" .-> S
-    E -.-> U
-    E -.-> Q
+flowchart TD
+    Q["User asks a question"]
+    Q --> R["Application retrieves<br/>relevant source material"]
+    R --> S["Application selects<br/>usable evidence"]
+    S --> C["Evidence enters<br/>the model context"]
+    C --> G["Model generates<br/>an answer with citations"]
+    G --> V["Application validates<br/>citations and output"]
 ```
 
-Each stage can independently make the answer wrong. A perfect vector search cannot rescue an obsolete source. A relevant chunk without its section heading may be ambiguous. A correct passage retrieved before an access check can leak data. A good context set can still be misquoted by the model. The architecture therefore preserves an **evidence chain** from answer claim back to source version.
+RAG solves a specific problem: it gives the model timely access to external knowledge at request time. Several other controls remain necessary.
 
-This is the main distinction between knowledge and context. The knowledge system holds governed, searchable content. Model context is a temporary projection of a few records for one decision. The context window is not the knowledge base, and a vector database is not the source of truth.
+If the source contains an obsolete limit, retrieval can faithfully return obsolete evidence. If the search ignores permissions, it can expose another department's document. If chunking separates a rule from its exception, the retrieved passage can mislead the model. If the model overstates what the passage says, a relevant search result still produces a poorly grounded answer.
 
-## Start With Source Authority And Freshness
-<!-- section-summary: Retrieval quality begins by knowing who owns each source, which version is active, and how updates or deletions propagate into every index. -->
+A production retrieval system therefore owns four outcomes:
 
-Before chunking documents, build a source inventory. For each source, record its owner, authority, update mechanism, classification, access model, effective dates, retention, and deletion process. PolicyDesk should prefer the compliance repository over an employee's copied PDF because the repository owns the policy lifecycle.
+1. the right sources are available and current.
+2. the right evidence is found inside the caller's access scope.
+3. the evidence arrives with enough context and provenance to be understood.
+4. the final answer can be checked against the supplied evidence.
 
-Authority is domain-specific. A ticket may be authoritative for support history but not for the official product warranty. A wiki may explain how engineers use a service while the versioned API specification defines what the service promises. Retrieval should preserve these source classes so ranking and answer policy can distinguish them.
+The model participates at the end of this path. Data governance, indexing, access control, and evidence selection determine the quality of what it receives.
 
-Ingestion turns a source revision into searchable artifacts. It should be repeatable and idempotent: processing the same source version twice must not create duplicate active chunks. Keep the original source ID and revision, ingestion time, content hash, parser version, and status. Mark a replacement as a new revision rather than editing indexed text in place without lineage.
+## Five Objects Keep the Knowledge System Honest
+<!-- section-summary: Source records, searchable indexes, candidates, evidence blocks, and model context represent different stages of the retrieval path. -->
+
+Retrieval discussions often use “knowledge base,” “vector store,” “document,” and “context” as loose synonyms. Clear object boundaries show which component owns a fact and where each failure can occur. Five objects are especially important.
+
+### The source of truth owns the material
+
+The **source of truth** is the system authorised to publish or change the material. A policy repository may own expense rules. A Git repository may own versioned code. A product catalogue may own specifications. An incident platform may own the active incident record.
+
+The source of truth controls status, revision, ownership, permissions, retention, and deletion. Search systems consume its records. They do not take over that ownership.
+
+### The searchable index is a derived copy
+
+A **searchable index** is a representation prepared for fast retrieval. It may contain lexical terms, vectors, structured metadata, or several of these together. Elasticsearch, OpenSearch, PostgreSQL full-text search, a vector database, and provider-managed vector stores can all serve this role.
+
+Indexes trade source fidelity for search performance. They may lag behind the source, use a different schema, and contain several chunks for one document. An index health check can report green while its content is stale.
+
+### A retrieved candidate is a possible match
+
+A **candidate** is one result returned by a first-stage search. It usually includes an identifier, score, metadata, and text or a reference to text. Candidates are possible evidence. Their presence says, “the search system found this potentially relevant.”
+
+A candidate can still be wrong for the task. It may belong to an expired revision, duplicate another result, miss a regional exception, or lack the caller's required evidence type.
+
+### An evidence block is selected for use
+
+An **evidence block** is a candidate that has passed the application's selection rules. The block contains enough surrounding material to support a claim. It also carries a stable source locator and a clear role, such as `official_policy`, `supporting_guidance`, or `historical_record`.
+
+This is the point where search results become decision material. Selection may merge adjacent chunks, attach a heading path, reject stale revisions, or pair a rule with its exception.
+
+### Model context is the temporary working view
+
+The **model context** contains the evidence blocks plus instructions, current user input, relevant state, and permitted tools for one inference step. It is temporary. The context window never replaces the source or the index.
+
+```mermaid
+flowchart TD
+    S["Source of truth<br/>owns revision and access"]
+    S --> I["Searchable index<br/>derived for fast search"]
+    I --> C["Retrieved candidates<br/>possible matches"]
+    C --> E["Evidence blocks<br/>selected and labelled"]
+    E --> M["Model context<br/>temporary working view"]
+    M --> A["Answer or tool proposal"]
+
+    A -. "citation resolves" .-> S
+```
+
+Consider a current travel policy stored in a document repository. The repository record is the source. OpenSearch may hold one lexical and vector representation per section. A query returns twenty candidates. The application selects the active global limit and the applicable regional exception as two evidence blocks. Those blocks enter the model context with the user's question.
+
+Each object has its own failure mode. A missing source is an ingestion problem. A missing index entry is an indexing problem. Poor candidate order is a ranking problem. A missing exception in the final evidence is a selection problem. A correct evidence set followed by an unsupported answer is a generation problem.
+
+## Govern the Source Lifecycle Before Tuning Search
+<!-- section-summary: Search quality depends on a governed lifecycle that publishes, versions, activates, supersedes, revokes, and deletes source material across every retrieval path. -->
+
+The best ranking algorithm cannot recover a document that never entered the index. It also cannot know that a source owner withdrew a policy unless the lifecycle carries that decision into search.
+
+Begin with a source registry. For each collection, record:
+
+- the source owner and approved ingestion path.
+- which facts the source can establish.
+- document classification and access model.
+- revision and effective-date fields.
+- update frequency and freshness target.
+- retention and deletion requirements.
+- the indexes, caches, and summaries derived from it.
+
+This registry explains what “current” means. A product manual may become current as soon as a release tag is published. A policy may be published today with an effective date next month. An incident note may become stale after a few minutes.
+
+### One revision moves through explicit states
+
+Ingestion should create an immutable record for each source revision. Reprocessing the same revision should produce the same active chunk identities or replace them atomically. Silent in-place edits make citations and incident investigation unreliable.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Discovered
-    Discovered --> Parsed
-    Parsed --> Indexed: validation passes
-    Parsed --> Quarantined: malformed or policy failure
-    Indexed --> Superseded: newer revision active
-    Indexed --> Revoked: owner withdraws content
-    Superseded --> Deleted: retention allows
-    Revoked --> Deleted: deletion propagated
+    Discovered --> Parsed: parser succeeds
+    Discovered --> Quarantined: malformed or disallowed
+    Parsed --> Indexed: chunks validated
+    Indexed --> Active: publication check passes
+    Active --> Superseded: newer revision takes effect
+    Active --> Revoked: owner withdraws source
+    Superseded --> Deleted: retention permits removal
+    Revoked --> Deleted: purge confirmed
 ```
 
-Freshness has two parts. **Content freshness** asks whether the indexed revision matches the owner source. **Decision freshness** asks whether that revision is valid for the question's effective date. A policy effective next month may be the newest document but the wrong rule for today's expense.
+An ingestion record should retain the source ID, revision, content hash, parser version, ingestion time, classification, and current status. The individual chunks inherit that lineage.
 
-Deletion must reach the text index, vector index, cache, citation resolver, and any precomputed summaries. A record removed only from the primary index can continue appearing through another retrieval path.
+### Freshness has two meanings
 
-## A Chunk Is An Evidence Unit
-<!-- section-summary: Chunking should preserve a passage that can be retrieved, understood, cited, and governed on its own; fixed token windows are only one implementation technique. -->
+**Content freshness** asks whether the searchable copy matches the latest source revision. A stale index may still return an old manual after the repository has published a new one.
 
-Documents are usually too large and too mixed in purpose to retrieve as one unit. A **chunk**—also called a node or passage—is the unit indexed and returned by search. Its boundary should match how evidence is used.
+**Decision freshness** asks whether the revision applies to the situation. The newest travel policy may take effect next month. A question about an expense from last month may require an older revision.
 
-For policy content, a section or subsection is often stronger than an arbitrary slice. Keep the heading path and, when needed, include a small parent summary so the passage remains understandable. Tables may need row groups plus headers. Code documentation may split by symbol. Transcripts may split by speaker turn and time. Fixed token windows are acceptable as a fallback, but they can separate a rule from its exception or a table value from its label.
+Keep effective intervals as structured metadata:
 
-A useful chunk record is small enough to inspect:
+```text
+effective_from <= decision_time
+and (effective_to is empty or decision_time < effective_to)
+```
+
+This filter expresses a business rule directly. Similarity scores should not choose between policy periods.
+
+### Deletion is a distributed workflow
+
+Deleting the source record is only the first step. Derived text indexes, vector indexes, caches, citation mappings, summaries, and evaluation fixtures may still contain the material.
+
+A robust deletion workflow:
+
+1. marks the source revision revoked so new requests cannot select it.
+2. removes its chunks from every search path.
+3. invalidates cached candidate and context sets.
+4. updates citation resolution according to the retention policy.
+5. verifies that representative queries return zero active results.
+6. records completion for audit.
+
+Provider behaviour affects the temporary control. OpenAI's vector-store documentation states that removing a file is eventually consistent, so search results may include it briefly. An application with urgent revocation requirements needs an immediate deny rule keyed by source or revision while deletion propagates.
+
+This approach treats deletion as a safety property. A successful API response alone provides incomplete evidence.
+
+## Parsing and Chunking Create Evidence Units
+<!-- section-summary: Parsing preserves document structure, while chunking turns that structure into passages that can be found, understood, governed, and cited. -->
+
+Raw files are rarely ready for search. A PDF may contain headers, footers, tables, images, and text in a reading order that differs from the page layout. A web page may include navigation and hidden text. A spreadsheet stores meaning in row and column relationships.
+
+**Parsing** extracts useful content and structure from the source. A good parser keeps the hierarchy of headings and paragraphs. Lists and code blocks need their boundaries. Tables need their headers, and page references need to remain connected to the text they locate.
+
+Scanned documents may require optical character recognition, or OCR. OCR converts images of text into machine-readable text, though its output still needs quality checks.
+
+Parser quality directly affects retrieval. If a two-column PDF is read across both columns, the resulting sentences may be nonsense. If table headers disappear, a row containing “Berlin | 240” loses the meaning of 240. Quarantine malformed output and expose parser failures as ingestion errors.
+
+### A chunk should stand as evidence
+
+A **chunk** is the unit stored and returned by the search index. You can think of it as a passage prepared for independent use. Its boundary should preserve the meaning needed to support a claim.
+
+Suppose a policy contains:
+
+**Policy text:** “Hotels are reimbursed up to the regional nightly limit. Conference hotels may exceed that limit with pre-approval.”
+
+Splitting immediately after the first sentence produces a precise-looking rule with a missing exception. A stronger chunk keeps the rule and exception together, along with the heading “Accommodation limits.”
+
+Different content benefits from different boundaries:
+
+- policies often split by section or subsection.
+- API documentation often splits by operation or symbol.
+- source code often splits by function, class, or logical block.
+- tables need headers repeated with relevant row groups.
+- transcripts often split by speaker and time range.
+- long narrative documents may use paragraph groups with small overlaps.
+
+Fixed token windows remain a practical fallback. Their size and overlap should come from retrieval evaluations. A universal chunk size ignores document structure and task requirements.
+
+### Parent and child passages can work together
+
+Some systems index a small **child chunk** for precise matching, then return a larger **parent passage** for understanding. For example, search may match one paragraph about conference hotels and expand the result to the complete accommodation section.
+
+This pattern separates two goals:
+
+- a narrow representation improves matching precision.
+- a wider evidence block preserves conditions, exceptions, and citation context.
+
+The expansion still needs a budget. Returning an entire handbook because one sentence matched recreates the noise problem.
+
+### Chunk metadata carries governance and provenance
+
+A practical chunk record may look like this:
 
 ```json
 {
-  "chunk_id": "gift-policy-9.2-v7",
-  "source_id": "policy://compliance/gifts",
-  "source_revision": "7",
-  "heading_path": ["Supplier hospitality", "Meals at events"],
-  "effective_from": "2026-04-01",
-  "regions": ["EU"],
+  "chunk_id": "travel-policy@18#accommodation-berlin",
+  "source_id": "policy://travel",
+  "source_revision": "18",
+  "heading_path": ["Accommodation", "Regional limits"],
+  "language": "en",
+  "region": "DE",
+  "effective_from": "policy-effective-start",
+  "effective_to": null,
   "access_groups": ["employees"],
-  "authority": "official-policy",
-  "text": "...",
-  "locator": "policy://compliance/gifts?v=7#section-9.2"
+  "authority": "official_policy",
+  "parser_version": "layout-parser-v6",
+  "parent_id": "travel-policy@18#accommodation",
+  "locator": "policy://travel?revision=18#regional-limits",
+  "text": "..."
 }
 ```
 
-Metadata directly affects retrieval behaviour. Region, product, language, document type, effective date, tenant, permission group, and authority can all serve as filters or ranking signals. Keep sensitive attributes in structured filters when they can enforce the boundary more clearly than embeddings.
+Structured metadata supports permissions, time filters, authority rules, citation resolution, and incident diagnosis. Keep filterable attributes out of the embedding alone. An embedding captures meaning; it does not provide a reliable tenant or retention boundary.
 
-Chunk size creates a tradeoff. Very small chunks retrieve precisely but lose surrounding conditions. Very large chunks preserve context but dilute the matching signal and consume more model input. Evaluate boundaries using real questions. “How many tokens?” has no universal answer because document structure and evidence needs differ.
+## Retrieval Uses Several Search Signals
+<!-- section-summary: Lexical matching, semantic similarity, structured filters, hybrid fusion, reranking, and diversity contribute different evidence about relevance. -->
 
-## Retrieval Has Several Signals
-<!-- section-summary: Lexical search, semantic search, structured filters, recency, authority, and reranking contribute different evidence about relevance. -->
+One search method rarely handles every query well. Production retrieval commonly combines several signals because each catches a different relationship between the question and the source.
 
-**Lexical search** matches words and phrases. It is strong for identifiers, policy numbers, exact legal terms, product names, and rare vocabulary. **Semantic search** compares vector representations and is useful when question and source express the same idea with different words. Neither dominates every query.
+### Lexical search finds exact language
 
-For “supplier dinner at a trade show,” semantic search may connect dinner with hospitality. Lexical search may precisely find “supplier,” “Munich,” or a section number. **Hybrid search** runs both and fuses their ranked candidates. Reciprocal rank fusion (RRF) is a common starting method because it combines rank positions without assuming lexical and vector scores share the same scale.
+**Lexical search** looks for words and phrases. Search engines often use BM25, a ranking method that gives more weight to informative terms and considers how frequently terms appear in a document.
 
-The first-stage retriever should favor recall: collect a manageable candidate set that probably contains the needed evidence. A **reranker** then spends more computation comparing the question with those candidates and reorders them. Structured rules can boost official sources, demote superseded material, or require a regional addendum when the query has a region.
+You can think of lexical search as a skilled index lookup. It is strong for:
 
-```mermaid
-flowchart TB
-    Q["Question plus authenticated scope"] --> F["Mandatory filters"]
-    F --> L["Lexical candidates"]
-    F --> V["Semantic candidates"]
-    L --> R["Rank fusion"]
-    V --> R
-    R --> P["Authority, date, and source-policy rules"]
-    P --> K["Rerank top candidates"]
-    K --> D["Deduplicate and diversify"]
-    D --> C["Context selection under token budget"]
+- error codes such as `PAYMENT_1042`.
+- product identifiers and part numbers.
+- policy section names.
+- exact phrases.
+- rare technical terms.
+- names that embeddings may blur together.
+
+PostgreSQL includes full-text search with `tsvector`, `tsquery`, and ranking functions. It can be a practical starting point for a bounded corpus already stored in PostgreSQL.
+
+```sql
+SELECT chunk_id,
+       ts_rank_cd(search_vector, websearch_to_tsquery('english', :query)) AS rank
+FROM knowledge_chunks
+WHERE tenant_id = :tenant_id
+  AND status = 'active'
+  AND search_vector @@ websearch_to_tsquery('english', :query)
+ORDER BY rank DESC
+LIMIT 40;
 ```
 
-Notice that permissions are applied before candidate text leaves the index boundary. A prompt that says “ignore documents you cannot access” is not access control. Post-filtering a global nearest-neighbor list can also damage recall: if most top candidates are forbidden, the allowed result set may be empty even when relevant allowed content exists. Prefer an index and search design that supports filtered retrieval within the permitted scope.
+The query shows two important ideas. Full-text matching finds candidates, and structured conditions restrict the eligible corpus. In production, `tenant_id` must come from authenticated runtime state. Appropriate indexes and database access controls support the query at scale.
 
-Ranking should also avoid redundancy. Five overlapping chunks from one section may crowd out the regional addendum that changes the answer. Group by source section, merge adjacent passages when justified, and preserve diversity across required evidence types.
+### Semantic search finds similar meaning
 
-## Context Assembly Is A Selection Policy
-<!-- section-summary: Retrieved candidates enter model context only after the application chooses a bounded, labeled, and instruction-safe evidence set. -->
+**Semantic search** represents the query and passages as vectors called **embeddings**. Nearby vectors often express related meaning even if they use different words.
 
-Search returns candidates; context assembly decides what the model may see. Keep only evidence needed for the task, label every passage with source and locator, order passages deliberately, and state how conflicts should be handled. The model should be able to distinguish official policy, explanatory guidance, historical material, and user-provided text.
+A user may ask about “meal invitations from a vendor,” while the policy uses “supplier hospitality.” Semantic search can connect these phrases. It is useful for natural-language questions, paraphrases, and inconsistent vocabulary.
 
-Retrieved content is untrusted input. A document can contain text such as “ignore previous instructions” either accidentally or maliciously. Preserve the trust boundary: evidence can supply facts and must never silently gain system-policy or tool-authorization authority. Tool use, access, and output constraints remain in higher-authority application instructions and deterministic checks.
+Semantic similarity still lacks business authority. An archived policy may be the closest vector. A public document may resemble a private one. Structured filters and lifecycle status constrain the vector search.
 
-When sources conflict, do not hide the conflict through ranking alone. Prefer an authoritative and applicable source when the policy is clear. Otherwise show the disagreement, cite both records, and ask for review. The answer contract may require the model to abstain when mandatory evidence types are missing.
+### Hybrid search combines exact and semantic matches
 
-The context budget belongs to retrieval design. More passages can reduce answer quality by adding irrelevant or contradictory text. Reserve tokens for instructions, the current request, conversation state, tool results, and output. Compaction or summarization can help, but generated summaries need lineage and should not replace exact evidence for high-stakes claims.
+**Hybrid search** runs lexical and semantic retrieval, then combines the rankings. This protects exact identifiers while still finding paraphrases.
 
-## Citations Must Resolve Beyond The Model Output
-<!-- section-summary: A trustworthy citation links an answer claim to an immutable evidence record and then to a user-visible source location. -->
+Elasticsearch and OpenSearch both provide current hybrid-search paths. Reciprocal rank fusion, or **RRF**, is a common combination method. It works from rank positions, so lexical and vector scores do not need the same numeric scale.
 
-Giving the model labels such as `[S1]` is only the first step. The application should own the mapping from each label to a chunk ID, source revision, and stable locator. After generation, validate that cited labels were actually provided and that the caller may still open the source.
+```mermaid
+flowchart TD
+    Q["Question plus authorised scope"]
+    Q --> F["Metadata and lifecycle filters"]
+    F --> L["Lexical retrieval<br/>exact terms and identifiers"]
+    F --> V["Semantic retrieval<br/>similar meaning"]
+    L --> H["Hybrid rank fusion"]
+    V --> H
+    H --> R["Rerank a smaller candidate set"]
+    R --> D["Deduplicate and diversify"]
+    D --> E["Evidence candidates"]
+```
 
-A citation should answer three questions: Which claim uses this evidence? Which exact passage and source revision supports it? Can the user inspect that location? A source title without section or version can be too weak, especially when several revisions share a title.
+RRF is a baseline, not a universal winner. Elastic recommends RRF for its hybrid-search workflow, and OpenSearch provides rank- and score-based combinations. The right settings depend on the corpus and query set. Search-quality evaluations should choose the configuration.
 
-Citation presence is not citation correctness. The referenced passage may be related but fail to support the claim. Evaluate **entailment** or support separately, using human review, a calibrated grader, or task-specific rules. For PolicyDesk, a quoted spending threshold can often be checked deterministically against the retrieved passage.
+### Metadata filters enforce hard conditions
 
-Hosted retrieval tools can reduce implementation work. OpenAI File Search, for example, currently provides managed semantic and keyword search over uploaded vector stores. A hosted tool still leaves application decisions: which files enter which store, how tenants are isolated, which metadata filters apply, how deletion is verified, and whether the returned evidence satisfies the product's citation contract.
+Metadata filters handle facts that similarity should never guess:
+
+- tenant and access group.
+- active or revoked status.
+- region and language.
+- product or service version.
+- source type and authority.
+- effective interval.
+- document classification.
+
+Apply hard filters before or during candidate retrieval. OpenAI vector-store search and File Search support attribute-based filtering. OpenSearch and Elasticsearch support structured filters in their search queries. Many dedicated vector databases provide similar capabilities.
+
+### Reranking spends more effort on fewer candidates
+
+A **reranker** takes a question and a smaller candidate set, then reorders those candidates using a more expensive relevance model or business rules.
+
+First-stage search may inspect millions of records quickly and return forty candidates. A cross-encoder reranker can compare the full question with those forty passages more carefully. The final selection may use the top eight.
+
+This two-stage design balances speed and quality. Elasticsearch and OpenSearch both support reranking workflows. Teams can also use a separately hosted reranking model.
+
+### Diversity protects evidence coverage
+
+The five highest-scoring chunks may repeat the same paragraph with small overlaps. **Diversity** controls redundancy so several evidence needs can fit into the context.
+
+Suppose an answer requires a global limit, a regional exception, and an approval rule. Three copies of the global-limit paragraph provide poor coverage.
+
+Group adjacent chunks that express one idea. Deduplicate near-identical text and cap results from one source section. The selector can then reserve places for the exception and approval rule.
+
+## Permissions Must Constrain the Search
+<!-- section-summary: Authenticated identity and policy-derived filters must narrow the candidate corpus before restricted text leaves the retrieval boundary. -->
+
+Retrieval can leak information even if the model never quotes it. Candidate IDs, titles, snippets, scores, and result counts may reveal that a restricted document exists. Permission enforcement therefore begins before search results enter model-facing code.
+
+The access path starts with authenticated runtime state:
+
+1. verify the caller and tenant.
+2. resolve roles, groups, resource scopes, and purpose.
+3. translate those grants into trusted search filters.
+4. execute retrieval inside that authorised corpus.
+5. recheck access when resolving a citation or opening a source.
+
+```mermaid
+flowchart TD
+    U["Authenticated user and tenant"]
+    U --> P["Policy engine or access service"]
+    P --> F["Trusted retrieval filter"]
+    Q["User question"] --> S["Search request"]
+    F --> S
+    S --> I["Index searches only<br/>eligible documents"]
+    I --> C["Permitted candidates"]
+    C --> E["Evidence selection"]
+```
+
+The user message can contain useful search terms. It cannot supply the trusted tenant ID or grant itself a new role. Those values come from the session, identity provider, or policy service.
+
+### Pre-filtering protects both security and recall
+
+Imagine a global vector search that returns ten nearest passages and removes forbidden results afterwards. If nine results belong to another tenant, the caller receives only one passage. A relevant allowed passage ranked eleventh never enters the result set.
+
+Searching inside the authorised scope avoids this recall loss. OpenSearch document-level security can restrict which documents a role retrieves. Other stacks may use filtered indexes, row-level security, tenant-specific collections, or mandatory metadata predicates.
+
+The correct design depends on scale and isolation needs:
+
+- shared indexes with mandatory filters can work for many applications.
+- separate indexes or collections reduce cross-tenant exposure for stronger isolation.
+- highly sensitive workloads may use separate accounts, projects, or infrastructure.
+
+Every path must follow the same rule. Lexical and vector searches need equivalent access filters. Reranking fetches and citation resolution must recheck the permitted documents. Caches and debugging tools must preserve the same boundary.
+
+### Permission changes need cache invalidation
+
+Access can change after a context or candidate set has been cached. A user may leave a project, or a document may become restricted.
+
+Cache keys should include the relevant identity or policy version. Sensitive caches need short lifetimes or active invalidation. Citation resolvers should recheck current access before opening a source, even if the answer was created earlier.
+
+## Evidence Selection Handles Coverage, Conflict, and Abstention
+<!-- section-summary: Candidate selection builds a small evidence set with the required coverage, explicit source roles, conflict handling, and a safe path for missing support. -->
+
+Search ranking answers, “Which passages look relevant?” Evidence selection answers a richer question: “Which passages are sufficient and appropriate for this decision?”
+
+Task requirements define the selection policy. A hotel-limit answer may require:
+
+- the active base policy.
+- the regional limit.
+- an exception for event hotels.
+- the approval rule.
+- the policy revision and stable locator.
+
+A high-scoring regional paragraph alone is incomplete. The selector should check the required evidence types before generation.
+
+```mermaid
+flowchart TD
+    C["Ranked, permitted candidates"]
+    C --> V["Validate revision, date,<br/>authority, and provenance"]
+    V --> K["Check required<br/>evidence coverage"]
+    K --> D["Deduplicate, merge,<br/>and preserve diversity"]
+    D --> X{"Material conflict<br/>or missing evidence?"}
+    X -->|no| E["Create labelled<br/>evidence blocks"]
+    X -->|conflict| R["Present conflict<br/>or route for review"]
+    X -->|missing| A["Retrieve again, ask,<br/>or abstain"]
+    E --> M["Model context"]
+```
+
+### Source authority guides conflicts
+
+Two passages may disagree because one is explanatory guidance and the other is the active policy. The source registry should say which class owns the fact. Select the applicable authoritative revision and retain the supporting material only if it helps interpretation.
+
+Some conflicts cannot be resolved automatically. Two active records may both claim authority. A regional addendum may lack an effective date. A contract and policy may govern different parts of the decision.
+
+In these cases, preserve the disagreement. Give the model both labelled records and a response rule that avoids a definitive claim. High-impact workflows can route the case to a human owner.
+
+### Thresholds need a failure path
+
+A similarity threshold can reject weak matches, but a number alone cannot prove evidence sufficiency. A score of `0.82` has no universal meaning across indexes, embedding models, or query types.
+
+Calibrate thresholds on representative questions. Combine the score with required evidence coverage, source authority, and provenance checks. Low-confidence outcomes need an explicit action:
+
+- reformulate or expand the search.
+- query another governed source.
+- ask the user for a missing detail.
+- return “insufficient evidence”.
+- escalate for review.
+
+**Abstention** means declining to make a claim that lacks adequate support. It is a designed product behaviour, not a model failure.
+
+### Evidence blocks should carry labels and boundaries
+
+Each final block should tell the model what it represents:
+
+```text
+[E2]
+role: official_policy
+source: Travel Policy, revision 18
+location: Accommodation > Regional limits
+applies_to: Germany
+effective_for: requested trip period
+content: ...
+```
+
+Labels help the model distinguish policy from user-provided text or historical guidance. They also provide the keys used by the citation resolver.
+
+## Citations Need a Resolver
+<!-- section-summary: Citation labels must resolve through application-owned evidence records to an inspectable source revision and location. -->
+
+A generated citation such as `[E2]` is a reference inside the answer. The application still needs to map it to the selected evidence block and the underlying source.
+
+You can think of the citation resolver as a link service with access control. It answers:
+
+- Was `[E2]` present in the model's evidence set?
+- Which chunk and source revision produced it?
+- Which page, section, row, symbol, or time range should open?
+- Does the current viewer still have access?
+- Is the source active, superseded, revoked, or retained for historical audit?
+
+```mermaid
+sequenceDiagram
+    participant A as Answer
+    participant V as Citation validator
+    participant E as Evidence manifest
+    participant R as Citation resolver
+    participant S as Governed source
+
+    A->>V: cites E2
+    V->>E: confirm E2 was supplied
+    E-->>V: chunk ID, revision, locator
+    V->>R: resolve for current viewer
+    R->>R: recheck access and source status
+    R->>S: open exact source location
+    S-->>A: inspectable evidence
+```
+
+The evidence manifest should be immutable for the completed response. A later index rebuild may assign different internal document positions. Stable source IDs and revision-aware locators keep older answers reproducible.
+
+### Citation presence and citation support are different
+
+An answer can cite a relevant passage that fails to support the claim. For example, a passage may mention hotel limits while omitting the amount stated in the answer.
+
+Validate citations at two levels:
+
+1. **resolution:** the label maps to evidence that was actually provided.
+2. **support:** the evidence justifies the nearby claim.
+
+Support can be reviewed by humans, checked with task-specific rules, or scored by a calibrated model-based grader. Numeric limits, dates, and identifiers often allow deterministic checks.
+
+Hosted retrieval tools can supply part of this path. OpenAI File Search returns file citations with the generated message and can expose the underlying search results through the response's `include` option. The application still owns source admission, tenant isolation, revision policy, user-facing resolution, and product-specific support checks.
 
 ## Evaluate Retrieval Separately From Generation
-<!-- section-summary: Retrieval evals locate failures in source coverage, ranking, context selection, and answer grounding instead of reducing the entire system to one answer score. -->
+<!-- section-summary: Retrieval evaluation tests whether the system found and selected the required evidence, while generation evaluation tests how the model used it. -->
 
-An answer can fail because the source was absent, the right chunk was not indexed, filters removed it, ranking placed it too low, context assembly dropped it, or the model ignored it. An end-to-end score alone cannot tell the team which component to fix.
+An end-to-end answer score tells you whether the whole experience worked. It rarely identifies the failing stage. Retrieval evaluation checks whether the system found and selected the required evidence. Generation evaluation checks how the model used a fixed evidence set. Teams need both views to choose the right repair.
 
-Create an evaluation set from real questions and important edge cases. For each question, record the applicable source revision, required evidence chunks or sections, forbidden or stale sources, expected answer properties, and abstention conditions. Include exact identifiers, paraphrases, multi-source questions, permission boundaries, temporal questions, ambiguous wording, and adversarial document text.
+Suppose the answer gives the wrong Berlin limit. Several causes are possible:
 
-At the retrieval layer, measure whether required evidence appears in the candidate set and final context. Common measures include recall at *k*, precision at *k*, mean reciprocal rank, and normalized discounted cumulative gain. The metric name matters less than matching the product need: a single-answer lookup cares about the first correct hit; a policy synthesis may require several distinct evidence types.
+- the current policy was absent from the source collection.
+- parsing damaged the limit table.
+- chunking separated the city from its value.
+- the permission filter removed the correct document.
+- lexical and semantic retrieval ranked an old addendum first.
+- the selector omitted the exception.
+- the model misread a correct evidence set.
 
-At the answer layer, measure factual support, citation correctness, completeness, conflict handling, abstention, and task usefulness. Slice results by source, region, language, query type, tenant configuration, and content age. A good average can hide a complete failure on table-heavy policies or exact part numbers.
+Separate evaluation exposes the cause.
 
-Use the same set to compare chunking, embedding, hybrid fusion, reranking, and context budgets. Change one important stage at a time and retain the full configuration with the result. Retrieval tuning without versioned eval evidence leaves the team guessing.
+### Build retrieval judgements
 
-## Operate Retrieval As A Data Product
-<!-- section-summary: Production traces and runbooks need lineage, timing, selection decisions, and deletion evidence across ingestion, search, and generation. -->
+Create an evaluation set from real questions, common tasks, and high-risk edge cases. For each query, record:
 
-Trace a request through query interpretation, scope filters, candidate IDs and scores, fusion and reranking versions, selected context, citations, answer validation, latency, and cost. Log identifiers and redacted metadata where content is sensitive. Link the trace to source lineage so an incident responder can answer, “Why did this answer use revision 6 after revision 7 was published?”
+- the applicable source revision.
+- relevant chunks or source sections.
+- required evidence types.
+- forbidden, stale, or out-of-scope sources.
+- caller permissions and decision time.
+- acceptable abstention conditions.
 
-Monitor ingestion lag, failed or quarantined sources, active revisions, index counts, permission-filter outcomes, empty-result rate, retrieval latency, reranker latency, citation resolution, stale-source use, and evaluation quality. A healthy vector database does not prove the knowledge is current.
+Include exact identifiers, paraphrases, multi-source questions, table lookups, permission boundaries, temporal questions, ambiguous requests, and hostile document text.
 
-When a bad source is discovered, stop serving it first: revoke the revision or add a deny rule that every retrieval path honors. Find affected chunks, cached contexts, and recent answers through lineage. Re-index the corrected source, run focused evals, and only then remove the temporary block. Keep evidence of deletion or supersession.
+### Measure candidate search and final evidence
 
-The durable lesson is that retrieval is an evidence system. Govern sources before indexing them. Make chunks independently understandable and traceable. Combine signals under permissions and freshness rules. Give the model a small, labeled context. Validate citations and evaluate retrieval separately from writing. The vector store is one component inside that framework, not the framework itself.
+**Recall at k** asks whether the required evidence appears among the first *k* results. It matters where missing one passage can invalidate the answer.
+
+**Precision at k** asks how much of the first *k* is relevant. It catches noisy candidate sets that waste reranker and context budgets.
+
+**Mean reciprocal rank**, or MRR, rewards systems that put the first relevant result near the top. It suits tasks where one correct record is enough.
+
+**Normalized discounted cumulative gain**, or nDCG, rewards good ordering across several levels of relevance. It suits results where multiple passages have different usefulness.
+
+Search platforms can calculate these metrics from query sets and relevance judgements. Elasticsearch and OpenSearch both expose ranking-evaluation APIs. The important asset is the judgement set: representative queries paired with reviewed relevance labels.
+
+### Evaluate the generated answer with fixed evidence
+
+Generation evaluation holds the evidence set constant and tests:
+
+- factual support.
+- citation correctness.
+- completeness.
+- conflict handling.
+- appropriate uncertainty.
+- abstention.
+- required output shape.
+
+This isolates the model and prompt from the retriever. A second experiment can hold the model and prompt constant while changing chunking, embeddings, hybrid weights, reranking, or evidence budgets.
+
+```mermaid
+flowchart TD
+    Q["Evaluation query and access scope"]
+    Q --> R["Run retrieval configuration"]
+    R --> J["Compare candidates and evidence<br/>with relevance judgements"]
+    J --> RM["Retrieval metrics"]
+
+    R --> G["Generate with fixed prompt<br/>and selected evidence"]
+    G --> A["Check support, citations,<br/>completeness, and abstention"]
+    A --> GM["Generation metrics"]
+
+    RM --> D["Release decision"]
+    GM --> D
+```
+
+Slice both result sets by source, language, region, query type, document structure, tenant policy, and content age. A healthy average can hide a complete failure on scanned tables or exact part numbers.
+
+Change one major stage at a time. Store the source snapshot, parser version, and chunking policy with the evaluation. Record the embedding model, search query, fusion settings, and reranker as a second group. The selection policy, prompt version, and model configuration complete the reproducible record.
+
+## Operate Retrieval as a Production Data System
+<!-- section-summary: Production retrieval needs lineage, freshness monitoring, stage-level traces, deletion controls, and incident diagnosis before teams change the model. -->
+
+Retrieval combines a data pipeline and an online serving path. The data pipeline keeps source revisions and parsed chunks current. It also builds embeddings and updates indexes.
+
+The serving path applies permissions before candidate search. It reranks candidates, selects evidence, and resolves citations for live requests. Each path needs service-level objectives, telemetry, and runbooks.
+
+### Monitor ingestion and serving separately
+
+The ingestion side should expose:
+
+- source discovery and publication lag.
+- parse success, quarantine rate, and parser version.
+- chunk counts by source revision.
+- embedding and index completion.
+- active, superseded, and revoked records.
+- deletion backlog and verification status.
+
+The serving side should expose:
+
+- query volume and latency by stage.
+- empty and low-confidence result rates.
+- permission-filter outcomes.
+- lexical, semantic, and fused candidate counts.
+- reranker latency and failures.
+- selected evidence count and token use.
+- citation resolution and support quality.
+- retrieval and generation evaluation scores.
+
+A healthy vector cluster says that the service is reachable. It cannot prove that the latest source revision was indexed or that the answer used the correct exception.
+
+### Trace the evidence path
+
+OpenTelemetry's Generative AI semantic conventions include a retrieval span with `gen_ai.operation.name` set to `retrieval`. Those conventions remain in development, so teams should pin the emitted schema version and review upgrades.
+
+Keep sensitive query text and retrieved documents opt-in. Record stable identifiers, counts, versions, and timing as the default:
+
+```python
+with tracer.start_as_current_span("retrieval knowledge-policy") as span:
+    span.set_attribute("gen_ai.operation.name", "retrieval")
+    span.set_attribute("gen_ai.data_source.id", "knowledge-policy")
+    span.set_attribute("app.retrieval.config_version", config.version)
+    span.set_attribute("app.retrieval.candidate_count", len(candidates))
+    span.set_attribute("app.retrieval.evidence_count", len(evidence))
+    span.set_attribute("app.retrieval.source_revision_count", revision_count)
+    span.set_attribute("app.retrieval.required_missing", len(missing))
+```
+
+Link the retrieval span to ingestion lineage, the context projection, the provider inference span, and citation validation. An operator can then follow one answer back to the exact source revisions and selection rules.
+
+### Diagnose incidents in source-to-answer order
+
+If answer quality drops, begin with evidence integrity. Check the source revision, ingestion status, parser output, chunk metadata, permission filters, candidate rankings, evidence selection, and citation mapping. Inspect model behaviour after confirming the input.
+
+```mermaid
+flowchart TD
+    I["Bad or unsupported answer"]
+    I --> S{"Correct source revision active?"}
+    S -->|no| SF["Repair publication or ingestion"]
+    S -->|yes| P{"Parsed chunks preserve meaning?"}
+    P -->|no| PF["Repair parser or chunking<br/>and rebuild index"]
+    P -->|yes| R{"Required evidence retrieved?"}
+    R -->|no| RF["Inspect filters, lexical/vector search,<br/>fusion, and reranking"]
+    R -->|yes| E{"Evidence selected and cited?"}
+    E -->|no| EF["Repair coverage, conflict,<br/>budget, or resolver policy"]
+    E -->|yes| G["Inspect prompt and model use"]
+```
+
+This order prevents an unnecessary model rollback after a stale source or broken permission filter.
+
+### Contain a bad source before rebuilding
+
+Suppose a withdrawn handbook revision keeps appearing in answers. The first action is containment:
+
+1. add the source revision to a deny rule honoured by every retrieval path.
+2. invalidate cached candidates and contexts containing that revision.
+3. find affected answers through source lineage.
+4. remove the revision from lexical and vector indexes.
+5. verify zero active hits with targeted queries.
+6. ingest the corrected revision and run focused evaluations.
+7. remove the temporary deny rule after deletion is confirmed.
+
+The deny rule provides immediate protection during an eventually consistent delete. The targeted evaluation confirms that the replacement still answers the important questions. Lineage identifies which previous outputs may need review.
+
+A mature retrieval system delivers governed evidence, not merely similar text. Source ownership keeps facts current. Parsing and chunking preserve meaning. Hybrid search, filters, reranking, and diversity find useful candidates. Selection creates a sufficient evidence set. Citation resolution lets people inspect it. Separate evaluations and stage-level traces show exactly where a failure entered the path.
 
 ## References
 
-- [OpenAI API docs: Retrieval](https://developers.openai.com/api/docs/guides/retrieval)
-- [OpenAI API docs: File search](https://developers.openai.com/api/docs/guides/tools-file-search)
-- [OpenAI API docs: Vector embeddings](https://developers.openai.com/api/docs/guides/embeddings)
-- [OpenAI API docs: Data controls](https://developers.openai.com/api/docs/guides/your-data)
-- [Elasticsearch hybrid search](https://www.elastic.co/docs/solutions/search/hybrid-search)
-- [Elasticsearch ranking and reranking](https://www.elastic.co/docs/solutions/search/ranking)
-- [Pinecone metadata filtering](https://docs.pinecone.io/guides/search/filter-by-metadata)
-- [Qdrant hybrid queries](https://qdrant.tech/documentation/search/hybrid-queries/)
-- [OWASP prompt injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
-- [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
+- [OpenAI API: Retrieval and vector stores](https://developers.openai.com/api/docs/guides/retrieval)
+- [OpenAI API: File Search](https://developers.openai.com/api/docs/guides/tools-file-search)
+- [OpenAI API: Data controls](https://developers.openai.com/api/docs/guides/your-data)
+- [PostgreSQL: Full-text search](https://www.postgresql.org/docs/current/textsearch.html)
+- [PostgreSQL: Controlling text search and ranking](https://www.postgresql.org/docs/current/textsearch-controls.html)
+- [Elasticsearch: Hybrid search](https://www.elastic.co/docs/solutions/search/hybrid-search)
+- [Elasticsearch: Ranking and reranking](https://www.elastic.co/docs/solutions/search/ranking)
+- [Elasticsearch: Ranking evaluation](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-rank-eval)
+- [OpenSearch: Hybrid query](https://docs.opensearch.org/latest/query-dsl/compound/hybrid/)
+- [OpenSearch: Reranking search results](https://docs.opensearch.org/latest/search-plugins/search-relevance/reranking-search-results/)
+- [OpenSearch: Document-level security](https://docs.opensearch.org/latest/security/access-control/document-level-security/)
+- [OpenSearch: Ranking Evaluation API](https://docs.opensearch.org/latest/api-reference/search-apis/rank-eval/)
+- [OpenTelemetry: Generative AI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)

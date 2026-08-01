@@ -9,6 +9,20 @@ aliases:
   - roadmaps/mlops/modules/governance-and-responsible-ai/standards-and-compliance/02-eu-ai-act-operational-readiness.md
 ---
 
+## Table of Contents
+
+1. [What Operational Readiness Means](#what-operational-readiness-means)
+2. [Start with Scope, Role, and Intended Purpose](#start-with-scope-role-and-intended-purpose)
+3. [Classify the Use Case Carefully](#classify-the-use-case-carefully)
+4. [Track the Application Timeline](#track-the-application-timeline)
+5. [Turn High-Risk Requirements into Engineering Work](#turn-high-risk-requirements-into-engineering-work)
+6. [Prepare Transparency and Human Procedures](#prepare-transparency-and-human-procedures)
+7. [Maintain Technical Documentation Evidence](#maintain-technical-documentation-evidence)
+8. [Operate Changes, Incidents, and Monitoring](#operate-changes-incidents-and-monitoring)
+9. [Run a Readiness Review](#run-a-readiness-review)
+10. [Common Mistakes](#common-mistakes)
+11. [Putting It Together](#putting-it-together)
+12. [References](#references)
 
 ## What Operational Readiness Means
 <!-- section-summary: EU AI Act readiness connects legal scoping with inventories, technical controls, human procedures, evidence, and ongoing change management. -->

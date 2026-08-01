@@ -10,6 +10,22 @@ aliases:
   - child-serving-apis-01-serving-model-with-fastapi
 ---
 
+## Table of Contents
+
+1. [FastAPI Implements The HTTP Inference Boundary](#fastapi-implements-the-http-inference-boundary)
+2. [Decide Whether FastAPI Should Execute The Model](#decide-whether-fastapi-should-execute-the-model)
+3. [Model Lifecycle Is Separate From Request Lifecycle](#model-lifecycle-is-separate-from-request-lifecycle)
+4. [Typed Schemas Protect The Caller Contract](#typed-schemas-protect-the-caller-contract)
+5. [The Endpoint Coordinates A Narrow Prediction Function](#the-endpoint-coordinates-a-narrow-prediction-function)
+6. [Concurrency And Overload Need Explicit Policy](#concurrency-and-overload-need-explicit-policy)
+7. [Worker Topology Changes Memory And Failure Behaviour](#worker-topology-changes-memory-and-failure-behaviour)
+8. [Errors Should Be Stable And Safe](#errors-should-be-stable-and-safe)
+9. [Health Endpoints Reflect Real Readiness](#health-endpoints-reflect-real-readiness)
+10. [Observability Follows The Request Path](#observability-follows-the-request-path)
+11. [Tests Cover Contract, Lifecycle, And Behaviour](#tests-cover-contract-lifecycle-and-behaviour)
+12. [Release The API And Model As One Proven Combination](#release-the-api-and-model-as-one-proven-combination)
+13. [References](#references)
+
 ## FastAPI Implements The HTTP Inference Boundary
 <!-- section-summary: A model API turns an authenticated, validated request into a versioned prediction through a controlled lifecycle. -->
 

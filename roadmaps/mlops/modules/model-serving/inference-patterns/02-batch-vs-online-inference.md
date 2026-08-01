@@ -10,6 +10,18 @@ aliases:
   - child-inference-patterns-01-batch-vs-online-inference
 ---
 
+## Table of Contents
+
+1. [Batch And Online Make Different Operating Promises](#batch-and-online-make-different-operating-promises)
+2. [Batch Inference](#batch-inference)
+3. [Online Inference](#online-inference)
+4. [The Same Model Can Need Two Serving Paths](#the-same-model-can-need-two-serving-paths)
+5. [A Practical Batch Job](#a-practical-batch-job)
+6. [A Practical Online API](#a-practical-online-api)
+7. [Operations, Checks, and Recovery](#operations-checks-and-recovery)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
+
 ## Batch And Online Make Different Operating Promises
 <!-- section-summary: Batch inference scores records ahead of time, while online inference scores a live request during the user workflow. -->
 

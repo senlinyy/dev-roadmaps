@@ -1,364 +1,417 @@
 ---
 title: "Training Config Files"
 description: "Use versioned training config files to control data snapshots, features, model settings, runtime resources, thresholds, and tracking metadata."
-overview: "A training config system separates reviewed code from run choices through a typed hierarchy, controlled override precedence, validation, and a recorded resolved configuration. A returns-risk model illustrates the framework."
+overview: "A training configuration system turns run choices into a validated, versioned input. It separates scientific settings from code, infrastructure, and secrets, then records one frozen effective configuration with every run."
 tags: ["MLOps", "core", "training"]
 order: 2
 id: "article-mlops-training-pipelines-config-files-for-ml-training"
 ---
 
-## A Config File Controls A Run Without Rewriting The Script
-<!-- section-summary: A training config file stores the run choices that change often while source code stores the reviewed training behavior. -->
+## Table of Contents
 
-A **training config file** is a versioned file that tells a training script which data, features, model settings, runtime resources, thresholds, and tracking metadata to use for one run. The script owns the behavior. The config owns the choices. This split lets the team try a new learning rate, dataset snapshot, threshold, or GPU setting through a reviewed file instead of editing Python code each time.
+1. [A Typo Can Waste A Full Training Run](#a-typo-can-waste-a-full-training-run)
+2. [Configuration Creates A Contract Around Each Run](#configuration-creates-a-contract-around-each-run)
+3. [Keep Four Configuration Boundaries Separate](#keep-four-configuration-boundaries-separate)
+4. [Give The Run Configuration A Small Stable Shape](#give-the-run-configuration-a-small-stable-shape)
+5. [Validate Before Data Access And Compute](#validate-before-data-access-and-compute)
+6. [Make Override Precedence Explicit](#make-override-precedence-explicit)
+7. [Resolve Freeze And Identify The Effective Config](#resolve-freeze-and-identify-the-effective-config)
+8. [Keep Operational Injection And Secrets Out Of The Recipe](#keep-operational-injection-and-secrets-out-of-the-recipe)
+9. [Choose A Configuration Library After The Design](#choose-a-configuration-library-after-the-design)
+10. [Evolve Configuration Without Breaking Old Runs](#evolve-configuration-without-breaking-old-runs)
+11. [Test The Contract And The Managed Job Boundary](#test-the-contract-and-the-managed-job-boundary)
+12. [Debug Configuration Drift With Digests](#debug-configuration-drift-with-digests)
+13. [A Production Configuration Path](#a-production-configuration-path)
+14. [References](#references)
 
-You can think of the config as the run order for the training job. It says, "Use this training table, these feature columns, this model type, these hyperparameters, this output path, and these review thresholds." The training script still decides how to load data, build features, train, evaluate, and log artifacts.
+## A Typo Can Waste A Full Training Run
+<!-- section-summary: A configuration error can launch a valid job with an unintended training recipe, so the job must validate its effective config before spending compute. -->
 
-This matters after the first article's script exists. A script such as `python -m returns_risk.train --config configs/returns_gbdt.yaml` gives the team one entrypoint. The config file makes each run legible. A reviewer can open the config and see the exact data snapshot, feature set, model parameters, and runtime assumptions before a large job starts.
+A platform engineer is about to approve an overnight GPU training job. The submitted YAML contains `learningRate: 0.0001`, while the Python program expects `learning_rate`. The loader silently drops the unfamiliar key and uses its default value of `0.01`. The job finishes, uploads a model, and reports metrics. Every system appears healthy, yet the team trained a different recipe from the one the reviewer approved.
 
-The core pieces connect like this:
+This failure is expensive because configuration mistakes often produce valid computations. A misspelled data snapshot can train on the wrong population. A string such as `"false"` can turn into a truthy value in careless Python code. An unrecorded command-line override can make a promising result impossible to reproduce. The training service may return success in all three cases.
 
-| Config area | Example field | Question it answers |
-|---|---|---|
-| Run metadata | `owner`, `run_reason`, `model_name` | Who owns this run and why does it exist? |
-| Data | `train_table`, `validation_table`, `label_column` | Which examples and labels train the model? |
-| Features | `feature_set`, `columns`, `categorical_columns` | Which inputs can the model use? |
-| Model | `algorithm`, `learning_rate`, `max_depth` | Which training recipe should the script execute? |
-| Runtime | `image_digest`, `cpu`, `memory`, `gpu` | What compute and environment does the run expect? |
-| Review | `min_auc`, `max_return_loss_delta` | Which checks must pass before promotion? |
-| Tracking | `experiment`, `tags`, `artifact_root` | Where should evidence go? |
+The safe path is to turn configuration into a checked input contract. The job first combines the allowed inputs and rejects invalid fields. It then creates one final configuration and records its identity. Data access and accelerator reservation wait until that contract passes.
 
-![Code and config split for a training run](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/code-vs-config.png)
-*The Python code carries the reviewed behavior, while the config names the data, features, thresholds, and runtime for this BrightCart run.*
-
-## Apply The Config Framework To Returns Risk
-<!-- section-summary: A supporting example follows an ecommerce team that needs clear configs for a returns-risk training job. -->
-
-Imagine **BrightCart**, an ecommerce marketplace that wants to predict which orders have a high chance of return. The operations team uses the model to prioritize fit guidance, quality checks, and merchant coaching. A bad model can unfairly flag honest customers or miss product categories with real sizing issues, so the training run needs a clear record.
-
-The model is `returns_risk_gbdt`. The training table is `warehouse.ml.returns_train_2026_06_30`, and the validation table is `warehouse.ml.returns_valid_2026_06_30`. The primary metric is `roc_auc`, because the team first needs ranking quality. The business guardrail is `high_value_customer_flag_rate`, because the team wants extra review when the model flags loyal customers too aggressively.
-
-The first baseline used a notebook. The first production step is a script. The next step is a config file that lets BrightCart run several reviewed variants:
-
-- `configs/returns_baseline.yaml` for the current LightGBM baseline.
-- `configs/returns_quality_features.yaml` for a candidate that adds merchant defect signals.
-- `configs/returns_low_cost_smoke.yaml` for CI and local checks.
-
-The command stays stable:
-
-```bash
-python -m returns_risk.train \
-  --config configs/returns_quality_features.yaml \
-  --run-id returns-risk-2026-07-04-1400
+```mermaid
+flowchart TD
+    A["Submitted settings<br/>(files and approved overrides)"] --> B["Resolve one config<br/>(apply declared precedence)"]
+    B --> C["Validate contract<br/>(types, ranges, relationships)"]
+    C --> D{"Valid?"}
+    D -->|Yes| E["Freeze and identify<br/>(artifact plus digest)"]
+    E --> F["Start training<br/>(data and compute may begin)"]
+    D -->|No| G["Reject submission<br/>(show the exact field error)"]
 ```
 
-The config name explains the candidate. The run ID gives tracking, logs, and artifacts a stable handle. The script can read the config, validate it, log the resolved version, and then train.
+In essence, configuration safety moves mistakes to the cheapest point in the run: before data access, compute allocation, and model production.
 
-## Separate Stable Code From Run Choices
-<!-- section-summary: Source code should hold reusable behavior, while config should hold values that reviewers expect to change between runs. -->
+## Configuration Creates A Contract Around Each Run
+<!-- section-summary: Run configuration stores the reviewed choices for one execution while the training program keeps the reusable behavior. -->
 
-The first design decision is where each choice belongs. A beginner mistake is putting every value in the config because it feels flexible. That can create confusing configs that secretly change the meaning of the training job. Another common problem is burying run choices inside Python files, which makes every experiment a source edit.
+A **training configuration** is a structured set of values that selects the inputs and settings for one execution of a training program. You can think of it as the recipe card attached to a run. The Python package provides the cooking method; the config names the ingredients, quantities, and acceptance checks chosen for this attempt.
 
-BrightCart can use this rule: code owns the **how**, config owns the **which**. The Python code owns how to load a warehouse table, encode categorical features, train a gradient boosted model, calculate segment metrics, and write artifacts. The config names which table, which features, which hyperparameters, which metric thresholds, and which runtime resources.
+This separation exists because training code and run choices change at different speeds. The implementation of average precision may remain stable for months. A dataset snapshot, feature-set version, seed, or learning rate may change for every experiment. Keeping those values in Python would turn each experiment into a code edit. Passing dozens of loose command-line flags would hide the complete recipe across a scheduler, shell history, and CI variables.
 
-Here are examples:
+### The source file and the effective config answer different questions
 
-| Decision | Better home | Reason |
-|---|---|---|
-| Function that computes `return_label_30d` | Code | Business logic needs tests and review |
-| Training table version | Config | Each run should name its data snapshot |
-| Feature column list | Config | Candidate runs often compare feature sets |
-| Metric implementation | Code | Metric calculation should stay consistent |
-| Minimum acceptable AUC | Config | Review thresholds can change by model family |
-| Kubernetes CPU and memory request | Config | The same script may run smoke and full jobs |
+The source file captures the choices proposed by the author. The **effective config** captures every value that reached the process after defaults and overrides. That distinction matters in scheduled and managed training. An orchestrator may add a smoke-test overlay. A release pipeline may select a pinned dataset version. A managed service may pass values through its job API.
 
-This split helps reviews. A data scientist can propose a config-only change for a new feature group. A platform engineer can review runtime requests. A model reviewer can compare thresholds. The Python training behavior stays in normal source review.
+A useful run record therefore contains both provenance and content:
 
-## Design The Config Hierarchy
-<!-- section-summary: A good config hierarchy names metadata, data, features, model settings, runtime, tracking, and review gates clearly. -->
+- the source config path and Git revision;
+- every applied overlay or override, in precedence order;
+- the fully resolved configuration artifact;
+- a stable digest calculated from that artifact;
+- the training-code revision, container image digest, and managed-job identifier.
 
-A clear config reads from top to bottom like the run itself. Start with human metadata, then data, features, model, runtime, tracking, and review gates. This order helps a reviewer understand the run before reading any code.
+With this record, two runs sharing a source file can still reveal different effective settings. Two files producing the same effective settings can also reveal that equivalence through the digest.
 
-Here is BrightCart's candidate config:
+## Keep Four Configuration Boundaries Separate
+<!-- section-summary: Source code, run configuration, deployment configuration, and secret values have different owners, review paths, and security needs. -->
 
-:::expand[Inspect the complete candidate training config]{kind="example"}
+Configuration works best after the team separates four kinds of decisions. They travel through different review paths and change for different reasons. Mixing them creates oversized YAML files that let an experiment edit quietly change infrastructure or expose credentials.
+
+At submission time, the training execution receives one reviewed version of each input. The code defines the operation. The run config selects the experiment. The job specification places that work on an execution platform. Secret references grant narrowly scoped access. The run record keeps the identities of all four inputs together.
+
+```mermaid
+flowchart TD
+    A["Source code<br/>(reusable training behavior)"] --> E["Training execution<br/>(one governed run)"]
+    B["Run configuration<br/>(scientific choices and data identities)"] --> E
+    C["Job specification<br/>(compute, image, network, retries)"] --> E
+    D["Secret references<br/>(names resolved by workload identity)"] --> E
+    E --> F["Run evidence<br/>(code, config, job, and artifact identities)"]
+```
+
+### Source code owns behavior
+
+Source code implements the repeatable path from input data to model artifacts. It contains data loading, feature transformations, model construction, metric calculations, artifact writing, and failure handling.
+
+If a choice changes the meaning of an algorithm or requires unit tests, code is usually its proper home. The function that prevents target leakage belongs in code. The specific immutable training snapshot selected for one run belongs in configuration.
+
+### Run configuration owns scientific choices
+
+The run config names data and feature versions, model family, hyperparameters, random seeds, evaluation metrics, and promotion thresholds. These values describe the experiment. A reviewer should be able to inspect them without opening the cloud job definition.
+
+Some runners transport a selected dataset through a dedicated CLI or managed-job input. The mounted path is an execution detail; the immutable snapshot identity still belongs in the effective run record. The resolver can combine the submitted identity with the path supplied by the platform before it freezes and hashes the config.
+
+Some teams also include a portable compute intent such as `compute_profile: gpu-medium`. The cloud binding for that profile still lives in the job specification. This keeps an experiment meaningful across Azure Machine Learning, Amazon SageMaker AI, Vertex AI, Databricks Jobs, or an internal Kubernetes platform.
+
+### Environment and deployment configuration own execution conditions
+
+The job specification selects the container image digest, machine type, accelerator count, network, identity, retry policy, timeout, storage mounts, and queue. These settings influence cost and reliability, and platform teams often own them. Record their resolved values beside the run config because numerical reproducibility can depend on hardware and library versions.
+
+### Secret configuration contains references
+
+A run may need access to a warehouse, tracking server, or artifact store. The config should carry a secret reference or credential scope, such as `secret://ml-training/warehouse-reader`. The workload identity receives permission to resolve that reference at runtime.
+
+The fetched credential remains inside the protected runtime boundary. Git stores the reference. The run digest covers the reference. Logs, tracking tags, and resolved artifacts omit the credential value.
+
+## Give The Run Configuration A Small Stable Shape
+<!-- section-summary: A compact hierarchy helps reviewers find data identity, feature identity, model choices, evaluation rules, and reproducibility controls. -->
+
+A useful schema follows the questions a reviewer asks before approving training. The first group establishes the identity of the training and validation data. The second identifies the features and model recipe. The final groups define evaluation and reproducibility controls.
+
+Each group should remain small enough to review as a coherent decision. The following config is complete enough to launch one tree-model training run, while the cloud job specification supplies its image, compute, identity, and network.
 
 ```yaml
-schema_version: 1
-
-run:
-  model_name: returns_risk_gbdt
-  owner: marketplace-risk-ml
-  run_reason: "Add merchant quality features after June sizing incident review."
-  ticket: "RISK-1842"
-
+schema_version: 2
 data:
-  train_table: warehouse.ml.returns_train_2026_06_30
-  validation_table: warehouse.ml.returns_valid_2026_06_30
-  label_column: returned_within_30d
-  entity_key: order_id
-  snapshot_id: returns-training-2026-06-30-v4
-
+  train_snapshot: warehouse://credit_events/train@43
+  validation_snapshot: warehouse://credit_events/validation@18
+  label: default_within_90_days
 features:
-  feature_set: returns_features_v8_quality
-  numeric_columns:
-    - order_value_usd
-    - customer_return_rate_365d
-    - merchant_return_rate_90d
-    - product_size_complaint_rate_60d
-    - delivery_delay_hours
-  categorical_columns:
-    - product_category
-    - merchant_tier
-    - shipping_method
-
+  feature_set: credit_risk_features@12
 model:
-  algorithm: lightgbm_binary
-  objective: binary
-  learning_rate: 0.04
-  num_leaves: 63
-  max_depth: 8
-  num_boost_round: 900
-  early_stopping_rounds: 50
-  seed: 20260704
-
-runtime:
-  image: ghcr.io/brightcart/returns-trainer@sha256:8df8e9b3a6d4f1e0c2b9a770055ccaa11223344556677889900aabbccddeeff
-  cpu: "8"
-  memory: "32Gi"
-  gpu: null
-
-tracking:
-  experiment: brightcart-returns-risk
-  artifact_root: s3://brightcart-ml-artifacts/returns-risk/
-  tags:
-    team: marketplace-risk
-    candidate: quality-features
-
-review:
-  min_valid_auc: 0.805
-  min_valid_average_precision: 0.219
-  max_high_value_customer_flag_rate: 0.085
-  max_training_cost_usd: 35
+  family: lightgbm
+  learning_rate: 0.03
+  num_boost_round: 400
+  early_stopping_rounds: 30
+evaluation:
+  primary_metric: average_precision
+  minimum_primary_metric: 0.41
+seed: 23
 ```
 
-:::
+The identifiers matter more than the YAML format. `train_snapshot` points to an immutable dataset version. `feature_set` identifies a reviewed feature definition. `schema_version` tells the loader how to interpret the document. The seed records one source of training randomness. A value such as `latest` would move over time and weaken the evidence trail, so production runs should use immutable versions.
 
-This file tells a strong story. The data section names the snapshot and entity key. The feature section shows which columns the model can use. The runtime section records a CPU-only job, which fits a tree model. The review section carries business guardrails, so the training job can fail early if a candidate creates too much customer harm risk.
+### Prefer domain names over implementation names
 
-![Training config hierarchy](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/config-hierarchy.png)
-*A readable config hierarchy lets reviewers scan the run from ownership and data identity down to runtime, tracking, and review gates.*
+A field name should communicate the choice it controls. `minimum_primary_metric` gives a reviewer more context than `threshold_1`. `train_snapshot` communicates immutability more clearly than `train_path`. Units belong in names where ambiguity is possible, such as `timeout_seconds` or `memory_gib`.
 
-The config should avoid vague names such as `latest`, `final`, or `best`. A config named `returns_quality_features.yaml` and a snapshot named `returns-training-2026-06-30-v4` give the team better evidence than `prod.yaml` pointing at `latest_train`.
+Avoid turning the config into a second programming language. Conditional logic, loops, arbitrary expressions, and embedded Python make review and migration difficult. A small amount of composition can reduce duplication; training behavior still belongs in tested source code.
 
-## Validate The Config Before Training
-<!-- section-summary: Config validation catches missing fields, unsafe defaults, and unsupported combinations before expensive training starts. -->
+## Validate Before Data Access And Compute
+<!-- section-summary: Schema validation checks structure, types, ranges, and cross-field rules before the program performs expensive or irreversible work. -->
 
-Validation should happen before the training script reads a large table or requests expensive compute. Validation checks the shape of the config and the meaning of important values. A missing label column, unsupported algorithm, or empty feature list should stop the run quickly.
+Parsing YAML only proves that the text has valid YAML syntax. **Schema validation** checks whether those parsed values form a training configuration the program understands. In other words, the schema is the agreement between the author of the config and the code that consumes it.
 
-BrightCart can start with a small Python validator:
+A production validator should cover four layers. Structural rules require fields such as `data.train_snapshot`. Type rules keep `num_boost_round` as an integer. Constraint rules keep values inside meaningful ranges. Relationship rules compare fields, such as requiring early stopping to occur before the maximum boosting round.
 
-:::expand[Implement the config validator]{kind="pattern"}
+### Reject unknown keys
+
+Many configuration libraries ignore unfamiliar keys by default. That behavior turns a typo into a silent fallback. Strict configs should reject `learningRate`, `learnng_rate`, or any unapproved field and point to its exact location. The author then receives a clear correction before the job consumes resources.
+
+Pydantic provides a concise runtime schema for Python training services. This focused model uses strict types, forbidden extra keys, immutable model instances, field constraints, and a cross-field validator:
 
 ```python
-from pathlib import Path
-
-import yaml
-
-
-SUPPORTED_ALGORITHMS = {"lightgbm_binary", "logistic_regression"}
-REQUIRED_TOP_LEVEL = {"schema_version", "run", "data", "features", "model", "runtime", "tracking", "review"}
-
-
-def load_config(path: str) -> dict:
-    config = yaml.safe_load(Path(path).read_text())
-    missing = REQUIRED_TOP_LEVEL - set(config)
-    if missing:
-        raise ValueError(f"Config is missing top-level sections: {sorted(missing)}")
-
-    if config["schema_version"] != 1:
-        raise ValueError(f"Unsupported config schema_version: {config['schema_version']}")
-
-    algorithm = config["model"]["algorithm"]
-    if algorithm not in SUPPORTED_ALGORITHMS:
-        raise ValueError(f"Unsupported model.algorithm: {algorithm}")
-
-    numeric = config["features"].get("numeric_columns", [])
-    categorical = config["features"].get("categorical_columns", [])
-    if len(numeric) + len(categorical) == 0:
-        raise ValueError("At least one feature column is required")
-
-    if config["runtime"]["gpu"] and algorithm == "lightgbm_binary":
-        raise ValueError("GPU runtime needs an approved GPU training config")
-
-    return config
+from typing import Literal, Self
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+class ModelConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    family: Literal["lightgbm"]
+    learning_rate: float = Field(gt=0, le=1)
+    num_boost_round: int = Field(ge=1, le=10_000)
+    early_stopping_rounds: int = Field(ge=1)
+    @model_validator(mode="after")
+    def early_stopping_fits_run(self) -> Self:
+        if self.early_stopping_rounds >= self.num_boost_round:
+            raise ValueError("early_stopping_rounds must be smaller than num_boost_round")
+        return self
+model_config = ModelConfig.model_validate(parsed_yaml["model"])
 ```
 
-:::
+The root `TrainingConfig` can combine similarly strict models for `data`, `features`, `evaluation`, and the seed. The validator then reports errors in the vocabulary of the config. A misspelled key should produce a path such as `model.learningRate`, and an invalid range should name `model.learning_rate`. The job runner can print the full validation report, mark the submission as rejected, and avoid retrying it as an infrastructure failure.
 
-This validator keeps the errors close to the source. It checks required sections, schema version, algorithm names, feature lists, and one resource rule. A larger team may use a typed config library or JSON Schema, yet the first habit stays the same: parse and validate before training.
+### Validate identities as well as values
 
-The validation output should be readable in CI and Kubernetes logs:
+Schema validation cannot prove that `warehouse://credit_events/train@43` exists or that it carries the expected columns. Add a preflight stage after schema validation. It resolves immutable data and feature references, checks access, compares their schemas with the training contract, and estimates size before provisioning costly compute.
 
-```console
-ValueError: Unsupported model.algorithm: lightgbm_binray
+This creates two useful failure classes. A malformed field fails as `CONFIG_INVALID`. A well-formed reference that cannot be resolved fails as `INPUT_PREFLIGHT_FAILED`. Separate classes direct the first problem to the config author and the second to the data or platform owner.
+
+## Make Override Precedence Explicit
+<!-- section-summary: Layered configuration stays predictable when every layer has a declared purpose and later layers can change only approved fields. -->
+
+Teams need a small amount of layering. A base file may hold reviewed defaults. An experiment overlay may select a candidate recipe. CI may reduce the training rounds for a smoke test. The risk comes from hidden precedence: two places set the same field, and nobody knows which value reached training.
+
+Use one documented order from lowest to highest priority:
+
+```mermaid
+flowchart TD
+    A["Schema defaults<br/>(safe values defined by the program)"] --> B["Versioned base file<br/>(shared training policy)"]
+    B --> C["Reviewed overlay<br/>(experiment-specific choices)"]
+    C --> D["Allowlisted job overrides<br/>(small submission-time changes)"]
+    D --> E["Effective config<br/>(one resolved value per field)"]
 ```
 
-That message is useful because the typo is in the config, not in the warehouse or cluster. The team can fix the file in a small pull request.
+Later layers win only for fields they are allowed to change. A smoke-test job may reduce `model.num_boost_round`, point at small fixture snapshots, and add tracking labels. It should have no permission to weaken a production evaluation threshold or select an unreviewed feature set.
 
-## Override Values Safely
-<!-- section-summary: Overrides are useful for smoke tests and scheduled runs when they stay visible and limited. -->
-
-Overrides let CI or an orchestrator adjust a few values without creating a full duplicate config. The danger is hidden changes. If a scheduler silently changes the training table, threshold, or feature list, the run record can mislead reviewers. Good overrides stay small, visible, and logged.
-
-BrightCart can allow only a short list:
-
-| Override | Allowed caller | Why it exists |
-|---|---|---|
-| `run.run_reason` | Humans and schedulers | Adds context for a run |
-| `data.train_table` | CI smoke only | Points at sample fixtures |
-| `data.validation_table` | CI smoke only | Points at sample fixtures |
-| `runtime.cpu` and `runtime.memory` | Platform jobs | Adjusts compute envelope |
-| `tracking.tags.*` | CI and schedulers | Adds source branch or schedule name |
-
-The training CLI can expose explicit flags for common overrides:
+A command can keep the change visible:
 
 ```bash
-python -m returns_risk.train \
-  --config configs/returns_quality_features.yaml \
-  --run-id returns-risk-smoke-pr-418 \
-  --override data.train_table=tests/fixtures/returns_train_sample.parquet \
-  --override data.validation_table=tests/fixtures/returns_valid_sample.parquet \
-  --override tracking.tags.source=pull-request
+train-model \
+  --config configs/base.yaml \
+  --overlay configs/experiments/lower-learning-rate.yaml \
+  --set model.num_boost_round=20 \
+  --set data.train_snapshot=fixtures://credit/train@7
 ```
 
-Every override should appear in the resolved config artifact. The training job can also log them as tags:
+The loader parses override values through the same typed schema as the file. A service such as SageMaker supplies hyperparameters as strings, so the boundary adapter must convert each allowlisted value to its declared type before validation. Arbitrary dot-path assignment gives a scheduler too much power and weakens review.
+
+### Keep defaults in one place
+
+Repeated defaults create drift. Imagine `learning_rate` appearing in Python, `base.yaml`, and the scheduler template. A reader must search three systems to predict the run. Choose one authoritative layer for each default. Required scientific choices often deserve an explicit value in the reviewed file, while harmless implementation defaults can live in the schema.
+
+## Resolve Freeze And Identify The Effective Config
+<!-- section-summary: The runner should resolve every approved input once, freeze the result, serialize it consistently, and attach its digest to the run. -->
+
+After layering, the runner should produce one **effective config**. This object contains a single value for every field and no unresolved placeholders. You can think of it as the signed recipe that the training process has agreed to follow.
+
+Resolution should finish before any training worker loads data. The runner applies layers in declared order, resolves supported references, validates the final structure, and freezes the object. Training functions receive that frozen object through their arguments. They should never reload YAML in the middle of a run or read a second set of modeling values from process-wide environment variables.
+
+### Give equivalent configs the same digest
+
+A digest is a short identity calculated from the full effective configuration. Stable calculation requires a canonical representation: the same field order, scalar encoding, enum representation, and treatment of optional values every time. Serializing the validated Pydantic model as sorted JSON produces the exact bytes that SHA-256 hashes:
 
 ```python
-def apply_overrides(config: dict, overrides: list[str]) -> dict:
-    applied = {}
-    for item in overrides:
-        key, value = item.split("=", 1)
-        if key not in ALLOWED_OVERRIDES:
-            raise ValueError(f"Override is not allowed: {key}")
-        set_nested_value(config, key.split("."), value)
-        applied[key] = value
-    config["run"]["applied_overrides"] = applied
-    return config
+import hashlib
+import json
+resolved = effective_config.model_dump(mode="json")
+payload = json.dumps(
+    resolved,
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=False,
+).encode("utf-8")
+config_digest = hashlib.sha256(payload).hexdigest()
+output_dir.joinpath("resolved-config.json").write_bytes(payload)
 ```
 
-This code keeps flexibility under review. If someone tries to override `review.max_high_value_customer_flag_rate` from the scheduler, the script rejects the run. That threshold should change through a reviewed config file because it affects the product decision.
+Store the serialization format, schema version, and digest algorithm with the digest. A future serializer may encode the same values differently. Those identifiers let the team reproduce the original calculation and distinguish content changes from serialization changes.
 
-## Record The Resolved Config
-<!-- section-summary: The resolved config is the final run recipe after defaults and overrides, and it should travel with metrics and artifacts. -->
+### Attach the config to lineage
 
-The config file in Git tells reviewers what the team intended. The **resolved config** tells reviewers what actually ran after overrides and defaults. It should be written to the output directory and logged to the tracking system with the metrics and model artifact.
+The resolved file should travel with the run's metrics and artifacts. MLflow can log it as an artifact and record the digest as a run tag. A managed platform can also store the digest in job labels or metadata. Useful lineage links include the Git commit, source config URI, ordered override list, data snapshot IDs, feature-set version, container digest, and cloud job ID.
 
-BrightCart can write it like this:
+This record helps a reviewer connect a metric to the approved configuration. The reviewer compares the submitted digest with the tracking tag and the artifact digest. A match ties the evidence to one exact recipe.
+
+## Keep Operational Injection And Secrets Out Of The Recipe
+<!-- section-summary: Environment variables carry runtime facts, while secret managers supply credential values through identities and reviewed references. -->
+
+Environment variables are useful for facts supplied by the execution platform. Examples include the managed-job ID, mounted input path, tracking URI, output directory, and distributed-worker rank. These values describe where the process is running. Hyperparameters and dataset choices describe what the experiment is testing, so they belong in the effective config.
+
+This boundary prevents a common investigation problem. If `LEARNING_RATE` can silently override the YAML, the recorded config may say `0.03` while the process uses `0.1`. An engineer examining the run artifact sees the approved value and misses the operational override. Keeping scientific choices in the validated config leaves one source of truth inside the process.
+
+### Resolve credentials through workload identity
+
+A secret reference names a credential without containing it:
+
+```yaml
+connections:
+  feature_store:
+    secret_ref: secret://ml-training/feature-store-reader
+```
+
+At startup, the workload identity asks the platform's secret manager for that reference. AWS commonly pairs IAM with Secrets Manager. Azure pairs managed identity with Key Vault, while Google Cloud uses service identity with Secret Manager. Databricks jobs can use governed connections or secret scopes according to the workspace design.
+
+The resolved config artifact keeps `secret_ref` and removes any fetched value. Logging filters should also redact credential-shaped environment variables and command arguments. The training process should hold credentials only for the period needed, while the platform controls rotation and access auditing.
+
+## Choose A Configuration Library After The Design
+<!-- section-summary: Pydantic, dataclasses, Hydra, and OmegaConf solve different parts of configuration, so the required behavior should determine the choice. -->
+
+The framework comes first: boundaries, schema, precedence, freezing, identity, and lineage. A library implements part of that framework. Selecting one by popularity can leave gaps around override policy, migrations, or evidence capture.
+
+### Dataclasses suit small internal programs
+
+Python dataclasses provide typed objects with low ceremony, and frozen dataclasses prevent attribute assignment. Type annotations alone leave parsed YAML unchecked at runtime. A small internal trainer can pair a dataclass with an explicit parser and validator. This choice fits a stable shape with limited composition needs.
+
+### Pydantic suits runtime validation
+
+Pydantic models provide runtime type checking, constraints, cross-field validators, JSON Schema generation, rejection of extra keys, and frozen instances. This is a strong default for a Python training service that receives YAML, JSON, API payloads, or managed-job parameters. The team still owns layering, allowed overrides, secret handling, migrations, and canonical artifact generation.
+
+### Hydra and OmegaConf suit compositional experiment families
+
+Hydra is useful when a project has several interchangeable config groups, such as model family, dataset family, and training profile. Its Defaults List composes those groups, and its override grammar supports command-line selection and multirun workflows. OmegaConf provides the underlying hierarchical configuration, interpolation, structured configs, merge operations, missing-value checks, struct mode, and read-only mode.
+
+Composition adds power and review surface. Declare `_self_` deliberately in Hydra defaults so the merge order remains visible. Enable structured or struct mode so unknown keys fail. Convert the composed config to a resolved primitive container with missing-value checks, freeze it, and save the exact result before training. A composed source tree is provenance; the resolved artifact is the run recipe.
 
 ```python
-from pathlib import Path
+resolved = OmegaConf.to_container(
+    cfg,
+    resolve=True,
+    throw_on_missing=True,
+)
+OmegaConf.set_readonly(cfg, True)
+```
 
-import mlflow
-import yaml
+Choose Hydra once config groups and experiment sweeps create genuine composition needs. For a single modest schema, Pydantic plus a small explicit merge layer usually gives reviewers fewer moving parts.
 
+## Evolve Configuration Without Breaking Old Runs
+<!-- section-summary: Schema versions and deterministic migrations let new code interpret old run recipes without guessing their original meaning. -->
 
-def write_resolved_config(config: dict, output_dir: Path) -> Path:
-    path = output_dir / "resolved_config.yaml"
-    path.write_text(yaml.safe_dump(config, sort_keys=True))
-    return path
+Configuration schemas change as training systems mature. A field may receive a clearer name, one section may split into two, or a new value may require a unit. Old resolved configs remain part of the lineage record, so future code needs a deliberate interpretation path.
 
+Add a required integer `schema_version` at the root. The loader reads this field before normal validation. It accepts the current version, migrates specifically supported older versions through pure functions, and rejects unknown future or retired versions with a clear error.
 
-with mlflow.start_run(run_name=run_id):
-    resolved_config_path = write_resolved_config(config, output_dir)
-    mlflow.log_artifact(str(resolved_config_path), artifact_path="config")
-    mlflow.set_tags(
-        {
-            "config.schema_version": str(config["schema_version"]),
-            "data.snapshot_id": config["data"]["snapshot_id"],
-            "features.feature_set": config["features"]["feature_set"],
-            "runtime.image": config["runtime"]["image"],
-        }
+```python
+from copy import deepcopy
+def migrate_v1_to_v2(raw: dict) -> dict:
+    migrated = deepcopy(raw)
+    migrated["model"]["learning_rate"] = migrated["model"].pop("eta")
+    migrated["schema_version"] = 2
+    return migrated
+MIGRATIONS = {1: migrate_v1_to_v2}
+```
+
+A migration should preserve meaning, avoid I/O, and produce deterministic output. Record the original artifact digest, source schema version, migration steps, and final digest. If an old field cannot map safely, stop and ask for a reviewed replacement config. Guessing converts a compatibility problem into an experiment-integrity problem.
+
+### Roll out schema changes in stages
+
+Start by teaching the loader to accept both the current and previous version. Update versioned configs through review, then update scheduled jobs and templates. Observe validation failures and usage counts. Remove the older migration path only after active callers and reproducibility commitments permit it. This staged path gives teams a recovery window without keeping every historical schema alive forever.
+
+## Test The Contract And The Managed Job Boundary
+<!-- section-summary: Configuration tests should cover invalid and boundary values, precedence, stable identity, migrations, secret leakage, and provider-specific parameter adapters. -->
+
+Configuration code deserves tests because it decides which experiment the platform runs. Happy-path loading proves very little. The valuable cases are malformed, ambiguous, and close to the accepted boundary.
+
+Start with a valid minimal config, then remove required fields and add unknown keys. Exercise wrong scalar types, numeric boundaries, and invalid relationships between fields. Separate tests should cover override allowlists, precedence conflicts, digest stability, migration output, and secret redaction. A focused parameterized test keeps the failure behavior visible:
+
+```python
+import pytest
+from pydantic import ValidationError
+@pytest.mark.parametrize(
+    ("learning_rate", "rounds", "patience"),
+    [
+        (0.0, 400, 30),
+        (1.01, 400, 30),
+        (0.03, 20, 20),
+    ],
+)
+def test_invalid_model_settings(learning_rate, rounds, patience, valid_model):
+    valid_model.update(
+        learning_rate=learning_rate,
+        num_boost_round=rounds,
+        early_stopping_rounds=patience,
     )
+    with pytest.raises(ValidationError):
+        ModelConfig.model_validate(valid_model)
 ```
 
-The resolved config should include the image digest, data snapshot, feature set, seed, threshold, and applied overrides. If a teammate tries to reproduce the run two weeks later, the resolved config is the first file they open. It also helps compare two runs that used the same source config with different smoke-test overrides or runtime resources.
+### Treat managed-job parameters as an external API
 
-![Resolved config evidence trail](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/resolved-config-trail.png)
-*The resolved config travels with metrics, model files, signatures, and segment reports so the review packet shows what actually ran.*
+Cloud services expose different parameter channels. Azure Machine Learning command jobs can declare typed inputs and interpolate them into the command. SageMaker training containers receive hyperparameters in `/opt/ml/input/config/hyperparameters.json`, where values arrive as strings. Databricks Jobs can pass job parameters into compatible task types and expose dynamic value references such as a run ID.
 
-For production runs, the resolved config can sit inside the model review packet:
+The adapter at this boundary should accept a small allowlist and parse each value explicitly. It also attaches the value's origin. The merged result then passes through the same schema validator. A separate cloud-only validation path would let local and managed runs accept different recipes.
+
+Here is a compact Azure Machine Learning job definition. It mounts a versioned config file and exposes one bounded smoke-test override:
 
 ```yaml
-review_packet:
-  run_id: returns-risk-2026-07-04-1400
-  resolved_config: artifacts/returns-risk-2026-07-04-1400/resolved_config.yaml
-  metrics: artifacts/returns-risk-2026-07-04-1400/metrics.yaml
-  segment_report: artifacts/returns-risk-2026-07-04-1400/segment_metrics.csv
-  model_signature: artifacts/returns-risk-2026-07-04-1400/model_signature.json
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+code: ./src
+command: >-
+  python -m trainer
+  --config ${{ inputs.training_config }}
+  --set model.num_boost_round=${{ inputs.num_boost_round }}
+inputs:
+  training_config:
+    type: uri_file
+    path: azureml:credit-training-config:12
+  num_boost_round: 20
+environment: azureml:credit-trainer:8
+compute: azureml:cpu-training
 ```
 
-That packet gives product, risk, and ML reviewers the same evidence. Nobody needs to reverse-engineer which YAML file or override created the candidate.
+The job API supplies the file and the override; the training program still owns precedence, allowlisting, parsing, validation, freezing, and digest creation. A full training submission would use the reviewed round count, while this bounded override supports a fast integration check.
 
-## Operational Checks
-<!-- section-summary: Config reviews should check data identity, feature ownership, resource fit, review thresholds, and resolved output evidence. -->
+## Debug Configuration Drift With Digests
+<!-- section-summary: Comparing the same configuration digest at submission, process startup, tracking, and artifact storage pinpoints where a run recipe changed. -->
 
-Config files need operations habits because small values can cause expensive or harmful training runs. BrightCart uses a short pull-request checklist for every config change:
+**Configuration drift** means different stages believe the run used different settings. A submitter may hash one config before a scheduler adds an override. A worker may later read a mutable file again, while the tracker logs the original source. The final metric then lacks a trustworthy recipe.
 
-| Check | Review question | Evidence |
-|---|---|---|
-| Data identity | Does the config name immutable train and validation snapshots? | Snapshot ID, table version, row counts |
-| Feature ownership | Does each feature group have an owner and freshness check? | Feature catalog entry or data contract |
-| Runtime fit | Does CPU, memory, or GPU match the model family? | Past run duration and resource metrics |
-| Cost guardrail | Does `max_training_cost_usd` fit the experiment value? | Budget tag and prior run costs |
-| Customer guardrail | Are segment thresholds explicit? | Review section and segment report |
-| Resolved output | Did the run log `resolved_config.yaml`? | Tracking artifact list |
+Record the effective-config digest at each important boundary: after submission resolution, at worker startup, in the experiment tracker, and beside the model artifact. These values should match for one run.
 
-A simple CI check can validate every config in the repository:
-
-:::expand[Run config validation in pull requests]{kind="example"}
-
-```yaml
-name: validate-training-configs
-
-on:
-  pull_request:
-    paths:
-      - "configs/**/*.yaml"
-      - "returns_risk/config_validation.py"
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install training package
-        run: pip install -e ".[dev]"
-      - name: Validate configs
-        run: |
-          for config in configs/*.yaml; do
-            python -m returns_risk.validate_config --config "$config"
-          done
+```mermaid
+flowchart TD
+    A["Submission digest<br/>(approved effective config)"] --> B["Worker digest<br/>(bytes received by the process)"]
+    B --> C["Tracking digest<br/>(tag attached to metrics)"]
+    C --> D["Artifact digest<br/>(stored beside the model)"]
+    B -->|Mismatch| E["Inspect transport<br/>(scheduler or mounted file changed)"]
+    C -->|Mismatch| F["Inspect logging<br/>(source file logged instead of effective file)"]
+    D -->|Mismatch| G["Quarantine artifact<br/>(lineage evidence is inconsistent)"]
 ```
 
-:::
+Suppose the submission and worker digests differ. The investigation focuses on the job adapter, override resolver, or mounted config asset. If the worker and tracker differ, the training process probably logged the source file or recalculated the digest with another serializer. If the artifact differs, keep the model out of promotion until the storage or packaging path is understood.
 
-The same validator can run inside the training script. CI catches config errors during review, and the training job catches any config that enters through a manual run or scheduler.
+The operational response should preserve evidence. Save the submitted layers, ordered overrides, resolved bytes, serializer metadata, and job event log. Repair the faulty boundary, rerun a low-cost validation job, and compare all four digests before restoring full training. Rewriting the tracking tag after the fact would hide the original inconsistency.
 
-## Putting It Together
-<!-- section-summary: Training config files make each run reviewable by separating source behavior from changing run choices. -->
+## A Production Configuration Path
+<!-- section-summary: A reliable runner resolves, validates, freezes, records, executes, and verifies one configuration through every stage of training. -->
 
-A training config file gives the team a readable recipe for one training run. In BrightCart's returns-risk model, the config names the run reason, data snapshots, feature set, model parameters, runtime resources, tracking destination, and review gates. The script reads the file, validates it, applies limited overrides, writes the resolved config, and logs it with the model artifacts.
+A production training configuration system follows one continuous path. It loads a versioned run config and applies reviewed layers in declared order. It accepts only allowlisted job overrides, then validates structure and meaning. Finally, it resolves immutable inputs, freezes the effective object, writes canonical bytes, calculates a digest, and attaches that evidence to the job and artifacts.
 
-This is the bridge between a training script and a training pipeline. The script gives the workflow one command. The config gives each run a versioned set of choices. The artifact article comes next because every run now needs to emit the files that prove what happened.
+The design gives each concern a clear home. Source code defines training behavior. The run config defines scientific choices. The job specification defines compute and execution policy. Secret managers provide credential values through workload identity. The resolved artifact joins those identities into a reproducible run record without copying secrets.
+
+This foundation supports local scripts, CI smoke tests, scheduled retraining, managed cloud jobs, and experiment sweeps with the same contract. The platform may change how it transports values, while the training program keeps one validated recipe from process startup through artifact publication.
 
 ## References
 
-- [Kubernetes Docs: ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
-- [Kubernetes Docs: Secrets](https://kubernetes.io/docs/concepts/configuration/secret/)
-- [GitHub Docs: Workflow syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
-- [Docker Docs: Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
-- [MLflow Python API: `mlflow.sklearn.log_model`](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.sklearn.html)
+- [Pydantic Documentation: Configuration](https://docs.pydantic.dev/latest/api/config/)
+- [Pydantic Documentation: Validators](https://docs.pydantic.dev/latest/concepts/validators/)
+- [Pydantic Documentation: Serialization](https://docs.pydantic.dev/latest/concepts/serialization/)
+- [Hydra Documentation: The Defaults List](https://hydra.cc/docs/advanced/defaults_list/)
+- [OmegaConf Documentation: Usage](https://omegaconf.readthedocs.io/en/latest/usage.html)
+- [MLflow Documentation: Tracking](https://mlflow.org/docs/latest/ml/tracking/)
+- [Azure Machine Learning Documentation: Command Job YAML Schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-command?view=azureml-api-2)
+- [Amazon SageMaker AI Documentation: How Training Information Reaches A Container](https://docs.aws.amazon.com/sagemaker/latest/dg/your-algorithms-training-algo-running-container.html)
+- [Databricks Documentation: Job Parameters](https://docs.databricks.com/aws/en/jobs/job-parameters)
+- [Databricks Documentation: Dynamic Value References](https://docs.databricks.com/aws/en/jobs/dynamic-value-references)

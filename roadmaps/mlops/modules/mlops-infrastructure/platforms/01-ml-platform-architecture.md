@@ -9,6 +9,18 @@ aliases:
   - roadmaps/mlops/modules/mlops-infrastructure/platforms/00-ml-platform-architecture.md
 ---
 
+## Table of Contents
+
+1. [What An ML Platform Is](#what-an-ml-platform-is)
+2. [Platform Product And Interfaces](#platform-product-and-interfaces)
+3. [Control Plane And Workload Plane](#control-plane-and-workload-plane)
+4. [Follow One Request Through Reconciliation](#follow-one-request-through-reconciliation)
+5. [Data, Artifact, And Serving Planes](#data-artifact-and-serving-planes)
+6. [Guardrails, Reliability, And Cost](#guardrails-reliability-and-cost)
+7. [Measure The Platform As A Product](#measure-the-platform-as-a-product)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
+
 ## What An ML Platform Is
 <!-- section-summary: An ML platform is an internal product that gives ML teams supported, self-service paths across the model lifecycle. -->
 

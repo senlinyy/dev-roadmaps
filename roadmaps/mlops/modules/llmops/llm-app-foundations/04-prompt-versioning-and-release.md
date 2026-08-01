@@ -1,224 +1,647 @@
 ---
 title: "Prompt Versioning and Release"
-description: "Release prompts as reproducible behaviour bundles with immutable versions, evaluation gates, staged rollout, trace reconstruction, and rollback."
-overview: "A prompt release controls the complete set of instructions, schemas, examples, context rules, and runtime settings that shape model behaviour."
+description: "Release prompts as reproducible behaviour bundles with immutable versions, compatibility checks, evaluation gates, staged rollout, trace reconstruction, and rollback."
+overview: "Prompt release engineering controls the complete set of instructions, examples, schemas, tools, context rules, model settings, and policies that shape production behaviour."
 tags: ["MLOps","LLMOps","foundations","prompting"]
 order: 4
 id: "article-mlops-llmops-prompt-versioning-release"
 ---
 
-## A Prompt Change Is a Behaviour Change
+## Table of Contents
 
-<!-- section-summary: Prompt releases need software-style control because small instruction changes can alter quality, tools, cost, latency, and safety. -->
+1. [Prompt Changes Alter Production Behaviour](#prompt-changes-alter-production-behaviour)
+2. [Four Terms Prevent Versioning Confusion](#four-terms-prevent-versioning-confusion)
+3. [A Release Bundle Captures Every Behaviour Dependency](#a-release-bundle-captures-every-behaviour-dependency)
+4. [Immutable Versions Create Reliable Evidence](#immutable-versions-create-reliable-evidence)
+5. [Drafts, Versions, Aliases, and Runtime Identity Serve Different Jobs](#drafts-versions-aliases-and-runtime-identity-serve-different-jobs)
+6. [Compatibility Has to Be Designed Across the Bundle](#compatibility-has-to-be-designed-across-the-bundle)
+7. [Review Meaning Alongside Text](#review-meaning-alongside-text)
+8. [Evaluation Gates Protect Known Behaviour](#evaluation-gates-protect-known-behaviour)
+9. [CI/CD Turns Evidence Into a Release Decision](#cicd-turns-evidence-into-a-release-decision)
+10. [Shadow and Canary Releases Limit Risk](#shadow-and-canary-releases-limit-risk)
+11. [Traces Reconstruct the Request Without Copying Every Secret](#traces-reconstruct-the-request-without-copying-every-secret)
+12. [Roll Back a Compatible Bundle and Reconcile Its Effects](#roll-back-a-compatible-bundle-and-reconcile-its-effects)
+13. [Choose a Registry That Fits the Operating Model](#choose-a-registry-that-fits-the-operating-model)
+14. [A Release Should Be Explainable and Reversible](#a-release-should-be-explainable-and-reversible)
+15. [References](#references)
 
-Changing a sentence in a prompt can alter which tool a model chooses, how long it answers, whether it cites evidence, or when it escalates to a person. The text may not compile, yet it still changes production behaviour. Treating prompts as anonymous strings embedded in application code makes those changes difficult to review, evaluate, trace, and reverse.
+At a high level, **prompt versioning and release** applies normal production discipline to the instructions that shape an LLM application's behaviour.
 
-**Prompt versioning** gives each approved behaviour definition an immutable identity. **Prompt release** is the process that moves that identity through evaluation, environments, and production traffic. The release unit is wider than one text file: it includes every instruction and setting needed to reconstruct what the model received.
+A conventional software change may fail by refusing to compile, crashing a process, or returning an error. A prompt change can keep every endpoint healthy while changing the answers users receive. Replacing “include relevant limitations” with “keep the answer brief” may remove an important warning. Reordering tool instructions may make a model call a tool more often. Adding one example may improve one language and quietly distort another.
+
+This is why prompt work belongs in the release process. Teams need to know which behaviour definition was tested and which one served a request. They also need a clear diff and a safe route back to the earlier behaviour.
+
+The word *prompt* is often used for several different objects. Clear release engineering starts by separating those objects.
+
+## Prompt Changes Alter Production Behaviour
+
+<!-- section-summary: Prompt edits can change quality, tool use, safety, latency, and cost while the surrounding service continues to look healthy. -->
+
+An LLM generates an output from the request it receives and the model that processes that request. Instructions influence how the model interprets the task. Examples demonstrate preferred patterns. Tool descriptions tell it which actions exist. An output schema limits the shape of its answer. Model settings influence how much work it performs and how much it costs.
+
+Changing any of these inputs can alter production behaviour. The application may still return `200 OK`, the JSON may still parse, and the dashboards may show normal CPU and memory. The failure appears in the product experience. A required fact may be missing, an escalation may happen too late, or a tool may receive the wrong kind of request.
+
+Consider a service that turns a long document into a short summary. A developer adds “use at most five bullets” to reduce the visual length. The change sounds cosmetic. It can still alter the service in several ways:
+
+- long documents may lose required caveats;
+- the output may become cheaper and faster because fewer tokens are generated;
+- the model may merge unrelated points to stay within the limit;
+- an existing evaluator may reject the new format;
+- a downstream parser may expect paragraphs instead of a list.
+
+One sentence touched quality, cost, format, and compatibility. The change deserves the same basic questions as an application release: What behaviour should improve? What behaviour must remain stable? Which tests prove that? How much live traffic should see it first? Which known-good version can replace it?
 
 ```mermaid
-flowchart LR
-    A[Prompt bundle change] --> B[Reviewable version]
-    B --> C[Offline evals]
-    C --> D[Shadow or canary]
-    D --> E[Production alias]
-    E --> F[Traces and outcomes]
-    F -->|healthy| G[Wider rollout]
-    F -->|regression| H[Move alias to previous version]
+flowchart TD
+    A["Author changes an instruction, example, schema, tool, or setting"] --> B["Create an immutable candidate bundle"]
+    B --> C["Review the intended behaviour change"]
+    C --> D["Run contract, regression, and safety evaluations"]
+    D --> E{"Does the evidence satisfy the release policy?"}
+    E -->|"No"| F["Revise the candidate"]
+    F --> B
+    E -->|"Yes"| G["Shadow or canary release"]
+    G --> H["Observe outcomes, safety, latency, and cost"]
+    H --> I{"Continue or restore the previous bundle?"}
+    I -->|"Continue"| J["Promote traffic in stages"]
+    I -->|"Restore"| K["Move production to the known-good bundle"]
+
+    classDef author fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef restore fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,F author
+    class C,D evidence
+    class G,H,J release
+    class E,I decision
+    class K restore
 ```
 
-The goal is not to slow every edit. It is to make behaviour changes proportional to risk and reproducible when something goes wrong.
+The amount of control should match the consequence of the change. A punctuation fix and a new instruction that authorizes account changes should travel through different release lanes. Both still need an identity.
 
-## Define the Complete Prompt Bundle
+## Four Terms Prevent Versioning Confusion
 
-<!-- section-summary: Reproducibility requires the whole assembled behaviour contract, not only the visible system message. -->
+<!-- section-summary: A prompt, template, assembled request, and behaviour release bundle describe different parts of the runtime request. -->
 
-An LLM request may combine developer instructions, a task template, few-shot examples, tool descriptions, structured-output schemas, retrieved context, tenant policy, and runtime parameters. Saving only `system_prompt.txt` does not identify the actual behaviour.
+Teams often say “prompt version” while referring to a text file, a provider object, or the complete request sent to a model. That ambiguity causes weak incident reports. “Prompt version 12 was running” provides little help if the tool schema, model route, or context policy changed independently.
 
-A prompt bundle should record:
+A **prompt** is the general input that guides a model. Depending on the API, it may include system or developer instructions, user messages, examples, images, tool results, and other content. It is a useful everyday term, though it is too broad to identify a production release by itself.
 
-- stable name, immutable version, owner, and change reason;
-- developer and task instructions;
-- variable names, types, and escaping rules;
-- few-shot examples and their provenance;
-- tool definitions or references to their versions;
-- response schema and validator version;
-- context assembly and truncation policy;
-- model route and relevant generation or reasoning settings;
-- safety, guardrail, and fallback configuration;
-- evaluation dataset and release thresholds.
+A **prompt template** is stored text or a stored message structure with named placeholders. For example, a summarisation template may contain `{{document}}`, `{{audience}}`, and `{{maximum_words}}`. The template defines how values are placed; it does not contain the actual document for one request.
 
-A manifest can bind these pieces:
+An **assembled request** is the concrete request created at runtime. It contains the rendered instructions, current user input, selected context, tool definitions, response schema, and model settings sent to the provider. Two requests may use the same template version and still contain different documents, retrieved evidence, or conversation history.
+
+A **behaviour release bundle** is an engineering term for the immutable set of versions and policies approved to run together. It identifies the prompt template, examples, assembly code, tool and output contracts, context policy, model route, safety policy, and evaluation evidence. Vendors use different names for this idea, so teams often define their own bundle manifest.
+
+You can think of a template as an empty form. The assembled request is one completed form with its attachments. The release bundle contains the approved form design and the rules for completing and processing it. The bundle does not freeze every user's data. It freezes the behaviour definition and records how dynamic data was selected.
+
+For a document-summary request, the identities might look like this:
+
+- template version `summary/18` defines the messages and placeholders;
+- context policy `document-context/6` decides which pages fit into the request;
+- output schema `summary-result/3` requires `summary`, `warnings`, and `source_pages`;
+- model route `balanced-text/4` selects an approved model deployment and settings;
+- safety policy `document-handling/5` controls sensitive-content handling;
+- bundle `summary-release/27` binds those versions together;
+- the runtime trace records bundle `27`, the document revision, selected page IDs, and the actual model response ID.
+
+This vocabulary makes two questions answerable. The release record explains **what the team approved**. The trace explains **what one request actually used**.
+
+## A Release Bundle Captures Every Behaviour Dependency
+
+<!-- section-summary: Production behaviour depends on instructions, examples, schemas, tools, context assembly, model identity, settings, and safety policy. -->
+
+The visible instruction text is only one input to an LLM system. A reliable release bundle records the other inputs that can change the result.
+
+### Instructions and examples teach the task
+
+**Instructions** define the task, boundaries, priorities, and response style. Their order and role matter because model APIs distinguish developer, system, user, and tool messages.
+
+**Examples** demonstrate the pattern the model should imitate. An example can carry more practical influence than a general rule. It needs provenance, review, and a version just like the instructions.
+
+### Contracts define what the model can exchange
+
+**Tool schemas** describe the operations available to the model. A renamed argument, broader description, or new tool changes the choices the model can make. The actual authorization policy remains outside the prompt, yet its version still belongs in the bundle.
+
+**Output schemas** define the machine-readable response contract. They affect prompting, validation, downstream code, and evaluation. A prompt that requests citations must be paired with a schema and validator that can represent and check citations.
+
+### Runtime policies shape the assembled request
+
+**Context policy** decides which conversation turns, retrieved documents, memory items, and metadata enter the request. It also defines ordering, filtering, truncation, and compaction. The template may stay unchanged while a new context policy produces very different requests.
+
+**Model identity and settings** include the provider, model snapshot or deployment, reasoning level, output limit, and other supported parameters. A movable provider alias may later resolve to a different model. Traces should record the requested route and the model identity returned by the provider.
+
+**Safety policy** covers input filtering, output checks, data-handling rules, tool permissions, approval requirements, and fallback behaviour. Prompts can communicate safety expectations to a model; trusted code still enforces permissions and irreversible effects.
+
+```mermaid
+flowchart TD
+    A["Behaviour release bundle"] --> B["Instructions and examples"]
+    A --> C["Tool and output contracts"]
+    A --> D["Context assembly policy"]
+    A --> E["Model route and settings"]
+    A --> F["Safety and approval policy"]
+    B --> G["Runtime assembler"]
+    C --> G
+    D --> G
+    E --> G
+    F --> G
+    G --> H["Assembled model request"]
+    H --> I["Provider response"]
+    I --> J["Validation, tools, and product outcome"]
+
+    classDef bundle fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef component fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef runtime fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef outcome fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A bundle
+    class B,C,D,E,F component
+    class G,H,I runtime
+    class J outcome
+```
+
+A compact manifest binds these identities without copying every artifact into one file:
 
 ```yaml
-name: grounded-support-answer
-version: 2026-07-16.1
-owner: support-ai
-instructions:
-  developer: prompts/developer.md
-  task: prompts/answer.md
-examples: prompts/examples.jsonl
-context_policy: support-context-v5
-tools: [search-policy-v3, read-case-v2]
-output_schema: grounded-answer-v4
-model_route: standard-assistant-v7
-eval_gate: support-answer-release-v12
+bundle:
+  name: document-summary
+  version: 27
+  digest: sha256:78f4...
+prompt:
+  template: summary/18
+  examples: summary-examples/9
+assembly_code: git:4d91c2f
+contracts:
+  tools: document-tools/4
+  output_schema: summary-result/3
+context_policy: document-context/6
+model_route: balanced-text/4
+safety_policy: document-handling/5
+evaluation_report: evals/summary-candidate-27
 ```
 
-The files can live in source control, a provider prompt service, or an internal registry. The important property is immutability: once `2026-07-16.1` has served traffic, changing its content in place would make old traces lie. A new content digest requires a new version.
+The manifest uses references so each component can have a clear owner and lifecycle. The release pipeline resolves every reference, verifies compatibility, packages the resolved files, and computes the bundle digest. Production receives that resolved artifact. It should not assemble a fresh mixture of whatever each registry currently calls `latest`.
 
-## Map the Dependencies That Shape Behaviour
+## Immutable Versions Create Reliable Evidence
 
-<!-- section-summary: A prompt release depends on schemas, tools, retrieval, policy, model routes, and runtime assembly, so compatibility must be checked across the whole bundle. -->
+<!-- section-summary: An immutable version keeps its content fixed, while a digest proves which resolved artifact the system loaded. -->
 
-Prompt text rarely runs alone. A sentence such as “cite every policy claim” depends on retrieval returning source identifiers and the output schema having a place for citations. An instruction to “ask before issuing a refund” depends on the tool runtime exposing a proposal state and a durable approval transition. The prompt can describe the expected behaviour, while the surrounding components make that behaviour possible.
+**Immutable** means that a published version keeps the same content for its entire life. Fixing a typo in version `18` produces version `19`; it does not rewrite version `18`. This rule protects evaluation reports, traces, and incident timelines. A trace that names version `18` must continue to refer to the same bytes that were evaluated.
 
-Treat these relationships as a dependency graph:
+Human-readable versions and cryptographic digests solve related problems. A registry number such as `summary/18` is convenient for people. A digest such as SHA-256 is calculated from the resolved artifact and detects any content change. Store both in the release record.
+
+Git supplies history, review, authorship, and commit identities for code-managed prompts. A Git commit alone may not capture remote tool schemas, provider prompt objects, model aliases, or a policy fetched during deployment. The build step should resolve those dependencies into a manifest or archive and store it in an immutable artifact location.
+
+Common storage choices include:
+
+- a prompt registry for prompt templates and version metadata;
+- Git for templates, assembly code, schemas, tests, and review;
+- an object store with versioning or retention controls for resolved bundle archives;
+- an OCI registry if the organisation already treats configuration bundles as signed OCI artifacts;
+- a small release database for aliases, approvals, rollout state, and audit history.
+
+The exact combination matters less than three guarantees:
+
+1. the released content cannot change in place;
+2. the runtime can report the concrete version and digest it loaded;
+3. the previous compatible artifact remains available during rollback.
+
+Immutability supports reconstruction, though it does not promise an identical model answer. Generative models may produce different valid outputs from the same request. External documents can also disappear, tools can return new data, and providers can route an alias differently. Reproducibility here means recovering the input, dependencies, and execution identity well enough to explain and compare behaviour.
+
+Build the bundle once and promote that same digest through test, staging, and production. Rebuilding in every environment risks picking up a new dependency between stages. If an environment needs different endpoints or credentials, inject those operational values separately and keep their policy identity in the release record.
+
+## Drafts, Versions, Aliases, and Runtime Identity Serve Different Jobs
+
+<!-- section-summary: Editable drafts support authoring, immutable versions preserve evidence, movable aliases control rollout, and runtime records reveal the concrete artifact used. -->
+
+Prompt development and prompt operation need different kinds of identity. Authors need freedom to revise unfinished work. Evaluators need a fixed candidate. Operators need a stable deployment name that can move during promotion or rollback. Investigators need the concrete artifact that served one request. Drafts, versions, aliases, and runtime identities meet those separate needs.
+
+A **draft** is editable working material. Authors may try new wording, examples, or model settings without creating permanent production evidence for every keystroke.
+
+A **version** is a published snapshot. It has an owner, change reason, resolved content, and immutable identity. Evaluation jobs should run against a version or bundle digest.
+
+An **alias** is a movable name such as `staging`, `canary`, or `production`. It allows an application or deployment controller to refer to an environment role instead of hard-coding a version. Moving `production` from bundle `26` to bundle `27` promotes the candidate. Moving it back performs the control-plane part of a rollback.
+
+A **runtime identity** records what the application actually resolved. This is essential because an alias can move. A trace that records only `production` loses the evidence needed to distinguish requests served before and after promotion.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Draft: Edit and test
+    Draft --> Version: Publish immutable candidate
+    Version --> Evaluated: Pass required evaluation gates
+    Evaluated --> Canary: Point canary alias to version
+    Canary --> Production: Point production alias to version
+    Canary --> Rejected: Stop on regression
+    Production --> Previous: Retain as rollback target
+    Rejected --> [*]
+    Previous --> Production: Restore alias during rollback
+```
+
+Resolve an alias at a controlled boundary and pin the concrete version for the relevant unit of work. A stateless one-shot request can resolve it at request start. A conversation should usually retain one bundle version for the session so its instructions and schemas do not change halfway through. A long-running agent run should store the resolved bundle in durable state.
+
+Alias caching requires an explicit policy. MLflow, for example, caches immutable version lookups differently from mutable alias lookups. An application that caches `production` forever will miss a release. One that resolves the alias before every step may switch a run unexpectedly. Choose a refresh interval, publish an invalidation event, or let the deployment system restart workers with a pinned version.
+
+Provider capabilities also change. Current OpenAI guidance recommends code-managed prompts with typed parameters for new work. Git history, tests, evaluation checks, and feature flags provide the release controls; reusable prompt objects are being retired. Amazon Bedrock Prompt Management supports saved versions and variants that can include model and inference configuration. These are different operating models. An internal runtime identity keeps the rest of the release process consistent across them.
+
+## Compatibility Has to Be Designed Across the Bundle
+
+<!-- section-summary: Prompt, model, tool, schema, context, and safety versions must agree on the contracts they exchange. -->
+
+Versioning each component identifies the available pieces. Compatibility determines whether those pieces can safely run together. A prompt may assume a field, tool, or model capability that another component does not provide. The release process therefore checks the relationships between versions before it evaluates or deploys the bundle.
+
+Suppose a candidate prompt tells the model to return citation objects containing `source_id` and `claim`. The output schema must contain those fields. The retrieval policy must supply stable source IDs, and the downstream renderer must understand the list. Promoting only the prompt would create a partial release.
+
+Rollback exposes the same issue. Imagine that the current application understands output schema `v3`, while the previous prompt produces a `v2` string field. Moving only the prompt alias may restore the old language behaviour and break the parser. The rollback target should be a previously evaluated bundle, or the application should keep a tested compatibility adapter.
+
+Compatibility decisions usually cover four relationships:
+
+- **prompt to model:** the model supports the required modalities, tools, structured-output features, and context size;
+- **prompt to tools:** names, arguments, result shapes, meanings, permissions, and approval states agree;
+- **prompt to output schema:** instructions and examples produce fields the validator and consumers understand;
+- **prompt to context and policy:** required evidence exists, untrusted content is delimited, and safety rules are enforced by the runtime.
+
+Teams can encode these requirements as a small compatibility manifest:
+
+```yaml
+compatibility:
+  model_capabilities: [text, tool_calling, structured_output]
+  tool_contracts:
+    document_search: ">=4,<5"
+  output_schema: "summary-result/3"
+  context_policy: "document-context/6"
+  minimum_runtime: "summary-service/11"
+rollback_bundle: "summary-release/26"
+```
+
+The pipeline should verify exact versions or supported ranges before evaluation and again before promotion. Version ranges are suitable only where owners promise backward compatibility. A breaking tool or schema change needs a new major contract and an explicit bundle update.
+
+| Dependency change | Main compatibility question | Typical protection |
+|---|---|---|
+| Model or deployment | Does it support the required tools, schema, modality, and settings? | Capability check plus full candidate evaluation |
+| Tool schema | Do prompt names, arguments, permissions, and results still agree? | Contract tests and versioned tool adapter |
+| Output schema | Can validators and downstream consumers read the result? | Schema validation and consumer tests |
+| Context policy | Does the request still contain the evidence the instructions assume? | Retrieval fixtures and assembly tests |
+| Safety policy | Are permissions, approvals, and blocked content enforced consistently? | Policy tests, adversarial cases, and security review |
+
+The table summarises the boundaries. The release bundle remains the unit that proves one specific combination has been exercised together.
+
+## Review Meaning Alongside Text
+
+<!-- section-summary: A semantic review explains the expected behavioural effect, affected users and capabilities, evidence, risk, and rollback plan. -->
+
+A normal text diff remains useful. It shows exactly which words, examples, or schemas changed. It cannot explain the intended effect by itself.
+
+Consider this small edit:
+
+```diff
+- If the document contains uncertainty, mention it in the summary.
++ List each material uncertainty under `warnings`.
++ If no material uncertainty is present, return an empty `warnings` list.
+```
+
+The new instruction is more precise. It also introduces a required output field, changes the expected length, and may increase false warnings. A meaningful review checks whether the output schema contains `warnings` and defines how “material” is evaluated. It also names the behaviour that should stay constant and the dataset slices that contain uncertain documents.
+
+Every material change proposal should explain:
+
+- the observed failure or product need;
+- the behaviour expected to improve;
+- the behaviour expected to remain stable;
+- affected languages, tasks, tools, data classes, and user groups;
+- expected changes to latency, tokens, refusals, or tool calls;
+- evaluation evidence and unresolved disagreements;
+- risk tier, rollout plan, stop conditions, and rollback bundle.
+
+Examples deserve close review. Models learn patterns from them, including accidental ones. First check the policy and privacy of the content. Then compare its output shape and tone with the general rule. A shortcut demonstrated by one example can undermine the written instruction.
+
+Review ownership follows the affected boundary. A domain specialist reviews policy meaning. A tool owner reviews argument and effect semantics. Security or privacy reviewers assess new data access and authority. The LLMOps owner checks evaluation design, trace identity, and release controls.
+
+Automated semantic checks can highlight changed tool names, placeholders, output fields, token budgets, model settings, and safety clauses. They support human review; they cannot determine the business meaning of a sentence. The pull request should place the semantic change summary beside the raw diff so reviewers can compare intent with implementation.
+
+## Evaluation Gates Protect Known Behaviour
+
+<!-- section-summary: Release evaluation compares a candidate with the current bundle across representative, golden, regression, and adversarial cases. -->
+
+An **evaluation gate** is a release rule backed by measured results. The candidate can progress only after required metrics and slices meet their thresholds.
+
+### Build cases from several sources
+
+A strong evaluation collection contains several kinds of cases:
+
+**Representative cases** reflect ordinary production inputs across important languages, lengths, customer segments, and task types. They estimate common behaviour.
+
+**Golden cases** have carefully reviewed expected answers, facts, actions, or scoring criteria. They protect core requirements. “Golden” describes the quality of the reference, not a promise that only one wording is valid.
+
+**Regression cases** come from failures the team has already found in testing or production. Each confirmed incident should leave behind a case that detects the same failure pattern.
+
+**Adversarial cases** deliberately test prompt injection, unsafe requests, missing evidence, malformed tool results, conflicting instructions, sensitive data, and attempts to bypass approval.
+
+Run the current production bundle and candidate against the same cases. Keep other dependencies fixed for a prompt-only comparison. If the model, tools, or context policy must move with the prompt, evaluate the complete candidate bundle and describe the comparison accordingly.
 
 ```mermaid
 flowchart TD
-    P[Prompt bundle] --> S[Output schema]
-    P --> T[Tool contracts]
-    P --> C[Context policy]
-    P --> R[Model route]
-    C --> K[Retrieval index and source policy]
-    T --> A[Authorization and approval]
-    S --> V[Semantic validators]
-    R --> M[Concrete deployment]
-    P --> E[Evaluation bundle]
-    S --> E
-    T --> E
-    C --> E
-    R --> E
-```
-
-A **compatibility rule** states which versions may run together. If `grounded-answer-v4` requires citation objects, it should reject an output schema that only accepts plain strings. If a tool renamed `customer_id` to `account_ref`, the prompt and tool schema must move together or the registry must keep the older contract available. If the retrieval system no longer returns paragraph IDs, the citation instruction needs a compatible evidence format.
-
-Store dependency constraints in the release record and resolve them before traffic reaches the candidate. Runtime resolution should return one immutable bundle identity. Silently selecting “latest” for each component creates combinations that nobody evaluated. A model alias can change underneath the prompt, a policy service can publish a new revision, and a tool can change result semantics even while the prompt file stays identical.
-
-This also clarifies ownership. Prompt authors own the intended instruction behaviour. Tool owners own effect and result semantics. Retrieval owners own evidence availability. Domain reviewers own policy meaning. The release owner checks that one evaluated combination satisfies the product contract. A regression investigation can then start from a concrete dependency change instead of blaming whichever prompt sentence looks suspicious.
-
-## Match the Release Path to the Risk
-
-<!-- section-summary: Low-risk wording changes and high-impact authority changes can share infrastructure while using different review, evidence, and rollout requirements. -->
-
-Prompt releases need proportional lanes. A copy edit that preserves meaning can use automated contract tests and a small regression suite. A change to tool selection, refusal behaviour, financial limits, personal-data handling, or human approval needs domain or security review, high-risk eval slices, and a smaller canary. The versioning system should carry a risk class and enforce the corresponding evidence rather than making every change wait for the same ceremony.
-
-A useful release record includes the intended change, affected capabilities, risk class, owner approvals, candidate and baseline eval reports, traffic plan, alert thresholds, rollback target, and expiry for temporary exceptions. The record links evidence; it should not duplicate sensitive evaluation content into a broadly visible deployment log.
-
-Emergency changes still need identity and evidence. If an active prompt causes harmful tool use, operators may move production to a previous bundle immediately. If a new instruction is the only safe mitigation, publish it as an immutable emergency version, require the minimum available review, restrict traffic or tools, and schedule the full evaluation afterward. Editing the live prompt in place would remove the evidence needed to understand both the incident and the mitigation.
-
-Prompt caching affects rollout as well. Providers may reuse stable prompt prefixes according to their current caching behaviour, but a new bundle version must still resolve to the intended content and trace identity. Keep stable shared instructions early when that layout fits the task, and keep dynamic user or retrieved data later. Cache efficiency can reduce latency and cost; it should never cause two semantically different bundles to share one internal application identity.
-
-Test the operational path before a risky release: resolve the candidate alias, reconstruct the bundle in a clean environment, run the required evals, shift a test cohort, move the alias back, and verify that new workers and conversations use the rollback version. This rehearsal checks the control plane that teams need during a real behaviour incident.
-
-## Separate Authoring, Release, and Runtime Identity
-
-<!-- section-summary: Draft names, immutable versions, and movable environment aliases solve different operational needs. -->
-
-Authors need a place to iterate. Production needs immutable evidence. Operators need a stable name that can move during rollout. Use three identities:
-
-- a **draft** is editable and not a production record;
-- a **version** is an immutable bundle approved for evaluation or release;
-- an **alias** such as `staging`, `canary`, or `production` points to one version.
-
-Applications request the alias, while the resolver records the concrete version. Rollback moves the alias to a known-good version; it does not rebuild old text from memory. Environment promotion moves the same artifact from test to staging to production rather than creating a slightly different copy in each environment.
-
-Provider-managed prompts can implement part of this model, but the application may still assemble tools, schemas, retrieved context, and policy at runtime. Keep one internal release identity that links the provider prompt version to the other bundle components.
-
-## Make Changes Reviewable by Meaning
-
-<!-- section-summary: A useful prompt review explains the intended behaviour change, affected slices, risks, and evidence—not only the text diff. -->
-
-A text diff shows wording changes but not their expected consequence. Every material release should state:
-
-- the failure or product need motivating the change;
-- which behaviours should improve and which should stay invariant;
-- affected task, language, risk, and customer slices;
-- possible tool, latency, token, or refusal changes;
-- the evals that demonstrate the intended effect;
-- rollout and rollback thresholds.
-
-Review ownership should match the change. Domain experts review policy meaning, security reviews new tool or data access, and LLMOps reviews evaluation and observability. A formatting-only change may use a lighter path than a change that alters approval or safety instructions.
-
-Examples inside a prompt need the same scrutiny as rules. Models can follow the pattern of an example even when prose says otherwise. Verify that examples do not contain stale policy, private data, contradictory output fields, or one narrow scenario that distorts the general task.
-
-## Evaluate the Bundle as a System
-
-<!-- section-summary: Prompt evaluation must hold other components steady, cover important slices, and measure end-to-end behaviour. -->
-
-Offline evaluation compares the candidate and current version on a representative dataset. Include ordinary requests, known failures, edge cases, adversarial content, missing context, tool errors, and high-risk cases. Measure the product contract: factual support, task completion, tool selection, structured-output validity, escalation, safety, latency, and total token or tool cost.
-
-Changing the model, tools, retrieval index, and prompt simultaneously makes the result hard to attribute. Prefer controlled comparisons when possible. When the components must change together, treat them as one release bundle and evaluate the combination explicitly.
-
-```mermaid
-flowchart TD
-    A[Evaluation cases and slices] --> B[Current bundle]
-    A --> C[Candidate bundle]
-    B --> D[Task, safety, latency, and cost graders]
+    A["Representative, golden, regression, and adversarial cases"] --> B["Run current production bundle"]
+    A --> C["Run candidate bundle"]
+    B --> D["Deterministic checks"]
     C --> D
-    D --> E{Required thresholds and no blocked regression?}
-    E -->|no| F[Revise candidate]
-    E -->|yes| G[Shadow or canary eligible]
+    B --> E["Task-specific and model-based graders"]
+    C --> E
+    D --> F["Compare aggregate metrics and required slices"]
+    E --> F
+    F --> G{"All blocking gates pass?"}
+    G -->|"No"| H["Inspect failures and revise"]
+    G -->|"Yes"| I["Approve for the permitted rollout stage"]
+
+    classDef cases fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef score fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A cases
+    class B,C run
+    class D,E,F score
+    class G,I decision
+    class H fail
 ```
 
-Aggregate scores can hide damage. A candidate may improve average helpfulness while reducing safety recall for one language. Define non-negotiable slice gates and review disagreements manually. Re-run evaluation when the model route, context policy, tool contracts, or important source data changes, even if the prompt text does not.
+### Match each requirement to an appropriate grader
 
-## Use Staged Traffic to Measure Real Behaviour
+Use deterministic graders for facts that software can check directly. These include JSON validity, required fields, citation IDs, forbidden tool calls, numeric bounds, latency, and token usage.
 
-<!-- section-summary: Shadow and canary releases expose live input patterns while keeping blast radius and rollback time small. -->
+Use task-specific scoring or calibrated model graders for qualities such as groundedness, completeness, and tone. Human review remains important for ambiguous or high-impact disagreements.
 
-In **shadow mode**, the candidate processes a copy of representative traffic but does not serve its result. This reveals unseen input shapes, latency, tool behaviour, and cost. Shadowing must respect privacy and avoid duplicated side effects; use read-only tools, stubs, or recorded results where needed.
+Aggregate scores can hide a blocked regression. A candidate may improve average completeness while failing on short requests in one language. Release policy should name the slices that cannot regress and the safety conditions that require a perfect pass.
 
-In a **canary**, a small production cohort receives the candidate. Assign cohorts deterministically so a conversation does not switch versions midstream unless that transition is explicitly supported. Monitor outcome quality, escalation, refusal, tool errors, latency, cost, and support reports against the current version.
+A gate definition might look like this:
 
-Define rollback triggers before rollout. A blocked safety failure, schema incompatibility, sharp tool-error increase, or meaningful outcome regression may stop the release immediately. Other signals may require a sustained threshold. Automatic rollback can move the production alias, but operators still need to inspect downstream effects already created.
+```yaml
+candidate: summary-release/27
+baseline: production
+blocking_gates:
+  schema_validity: 1.0
+  unauthorized_tool_calls: 0
+  unsupported_citations: 0
+slice_gates:
+  - slice: long_documents
+    metric: required_fact_recall
+    minimum: 0.95
+  - slice: sensitive_documents
+    metric: policy_compliance
+    minimum: 1.0
+review_sample:
+  disagreements: 30
+```
 
-## Reconstruct the Actual Runtime Prompt
+Thresholds should come from the product's risk tolerance and a measured baseline. Copying a number from another application gives it the appearance of precision without the supporting evidence.
 
-<!-- section-summary: Traces must identify both the immutable bundle and the dynamic context that produced one request. -->
+## CI/CD Turns Evidence Into a Release Decision
 
-Even with an immutable bundle, each run contains dynamic values: user input, conversation state, retrieved documents, memory, tool results, time, and tenant policy. Debugging requires both the bundle version and the assembly evidence.
+<!-- section-summary: A release pipeline resolves dependencies, builds one immutable bundle, runs evaluations, records evidence, and promotes the same artifact. -->
+
+CI/CD connects prompt review to a repeatable deployment. The pipeline does more than upload text. It produces the evidence that the candidate is complete and eligible for a specific environment.
+
+### Build and evaluate one digest
+
+A practical pipeline performs these steps:
+
+1. validate template placeholders, message roles, schemas, and manifests;
+2. resolve tool, context, model, and safety dependencies;
+3. package one immutable bundle and calculate its digest;
+4. run contract tests and offline evaluations against that digest;
+5. publish the artifact and evaluation report;
+6. request the approvals required by the risk tier;
+7. move a shadow or canary alias to the candidate;
+8. promote traffic gradually or restore the rollback alias.
+
+GitHub Actions environments can require a reviewer before a deployment job starts. They can also restrict deployment branches and protect environment secrets. Each environment deployment appears in the repository's deployment history. GitLab CI, Jenkins, and cloud-native pipelines can implement the same control pattern.
+
+The deployment job should receive the artifact digest that passed evaluation. Rebuilding the candidate inside that job could resolve a different dependency.
+
+```yaml
+name: release-prompt-bundle
+on:
+  pull_request:
+    paths: ["prompts/**", "schemas/**", "evals/**", "ops/**", "pyproject.toml", "uv.lock", ".github/workflows/release-prompt-bundle.yml"]
+  push:
+    branches: [main]
+    paths: ["prompts/**", "schemas/**", "evals/**", "ops/**", "pyproject.toml", "uv.lock", ".github/workflows/release-prompt-bundle.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - run: uv run --frozen pytest tests/prompt_contracts
+      - run: uv run --frozen python ops/build_bundle.py --out dist/bundle.tar.gz
+      - run: uv run --frozen python evals/compare.py --candidate dist/bundle.tar.gz --baseline production
+      - uses: actions/upload-artifact@v7
+        with: { name: evaluated-bundle, path: dist/ }
+
+  release-canary:
+    needs: evaluate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: prompt-canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
+      - uses: actions/download-artifact@v8
+        with: { name: evaluated-bundle, path: dist/ }
+      - run: uv run --frozen python ops/promote.py --artifact dist/bundle.tar.gz --alias canary
+```
+
+The pull-request run produces review evidence without deploying. After the same change reaches `main`, the pipeline repeats the evaluation and allows the canary job to run. That job checks out the exact workflow commit and installs uv. Each `uv run --frozen` command creates or uses the project environment from the committed lockfile without changing it. The job also downloads the artifact created by its `evaluate` dependency. The promotion script and its locked environment are therefore present, while the tested bundle is downloaded and promoted without another build.
+
+The Python commands represent application-specific release logic; GitHub Actions supplies the standard source, artifact, approval, and environment controls around it. The major tags keep the tutorial readable. A production supply-chain policy may pin every third-party action to a reviewed full commit SHA. The promotion job should also receive only the deployment credentials and permissions it needs.
+
+Store the candidate digest, baseline digest, source commit, evaluation report, reviewer decisions, risk tier, canary plan, thresholds, and rollback target in the release record. This record lets an incident reviewer connect a production trace to the exact evidence that allowed the version to ship.
+
+## Shadow and Canary Releases Limit Risk
+
+<!-- section-summary: Risk-tiered shadowing and canaries expose candidates to realistic inputs while limiting who can see their outputs and what effects they may create. -->
+
+Offline evaluations are built from known data. Production traffic contains new phrasing, document lengths, languages, and interaction patterns. Staged rollout tests the candidate against that reality without sending it to everyone at once.
+
+### Shadow traffic reveals unseen inputs
+
+In **shadow mode**, the candidate receives a copy of selected live inputs while the current version continues to serve users. The candidate output is stored for comparison and never drives the product response. Shadowing can reveal latency, token cost, schema failures, and unexpected input patterns.
+
+Shadow mode needs effect isolation. A copied agent request must never send a second email, create a duplicate ticket, or charge an account. Read-only adapters can replace effectful tools. Recorded results and validation-only stubs are also useful.
+
+Sensitive inputs require the same privacy policy as the serving path. Apply its consent and access rules, keep data in the approved region, and enforce the same retention period.
+
+### Canary traffic measures user-facing behaviour
+
+In a **canary release**, a small production cohort receives the candidate. Cohort assignment should be stable for a user, conversation, tenant, or workflow. Stable assignment prevents a multi-turn interaction from switching instructions halfway through and supports a clean comparison with the current bundle.
+
+The release plan defines success metrics, blocking failures, observation time, minimum sample, traffic stages, and rollback owner before the canary starts. Monitor product outcomes alongside service signals: task completion, supported facts, escalation, refusal, tool errors, latency, token use, and user feedback.
+
+| Risk tier | Example change | Typical evidence and rollout |
+|---|---|---|
+| Low | Spelling or presentation change with no contract impact | Contract tests, focused regression set, normal deployment |
+| Medium | New examples, context ordering, output behaviour, or tool-selection guidance | Full offline suite, shadow comparison, small canary, staged promotion |
+| High | Safety policy, sensitive data handling, approval logic, or effectful tool authority | Domain and security review, adversarial gates, isolated shadow, tightly bounded canary, explicit human approval |
+
+These lanes share one release system. The risk tier changes the required evidence and blast radius.
 
 ```mermaid
-flowchart LR
-    A[Immutable prompt bundle] --> E[Runtime assembly]
-    B[User and conversation state] --> E
-    C[Retrieved evidence and memory] --> E
-    D[Tool definitions and policy] --> E
-    E --> F[Model request]
-    F --> G[Trace record]
-    G --> H[Bundle version and digest]
-    G --> I[Context item IDs and versions]
-    G --> J[Truncation, model route, and settings]
+flowchart TD
+    A["Evaluated candidate bundle"] --> B{"Risk and production uncertainty"}
+    B -->|"Low"| C["Focused deployment"]
+    B -->|"Medium"| D["Shadow on representative traffic"]
+    B -->|"High"| E["Isolated shadow plus specialist approval"]
+    D --> F["Small stable canary cohort"]
+    E --> F
+    C --> G["Observe release metrics"]
+    F --> G
+    G --> H{"Promotion criteria satisfied?"}
+    H -->|"Yes"| I["Increase traffic in stages"]
+    H -->|"No"| J["Restore known-good bundle"]
+
+    classDef start fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A start
+    class B,H choice
+    class C,D,E,F,G,I stage
+    class J stop
 ```
 
-Record prompt name and version, content digest, model request and response identifiers, tool and schema versions, context-policy version, retrieved document or chunk IDs, memory/checkpoint identity, truncation or compaction decisions, token usage, and final outcome. Raw content capture should follow privacy, access, and retention policy; identifiers and hashes often provide enough reconstruction without copying every secret into telemetry.
+Some failures justify immediate automatic rollback, such as a blocked safety violation, an incompatible output schema, or a sharp increase in unauthorized tool attempts. More ambiguous quality signals may need a sustained threshold and human review. Automated promotion should wait for enough evidence; an empty error dashboard after a few requests says little about answer quality.
 
-Prompt reconstruction is also a testable capability. Given an approved trace fixture, the runtime should resolve the same immutable bundle and context versions. If an external source has changed, the system should clearly report that exact replay is unavailable rather than silently using current data.
+## Traces Reconstruct the Request Without Copying Every Secret
 
-## Rollback the Behaviour, Then Investigate
+<!-- section-summary: Runtime traces join the resolved behaviour bundle with dynamic context, provider identity, validation, tools, and outcomes under a deliberate privacy policy. -->
 
-<!-- section-summary: Fast rollback restores a known-good bundle while trace comparison identifies which component caused the regression. -->
+A release record describes the approved bundle. A **trace** describes one execution. The trace follows the request across the application. Its spans record individual operations such as context retrieval, model inference, validation, and tool execution.
 
-Rollback should be one controlled alias change with an audit record. Confirm that caches, long-running conversations, and workers do not continue using the candidate unintentionally. Decide whether active runs finish on their pinned version or restart under the previous one.
+### Record identities before content
 
-Then compare failed candidate traces with matched current traces. Check output and evaluator differences, assembled context, tool choices, truncation, refusals, token use, and latency. A "prompt incident" may actually be a changed retrieval corpus, tool schema, model alias, or tenant variable. The complete bundle and trace prevent premature blame.
+For prompt release work, the trace should connect four kinds of evidence:
 
-Turn confirmed production failures into evaluation cases. That closes the release loop: real incidents expand the dataset that protects later versions.
+1. the resolved bundle version, digest, source commit, and deployment environment;
+2. the context policy, selected source IDs, memory or conversation checkpoint, and truncation decisions;
+3. the requested model route, actual provider model identity, request and response IDs, settings, tokens, and latency;
+4. the output schema, validation result, tool contract versions, tool calls, policy decisions, and product outcome.
 
-## What a Production Prompt Release Provides
+OpenTelemetry supplies the trace model and common semantic names for services and model operations. Its generative-AI semantic conventions continue to evolve, so instrumentation libraries may support different convention versions. Record standard attributes exposed by the chosen instrumentation and place application-owned release fields in an application namespace instead of inventing new `gen_ai.*` names.
 
-<!-- section-summary: Mature prompt operations make behaviour immutable, evaluated, observable, staged, and reversible. -->
+```python
+with tracer.start_as_current_span("summary.generate") as span:
+    span.set_attribute("app.llm.bundle.name", bundle.name)
+    span.set_attribute("app.llm.bundle.version", bundle.version)
+    span.set_attribute("app.llm.bundle.digest", bundle.digest)
+    span.set_attribute("app.llm.context_policy.version", bundle.context_policy)
+    span.set_attribute("app.llm.output_schema.version", bundle.output_schema)
 
-A production prompt release has a complete immutable bundle, clear owner, reviewable intent, slice-aware eval gates, staged rollout, trace reconstruction, and a tested rollback path. Runtime aliases resolve to concrete versions, and every run records the bundle and dynamic context that shaped it.
+    response = model_client.generate(assembled_request)
+    span.set_attribute("gen_ai.response.model", response.model)
+    span.set_attribute("app.llm.provider_response.id", response.id)
+```
 
-The core idea is simple: prompts are part of the deployed behaviour of an LLM system. Managing only their text misses tools, schemas, context assembly, and runtime settings. Releasing the complete bundle makes improvements measurable and incidents explainable without turning prompt authoring into guesswork.
+The application fields complement standard service and generative-AI attributes. The exact provider response shape varies, so production instrumentation should use the SDK's supported response ID and model fields.
+
+Raw prompts, user messages, retrieved text, tool arguments, and model outputs can contain personal data, credentials, confidential documents, or attacker-controlled content. Capturing all of it in a broadly accessible tracing system creates a second sensitive data store.
+
+A safer default records immutable identities and digests. Lengths, policy decisions, source IDs, and validation outcomes add useful operational detail.
+
+If a team needs content for debugging or quality review, it can capture a sampled and redacted copy in a restricted store. That store needs explicit access, retention, encryption, and deletion controls. Hashes can confirm that two artifacts match; they cannot recover content that was never retained.
+
+Reconstruction should be tested. Given a trace fixture, the runtime should resolve the same bundle digest and explain which dynamic sources were used. Exact replay may be impossible after an external document changes or a provider model is retired. The trace should report that limitation instead of silently substituting current data.
+
+## Roll Back a Compatible Bundle and Reconcile Its Effects
+
+<!-- section-summary: Rollback restores a known-good compatible bundle, while reconciliation handles requests and external effects already produced by the candidate. -->
+
+A prompt rollback starts by moving traffic to a known-good bundle. That action may be an atomic alias update, a feature-flag change, a deployment rollback, or a worker restart with the earlier digest. The mechanism should be rehearsed before an incident.
+
+The rollback target must still be compatible with the running application. Keep the earlier output validator, tool adapter, and model route available for the rollback window, or package them inside the bundle. If a database or external API no longer accepts the old contract, prepare a compatibility adapter during the forward release.
+
+Active work needs a clear rule. One-shot requests can use the restored version on their next invocation. Conversations and long-running agent runs may finish on their pinned bundle, pause for review, or restart under a migration path. Quietly changing instructions inside an active run makes its later trace difficult to interpret and can invalidate previously generated state.
+
+Also account for caches. Invalidate alias caches, confirm that each worker resolves the expected version, and query traces for the candidate digest after rollback. A control-plane update is incomplete while part of the fleet still serves the candidate.
+
+```mermaid
+flowchart TD
+    A["Rollback threshold or operator decision"] --> B["Move traffic to known-good bundle"]
+    B --> C["Verify workers, caches, and new traces"]
+    C --> D["Identify runs and users exposed to candidate"]
+    D --> E{"Did the candidate create external effects?"}
+    E -->|"No"| F["Compare traces and add regression cases"]
+    E -->|"Yes"| G["Reconcile records, notifications, or transactions"]
+    G --> F
+    F --> H["Correct the failure and publish a new candidate version"]
+
+    classDef trigger fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef inspect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef recover fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A trigger
+    class B,E control
+    class C,D,F inspect
+    class G,H recover
+```
+
+Restoring a prompt does not undo an email, ticket, account update, or payment already created by the candidate. Reconciliation finds those effects through trace IDs and idempotency keys. Audit logs and domain records show what reached the external system. Operators can then cancel, correct, notify, or send the case for human review.
+
+After containment, compare candidate and known-good traces. Inspect assembled context, model identity, output validation, tool choices, policy decisions, latency, and outcomes. The apparent prompt regression may originate from retrieval, a model alias, or a tool change. Add confirmed failure patterns to the regression set before publishing the corrected bundle.
+
+## Choose a Registry That Fits the Operating Model
+
+<!-- section-summary: Git, prompt registries, provider services, object stores, and deployment controls cover different parts of the release lifecycle. -->
+
+There is no requirement to buy a dedicated prompt platform before versioning prompts well. A small team can keep typed prompt helpers in Git and review them through pull requests. An evaluation job creates evidence, an immutable object store holds bundles, and a database or feature flag controls promotion. This approach keeps prompts close to the application code that assembles them.
+
+### Code-managed prompts fit application-owned behaviour
+
+Git works well where prompts change with assembly code, schemas, or tests. Pull requests keep the behaviour change beside the application change. An evaluation job creates the release evidence, and a feature flag or alias controls rollout.
+
+### Prompt registries support shared operations
+
+A prompt registry is a good fit for prompts shared across several applications. It can also provide controlled authoring for colleagues who do not work in the application repository. Central discovery, aliases, comparisons, lineage, and permissions reduce duplicated operational work.
+
+MLflow Prompt Registry supports immutable prompt-template versions, comparisons, aliases, and integration with MLflow tracing and evaluation. Its prompt object can also carry response formats and model configuration. Current MLflow documentation allows model configuration to be updated on an existing prompt version. A fully immutable release should therefore freeze the resolved model settings in a separate bundle manifest and digest.
+
+Amazon Bedrock Prompt Management supports reusable prompts with variables and saved versions. Its variants can include a model and inference configuration. It fits teams already operating their application through Bedrock. Tool contracts, application assembly code, context policy, and external safety controls still need identities outside the provider prompt object.
+
+OpenAI's current direction for new applications is code-managed prompt helpers with typed inputs and direct API requests. Git review, tests, evaluations, and feature flags provide the release path. Teams using reusable OpenAI prompt objects should migrate their content into that path because the object lifecycle is being retired.
+
+| Release concern | Common industrial choice |
+|---|---|
+| Authoring and code review | GitHub or GitLab pull requests with code owners |
+| Shared prompt versions and aliases | MLflow Prompt Registry or a provider prompt service |
+| Resolved immutable bundle | Versioned object storage, artifact registry, or signed release archive |
+| Evaluation | Task-specific Python test suite, MLflow evaluation, or provider evaluation service |
+| Promotion and approval | GitHub Actions, GitLab CI, Jenkins, or a cloud deployment pipeline |
+| Traffic control | Feature flags, gateway routing, service configuration, or registry aliases |
+| Runtime evidence | OpenTelemetry traces plus provider request and response identities |
+
+The tools can vary across organisations. The operating model should still answer the same questions: Who can edit a draft? What makes a version immutable? Which evidence permits promotion? How does runtime resolve and record the concrete version? How quickly can operators restore a compatible bundle?
+
+## A Release Should Be Explainable and Reversible
+
+<!-- section-summary: Mature prompt release engineering connects one reviewed change to one evaluated artifact, one controlled rollout, and one reconstructable runtime identity. -->
+
+Prompt versioning is useful because LLM behaviour depends on more than a visible block of prose. Templates, examples, tools, schemas, context assembly, model settings, and safety policy work together to shape the result.
+
+A production release gives that complete combination an immutable bundle identity. Reviewers examine the intended behavioural change. Evaluation gates protect core, regression, and adversarial cases. CI/CD packages and promotes the same tested digest. Shadow and canary stages limit exposure. Traces connect real requests to the bundle and dynamic context. Rollback restores a compatible known-good artifact and reconciliation handles effects that already occurred.
+
+With those controls in place, the team can answer the questions that matter during normal improvement and during an incident: What changed? Why was it approved? Which users saw it? Did it improve the intended behaviour? Which artifact can safely replace it?
 
 ## References
 
 - [OpenAI prompting guide](https://developers.openai.com/api/docs/guides/prompting)
-- [OpenAI prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering)
 - [OpenAI evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
 - [OpenAI agent evaluations](https://developers.openai.com/api/docs/guides/agent-evals)
-- [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
-- [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
+- [MLflow Prompt Registry](https://mlflow.org/docs/latest/genai/prompt-registry/)
+- [Amazon Bedrock Prompt Management](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html)
+- [GitHub Actions deployment environments](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments)
+- [GitHub checkout action](https://github.com/actions/checkout)
+- [GitHub artifact actions](https://github.com/actions/upload-artifact)
+- [Astral setup-uv action](https://github.com/astral-sh/setup-uv)
+- [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
+- [OpenTelemetry generative AI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)

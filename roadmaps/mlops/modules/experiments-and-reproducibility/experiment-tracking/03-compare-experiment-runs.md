@@ -1,290 +1,375 @@
 ---
 title: "Comparing Experiment Runs"
-description: "Show how teams compare tracked runs against a baseline using metrics, segments, artifacts, runtime checks, and release risk."
-overview: "Comparing experiment runs is a layered decision about comparability, product value, guardrails, uncertainty, operational readiness, and release evidence. A defect-detection example applies that framework to tracked runs."
+description: "Learn how to make fair run comparisons, explain metric differences, account for randomness, and choose the next experiment with evidence."
+overview: "Run comparison is a controlled investigation into why results differ. Teams first align the task, data, split, evaluation, and environment, then compare configurations, learning behavior, artifacts, segments, uncertainty, and operational evidence."
 tags: ["MLOps", "core", "tracking"]
 order: 3
 id: "article-mlops-experiments-and-reproducibility-compare-experiment-runs"
 ---
 
-## Comparison Is A Model Decision With Evidence
-<!-- section-summary: Comparing runs means judging candidates against a baseline, guardrails, segments, artifacts, and release constraints. -->
+## Table of Contents
 
-Comparing experiment runs is the step where tracked evidence turns into a model decision. The team has several runs, each with parameters, metrics, artifacts, data versions, code commits, environment records, and notes. The comparison asks which candidate should move forward, which should stop, and which needs another experiment.
+1. [Two Scores Can Hide Two Different Experiments](#two-scores-can-hide-two-different-experiments)
+2. [Run Comparison Explains Why the Result Changed](#run-comparison-explains-why-the-result-changed)
+3. [Prove That the Runs Are Comparable](#prove-that-the-runs-are-comparable)
+4. [Choose a Baseline and a Candidate](#choose-a-baseline-and-a-candidate)
+5. [Isolate the Intended Change](#isolate-the-intended-change)
+6. [Read Learning Curves Alongside Final Metrics](#read-learning-curves-alongside-final-metrics)
+7. [Use Segments and Artifacts to Explain the Aggregate](#use-segments-and-artifacts-to-explain-the-aggregate)
+8. [Separate Improvement From Random Variation](#separate-improvement-from-random-variation)
+9. [Compare Hyperparameter Trials as One Study](#compare-hyperparameter-trials-as-one-study)
+10. [Use MLflow 3 as an Evidence Workspace](#use-mlflow-3-as-an-evidence-workspace)
+11. [Know What the Comparison UI Cannot Decide](#know-what-the-comparison-ui-cannot-decide)
+12. [An Experiment Winner Is Only a Release Candidate](#an-experiment-winner-is-only-a-release-candidate)
+13. [Record the Conclusion and the Next Experiment](#record-the-conclusion-and-the-next-experiment)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-The title answer is straightforward: **comparing experiment runs means evaluating candidates side by side against the same baseline and validation evidence, then choosing a model based on product metrics, guardrails, segment behavior, runtime readiness, and known risk**. A leaderboard score is part of the decision. The release story around that score is the part that protects production.
+## Two Scores Can Hide Two Different Experiments
+<!-- section-summary: A higher metric has meaning only after the team confirms that both runs answered the same experimental question. -->
 
-This article builds directly on the previous two. Reproducibility gives you the ingredients. Tracking stores those ingredients in run records. Comparison uses those records to decide what happens next.
+At a high level, **comparing experiment runs** means explaining why one training run produced a different result from another. The visible part is usually a pair of scores. The real work is deciding whether the score difference came from the intended model change or from some other part of the experiment.
 
-If you are the person reviewing the run table, start with the product decision instead of the biggest number. Ask whether the candidate improves the product, respects the guardrails, has the files needed for release, and leaves a rollback path the operations team can trust.
+Imagine two classification runs:
 
-Use the same decision layers for every candidate review:
+- The baseline reports an F1 score of `0.812`.
+- The candidate reports an F1 score of `0.826`.
 
-| Decision layer | Question | Stop condition |
-|---|---|---|
-| **Comparability** | Did baseline and candidate use the same eligible data, metric code, and protocol? | The comparison mixes incompatible evidence |
-| **Product value** | Does the primary metric represent the decision the product needs? | The gain has no useful product interpretation |
-| **Guardrails and segments** | Which users, classes, regions, or failure types lost quality? | A protected or high-cost slice crosses its limit |
-| **Uncertainty and robustness** | Is the difference larger than run variance and stable under useful perturbations? | The claimed gain disappears across seeds or stress tests |
-| **Operational readiness** | Can the artifact load, meet latency and memory limits, and use the production schema? | The candidate cannot run safely in the target path |
-| **Release evidence** | Are lineage, owner, approval, rollback target, and limitations complete? | Operations cannot identify or recover the release |
+The candidate appears better. That conclusion is safe only if both runs used the same task definition, eligible data, split, label policy, metric code, prediction threshold, and evaluation environment. A new data snapshot could contain less challenging examples. A changed threshold could raise F1 without changing model quality. A lucky random seed could create a small temporary advantage. A dependency upgrade could alter preprocessing.
 
-A candidate reaches the final decision only after earlier layers pass. This order prevents teams from spending time debating a small metric gain when the runs used different data or the artifact cannot load in the serving runtime.
+The metric difference tells us what happened; the comparison must explain why it happened.
 
 ```mermaid
-flowchart LR
-    Runs["Baseline and candidate run records"] --> Comparable{"Comparable evidence?"}
-    Comparable -->|no| Repair["Align data, metric, threshold, and protocol"]
-    Comparable -->|yes| Value["Product metric and guardrails"]
-    Value --> Robust["Segments, uncertainty, and stress tests"]
-    Robust --> Runtime["Artifact and runtime readiness"]
-    Runtime --> Decision{"Advance, reject, or experiment again"}
-    Decision --> Packet["Recorded evidence, limits, owner, and rollback target"]
+flowchart TD
+    A["Two runs report different results"] --> B["Verify task, data, split, and evaluation"]
+    B --> C["Choose baseline and candidate"]
+    C --> D["Identify the intended change"]
+    D --> E["Compare learning curves, artifacts, and segments"]
+    E --> F["Estimate random variation"]
+    F --> G["Explain the result and choose the next experiment"]
 ```
 
-The order saves review effort and protects the conclusion. A candidate with incompatible evidence returns to comparison setup. A candidate that violates an important slice stops before packaging. A candidate that passes offline quality can still stop when the artifact fails the target runtime.
+This order prevents a familiar mistake: sorting a run table by one metric and treating the first row as the answer.
 
-## Apply The Decision Framework To Defect Detection
-<!-- section-summary: A supporting example follows a computer vision team choosing a surface defect detector for a factory line. -->
+## Run Comparison Explains Why the Result Changed
+<!-- section-summary: A useful comparison connects a measured outcome to the controlled change that could have produced it. -->
 
-Imagine **BrightForge Electronics**, a manufacturer that inspects tablet screens before packaging. Cameras above each line capture images of screens, and a computer vision model flags scratches, dust blobs, pressure marks, and edge chips. The current production model is `surface-defect-detector:v21`, a YOLO-style detector served through a GPU-backed inspection service.
+An experiment asks a question such as, “Does adding recency features improve ranking quality?” or “Does a smaller learning rate improve calibration?” A run is one execution of that experiment. Run comparison evaluates the evidence across executions.
 
-The quality engineering team has a problem. Line C started using a new protective film, and the old model confuses film glare with scratches. Too many good screens are sent to manual inspection, slowing the shift lead's queue. At the same time, the team must catch real edge chips because defective units create expensive returns.
+The strongest comparison changes one planned factor and holds the important alternatives steady. Reality is often messier: training code, data, compute images, and several parameters may move together. The team can still compare those runs, although its conclusion should match the evidence. If five meaningful inputs changed, the result supports “this bundle performed differently.” It cannot isolate which one caused the change.
 
-The review owner is Elena, the MLOps engineer supporting the vision team. She has six tracked runs from a new training batch:
+A helpful framework has six layers:
 
-- Three runs fine-tuned `yolov8s-defect` with heavier glare augmentation.
-- Two runs used a larger `yolov8m-defect` model.
-- One run kept the old model architecture and adjusted the confidence threshold.
+1. **Question:** What hypothesis or engineering choice is being tested?
+2. **Comparability:** Did the runs use compatible data and evaluation rules?
+3. **Treatment:** Which intentional change separates candidate from baseline?
+4. **Behavior:** How did training, segments, and errors differ?
+5. **Uncertainty:** Is the result larger than ordinary run-to-run variation?
+6. **Decision:** What conclusion is justified, and what experiment comes next?
 
-The shared validation dataset is `defect_frames_2026_06_holdout:v3`, built from 28,000 labeled images across Lines A, B, and C. The primary metric is `mAP@0.5` for defect localization. Guardrails include scratch recall, edge-chip recall, false rejects per 1,000 screens, Line C glare false positives, and p95 inference latency.
+For example, two demand-forecasting runs use the same code and evaluation window. The candidate adds holiday-distance features. Aggregate error improves, with the gain concentrated around holidays and stable error elsewhere. Repeated seeds show a similar pattern. This evidence supports a focused conclusion: the holiday features help forecast holiday periods. It says little about a new optimizer because the optimizer stayed fixed.
 
-## Start With A Shared Baseline
-<!-- section-summary: A fair comparison starts with a baseline evaluated on the same dataset and metric definitions as the candidates. -->
+## Prove That the Runs Are Comparable
+<!-- section-summary: A fair comparison aligns the task, eligible data, split, evaluation logic, and relevant execution environment before reading the metric delta. -->
 
-A **baseline** is the reference point for the comparison. For a production replacement, the most useful baseline is the current production model evaluated on the same validation dataset as the candidates. That shared dataset keeps the conversation focused on model changes instead of hidden data changes.
+**Comparability** means the runs answer the same question under sufficiently similar conditions. Exact byte-for-byte execution is unnecessary for every study. The conditions that can change the conclusion must be aligned or explicitly accounted for.
 
-BrightForge uses this baseline record:
+### Align the meaning of the task
+
+Start with the task. Both runs should predict the same target for the same population and decision horizon. A churn model predicting cancellation in 30 days cannot be compared directly with one predicting cancellation in 90 days, even if both log `roc_auc`.
+
+### Align the evidence boundary
+
+Then verify the evidence boundary:
+
+- **Data identity:** training and evaluation dataset names, digests, table versions, or immutable snapshot references;
+- **Split identity:** row assignment, time cutoff, cross-validation folds, and leakage controls;
+- **Label policy:** target construction, exclusions, adjudication, and label maturity;
+- **Evaluation protocol:** metric implementation, averaging rule, threshold, sample weights, and segment definitions;
+- **Environment:** code commit, dependency lock, container digest, framework version, and relevant hardware path.
+
+The evaluation split deserves special attention. Suppose a recommendation candidate uses a random split while the baseline uses a time-based split. The random split may place near-duplicate user behavior on both sides, making the candidate look stronger. The runs measured different levels of difficulty, so the metric delta cannot establish a model improvement.
+
+```mermaid
+flowchart TD
+    A["Candidate reports a better metric"] --> B{"Same task and target?"}
+    B -- "No" --> B1["Create separate comparison groups"]
+    B -- "Yes" --> C{"Same evaluation dataset and split?"}
+    C -- "No" --> C1["Rerun baseline or candidate on shared evidence"]
+    C -- "Yes" --> D{"Same label and metric definitions?"}
+    D -- "No" --> D1["Align evaluation protocol and recompute"]
+    D -- "Yes" --> E{"Relevant environment differences understood?"}
+    E -- "No" --> E1["Isolate or document environment change"]
+    E -- "Yes" --> F["Metric difference is ready for interpretation"]
+```
+
+If comparability fails, the team has learned something useful: the current runs cannot answer the intended question. Rerunning one model on the other run’s evaluation snapshot is often faster and safer than debating incompatible scores.
+
+## Choose a Baseline and a Candidate
+<!-- section-summary: The baseline is the reference the team cares about, and the candidate is the controlled alternative being evaluated against it. -->
+
+A **baseline** is the reference point for the decision. It gives the metric delta a practical meaning. The best baseline depends on the question:
+
+- Use the current production model to evaluate a possible replacement.
+- Use the simplest reasonable method to test whether added complexity earns its cost.
+- Use the last accepted experiment to measure progress during research.
+- Use a fixed control configuration to compare hyperparameter trials.
+
+The candidate is the alternative under investigation. A candidate should carry a clear statement of its intended difference: “added two recency features,” “changed learning rate,” or “replaced the text encoder.” This statement is far more informative than a generated run name.
+
+Consider an inference-cost experiment. A distilled model is three times faster and loses `0.003` in accuracy. The current production model is the right baseline because the product decision concerns latency and quality in the live path. The largest research model would answer a different question.
+
+Baseline choice also guards against moving targets. If every new run is compared only with the latest temporary winner, the team can lose sight of production behavior and the original hypothesis. Keep stable reference runs pinned or tagged, and record why each one matters.
+
+## Isolate the Intended Change
+<!-- section-summary: Parameter and environment diffs reveal the intended treatment, hidden changes, and confounders that could explain the result. -->
+
+A configuration comparison is a controlled diff. Its purpose is to identify the factor the experiment intended to test and expose extra differences that could also explain the result.
+
+After the fair-comparison gate passes, line up the run configurations. Separate fields into three groups:
+
+- **Held constant:** conditions intentionally shared by baseline and candidate;
+- **Planned change:** the factor the experiment aims to test;
+- **Unexpected difference:** any extra change that could affect the result.
+
+Suppose the planned change is `max_depth: 8 → 12`. The run diff also reveals a new data digest and a different scikit-learn version. Those extra differences are **confounders**: alternative explanations for the result. The clean response is a new run that keeps the shared data and environment while changing only depth.
+
+A small machine-readable comparison can keep this review repeatable:
 
 ```yaml
-baseline:
-  model: surface-defect-detector:v21
-  mlflow_run_id: 9a82c5a331e044e2b3fd8c0f52841c10
-  validation_dataset: defect_frames_2026_06_holdout:v3
-  code_commit: 77b31af
-  container_image: ghcr.io/brightforge/vision-eval@sha256:8d10c2
-  metrics:
-    map_50: 0.842
-    scratch_recall: 0.903
-    edge_chip_recall: 0.881
-    false_rejects_per_1000: 18.4
-    line_c_glare_false_positive_rate: 0.071
-    p95_latency_ms: 44
+comparison:
+  question: "Does a larger tree depth improve minority-class recall?"
+  baseline_run: "run_baseline"
+  candidate_run: "run_depth_12"
+  held_constant:
+    dataset_digest: "sha256:shared-evaluation-snapshot"
+    split_id: "grouped-split-v3"
+    metric_protocol: "classification-eval-v5"
+    code_commit: "same-commit"
+  planned_change:
+    max_depth: [8, 12]
+  unexpected_differences: []
 ```
 
-The dataset line matters as much as the score lines. If a candidate uses `defect_frames_2026_07_holdout:v1` while the baseline uses the June holdout, the comparison mixes model behavior with a data shift. Elena should rerun the baseline or rerun the candidate so the evidence lines up.
+In a large configuration, flatten nested values or log a normalized config artifact so the diff can compare actual values. Defaults matter too. A parameter missing from one run may mean “use the library default,” and library upgrades can change that default.
 
-This is the moment where a reviewer can save the team from a bad decision. If you see mismatched datasets, mismatched thresholds, or missing artifacts, pause the comparison and fix the evidence first.
+## Read Learning Curves Alongside Final Metrics
+<!-- section-summary: Step metrics show how a run reached its final score and reveal instability, overfitting, slow convergence, or accidental checkpoint selection. -->
 
-The metric definitions need the same care. If one run calculates false rejects per image and another calculates false rejects per inspected screen, the numbers can mislead the review. A shared evaluation script and attached metric report prevent that confusion.
+The final metric is one point at the end of a process. **Learning curves** record metrics across steps or epochs, helping the team understand how training evolved.
 
-## Build A Comparison Table
-<!-- section-summary: The comparison table should include the primary metric, guardrails, runtime, data version, and run identity. -->
+Align curves by a meaningful x-axis. Epoch number is useful if every epoch sees the same amount of data. Optimizer steps, tokens, examples processed, or wall-clock time may be fairer for runs with different batch sizes or distributed configurations.
 
-The comparison table is where reviewers first see the tradeoffs. It should include the current baseline, the candidate runs, the shared dataset, the primary metric, guardrails, and runtime checks. A useful table tells the team which candidates deserve deeper inspection and which candidates fail obvious constraints.
+Several curve shapes carry practical information:
 
-For BrightForge, the first pass might look like this:
+- Training loss falls while validation loss rises: the run may be overfitting.
+- Candidate improves early and later oscillates sharply: the learning rate may be aggressive.
+- Two runs reach the same quality, yet one needs half the compute: the faster run may be more efficient.
+- The selected checkpoint occurs at a different step for every run: checkpoint selection policy may explain the final-score difference.
 
-| Run | Model change | mAP@0.5 | Scratch recall | Edge-chip recall | False rejects / 1000 | Line C glare FP | p95 latency |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `v21-baseline` | Current production | 0.842 | 0.903 | 0.881 | 18.4 | 0.071 | 44 ms |
-| `run-1142` | YOLOv8s + glare aug | 0.856 | 0.917 | 0.887 | 14.9 | 0.041 | 46 ms |
-| `run-1208` | YOLOv8s + glare aug + threshold | 0.852 | 0.908 | 0.884 | 12.6 | 0.035 | 46 ms |
-| `run-1317` | YOLOv8m + glare aug | 0.864 | 0.922 | 0.891 | 13.8 | 0.033 | 71 ms |
-| `run-1420` | Old architecture + threshold | 0.839 | 0.897 | 0.879 | 11.9 | 0.030 | 43 ms |
+For example, two language classifiers finish at nearly the same F1 score. The candidate reaches that level after one-third of the tokens and then plateaus. If training cost matters, the experiment found an efficiency improvement even though the final leaderboard barely moved.
 
-Run `1317` has the highest primary metric, yet its latency may exceed the inspection service budget. Run `1420` reduces false rejects, although it gives up defect recall. Runs `1142` and `1208` are the realistic candidates because they improve glare behavior while staying close to the existing latency profile.
+Step metrics also reveal unfair stopping. Comparing the best checkpoint from one run with the final checkpoint from another gives each run a different selection rule. Choose the checkpoint policy before examining results and apply it consistently.
 
-![BrightForge experiment run comparison table](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/brightforge-comparison-table.png)
-*BrightForge compares each candidate against baseline v21 on the same holdout dataset, so metric and latency tradeoffs stay visible.*
+## Use Segments and Artifacts to Explain the Aggregate
+<!-- section-summary: Segment metrics and diagnostic artifacts reveal which examples improved, which regressed, and why the average moved. -->
 
-MLflow can produce this comparison table from tracked runs. The Python API is often easier to review than a manual spreadsheet because the script can live in the repository and use the same filters every week.
+An aggregate metric compresses many cases into one number. **Segment analysis** expands it again by looking at meaningful groups such as class, region, language, device, time horizon, or customer workflow.
+
+### Start from product-relevant segments
+
+The right segments come from product risk and known data structure. They should be defined before inspecting candidate outcomes where possible. Creating a very specific slice after seeing an error can generate a convincing story from random noise.
+
+Imagine a speech model whose overall word error rate improves by two percent. Error falls strongly for studio microphones and rises for mobile calls in noisy environments. A team serving a call-center product may reject that tradeoff even though the aggregate score is better.
+
+Artifacts add the missing detail. Useful comparison artifacts include:
+
+- confusion matrices and calibration plots;
+- residual distributions and error quantiles;
+- prediction tables keyed by stable example ID;
+- representative false positives and false negatives;
+- model cards, feature-importance reports, or data-profile differences;
+- runtime profiles, checkpoints, and evaluation reports.
+
+### Inspect paired examples
+
+The stable example ID is especially useful. Join baseline and candidate predictions on the same examples, then inspect cases that changed from correct to incorrect and incorrect to correct. This **paired comparison** is more informative than two separate error galleries because it shows exactly where behavior moved.
+
+For an image classifier, a small gallery of changed predictions may reveal that the candidate learned the background instead of the object. For a forecasting model, residual plots may reveal improvement in ordinary weeks and severe underprediction during promotions. These explanations guide the next experiment.
+
+## Separate Improvement From Random Variation
+<!-- section-summary: Repeated trials and uncertainty estimates show whether a metric gain is stable enough to support a conclusion. -->
+
+Many ML training procedures are stochastic. Weight initialization, data shuffling, augmentation, dropout, and distributed execution can produce different results from the same configuration. A single run therefore mixes the effect of the planned change with ordinary random variation.
+
+Suppose the baseline reaches accuracies between `0.810` and `0.819` across repeated seeds. The candidate reaches `0.813` to `0.822`. Its best run beats every baseline run, yet the two distributions overlap heavily. Selecting only the best seed exaggerates the evidence.
+
+A stronger design repeats baseline and candidate under a small, predeclared seed set. Compare the mean or median, the spread, and paired differences for matching seeds. For expensive training, bootstrap intervals over a fixed evaluation set can quantify prediction uncertainty, although they cannot replace repeated training runs if training randomness is important.
+
+```mermaid
+flowchart TD
+    A["Candidate score exceeds baseline"] --> B{"Difference large relative to run variation?"}
+    B -- "Unknown" --> C["Repeat both configurations with planned seeds"]
+    C --> D["Compare center, spread, and paired differences"]
+    B -- "Yes" --> E["Check segments and practical effect size"]
+    D --> E
+    E --> F{"Gain stable and useful?"}
+    F -- "Yes" --> G["Advance the conclusion"]
+    F -- "No" --> H["Treat result as uncertain and design another test"]
+```
+
+Statistical significance and practical significance answer different questions. A tiny improvement can be statistically credible on millions of examples and still have little product value. A larger but uncertain improvement may justify another run instead of immediate rejection.
+
+## Compare Hyperparameter Trials as One Study
+<!-- section-summary: Hyperparameter trials belong to one parent study, and the study design matters as much as the top child-run score. -->
+
+Hyperparameter optimization can create hundreds of runs. MLflow represents this naturally with a **parent run** for the tuning study and **child runs** for individual trials. The parent stores the search space, optimizer, trial budget, dataset identity, evaluation protocol, and final summary. Each child stores one parameter combination and its result.
+
+```mermaid
+flowchart TD
+    P["Parent Run<br/>(tuning study)"] --> C1["Child Trial<br/>(parameter set A)"]
+    P --> C2["Child Trial<br/>(parameter set B)"]
+    P --> C3["Child Trial<br/>(parameter set C)"]
+    P --> S["Study Evidence<br/>(search space and artifacts)"]
+
+    C1 --> R["Shortlist configurations"]
+    C2 --> R
+    C3 --> R
+    R --> V["Retrain finalists with repeated seeds"]
+    V --> D["Choose evidence for the next stage"]
+```
+
+The highest trial score is an optimistic estimate because the search deliberately tried many alternatives and selected the maximum. The more trials a team runs, the more opportunity it has to find a configuration that benefited from random noise in the validation set.
+
+Use the tuning study to shortlist promising configurations. Then retrain the finalists with controlled seeds and evaluate them on protected evidence that the search process did not repeatedly optimize against. Keep the final test set outside the tuning loop.
+
+A parent-child structure also prevents unrelated trials from flooding the main experiment view. Compare child runs inside their study first. Compare the selected configuration with the production or research baseline after the confirmation runs exist.
+
+## Use MLflow 3 as an Evidence Workspace
+<!-- section-summary: MLflow 3 can query comparable runs and first-class logged models, while the team still defines the experimental rules that make comparison valid. -->
+
+MLflow Tracking stores parameters, step metrics, tags, dataset references, and artifacts for runs. Its search API can retrieve a fair comparison group instead of relying on whichever rows happen to be visible in the UI.
+
+### Query comparable runs
+
+This focused query selects runs that share an evaluation dataset and protocol, then exposes the fields needed for review:
 
 ```python
 import mlflow
 
-experiment_name = "surface-defect-detection"
-validation_dataset = "defect_frames_2026_06_holdout:v3"
-
 runs = mlflow.search_runs(
-    experiment_names=[experiment_name],
-    filter_string=f"tags.validation_dataset = '{validation_dataset}'",
+    experiment_names=["ranking-feature-study"],
+    filter_string=(
+        'datasets.digest = "shared-eval-digest" '
+        'AND tags.eval_protocol = "ranking-eval-v4"'
+    ),
     output_format="pandas",
 )
 
-columns = [
+comparison = runs[[
     "run_id",
-    "tags.model_change",
-    "metrics.map_50",
-    "metrics.scratch_recall",
-    "metrics.edge_chip_recall",
-    "metrics.false_rejects_per_1000",
-    "metrics.line_c_glare_false_positive_rate",
-    "metrics.p95_latency_ms",
-    "tags.code.commit",
-]
-
-review_table = (
-    runs[columns]
-    .sort_values(
-        by=["metrics.map_50", "metrics.false_rejects_per_1000"],
-        ascending=[False, True],
-    )
-    .head(10)
-)
-
-print(review_table.to_markdown(index=False))
+    "tags.hypothesis",
+    "tags.code_commit",
+    "params.feature_set",
+    "params.random_seed",
+    "metrics.ndcg_at_10",
+    "metrics.p95_inference_ms",
+]]
 ```
 
-Weights & Biases can support the same workflow through project workspaces, tables, reports, and the public API. Many teams use the UI for interactive review and keep a small script for repeatable weekly comparison exports.
+The query filters for comparable evidence before any sorting happens. A reviewer can then add segment metrics, artifact links, and repeated-trial summaries. MLflow search uses a SQL-like filter language with its own supported operators. It is a tracking query with narrower semantics than general SQL.
 
-## Inspect Segments And Failure Examples
-<!-- section-summary: Segment checks and example artifacts reveal product risks that aggregate metrics can hide. -->
+### Compare first-class logged models
 
-After the first table, Elena should inspect segments. A computer vision defect detector can improve the average score while regressing on a small defect class, a new camera angle, or one factory line. The model review should look at groups that map to real operational risk.
+MLflow 3 also treats logged models as first-class entities. One run can log several checkpoints, each with its own model ID, and metrics can be linked to a specific model and dataset. `mlflow.search_logged_models()` can filter and rank those model objects. This is useful for checkpoint comparison because “run” and “model checkpoint” are no longer forced to mean the same thing.
 
-BrightForge tracks these segments:
+W&B offers a similar investigation workflow through baseline and pinned runs, metric deltas, line plots, tables, media panels, reports, and its public API. Managed platforms such as SageMaker Experiments also group and compare runs, metrics, charts, and output artifacts. The platform changes how evidence is explored; the fair-comparison rules remain the team’s responsibility.
 
-| Segment | Why it matters |
-|---|---|
-| `line_a`, `line_b`, `line_c` | Each line has different lighting, camera placement, and operators |
-| `scratch`, `dust_blob`, `pressure_mark`, `edge_chip` | Each defect class has a different customer impact |
-| `night_shift`, `day_shift` | Lighting and queue pressure differ by shift |
-| `new_film_batch`, `old_film_batch` | The current incident centers on film glare |
-| `small_defect_area` | Tiny defects are easier to miss |
+## Know What the Comparison UI Cannot Decide
+<!-- section-summary: Tracking interfaces accelerate exploration, while causal interpretation, uncertainty, product tradeoffs, and release judgment still require an explicit review. -->
 
-The strongest candidate should include an artifact with failure examples. For vision models, this is often more useful than another scalar metric. Reviewers need to see images where the baseline failed and the candidate improved, plus images where the candidate introduced a new error.
+A comparison UI is excellent for filtering runs, overlaying curves, viewing parameter diffs, and opening artifacts. It also encourages fast visual conclusions. Several important questions live outside the default table:
+
+- Are the datasets truly equivalent, beyond sharing a friendly name?
+- Did metric semantics or thresholds change?
+- Was the best checkpoint selected under the same rule?
+- Is the metric delta larger than seed variation?
+- Which examples changed, and do those changes matter to the product?
+- How many alternatives were tried before this winner was selected?
+- Can the model run safely in the production environment?
+
+W&B baseline deltas, for example, make relative changes visible in a workspace. Its own documentation describes limits around grouping, reports, and panel types. These are interface boundaries. The deeper limitation applies to every tracker: the UI displays logged evidence and cannot repair missing experiment design.
+
+For repeatable decisions, export a review table or query runs through an API. This also supports automated checks and independent review.
+
+Preserve the comparison specification beside the conclusion. Another person should be able to reconstruct which runs, datasets, metrics, and filters were included.
+
+## An Experiment Winner Is Only a Release Candidate
+<!-- section-summary: Winning an offline comparison earns further validation, while release evidence covers serving compatibility, operational limits, governance, and rollback. -->
+
+Run comparison answers an experiment question. Model release asks a broader production question. A candidate can win offline and still lack the evidence required for deployment.
+
+Before release, teams commonly add:
+
+- packaging and model-signature checks;
+- inference latency, throughput, memory, and cost tests on the target runtime;
+- security, privacy, fairness, or regulatory review appropriate to the use case;
+- shadow, canary, or online evaluation;
+- monitoring thresholds and outcome joins;
+- an immutable release identity and tested rollback path.
+
+For example, a larger ranking model improves offline relevance and doubles p95 latency. The experiment conclusion can still be “the architecture improves relevance.” The release decision may choose a smaller variant because the larger model misses the service objective. Both conclusions can be correct because they answer different questions.
+
+MLflow Model Registry or a managed registry can hold the reviewed candidate and its lineage. Registry status should point to the evidence; it cannot manufacture missing repeated trials, segment analysis, or runtime tests.
+
+## Record the Conclusion and the Next Experiment
+<!-- section-summary: A comparison is complete after the team records what the evidence supports, its limits, and the next test that will reduce uncertainty. -->
+
+The final output is a short decision record, not a screenshot of the winning row. It should connect the hypothesis, run identities, shared evidence, observed effect, uncertainty, limitations, and next action.
 
 ```yaml
-review_artifacts:
-  run_id: run-1208
-  files:
-    - artifacts/model.onnx
-    - artifacts/confusion_by_defect_class.csv
-    - artifacts/line_shift_metrics.csv
-    - artifacts/false_positive_gallery.html
-    - artifacts/false_negative_gallery.html
-    - artifacts/sample_predictions/line_c_glare_*.jpg
+comparison_decision:
+  question: "Do recency features improve ranking quality?"
+  baseline_run: "baseline_run_id"
+  candidate_runs:
+    - "candidate_seed_1"
+    - "candidate_seed_2"
+    - "candidate_seed_3"
+  shared_evidence:
+    evaluation_dataset_digest: "shared-eval-digest"
+    split_id: "time-split-v2"
+    evaluation_protocol: "ranking-eval-v4"
+  conclusion: >-
+    Recency features improved NDCG@10 across the planned seeds, with the
+    largest gains on returning-user queries and no observed latency regression.
+  limitations:
+    - "New-user queries showed no clear gain."
+    - "Offline evidence has not tested live feedback effects."
+  next_experiment: >-
+    Run a shadow evaluation with production traffic and preserve the same
+    baseline route for paired comparison.
 ```
 
-Those artifacts help the quality team make a practical decision. If `run-1208` removes most glare false positives while preserving edge-chip recall, it may deserve a shadow test. If it misses tiny edge chips on Line B, the team may need another dataset slice before release.
+Notice how the conclusion names the change and where the gain occurred. It avoids the vague statement “candidate won.” The limitations keep the evidence honest. The next experiment follows directly from what remains uncertain.
 
-![BrightForge segment and failure example review for run-1208](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/brightforge-segment-failure-review.png)
-*Segment checks and failure galleries help Elena see whether `run-1208` fixes the Line C glare issue while protecting scratch and edge-chip detection.*
+Rejecting a candidate can be equally valuable. If a feature improves the average and damages a protected segment, record that result and the suspected mechanism. The team then avoids repeating the same test and can design a targeted correction.
 
-## Check Artifacts And Runtime Readiness
-<!-- section-summary: A candidate must have the files and runtime evidence needed for registry, shadow testing, or release. -->
+## The Main Idea
+<!-- section-summary: Strong run comparison explains a result through fair evidence, controlled differences, behavioral analysis, uncertainty, and a recorded next decision. -->
 
-A model candidate can win the metric table and still fail readiness. The release path needs files and checks that the serving system can use. For BrightForge, the inspection service expects an ONNX model, a class label map, a preprocessing config, an input image contract, and a latency report from the same GPU class used in production.
+Comparing runs is an investigation into cause, not a leaderboard ritual. First establish that the runs answer the same question. Then identify the planned change, inspect learning behavior and errors, account for random variation, and decide what the evidence truly supports.
 
-The readiness checklist should sit next to the metrics:
+MLflow, W&B, and managed experiment platforms make runs searchable and visible. The scientific structure comes from the team: shared evidence, explicit baselines, controlled changes, repeated trials, protected evaluation, and clear conclusions.
 
-| Check | Evidence expected for BrightForge |
-|---|---|
-| Model artifact | `model.onnx` attached to the run and load-tested |
-| Preprocessing | `preprocess.yaml` matches production resize, normalization, and color order |
-| Label map | `label_map.json` matches `scratch`, `dust_blob`, `pressure_mark`, `edge_chip` |
-| Input contract | Test images include expected dimensions, channels, and metadata fields |
-| Runtime | p95 latency under 55 ms on `nvidia-l4-inspection` worker |
-| Safety guardrail | Edge-chip recall stays at or above baseline minus the approved tolerance |
-| Rollback | Current production model `surface-defect-detector:v21` remains available |
-| Owner | Quality engineering and MLOps both signed the review note |
-
-An evaluation job can write a runtime report into the run artifacts:
-
-```json
-{
-  "candidate_run": "run-1208",
-  "model_artifact": "s3://brightforge-mlflow-artifacts/run-1208/model.onnx",
-  "hardware": "nvidia-l4-inspection",
-  "batch_size": 1,
-  "input_shape": [1, 3, 1024, 1024],
-  "p50_latency_ms": 31,
-  "p95_latency_ms": 46,
-  "p99_latency_ms": 54,
-  "max_gpu_memory_mb": 1820,
-  "load_test_images": 5000,
-  "contract_check": "passed"
-}
-```
-
-This runtime evidence keeps the review grounded. Run `1317` may have the best score, yet the larger model misses the p95 latency budget. Run `1208` has slightly lower mAP and a release-ready artifact set, so it can be the stronger candidate for the next stage.
-
-## Choose A Candidate And Record The Decision
-<!-- section-summary: The final comparison output should name the candidate, baseline, evidence, risks, and next step. -->
-
-The output of run comparison is a decision record. It should name the selected candidate, the baseline, the shared dataset, the reason, known risks, owners, and the next step. This record belongs in the tracking tool, a W&B Report, an MLflow tag or artifact, a model registry entry, or the team's approval system.
-
-BrightForge can write a decision like this:
-
-```yaml
-model_review_decision:
-  selected_candidate: surface-defect-detector run-1208
-  baseline: surface-defect-detector:v21
-  validation_dataset: defect_frames_2026_06_holdout:v3
-  selected_by:
-    - elena@brightforge.example
-    - quality-review@brightforge.example
-  reason:
-    - mAP@0.5 improved from 0.842 to 0.852
-    - false rejects dropped from 18.4 to 12.6 per 1000 screens
-    - Line C glare false positive rate dropped from 0.071 to 0.035
-    - p95 latency stayed under the 55 ms inspection budget
-    - model artifact, preprocessing config, label map, and runtime report are attached
-  known_risks:
-    - edge-chip recall improved only slightly, so canary monitoring must watch this class
-    - new film batch labels came from one week of data, so shadow test should collect more examples
-  next_step: register candidate and run a two-shift shadow test on Line C
-  rollback: keep surface-defect-detector:v21 active for production decisions
-```
-
-The decision record prevents the common "which run did we choose?" problem. It also gives release, monitoring, and incident response teams the facts they need after the model leaves the experiment workspace.
-
-## Failure Modes In Run Comparison
-<!-- section-summary: Bad comparisons often come from mismatched data, weak baselines, missing artifacts, and unclear release criteria. -->
-
-Run comparison can go wrong even when every run is tracked. The most common issue is mismatched evidence. A candidate may use a newer validation dataset, a different label policy, or a changed threshold. The table still has numbers, yet the numbers answer different questions.
-
-Watch for these problems:
-
-| Problem | How the team catches it |
-|---|---|
-| Different validation snapshots | Filter runs by `validation_dataset` and rerun mismatched candidates |
-| Missing baseline on the same data | Evaluate production model with the same script and dataset |
-| Primary metric hides product risk | Add guardrails and segment tables before selecting a candidate |
-| Strong score lacks artifacts | Block promotion until model, schema, reports, and examples are attached |
-| Candidate passes offline checks and fails serving | Require runtime load test and input-contract artifact |
-| Decision lives only in chat | Attach a decision YAML, W&B Report, MLflow artifact, or registry note |
-
-The practical lesson is that comparison is an engineering workflow with a complete evidence packet. The team decides from tracked runs, fair baseline, consistent data, product metrics, guardrails, artifacts, runtime checks, and a written next step.
-
-## Putting It Together
-<!-- section-summary: A strong comparison picks a candidate through fair evidence, operational checks, and a recorded decision. -->
-
-Comparing experiment runs means using tracked evidence to choose a model candidate responsibly. Start with the current production baseline, evaluate every candidate on the same dataset and metric definitions, build a table with primary metrics and guardrails, inspect segments and failure examples, check runtime readiness, and write the decision.
-
-For BrightForge Electronics, `run-1208` wins because it reduces Line C glare false positives, keeps latency inside the inspection budget, preserves defect recall, and has the artifacts needed for a shadow test. The team can explain the choice because the comparison links the selected run back to its baseline, dataset, code, config, metrics, artifacts, risks, and rollback path.
-
-The next submodule makes this comparison discipline explicit before the runs start. It defines hypotheses, protected test data, search spaces, hyperparameter budgets, pruning rules, and uncertainty checks so a large tuning study still answers a fair question.
-
-![BrightForge run comparison decision path](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/brightforge-decision-path.png)
-*The final decision path keeps baseline evidence, guardrails, artifacts, runtime checks, shadow testing, and rollback in one review story.*
+The best result of a comparison is a justified next step. Sometimes that step is a release candidate. Sometimes it is a cleaner experiment. Both are progress if the team can explain why.
 
 ## References
 
-- [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) - Official MLflow guide for tracking and comparing runs with parameters, metrics, tags, and artifacts.
-- [MLflow Search Runs](https://mlflow.org/docs/latest/ml/search/search-runs/) - Official MLflow guide for querying runs through the UI and Python API.
-- [MLflow Tracking APIs](https://mlflow.org/docs/latest/ml/tracking/tracking-api/) - Official MLflow API guide for programmatic run logging and retrieval.
-- [W&B Experiments](https://docs.wandb.ai/models/track) - Official W&B guide for experiment tracking and run metrics.
-- [W&B Reports](https://docs.wandb.ai/models/reports) - Official W&B guide for organizing runs, visualizations, and findings in review documents.
-- [W&B Artifacts](https://docs.wandb.ai/models/artifacts) - Official W&B guide for tracking versioned datasets and model artifacts.
+- [MLflow: Experiment tracking](https://mlflow.org/docs/latest/tracking)
+- [MLflow: Search runs](https://mlflow.org/docs/latest/ml/search/search-runs)
+- [MLflow: Search logged models](https://mlflow.org/docs/latest/ml/search/search-models/)
+- [MLflow: Hyperparameter tuning with parent and child runs](https://mlflow.org/docs/latest/ml/getting-started/hyperparameter-tuning)
+- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation)
+- [Weights & Biases: Pin and compare runs](https://docs.wandb.ai/models/runs/compare-runs)
+- [Weights & Biases: Public API](https://docs.wandb.ai/models/ref/python/public-api/api)
+- [Amazon SageMaker AI: View experiments and runs](https://docs.aws.amazon.com/sagemaker/latest/dg/experiments-view-compare.html)

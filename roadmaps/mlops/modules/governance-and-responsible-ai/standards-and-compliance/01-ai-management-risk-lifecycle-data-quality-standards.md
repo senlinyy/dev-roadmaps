@@ -7,6 +7,19 @@ order: 1
 id: "article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards"
 ---
 
+## Table of Contents
+
+1. [What These Standards Give an AI Team](#what-these-standards-give-an-ai-team)
+2. [A Supporting Example: System Through the Standards](#a-supporting-example-system-through-the-standards)
+3. [Use ISO/IEC 42001 for the Management System](#use-isoiec-42001-for-the-management-system)
+4. [Use ISO/IEC 23894 and NIST AI RMF for Risk](#use-isoiec-23894-and-nist-ai-rmf-for-risk)
+5. [Use ISO/IEC 5338 for Lifecycle Work](#use-isoiec-5338-for-lifecycle-work)
+6. [Use the ISO/IEC 5259 Family for Data Quality](#use-the-isoiec-5259-family-for-data-quality)
+7. [Build One Control Crosswalk](#build-one-control-crosswalk)
+8. [Run Evidence-Based Reviews](#run-evidence-based-reviews)
+9. [Common Failure Modes](#common-failure-modes)
+10. [Putting It Together](#putting-it-together)
+11. [References](#references)
 
 ## What These Standards Give an AI Team
 <!-- section-summary: AI standards address management, risk, lifecycle, and data quality at different layers, so a team should connect them through shared controls and evidence. -->

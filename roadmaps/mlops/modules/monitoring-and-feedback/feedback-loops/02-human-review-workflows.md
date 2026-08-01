@@ -7,6 +7,19 @@ order: 2
 id: "article-mlops-monitoring-and-feedback-human-review-workflows"
 ---
 
+## Table of Contents
+
+1. [Human Review Is Part of the Product](#human-review-is-part-of-the-product)
+2. [Different Cases Need Different Review Paths](#different-cases-need-different-review-paths)
+3. [A Review Task Must Tell a Complete Story](#a-review-task-must-tell-a-complete-story)
+4. [The Interface Shapes the Decision](#the-interface-shapes-the-decision)
+5. [Disagreement Needs a Resolution Path](#disagreement-needs-a-resolution-path)
+6. [Measure the Review System, Not Only the Model](#measure-the-review-system-not-only-the-model)
+7. [Turn Decisions Into Useful Feedback](#turn-decisions-into-useful-feedback)
+8. [When the Human Layer Fails](#when-the-human-layer-fails)
+9. [The Complete Review Loop](#the-complete-review-loop)
+10. [References](#references)
+
 ## Human Review Is Part of the Product
 
 <!-- section-summary: Human review routes selected model outputs to qualified people who can confirm, correct, or escalate a decision with an auditable reason. -->

@@ -1,263 +1,388 @@
 ---
-title: "ML Data Basics"
-description: "Explain the basic pieces of supervised ML data in one connected article."
-overview: "Supervised ML data is a time-aware contract among examples, entities, features, targets, labels, and prediction outcomes. This article explains how those parts are defined, joined, validated, and kept aligned with the product decision."
+title: "Training Data: Examples, Features, Labels, and Targets"
+description: "Turn a product decision into time-correct, traceable training examples with clear features, labels, targets, and dataset identity."
+overview: "A supervised training dataset reconstructs past product decisions. Each row combines time-correct feature evidence with a mature outcome produced by documented label and target rules."
 tags: ["MLOps", "core", "datasets"]
 order: 1
 id: "article-mlops-data-for-ml-systems-training-data-labels-features-targets"
 ---
 
-## ML Data Basics Are The Contract Behind A Model
-<!-- section-summary: ML data basics are the reviewed definitions for examples, features, labels, targets, timestamps, and entity keys. -->
+## Table of Contents
 
-**ML data basics** are the pieces that tell a supervised model what it can learn from. An **example** is one historical case, **features** are the facts the model may use, a **label** is the answer recorded later, a **target** is the exact value the model learns to predict, and timestamps say what was known at the moment of prediction.
+1. [A Training Row Reconstructs A Past Decision](#a-training-row-reconstructs-a-past-decision)
+2. [Define The Population, Entity, Grain, And Clock](#define-the-population-entity-grain-and-clock)
+3. [Features Preserve The Evidence Available At Prediction Time](#features-preserve-the-evidence-available-at-prediction-time)
+4. [Labels And Targets Describe The Later Answer](#labels-and-targets-describe-the-later-answer)
+5. [Incomplete Outcomes Need Their Own State](#incomplete-outcomes-need-their-own-state)
+6. [Leakage Crosses The Time Or Answer Boundary](#leakage-crosses-the-time-or-answer-boundary)
+7. [A Dataset Contract Connects The Product Question To The Rows](#a-dataset-contract-connects-the-product-question-to-the-rows)
+8. [Build The Dataset As A Reproducible Data Product](#build-the-dataset-as-a-reproducible-data-product)
+9. [Give Every Dataset Release An Immutable Identity](#give-every-dataset-release-an-immutable-identity)
+10. [Validate Meaning As Well As Shape](#validate-meaning-as-well-as-shape)
+11. [Verify One Example From Source To Training](#verify-one-example-from-source-to-training)
+12. [The Main Idea](#the-main-idea)
+13. [References](#references)
 
-You can think of this as the contract before training starts. If the contract says one row represents one hospital discharge, the model learns from discharged patients. If someone quietly changes the row to one lab result or one billing claim, the model learns a different problem while the notebook may still run successfully.
+## A Training Row Reconstructs A Past Decision
+<!-- section-summary: A supervised training row recreates what the production system could have known at one historical decision and attaches the answer observed later. -->
 
-A supporting example is **Riverbend Health**, a regional hospital network building a model that estimates the risk of a patient returning within 30 days after discharge. The model supports a care coordination team. A high-risk patient may receive a follow-up call, a medication review, or a home-care referral, so the dataset needs clear definitions before the team trusts any score.
+At 09:00, a support system has to decide whether a newly opened ticket needs a specialist. At that moment it knows the ticket category, the customer plan, the current queue size, and the customer's earlier support history. The ticket is escalated at 16:00.
 
-The contract has six parts. The **entity** identifies what receives a prediction. The **example** fixes one entity at one prediction moment. **Features** contain only information available by that moment. The **target** states the future event or quantity the model is intended to predict. The **label** is the observed or adjudicated value used during learning and evaluation. **Keys, timestamps, and provenance** explain how those parts were joined and whether the join was valid. A table can have correct types and still be wrong if any one of these meanings is ambiguous.
+One useful training row recreates that 09:00 decision. Its input columns contain the facts available by 09:00. Its answer records that an escalation happened inside the next 24 hours. A private note written at 14:00 may explain the escalation to a human investigator. The production model could never have seen it at 09:00, so that note cannot enter the model's input.
 
-The parts are coupled through time. Moving the prediction moment changes which features are legal. Changing the outcome window changes which labels count as positive. Changing the entity key changes the unit of independence and may leak information across splits. This is why production teams need a reviewed data contract before feature engineering or model selection begins.
+This is the basic shape of **supervised machine learning**: the model learns a relationship between input evidence and known answers from historical cases. Each case is called an **example**. In a tabular dataset, an example usually starts as one row. Image, audio, text, and sequence models may represent one example through several stored objects.
+
+The row has two sides:
+
+- **features** contain the evidence supplied to the model;
+- the **target** contains the value the training algorithm tries to predict.
+
+The target comes from a **label**, meaning an observed, inferred, or human-reviewed answer attached to the historical case. Teams sometimes use *label* and *target* as synonyms. A small production distinction clarifies the data path. The label records what the data or reviewer said happened. The target records the exact value derived from that evidence for training.
+
+A collection of rows needs several shared definitions. The team decides who belongs, what one row represents, and which clock separates past evidence from future outcomes. It also records how the rows can be rebuilt. Those choices encode the product problem before any learning algorithm sees the data.
 
 ```mermaid
-flowchart LR
-    Entity["Entity"] --> Example["Example at prediction time"]
-    Features["Facts available by prediction time"] --> Example
-    Example --> Model["Model input and target during learning"]
-    Example --> Future["Outcome window after prediction"]
-    Future --> Label["Observed or adjudicated label"]
-    Label --> Target["Training target representation"]
-    Keys["Keys, timestamps, and provenance"] --- Example
-    Keys --- Label
+%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+flowchart TD
+    A["Product decision<br/>What action needs support?"] --> B["Eligible population<br/>Which cases could receive that action?"]
+    B --> C["Historical decision points<br/>One example at one prediction time"]
+    C --> D["Feature evidence<br/>Facts available by that time"]
+    C --> E["Outcome window<br/>What happened afterward?"]
+    E --> F["Label and target<br/>A mature training answer"]
+    D --> G["Versioned training dataset"]
+    F --> G
+    G --> H["Validated input to training"]
+
+    classDef question fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef define fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef result fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A question
+    class B,C define
+    class D,E,F evidence
+    class G,H result
 ```
 
-The time boundary separates legal features from later outcome evidence. Keys connect the example to the correct entity and label. The target then represents the label in the form the training algorithm uses. A change to any one part changes the data contract the model learns from.
+The flow has a deliberate time boundary. Features look backward from the historical decision. The label looks forward. Dataset engineering joins those two views without allowing the future answer to leak into the earlier evidence.
 
-## A Readmission Dataset As A Supporting Example
-<!-- section-summary: The readmission scenario gives every data piece a concrete owner, timestamp, and business purpose. -->
+## Define The Population, Entity, Grain, And Clock
+<!-- section-summary: Population, entity, grain, and prediction time define which historical cases exist and what each row means. -->
 
-Riverbend wants a model that runs shortly after discharge. At that moment, the hospital knows the patient age band, discharge department, length of stay, diagnosis group, recent admissions, lab summary fields, medication count, and whether a follow-up appointment was scheduled. The hospital will only learn the label after 30 days pass.
+Before choosing columns, describe the cases that the product could actually score. This description prevents a technically valid table from representing the wrong decision.
 
-That timing gives the dataset its shape. One row should represent one **discharge event**, because the prediction happens once for that discharge. The row needs a stable discharge ID, a patient key, a prediction timestamp, features known by that timestamp, and a future label showing whether the patient returned inside the agreed window.
+### Population decides which cases can enter
 
-Here is the simple map the team uses during design:
+The **population** is the full set of cases eligible for the prediction. A delivery-delay model may cover parcels accepted by a particular service, while excluding cancelled shipments and routes outside the supported network. Those rules affect what the model learns. If training quietly excludes difficult rural deliveries while production scores them, the training population and serving population disagree.
 
-| Piece | Riverbend example | Why it matters |
-|---|---|---|
-| Entity | `patient_id_hash` | Groups events that belong to the same patient without exposing raw identifiers |
-| Example | `discharge_id` | Gives one training row per discharge decision |
-| Prediction time | `discharge_ts` | Draws the line between available facts and future outcomes |
-| Features | `prior_admissions_180d`, `medication_count`, `followup_scheduled` | Give the model facts it can use during scoring |
-| Label | `readmitted_30d` | Records the later answer used for supervised learning |
-| Target | Binary `0` or `1` value from `readmitted_30d` | Gives the training algorithm the value to learn |
+### Entity, grain, and clock define one row
 
-The business owner, clinical owner, data engineer, and ML engineer should agree on this map before model training. A model can only answer the question encoded by the dataset, so the dataset contract is also the product requirement.
+An **entity** is the real thing being described, such as an account, device, parcel, patient, document, or transaction. The entity key connects data from several sources. It also reveals repeated history: one account can create many transactions, and one device can produce many maintenance observations.
 
-![Riverbend training row diagram showing one discharge example, approved features, prediction time, label, and target](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/example-features-label-target.png)
+The **dataset grain** states what one row represents. “One row per customer” is incomplete if customers can receive weekly predictions. A precise grain would be “one row per eligible account at each weekly renewal decision.” Many production datasets therefore use `entity + prediction time` as the row key. A distinct event such as `transaction_id` can also provide the grain if its timestamp supplies the decision point.
 
-*The row contract keeps the example, features, label, and target separate, with prediction time marking where future information begins.*
+The **prediction time** is the moment the production model would receive its inputs. Some teams call it the observation time or example timestamp, especially for offline studies. For a model that will drive a product action, prediction time is the clearer term. It asks what the running system could have known before taking that action.
 
-## Examples, Entities, And Prediction Time
-<!-- section-summary: An example is one training row, an entity is the real thing behind rows, and prediction time defines what the model may know. -->
+Consider a machine-maintenance model. One machine generates sensor readings every minute, receives a risk score each hour, and may fail several days later. The machine is the entity. One hourly score is the example. The grain is one row per machine per scoring hour. The prediction time is the end of that hour. Several rows may therefore belong to the same machine.
 
-An **example** is one row that teaches the model. For Riverbend, one example represents one discharge decision, such as patient `p_39172` leaving the cardiology unit on `2026-06-03T15:20:00Z`. The row tells the model what Riverbend knew at that time and later attaches the 30-day readmission answer.
+That repetition affects later work. Dataset splitting may need to keep related rows together or separate them by time. Sample weighting may prevent frequently observed entities from dominating training. The grain also determines uniqueness: `machine_id` alone cannot be the row key, while `(machine_id, prediction_time)` may be valid.
 
-An **entity** is the real-world thing the row describes. In this dataset, the main entity is the patient, and the event entity is the discharge. This distinction matters because one patient can have several discharges across a year, and the team needs to avoid mixing facts from a later discharge into an earlier example.
+A short design record should answer six questions before extraction starts:
 
-**Prediction time** is the timestamp where the model would run in production. For this use case, prediction time is the discharge timestamp, with a small grace period for final discharge documentation. Every feature needs an `as_of_ts` rule so the team can prove the feature was available when the score would have been produced.
+1. Which product action will use the prediction?
+2. Which cases are eligible to receive that action?
+3. What real entity is being scored?
+4. What event or schedule creates an example?
+5. What columns uniquely identify one row?
+6. At what instant must every input have been available?
+
+These answers define the rows. Features and labels can now attach to a stable decision point.
+
+## Features Preserve The Evidence Available At Prediction Time
+<!-- section-summary: Features are model inputs whose meaning, source, transformation, and availability rule reproduce what production could know at the decision. -->
+
+A **feature** is an input value supplied to the model. A raw field such as parcel weight can serve directly as a feature. A transformed value such as deliveries delayed on the same route during the previous seven days combines several events into one feature.
+
+### Event and availability clocks protect the cutoff
+
+The important property is availability. An event may occur before prediction time and still reach the system afterward. Suppose a payment happened at 08:50, the model scored an account at 09:00, and a correction containing the final amount arrived at 11:00. A historical warehouse queried today can see the corrected value. The live model lacked that corrected value at 09:00.
+
+Production datasets often need two clocks for this reason:
+
+- **event time** says when the business event happened;
+- **availability time** says when the feature pipeline could use the record.
+
+A feature is eligible only if its availability rule passes the prediction-time cutoff. This rule protects the model from learning with cleaner or newer information than production will receive.
+
+Each feature definition connects the value to an entity and source. Its calculation, window, and availability rule define how time affects that value. The data type and missing-value policy define its representation. An owner and version identify who controls future changes.
+
+“Orders in the last month” leaves several choices hidden. “Count completed orders available by prediction time in `(prediction_time - 30 days, prediction_time]`” gives both historical and serving implementations a testable meaning.
+
+### Retrieval implements the feature definition
+
+Warehouse-scale batch data often uses SQL with dbt. Spark handles larger distributed histories, while Polars fits data that can run on one machine. The workload and the team's operating environment determine the engine.
+
+A feature platform such as Feast earns its operating cost after several models need shared time-sensitive features, point-in-time historical retrieval, or low-latency online lookup. Product and domain owners define the feature meaning first. Feast then retrieves that definition consistently.
+
+A **point-in-time join** selects the feature value that belonged to each entity at that row's prediction time. Feast historical retrieval scans backward from the timestamps in an entity dataframe and applies each Feature View's time-to-live limit. The source still has to preserve the required arrival and availability semantics; the retrieval layer cannot infer that a late record was absent from the live system. A warehouse query can implement the same responsibility with temporal conditions and deterministic tie-breaking. Either path needs tests for late records, duplicate timestamps, window boundaries, and missing history.
+
+## Labels And Targets Describe The Later Answer
+<!-- section-summary: Labels preserve outcome evidence and its provenance, while targets turn that evidence into the exact value optimized during training. -->
+
+The label answers the historical prediction question after enough time has passed. For a ticket-routing model, the outcome might be escalation within 24 hours. For a demand model, it might be the number of units sold during the next seven days. For image classification, it may come from a reviewer who examined the image.
+
+### Labels preserve outcome evidence
+
+Labels can come directly from the event the product cares about, or from a proxy. A **direct label** records the desired outcome itself, such as a verified payment chargeback. A **proxy label** uses another signal, such as a customer clicking “helpful” to approximate satisfaction. A proxy may arrive sooner or cover more examples, yet it can teach the model to optimize the proxy's quirks.
+
+Label provenance records where the answer came from and how it was produced. For an event-derived label, useful evidence includes the source table, event type, event time, arrival time, deduplication rule, correction policy, and extraction version. For a human label, provenance also includes the annotation guide, reviewer or reviewer pool, adjudication state, and label-set version. Sensitive identities stay in a restricted evidence system; the training record can carry a governed reference.
+
+### Targets encode that evidence for learning
+
+The **target** is the training representation derived from that evidence. A cancellation event may produce a binary target called `cancelled_30d`. A qualifying cancellation maps to `1`. A fully observed 30-day period with no cancellation maps to `0`. A ranking task may derive pairwise preferences. A regression task may cap, transform, or normalize a measured quantity.
+
+That derivation deserves its own version. A longer outcome window changes the learning problem. So does excluding a new event category or replacing a direct label with a proxy. The target column could keep the same name through all three changes, so its definition needs an explicit version.
+
+Labels are observations with known limitations. Events can be missing, joins can fail, reviewers can disagree, and product actions can influence what happens next. If an earlier model sent the riskiest accounts to a retention team, their later cancellation labels reflect both customer intent and the intervention. Provenance and population analysis make those limitations visible.
+
+## Incomplete Outcomes Need Their Own State
+<!-- section-summary: Pending, censored, and invalid outcomes must remain separate from confirmed negative labels. -->
+
+A future outcome takes time to observe. A row created yesterday cannot yet answer whether an event will happen during the next 30 days. Assigning `0` today would teach the model that “still pending” means “negative.”
+
+### Pending and negative are different states
+
+An example has a **mature label** after its full outcome window and normal processing delay have passed. The delay matters because a qualifying event may reach the label source several hours or days after it occurred. The dataset release therefore needs a fixed **label as-of time**: the latest arrival time the build is allowed to use.
+
+Some rows never receive a complete observation window. An account may leave the measurable system, a sensor may stop reporting, or the data-sharing agreement may end. This is **censoring**. A censored row tells us that the outcome was unobserved after a known point; the negative outcome remains unconfirmed.
+
+One explicit label state prevents these cases from collapsing together:
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+stateDiagram-v2
+    direction TB
+    [*] --> Pending
+    Pending --> MaturePositive: "Qualifying outcome arrives"
+    Pending --> MatureNegative: "Window and processing delay finish"
+    Pending --> Censored: "Observation ends early"
+    Pending --> Invalid: "Source or join cannot be trusted"
+    MaturePositive --> Released
+    MatureNegative --> Released
+    Censored --> Reviewed
+    Invalid --> Quarantined
+    Released --> [*]
+```
+
+Ordinary binary training usually admits the mature positive and mature negative states. Pending rows wait for a later dataset release. Invalid rows enter a quarantine path for repair.
+
+### Censoring changes population coverage
+
+Censored rows may be excluded with coverage reported. A survival or time-to-event method offers another choice because it is designed to use partial follow-up.
+
+The choice can change the population. If customers with poor connectivity are censored more often, dropping every censored row underrepresents them. The build report should compare maturity and censoring rates across important segments before training proceeds.
+
+A focused label query makes the cutoff visible. Here the outcome window is 24 hours and the source is allowed two additional hours to deliver events:
 
 ```sql
 SELECT
-  discharge_id,
-  patient_id_hash,
-  discharge_ts AS prediction_ts,
-  department,
-  age_band,
-  length_of_stay_hours,
-  prior_admissions_180d,
-  abnormal_lab_count_48h,
-  medication_count_at_discharge,
-  followup_scheduled,
-  readmitted_30d
-FROM ml_curated.readmission_training_examples
-WHERE discharge_ts >= TIMESTAMP '2026-01-01 00:00:00 UTC'
-  AND discharge_ts < TIMESTAMP '2026-07-01 00:00:00 UTC';
+  d.example_id,
+  d.prediction_ts,
+  CASE WHEN COUNT(o.outcome_id) > 0 THEN 1 ELSE 0 END AS escalated_24h
+FROM eligible_decisions d
+LEFT JOIN outcome_events o
+  ON o.entity_id = d.entity_id
+ AND o.occurred_at > d.prediction_ts
+ AND o.occurred_at <= d.prediction_ts + INTERVAL 24 HOURS
+ AND o.available_at <= :label_as_of
+WHERE d.prediction_ts <= :label_as_of - INTERVAL 26 HOURS
+GROUP BY d.example_id, d.prediction_ts;
 ```
 
-The important detail is the time filter on `discharge_ts`. The filter selects examples by the moment the prediction would have happened, and the feature columns should also respect that same moment. Later articles on splits and leakage build directly on this time boundary.
+The `WHERE` clause admits only mature examples. The join looks forward solely for the target. Feature retrieval remains a separate backward-looking operation. A production implementation also records cancelled decisions, source outages, and censoring rules instead of silently converting them to zero.
 
-## Features
-<!-- section-summary: Features are model inputs, and each feature needs a definition that says how it is computed and when it is available. -->
+## Leakage Crosses The Time Or Answer Boundary
+<!-- section-summary: Leakage occurs when a feature reveals future information, the target itself, or evidence unavailable to the production decision. -->
 
-A **feature** is an input value the model can use. Some features come directly from source systems, such as `department` or `age_band`. Other features come from a transformation, such as counting prior admissions in the last 180 days or summarizing abnormal lab results in the 48 hours before discharge.
+Training metrics can look excellent for the wrong reason. **Data leakage** occurs if the model learns from information that would be unavailable or forbidden at the real prediction moment.
 
-Feature names should sound boring and precise. A name like `risk_score` hides the source and timing, while `prior_admissions_180d` tells you the entity, the event type, and the window. You want a new teammate to understand the meaning before reading the pipeline code.
+The clearest form is **target leakage**. A feature such as `refund_processed` would almost reveal a refund target directly. Leakage can also hide behind a plausible timestamp. A final case status written two days after a risk score may describe the same entity and still belong to the future.
 
-Riverbend can keep feature definitions in a small reviewed file:
+Temporal joins are a common source. A query that selects the latest customer record today can attach a later address, plan, or balance to an earlier decision. Preprocessing can leak too: fitting an imputer, vocabulary, or normalizer on the full dataset allows validation and test rows to influence training parameters.
+
+Two reviews catch different problems. A semantic review asks whether the feature contains or closely encodes the answer. A time review proves `available_at <= prediction_time` for every feature source. Automated lineage can reveal that a target-source column feeds a feature transformation, while boundary fixtures test values immediately before and after the cutoff.
+
+Suppose a delivery model uses `latest_driver_status`. Historical inspection finds that late deliveries often have status `investigation_open` several hours afterward. Replacing the current-state lookup with a point-in-time status history removes the future record. The team then rebuilds the dataset, reruns temporal assertions, and expects model quality to fall to a more honest level before evaluating a candidate.
+
+Leakage has several deeper forms involving splits, related entities, preprocessing, and policy feedback. The foundational rule remains stable: every feature must reproduce evidence the deployed model could legally and operationally receive for that decision.
+
+## A Dataset Contract Connects The Product Question To The Rows
+<!-- section-summary: A dataset contract records the population, grain, time boundaries, features, target, provenance, and acceptance rules shared by product and engineering owners. -->
+
+Several teams may touch a training dataset. Product defines the action, domain experts define meaningful outcomes, data engineering builds sources, and ML engineering trains the model. A **dataset contract** gives them one reviewable statement of the problem encoded by the rows.
+
+The contract covers meaning as well as schema. Column names and types cannot explain a 24-hour outcome window. They also cannot prove that a corrected event arrived in time or explain why an account was excluded.
+
+This compact example records the load-bearing choices:
 
 ```yaml
-features:
-  prior_admissions_180d:
-    entity: patient_id_hash
-    type: integer
-    source_table: warehouse.admissions
-    definition: "Count completed inpatient admissions in the 180 days before discharge_ts."
-    available_at: "discharge_ts"
-    default: 0
-    owner: care-ml-platform
-  abnormal_lab_count_48h:
-    entity: discharge_id
-    type: integer
-    source_table: warehouse.lab_results
-    definition: "Count lab results marked abnormal in the 48 hours before discharge_ts."
-    available_at: "discharge_ts"
-    default: 0
-    owner: clinical-data-eng
-  followup_scheduled:
-    entity: discharge_id
-    type: boolean
-    source_table: warehouse.appointments
-    definition: "True when an outpatient follow-up appointment exists before the discharge record closes."
-    available_at: "discharge_record_closed_ts"
-    default: false
-    owner: care-coordination
+dataset: escalation_examples
+contract_version: 4
+owner: support-ml
+
+population: "Tickets eligible for automated routing at initial assignment."
+grain: "One row per ticket at initial routing."
+example_key: ticket_id
+entity_key: account_id
+prediction_time: first_routed_at
+
+feature_policy:
+  cutoff: "available_at <= prediction_time"
+  definitions: feature-contracts/support-v7.yaml
+
+target:
+  name: escalated_24h
+  source: governed.support_outcomes
+  window: "(prediction_time, prediction_time + 24 hours]"
+  processing_delay: 2 hours
+  label_states: [pending, mature, censored, invalid]
+
+release_policy:
+  require_mature_label: true
+  maximum_duplicate_rate: 0
+  minimum_label_join_coverage: 0.98
 ```
 
-This file gives reviewers more than field names. It explains the source, the timing rule, the default behavior, and the owner. When the model behaves strangely, the on-call engineer can inspect the feature definition instead of guessing how a column was built.
+The contract gives each review a concrete object. Product can challenge the population and action. A domain owner can review qualifying outcomes. Data engineering can verify sources, clocks, and processing delay. ML engineering can verify feature availability, target encoding, and release checks.
 
-![Feature definition cards for Riverbend showing source, owner, default, lookback windows, and the prediction-time availability gate](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/feature-availability-rules.png)
+A mature contract also records permitted use, sensitive fields, retention, deletion rules, and owners for each source. Dataset documentation such as a datasheet can explain collection history, known gaps, intended uses, and excluded uses in more depth. The executable contract protects the pipeline; the documentation preserves the human context needed to use the data responsibly.
 
-*Each feature definition carries timing, source, ownership, and default rules so reviewers can tell whether the value was available at scoring time.*
+## Build The Dataset As A Reproducible Data Product
+<!-- section-summary: A production build uses versioned sources, reviewed transformations, deterministic parameters, and an immutable output instead of an ad hoc notebook export. -->
 
-## Labels And Targets
-<!-- section-summary: A label is the observed answer from history, and the target is the exact training value derived from that label. -->
+The contract now needs a repeatable build. Reviewed code creates rows from pinned inputs under fixed parameters. Tests decide whether the result may be released. A named owner handles failures and approves the new output.
 
-A **label** is the answer attached to a historical example. In Riverbend's case, the label is whether the patient returned for an unplanned inpatient admission within 30 days after discharge. The team needs one definition, because a planned chemotherapy visit and an unexpected heart failure readmission carry different meanings.
+### Transformations assemble a time-correct row
 
-A **target** is the exact value the algorithm learns from. For a binary classifier, the target can be `1` for a qualifying readmission and `0` for no qualifying readmission. The target should come from a label query that the clinical and analytics teams can review together.
+The build starts from a table of eligible historical decisions. This anchor table contains the example key, entity key, prediction time, and population evidence. Feature jobs join backward from those rows using availability cutoffs. The label job joins forward within the outcome window, waits for maturity, and records provenance. The final projection keeps feature columns separate from target and evidence columns.
 
-```sql
-WITH discharge_examples AS (
-  SELECT
-    discharge_id,
-    patient_id_hash,
-    discharge_ts
-  FROM warehouse.discharges
-  WHERE discharge_status = 'completed'
-    AND discharge_ts <= TIMESTAMP_SUB(
-      TIMESTAMP '2026-07-01 00:00:00 UTC',
-      INTERVAL 37 DAY
-    )
-),
-future_admissions AS (
-  SELECT
-    patient_id_hash,
-    admission_ts,
-    planned_admission
-  FROM warehouse.admissions
-)
-SELECT
-  d.discharge_id,
-  CASE
-    WHEN COUNTIF(a.planned_admission = false) > 0 THEN 1
-    ELSE 0
-  END AS readmitted_30d
-FROM discharge_examples d
-LEFT JOIN future_admissions a
-  ON a.patient_id_hash = d.patient_id_hash
-  AND a.admission_ts > d.discharge_ts
-  AND a.admission_ts <= TIMESTAMP_ADD(d.discharge_ts, INTERVAL 30 DAY)
-GROUP BY d.discharge_id;
-```
+### Choose the engine from the workload
 
-The fixed timestamp is the **label as-of time** for this dataset release. The query waits for the 30-day outcome window plus a seven-day processing buffer before it assigns either label. Without that cutoff, a patient discharged yesterday could receive a false `0` simply because the full outcome window has not passed. Production pipelines should pass the as-of time as a versioned parameter rather than reading the current clock inside a historical rebuild.
+SQL and dbt are a strong default if the source data already lives in a warehouse. dbt model contracts can enforce column names and data types for supported materializations. Data tests then check row content such as uniqueness, nulls, accepted values, and relationships.
 
-The label query uses future data because the row belongs to historical training. That is acceptable for the target after the outcome window matures. The same future admission fields should stay out of the feature columns, because the model would lack that information at discharge time.
+Spark fits large distributed joins and feature histories. Polars offers a lighter local engine for data that fits one machine. Orchestration can use the team's existing Airflow or Dagster estate, or a managed ML pipeline inside the selected platform.
 
-## A Dataset Schema The Team Can Review
-<!-- section-summary: A schema gives the dataset a stable shape that data engineering, ML, and product reviewers can inspect. -->
+### Storage and lineage preserve build evidence
 
-A training dataset schema is the practical version of the contract. It names each column, type, null rule, owner, and timing note. The schema helps you catch accidental changes, and it helps reviewers understand what the model learned from.
+Storage should preserve one complete, addressable dataset state. A cloud warehouse can provide immutable tables or snapshots. Object storage may use S3, Google Cloud Storage, or Azure Data Lake Storage. Delta Lake and Apache Iceberg add transactional snapshots and time travel over those files. Snapshot retention must cover the model's audit and reproduction horizon; an expired version cannot support a later rebuild.
 
-Riverbend can write the schema in a data catalog, dbt model contract, Great Expectations suite, Pandera schema, or a simple repository file. The tool matters less than the review habit at this stage, although later data-quality articles will show validation tools in more detail.
+Point-in-time feature retrieval belongs in the build only after time-varying reuse justifies a feature platform. Feast can join registered historical features onto an entity dataframe containing entity keys and timestamps. A simpler scheduled model may achieve the same contract with reviewed SQL and versioned warehouse tables.
 
-| Column | Type | Required | Timing rule | Purpose |
-|---|---|---|---|---|
-| `discharge_id` | string | yes | Known at discharge | Example key |
-| `patient_id_hash` | string | yes | Known before discharge | Entity key |
-| `prediction_ts` | timestamp | yes | Discharge time | Point-in-time boundary |
-| `department` | string | yes | Known at discharge | Care area context |
-| `age_band` | string | yes | Known before discharge | Demographic band approved for use |
-| `length_of_stay_hours` | float | yes | Known at discharge | Visit duration |
-| `prior_admissions_180d` | integer | yes | Before prediction time | Utilization history |
-| `abnormal_lab_count_48h` | integer | yes | Before prediction time | Recent clinical signal |
-| `medication_count_at_discharge` | integer | yes | Known when discharge meds close | Complexity signal |
-| `followup_scheduled` | boolean | yes | Known when discharge record closes | Care plan signal |
-| `readmitted_30d` | integer | yes after label maturity | 30 days after discharge | Training target |
+Lineage connects the output back to the jobs and input datasets that produced it. Native catalogs cover this inside many managed platforms. OpenLineage provides a vendor-neutral event model and dataset facets for source identity, schema, versions, and data-quality evidence. Lineage identifies dependencies; it still needs contract versions and runtime parameters to explain the exact row logic.
 
-The schema also tells the team which rows are ready for training. A discharge from yesterday lacks a mature 30-day label, so it belongs in monitoring or future backfill rather than supervised training. Label maturity is one of the first production data rules a beginner should learn.
+## Give Every Dataset Release An Immutable Identity
+<!-- section-summary: A dataset release binds the resulting rows to source snapshots, transformation code, contract, parameters, label cutoff, and validation evidence. -->
 
-## Checks Before Training
-<!-- section-summary: Pre-training checks make sure the dataset matches the contract before the model learns from it. -->
+A path such as `s3://ml-data/training/latest/` identifies a location whose contents can change. A query string identifies logic without freezing the tables it read. Reproducing a model requires an identity for the output and the evidence used to create it.
 
-Before training, Riverbend should run a small set of checks that match the schema and timing rules. These checks should run in CI for small samples and in the scheduled pipeline for full datasets. A failed check should stop the training job when it can change model behavior.
+A useful release record binds together:
 
-Here is a compact Pandera example for a dataframe produced by the training-data query:
+- the dataset name and release ID;
+- the output table snapshot or immutable object manifest;
+- every source table snapshot;
+- the transformation Git commit and locked runtime;
+- the dataset and feature contract versions;
+- the population filter and build parameters;
+- the prediction-time range and label as-of time;
+- row counts, segment counts, and a content fingerprint;
+- the validation run and approval state.
+
+The content fingerprint, often called a **digest**, detects a different result. It should complement the durable snapshot instead of replacing it. Some dataframe digests sample or summarize data, and a logged source may point to a table that received further transformations before training.
+
+MLflow Tracking can attach dataset metadata to the training run. This focused example records a Spark dataframe derived from a specific Delta table version and names the supervised target:
 
 ```python
-import pandera.pandas as pa
-from pandera.typing import Series
+import mlflow
 
+training_data = mlflow.data.from_spark(
+    training_df,
+    table_name="ml_training.escalation_examples",
+    version="842",
+    targets="escalated_24h",
+    name="escalation_examples_v4",
+)
 
-class ReadmissionTrainingSchema(pa.DataFrameModel):
-    discharge_id: Series[str] = pa.Field(unique=True)
-    patient_id_hash: Series[str]
-    prediction_ts: Series[pa.DateTime]
-    department: Series[str] = pa.Field(isin=["cardiology", "orthopedics", "general", "neurology"])
-    length_of_stay_hours: Series[float] = pa.Field(ge=0, le=1440)
-    prior_admissions_180d: Series[int] = pa.Field(ge=0, le=20)
-    abnormal_lab_count_48h: Series[int] = pa.Field(ge=0, le=200)
-    medication_count_at_discharge: Series[int] = pa.Field(ge=0, le=80)
-    followup_scheduled: Series[bool]
-    readmitted_30d: Series[int] = pa.Field(isin=[0, 1])
-
-
-validated_df = ReadmissionTrainingSchema.validate(training_df)
+with mlflow.start_run():
+    mlflow.log_input(training_data, context="training")
 ```
 
-The validation code catches duplicate examples, impossible lengths of stay, unexpected departments, and target values outside `0` or `1`. The ranges should come from clinical review and historical data, so they flag real surprises instead of turning the pipeline into a loose spell-checker.
+MLflow records the dataset name, digest, source, schema, profile, and training context where available. The run should also carry the contract version, code revision, label as-of time, and validation reference. The table snapshot supplies the durable data state; MLflow connects that state to the training attempt and resulting model evidence.
 
-A useful run report should also include dataset-level checks:
+## Validate Meaning As Well As Shape
+<!-- section-summary: Release validation checks structure, row meaning, time boundaries, label maturity, population coverage, distributions, and reproducibility before training consumes the data. -->
 
-```sql
-SELECT
-  COUNT(*) AS rows,
-  COUNT(DISTINCT discharge_id) AS distinct_discharges,
-  AVG(readmitted_30d) AS positive_label_rate,
-  AVG(CASE WHEN followup_scheduled THEN 1 ELSE 0 END) AS followup_rate,
-  COUNTIF(prior_admissions_180d IS NULL) AS missing_prior_admissions
-FROM ml_curated.readmission_training_examples
-WHERE prediction_ts >= TIMESTAMP '2026-01-01 00:00:00 UTC'
-  AND prediction_ts < TIMESTAMP '2026-07-01 00:00:00 UTC';
-```
+A training framework will happily fit a model to duplicated rows, immature negatives, missing segments, or leaked answers. Dataset validation needs to ask whether the release still represents the contract.
 
-These numbers help the team review the dataset before it trains a model. If the positive label rate drops from 13 percent to 2 percent, the team should inspect label ingestion before celebrating a new model score.
+### Row checks enforce the contract
 
-## Putting It Together
-<!-- section-summary: The core data pieces give later MLOps work a shared vocabulary and a reviewable training contract. -->
+Start with **structural checks**. Required columns exist and types match. The example key is unique at the declared grain. Target values use the allowed domain, and required fields contain no nulls. Database constraints and dbt contracts catch some failures during table construction.
 
-For Riverbend, the model starts with a clear supervised-learning question: at discharge time, which patients have higher risk of unplanned readmission within 30 days? The dataset answers that question with one row per discharge, patient and discharge keys, a prediction timestamp, approved features, and a mature label.
+Then check **row semantics**. Every row belongs to the eligible population. Feature availability is at or before prediction time. Positive outcomes fall inside the target window. Negative targets have a completed observation window. Join multiplicity preserves the declared one-example grain.
 
-That structure gives the rest of the roadmap something solid to build on. Dataset splits use the prediction timestamp, leakage checks protect the boundary between features and labels, validation enforces the schema, pipelines rebuild the dataset, and feature management keeps shared definitions consistent across training and serving.
+### Dataset checks protect population coverage
 
-![Training data contract summary with one row per discharge, patient key, prediction timestamp, approved features, mature label, and schema checks](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/training-data-contract-summary.png)
+**Dataset-level checks** reveal failures spread across many valid-looking rows. Compare row count, label rate, missingness, feature coverage, censoring, and key segments with an approved reference. A sudden loss of one region may barely affect the global row count while leaving that population absent from training.
 
-*A reviewable training data contract turns the model question into dataset fields, timing rules, mature labels, and checks that later MLOps work can reuse.*
+Native warehouse queries and dbt data tests are usually the smallest credible starting point. Great Expectations adds reusable expectation suites across supported dataframe and SQL data sources. TensorFlow Data Validation can compute statistics, compare them with a reviewed schema, and detect anomalies across training and serving datasets. Choose the tool from the data engine and existing operating model; the contract decides what must be checked.
+
+### Fail closed and publish a new version
+
+A failed critical check stops publication. The pipeline quarantines the bad partition or release, keeps the previous approved snapshot available, and routes evidence to the source or transformation owner. After repair, it backfills the affected range and rebuilds under the same fixed parameters. Every gate runs again before a new immutable release is published. Editing a failed release in place would destroy the evidence needed for investigation.
+
+The validation report belongs beside the dataset identity. A later model review should answer which checks passed, which warnings were accepted, who approved them, and which rows were excluded.
+
+## Verify One Example From Source To Training
+<!-- section-summary: Row-level reconstruction proves that the abstract contract produces the intended feature evidence and label for a real historical decision. -->
+
+Aggregate tests can pass while one important join is wrong. Before approving a dataset, trace a small reviewed sample from the original decision through features, label, target, and final row.
+
+Choose boundary cases on purpose. Include outcomes immediately inside and outside the target window. Add a feature arriving immediately after prediction time, an entity with no history, a corrected label, and a censored observation. For each case, an investigator should be able to recover:
+
+1. why the case belonged to the population;
+2. the entity, example key, and prediction time;
+3. every feature source record and its availability time;
+4. the label source, outcome window, and maturity decision;
+5. the target transformation;
+6. the contract, code, source snapshots, and output release.
+
+Suppose a row has prediction time 10:00. A source event occurred at 09:52 and arrived at 10:04. The reviewed reconstruction excludes it from the features. A qualifying outcome at 13:00 enters the label because it sits inside the future window and arrived before the fixed label cutoff. The final row should reflect both decisions.
+
+The same boundary fixture runs in CI against transformation code and in the scheduled pipeline against real storage. After a source migration, replaying it proves that identifier mapping, clocks, and joins still preserve the contract. A full rebuild from pinned snapshots should reproduce row counts and content fingerprints within the documented rules.
+
+This verification gives the training run a trustworthy starting point. Model metrics can then measure learning quality instead of accidentally measuring a broken dataset construction path.
+
+## The Main Idea
+<!-- section-summary: Trustworthy training data is a versioned reconstruction of eligible historical decisions, bounded by time and backed by provenance and validation. -->
+
+A supervised training dataset is a historical reconstruction of product decisions. The population defines which cases count. The entity and grain define one example. Prediction time separates available feature evidence from future outcome evidence. The label records what was observed, and the target turns that observation into the value the algorithm learns.
+
+Production quality comes from preserving those meanings through the whole build. Source and label provenance explain where values came from. Explicit maturity and censoring states keep unknown outcomes away from confirmed negatives. Point-in-time rules protect the feature boundary. Contracts, immutable snapshots, dataset tracking, and validation make each release reviewable and reproducible.
+
+The most useful final test is concrete. Select one row and explain why it exists and what the model could know. Then identify how the answer was observed and which exact dataset release supplied it to training. If the evidence supports every step, the model is learning from the problem the team intended to encode.
 
 ## References
 
-- [Pandera DataFrameModel documentation](https://pandera.readthedocs.io/en/latest/dataframe_models.html)
-- [Pandera checks documentation](https://pandera.readthedocs.io/en/stable/checks.html)
-- [TensorFlow Data Validation get started guide](https://www.tensorflow.org/tfx/data_validation/get_started)
-- [Great Expectations GX Core overview](https://docs.greatexpectations.io/docs/core/introduction/gx_overview/)
+- [Google Machine Learning Glossary: examples, features, and labels](https://developers.google.com/machine-learning/glossary/fundamentals)
+- [Google Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
+- [Google Machine Learning Crash Course: labels](https://developers.google.com/machine-learning/crash-course/overfitting/labels)
+- [Google Production ML Systems: checking for label leakage](https://developers.google.com/machine-learning/crash-course/production-ml-systems/monitoring#check_for_label_leakage)
+- [Feast point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
+- [dbt model contracts](https://docs.getdbt.com/docs/mesh/govern/model-contracts)
+- [dbt data tests](https://docs.getdbt.com/reference/resource-properties/data-tests)
+- [Delta Lake documentation](https://docs.delta.io/)
+- [Apache Iceberg time-travel queries](https://iceberg.apache.org/docs/latest/spark-queries/#time-travel-queries-with-sql)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/dataset/)
+- [MLflow data API](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.data.html)
+- [OpenLineage object model](https://openlineage.io/docs/spec/object-model/)
+- [Great Expectations: define expectations](https://docs.greatexpectations.io/docs/core/define_expectations/)
+- [TensorFlow Data Validation guide](https://tensorflow.github.io/tfx/guide/tfdv/)
+- [Datasheets for Datasets](https://arxiv.org/abs/1803.09010)

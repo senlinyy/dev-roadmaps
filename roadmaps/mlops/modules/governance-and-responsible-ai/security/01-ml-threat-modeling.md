@@ -9,6 +9,18 @@ aliases:
   - roadmaps/mlops/modules/governance-and-responsible-ai/security/00-ml-threat-modeling.md
 ---
 
+## Table of Contents
+
+1. [What ML Threat Modeling Means](#what-ml-threat-modeling-means)
+2. [Map The System And Trust Boundaries](#map-the-system-and-trust-boundaries)
+3. [Describe Threat Actors Through Capability and Access](#describe-threat-actors-through-capability-and-access)
+4. [Prioritize by Product Consequence and Reachability](#prioritize-by-product-consequence-and-reachability)
+5. [Connect Attack Families To The Lifecycle](#connect-attack-families-to-the-lifecycle)
+6. [Turn The Threat Model Into Engineering Controls](#turn-the-threat-model-into-engineering-controls)
+7. [Validate And Revisit The Threat Model](#validate-and-revisit-the-threat-model)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
+
 ## What ML Threat Modeling Means
 <!-- section-summary: ML threat modeling identifies valuable assets, trust boundaries, possible attackers, attack paths, controls, and evidence across the whole model lifecycle. -->
 

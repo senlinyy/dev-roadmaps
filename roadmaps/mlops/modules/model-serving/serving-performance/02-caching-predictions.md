@@ -7,6 +7,19 @@ order: 2
 id: "article-mlops-model-serving-caching-predictions"
 ---
 
+## Table of Contents
+
+1. [Prediction Caching Trades Freshness For Speed](#prediction-caching-trades-freshness-for-speed)
+2. [A Search Ranking Cache As A Supporting Example](#a-search-ranking-cache-as-a-supporting-example)
+3. [Decide What Can Be Cached](#decide-what-can-be-cached)
+4. [Build A Versioned Cache Key](#build-a-versioned-cache-key)
+5. [Use TTLs And Invalidation Rules](#use-ttls-and-invalidation-rules)
+6. [Add A Redis Cache Around Inference](#add-a-redis-cache-around-inference)
+7. [Monitor Cache Quality](#monitor-cache-quality)
+8. [Failure Modes](#failure-modes)
+9. [Putting It Together](#putting-it-together)
+10. [References](#references)
+
 ## Prediction Caching Trades Freshness For Speed
 <!-- section-summary: Prediction caching stores model outputs for repeated inputs so serving can answer faster, with a clear freshness boundary. -->
 

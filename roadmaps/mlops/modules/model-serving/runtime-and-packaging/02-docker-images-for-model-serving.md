@@ -7,6 +7,21 @@ order: 2
 id: "article-mlops-model-serving-docker-images-for-model-serving"
 ---
 
+## Table of Contents
+
+1. [An Image Defines The Serving Runtime](#an-image-defines-the-serving-runtime)
+2. [Build Time Produces A Reproducible Runtime](#build-time-produces-a-reproducible-runtime)
+3. [Runtime Layers Follow Serving Responsibilities](#runtime-layers-follow-serving-responsibilities)
+4. [Model Artifact Placement Has Two Main Designs](#model-artifact-placement-has-two-main-designs)
+5. [Process And Concurrency Must Match Model Behaviour](#process-and-concurrency-must-match-model-behaviour)
+6. [Health Reflects Process And Model Lifecycle](#health-reflects-process-and-model-lifecycle)
+7. [The Image Is A Security And Supply-Chain Boundary](#the-image-is-a-security-and-supply-chain-boundary)
+8. [A Dockerfile Implements The Framework](#a-dockerfile-implements-the-framework)
+9. [Verification Tests The Built Image](#verification-tests-the-built-image)
+10. [Containers Provide Portability Within Limits](#containers-provide-portability-within-limits)
+11. [A Good Image Makes The Runtime Explicit](#a-good-image-makes-the-runtime-explicit)
+12. [References](#references)
+
 ## An Image Defines The Serving Runtime
 <!-- section-summary: A container image packages a filesystem and process definition, while a running container adds environment, identity, resources, network, and mounted data. -->
 

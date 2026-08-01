@@ -7,6 +7,20 @@ order: 3
 id: "article-mlops-model-serving-model-artifacts-runtime-dependencies"
 ---
 
+## Table of Contents
+
+1. [Compatibility Is A Chain Across The Serving Path](#compatibility-is-a-chain-across-the-serving-path)
+2. [Request, Preprocessing, And Signature Form One Contract](#request-preprocessing-and-signature-form-one-contract)
+3. [Serialization Defines A Trust And Library Boundary](#serialization-defines-a-trust-and-library-boundary)
+4. [Package And Native Libraries Must Match The Artifact](#package-and-native-libraries-must-match-the-artifact)
+5. [Serving Runtime And Model Format Need A Supported Pair](#serving-runtime-and-model-format-need-a-supported-pair)
+6. [Hardware Compatibility Extends Through Drivers And Kernels](#hardware-compatibility-extends-through-drivers-and-kernels)
+7. [Load Lifecycle Is Part Of Compatibility](#load-lifecycle-is-part-of-compatibility)
+8. [A Compatibility Matrix Defines Supported Combinations](#a-compatibility-matrix-defines-supported-combinations)
+9. [The Release Record Captures The Proven Combination](#the-release-record-captures-the-proven-combination)
+10. [Compatibility Incidents Follow The Boundary Chain](#compatibility-incidents-follow-the-boundary-chain)
+11. [References](#references)
+
 ## Compatibility Is A Chain Across The Serving Path
 <!-- section-summary: Runtime compatibility requires every boundary from request to hardware to agree on data, format, software, and behaviour. -->
 

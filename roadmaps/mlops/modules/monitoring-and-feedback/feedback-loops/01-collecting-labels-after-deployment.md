@@ -7,6 +7,20 @@ order: 1
 id: "article-mlops-monitoring-and-feedback-collecting-labels-after-deployment"
 ---
 
+## Table of Contents
+
+1. [A Production Label Is A Governed Outcome](#a-production-label-is-a-governed-outcome)
+2. [Outcome Definition Comes Before Storage](#outcome-definition-comes-before-storage)
+3. [Provenance Records Who Said What And Why](#provenance-records-who-said-what-and-why)
+4. [Delay, Maturity, And Censoring Change The Dataset](#delay-maturity-and-censoring-change-the-dataset)
+5. [Prediction Identity Makes The Join Reproducible](#prediction-identity-makes-the-join-reproducible)
+6. [Conflicts Need Adjudication, Not Majority Guessing](#conflicts-need-adjudication-not-majority-guessing)
+7. [Model Routing Creates Selection Bias](#model-routing-creates-selection-bias)
+8. [Label Quality Is Measured As A System](#label-quality-is-measured-as-a-system)
+9. [Eligibility Separates Monitoring, Evaluation, And Training](#eligibility-separates-monitoring-evaluation-and-training)
+10. [Production Labels Carry The History Of The Product](#production-labels-carry-the-history-of-the-product)
+11. [References](#references)
+
 ## A Production Label Is A Governed Outcome
 <!-- section-summary: A production label records an outcome under a defined source, time, policy, and authority. -->
 

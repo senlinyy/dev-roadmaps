@@ -1,351 +1,385 @@
 ---
 title: "Training Artifacts"
 description: "Log the model, metrics, resolved config, data manifest, schemas, reports, environment details, and review packet that a training run needs."
-overview: "Training artifacts form an evidence system across model outputs, data identity, configuration, environment, evaluation, and review. A moderation model illustrates local durability, tracking-system lineage, review, and debugging."
+overview: "A training job produces evidence through several storage boundaries. A production artifact contract classifies that evidence, verifies it in an attempt-specific staging area, commits one immutable bundle, connects lineage, and hands an approved candidate to the next control boundary."
 tags: ["MLOps", "core", "training"]
 order: 3
 id: "article-mlops-training-pipelines-logging-training-outputs-artifacts"
 ---
 
-## Training Artifacts Are The Evidence A Run Leaves Behind
-<!-- section-summary: Training artifacts are files and metadata that let a team inspect, compare, replay, and promote a model run. -->
+## Table of Contents
 
-**Training artifacts** are the files and metadata produced by a training job. They include the model file, metrics, resolved config, data manifest, feature schema, evaluation reports, plots, logs, environment details, and sometimes checkpoints. They answer the practical question a reviewer asks after the job ends: what exactly did this run create, and can we trust it?
+1. [A Successful Job Can Still Leave No Usable Model](#a-successful-job-can-still-leave-no-usable-model)
+2. [Treat Training Output As An Evidence System](#treat-training-output-as-an-evidence-system)
+3. [Put Each Output In The Right Store](#put-each-output-in-the-right-store)
+4. [Define A Production Artifact Contract](#define-a-production-artifact-contract)
+5. [Stage Verify And Commit One Bundle](#stage-verify-and-commit-one-bundle)
+6. [Separate Run Identity From Attempt Identity](#separate-run-identity-from-attempt-identity)
+7. [Connect Lineage Without Copying Governed Data](#connect-lineage-without-copying-governed-data)
+8. [Map The Contract To MLflow 3](#map-the-contract-to-mlflow-3)
+9. [Map The Contract To W&B Artifacts](#map-the-contract-to-wb-artifacts)
+10. [Govern Privacy Access Retention And Deletion](#govern-privacy-access-retention-and-deletion)
+11. [Hand Off One Candidate Without Deploying It](#hand-off-one-candidate-without-deploying-it)
+12. [Recover Incomplete Publication](#recover-incomplete-publication)
+13. [The Main Idea](#the-main-idea)
+14. [References](#references)
 
-The previous articles gave you a training script and a config file. Artifacts are the next layer. The script runs the work. The config records the choices. The artifacts preserve the evidence. Without artifacts, a training run can finish successfully and still leave the team with weak proof. A model file alone cannot explain which data trained it, which threshold passed review, which segment failed, or which container image ran.
+## A Successful Job Can Still Leave No Usable Model
+<!-- section-summary: Training success and evidence publication are separate outcomes, so release waits for a complete verified artifact bundle. -->
 
-For beginners, the simplest artifact rule is this: every training run should leave enough evidence for another teammate to understand the result without rerunning the job. Rerunning may still help, yet the first review should start from saved outputs.
+An overnight training job exits successfully. The experiment page contains a final accuracy score and two files named `model.pkl`. One file came from the last epoch and the other came from the best validation checkpoint, yet neither filename says which is which. The resolved configuration is missing. The dataset field says `latest`. No input schema or sample prediction proves that either model can load and score data.
 
-The artifact set usually connects like this:
+The release reviewer now faces a concrete decision: select one file for shadow testing or hold the candidate. Choosing would mean guessing which model produced the reported metric. The reviewer holds the release, even though the training calculation finished and the compute platform reported success.
 
-| Artifact | Example file | Why it exists |
-|---|---|---|
-| Model | `model/model.joblib` or MLflow model directory | The trained object used for batch scoring or serving |
-| Metrics | `reports/metrics.yaml` | The headline scores used for comparison |
-| Segment report | `reports/segment_metrics.csv` | Evidence across customers, regions, labels, or classes |
-| Data manifest | `data/dataset_manifest.yaml` | Row counts, snapshot IDs, label window, checksums |
-| Feature schema | `schema/feature_schema.json` | Input columns, types, and order |
-| Resolved config | `config/resolved_config.yaml` | Final run recipe after overrides |
-| Environment | `environment/runtime.yaml` | Image digest, package versions, hardware, seeds |
-| Review packet | `review/model_review.yaml` | Decision summary and approval evidence |
+This situation exposes two outcomes that need separate states. **Training success** means the algorithm completed its computation. **Publication success** means the required evidence was staged, validated, and committed as one identifiable bundle. A production pipeline needs both outcomes before it can create a model candidate.
 
-![Training artifact contract](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/artifact-contract.png)
-*The artifact contract turns a completed moderation training job into a checklist of files reviewers can actually open.*
+```mermaid
+flowchart TD
+    A["Training Completes<br/>(the computation produced outputs)"] --> B["Stage Evidence<br/>(one attempt-specific workspace)"]
+    B --> C["Verify Contract<br/>(files, digests, schema, and test vector)"]
+    C --> D{"Contract Passes?"}
+    D -->|Yes| E["Commit Bundle<br/>(one immutable visible manifest)"]
+    E --> F["Create Candidate<br/>(eligible for release review)"]
+    D -->|No| G["Quarantine Attempt<br/>(release remains blocked)"]
+```
 
-## Apply The Artifact Contract To Moderation
-<!-- section-summary: A supporting example follows a trust and safety team training an image moderation model that must leave review evidence. -->
+In essence, a model file is a result of training. A committed artifact bundle is the evidence needed to evaluate, reproduce, and release that result safely.
 
-Imagine **SignalBend**, a social audio app where users can attach cover images to public rooms. The trust and safety team trains a model called `cover_image_policy_v5` to flag images that may violate nudity, violence, or hate-symbol policies. The model sends risky images to human review before they appear in high-traffic rooms.
+## Treat Training Output As An Evidence System
+<!-- section-summary: An evidence system preserves the model, its meaning, its origin, and the checks that make it usable after the training process ends. -->
 
-This model needs careful artifacts because mistakes have real user impact. A weak model can send too many safe images to reviewers, causing delay and frustration. It can also miss policy violations that damage the community. The review team needs more than one accuracy score. They need segment metrics by policy class, language market, image source, and account age. They also need sample false positives and false negatives to inspect.
+A **training artifact** is a durable output that another person or system needs after the training process ends. Model weights and the evaluation report belong in this category.
 
-The training run uses:
+The input-output signature, resolved configuration, dependency record, and bundle manifest are artifacts too. Together they explain what the model is, how it was produced, and whether it passed the expected checks.
+
+The word “output” is broader than “artifact.” A job also emits log events, metric points, parameters, tags, and references to governed data. Those signals belong to the evidence system, while each has a different storage job. Treating every output as a file creates a large bundle that is difficult to search. Treating every output as a tracking metric strips away structure and context.
+
+### Evidence moves from computation to decision
+
+The lifecycle starts inside the training process and ends at a control boundary. The process reports progress while it runs. It writes durable files for review and reuse. The publisher verifies those files and commits a manifest. A registry can then point to one immutable model package and its evidence. Deployment remains a separate decision.
+
+This design gives each consumer a stable entry point. An on-call engineer searches events. A data scientist compares metrics. A reviewer opens reports and test samples. A serving system reads the model signature and package. A governance process follows dataset, code, and dependency identities from the manifest.
+
+## Put Each Output In The Right Store
+<!-- section-summary: Events, metrics, metadata, artifacts, governed data references, and registry candidates differ in volume, mutability, access, and query patterns. -->
+
+The storage boundary should match the question a consumer asks. An operator searching for the cause of an upload failure has a different need from a release process fetching an immutable model package.
+
+During one attempt, the training process emits several output types at the same time. Events and metrics describe execution and results. Parameters and tags make those records searchable. Artifacts and governed data references preserve evidence across process boundaries. The registry later points to one reviewed model identity without absorbing every source object.
+
+```mermaid
+flowchart TD
+    A["Training Process<br/>(one running attempt)"] --> B["Log Events<br/>(what happened and when)"]
+    A --> C["Metrics<br/>(numeric values across steps and datasets)"]
+    A --> D["Parameters And Tags<br/>(searchable run identity and choices)"]
+    A --> E["Durable Artifacts<br/>(files required after the process exits)"]
+    A --> F["Governed Data References<br/>(immutable data kept in its source system)"]
+    E --> G["Registry Candidate<br/>(one reviewed model-package identity)"]
+    F --> G
+```
+
+### Log events explain execution
+
+A **log event** records a discrete fact such as `checkpoint_saved`, `evaluation_started`, or `artifact_upload_failed`. Useful events carry a timestamp, severity, event name, `run_id`, `attempt_id`, and relevant fields. Structured JSON works well because a log backend can filter by state or failure class without parsing free-form sentences.
+
+Events serve diagnosis and audit of the execution path. They can be numerous, and many organizations retain verbose events for a shorter period than model evidence. A final metric should still exist as a metric and report artifact; finding it inside thousands of log lines would make comparisons fragile.
+
+```json
+{"event":"artifact_verified","run_id":"fraud-ranker-1842","attempt_id":"a2","path":"model/model.skops","sha256":"7b3a...","severity":"INFO"}
+```
+
+### Metrics capture comparable numbers
+
+A **metric** is a named numeric measurement associated with a step, dataset, model, or evaluation slice. Training loss over epochs belongs in a metric series. Final average precision on validation snapshot `184` also belongs as a metric. Metric stores support plots, comparisons, filtering, and alerting across runs.
+
+The metric name and context must travel together. `average_precision=0.43` is ambiguous until the record identifies the validation dataset, evaluation code version, model identity, and any segment. Detailed confusion matrices, calibration curves, and per-segment rows usually belong in a report artifact, with selected headline values copied into the metric store for search.
+
+### Parameters and tags make runs searchable
+
+A **parameter** records a choice used by the run, such as `learning_rate=0.03`. A **tag** records descriptive identity or lifecycle metadata, such as an owner, source commit, purpose, or config digest. Tracking systems index these small values so teams can filter and compare runs.
+
+The full resolved config still belongs as a durable artifact. Flattening a nested config into hundreds of tracking parameters loses types, structure, and migration information. Mutable tags also make poor release identities. Use them as an index, then follow immutable IDs and digests for decisions.
+
+### Durable artifacts preserve reusable evidence
+
+A **durable artifact** is a versioned file or bundle that must survive the training process. Model packages, signatures, evaluation reports, resolved configs, dependency locks, and manifests belong here. Artifact storage optimizes for byte integrity, versioning, access control, and longer retention.
+
+Artifact files can be large and may require restricted access. A report containing misclassified customer records deserves a different policy from a public aggregate metric. The manifest can point to each object and record its digest without granting every tracker user access to the content.
+
+### Governed data references keep large data in place
+
+Training datasets and full prediction tables are often too large or sensitive for an experiment tracker. Keep them in the lake, warehouse, feature platform, or governed object store. The run records an immutable table version, snapshot ID, object version, schema identity, and digest or manifest reference.
+
+For example, a Delta table version or Iceberg snapshot ID identifies a fixed dataset state. A mutable table name alone identifies a moving collection. Reproducibility also depends on retention: the table platform must preserve that version for at least as long as the model evidence requires it.
+
+### A registry candidate is a lifecycle record
+
+A **registry candidate** points to one immutable deployable model package and its review evidence. It adds ownership, intended use, approval state, and lifecycle history. The registry is a control plane for selecting versions. It should avoid serving as a duplicate home for training datasets or verbose logs.
+
+Candidate status means the model is eligible for downstream release checks. It carries no authority to receive production traffic. A deployment workflow still needs environment-specific validation, approval, rollout, and rollback controls.
+
+## Define A Production Artifact Contract
+<!-- section-summary: The artifact contract names required objects, their responsibilities, validation rules, and the evidence that marks a bundle complete. -->
+
+An **artifact contract** states which outputs a successful publication must contain. It also defines the format, validation rule, and ownership of each output. You can think of it as the return type of the training job: callers can rely on the contract instead of learning the private details of each trainer.
+
+### Keep training state and serving packages distinct
+
+The raw model or checkpoint preserves framework-native training state. A deep-learning checkpoint may include weights, optimizer state, scheduler state, and training step so a compatible trainer can resume. This object is valuable for recovery and investigation. Framework-native serialization can also execute code during loading, so access and provenance checks matter.
+
+The **deployable model package** targets inference. It combines the selected model with the files and metadata needed by a specific serving contract. Common forms include an MLflow Model, an OCI image, or a serving repository accepted by Triton or another model server. The package should identify its format and loader, while the raw checkpoint remains available only when the recovery policy requires it.
+
+### Define inputs outputs and a test vector
+
+An **input-output signature** describes required fields, types, shapes, optional values, and prediction structure. A sample input helps humans understand the contract. A **test vector** adds an expected output or bounded tolerance, so publication validation can load the package and prove that inference still works after serialization.
+
+Use synthetic or de-identified examples whenever real records would expose personal or restricted data. For a probabilistic classifier, the test vector can include three representative inputs and expected probability ranges. The test vector validates package behavior. Full evaluation remains a separate requirement.
+
+### Preserve reproduction and evaluation evidence
+
+The bundle should carry the resolved config and its digest, source commit, dependency lock, runtime or container digest, random seeds, and immutable dataset references. The evaluation report should identify the model package, dataset snapshots, metric implementation, segment definitions, thresholds, and observed results. Selected predictions or a governed error-sample reference support human review.
+
+For containerized training or serving, attach a software bill of materials in SPDX or CycloneDX format when the platform requires supply-chain review. Build provenance can connect the package digest to its source and builder through an attestation such as SLSA provenance. A package lock and container digest answer different questions: the lock describes intended dependencies, while the built image digest identifies the actual runtime artifact.
+
+### Make the manifest the bundle index
+
+The **manifest** lists every committed object with its role, media type, size, and cryptographic digest. It also holds external references and lineage identities. Large reports stay in their own objects; the manifest remains a small machine-readable index.
 
 ```yaml
-run_id: cover-policy-2026-07-04-1700
-model_name: cover_image_policy
-data_snapshot: signalbend-cover-policy-train-2026-06-30-v6
-image_bucket: s3://signalbend-ml/cover-policy/images/snapshot_date=2026-06-30/
-owner: trust-safety-ml
-primary_metric: valid_macro_f1
-review_guardrail: max_safe_image_false_positive_rate
+contract_version: 1
+run_id: fraud-ranker-1842
+attempt_id: a2
+objects:
+  - path: model/model.skops
+    role: deployable_model
+    media_type: application/octet-stream
+    size_bytes: 4812032
+    sha256: 7b3a8f...
+  - path: reports/evaluation.json
+    role: evaluation_report
+    media_type: application/json
+    size_bytes: 18422
+    sha256: f12cd9...
+external_inputs:
+  - catalog: main.risk.features
+    role: training_dataset
+    table_format: delta
+    table_version: 184
+lineage:
+  source_commit: 34d7a1f...
+  config_digest: c91e40...
+  container_digest: sha256:4ae72c...
 ```
 
-The artifact goal is direct: when the run finishes, the team should find the model, the metrics, the examples behind the metrics, the resolved config, the data receipt, the runtime details, and a review packet. Each piece should have a stable path and should also be logged to the experiment system.
+Contract validation must reject a missing required role, duplicate path, unsupported contract version, or digest mismatch. Optional checkpoints and debug plots need explicit optional status. Otherwise a consumer cannot distinguish an intentional omission from a failed upload.
 
-## Decide Which Artifacts Every Run Must Emit
-<!-- section-summary: An artifact contract tells the training script which files must exist before the run can count as complete. -->
+## Stage Verify And Commit One Bundle
+<!-- section-summary: Attempt-specific staging keeps partial uploads invisible until verification succeeds and one manifest commits the complete bundle. -->
 
-An **artifact contract** is a short list of required outputs. It protects the team from partial runs that look successful. If `model.pt` exists but the segment report is missing, SignalBend should treat the run as incomplete because the moderation review depends on segment evidence.
+Publishing several files creates a consistency problem. Object stores upload each object independently, and they offer no atomic rename for a directory-sized bundle. A reader could see the model before the signature or see an evaluation report from another retry if the publisher writes directly to a shared final prefix.
 
-The contract can live in the training config:
+Solve this with three states. **Staging** contains attempt-specific files that consumers ignore. **Verified** means every required object passes the contract. **Committed** means a small manifest or commit pointer makes exactly one verified attempt visible.
 
-```yaml
-artifacts:
-  required:
-    - path: model/model.pt
-      kind: model
-    - path: reports/metrics.yaml
-      kind: metrics
-    - path: reports/segment_metrics.csv
-      kind: evaluation
-    - path: reports/error_examples.parquet
-      kind: evaluation
-    - path: data/dataset_manifest.yaml
-      kind: data
-    - path: schema/input_schema.json
-      kind: schema
-    - path: config/resolved_config.yaml
-      kind: config
-    - path: environment/runtime.yaml
-      kind: runtime
-    - path: review/model_review.yaml
-      kind: review
-```
+### Write into an attempt-specific staging prefix
 
-The key is that the contract names paths and kinds. The path tells the script where the file should appear. The kind tells tracking systems and reviewers how to group it. A model registry may care about the model and schema. A risk reviewer may care about the review packet and error examples. A platform engineer may care about runtime and logs.
+The training process writes to local scratch space or a mounted attempt directory first. The publisher uploads those bytes under a path such as `runs/fraud-ranker-1842/attempts/a2/`. Another attempt uses a separate prefix. Files from concurrent retries never overwrite each other.
 
-SignalBend's dataset manifest should carry data evidence:
+### Verify bytes and behavior
 
-```yaml
-dataset_manifest:
-  snapshot_id: signalbend-cover-policy-train-2026-06-30-v6
-  train_rows: 12388420
-  validation_rows: 1548872
-  label_window_utc: "2026-05-01T00:00:00Z..2026-06-30T23:59:59Z"
-  label_sources:
-    - human_review_queue
-    - appeal_outcomes
-    - policy_escalation_samples
-  class_counts:
-    safe: 10524400
-    nudity: 804210
-    violence: 644902
-    hate_symbols: 414908
-  checksum_sha256: 972e704b84cf38bfc14a3d4f62d81bc04527a87e3b7c8cc56e3b0f71c9ad2a44
-```
+Existence is the first check. The publisher then verifies file size and SHA-256 digest, parses JSON or YAML schemas, checks the resolved-config digest, and confirms that required dataset references resolve. Model validation should load the deployable package in an isolated environment, inspect its signature, and run the test vector.
 
-This file gives the model review a data receipt. If the validation score drops next week, the team can compare class counts and label sources before blaming the model architecture.
+Evaluation evidence needs semantic checks as well. The report must name the same model digest and dataset identities as the manifest. Required segments must be present, sample counts must meet policy, and metric values must be finite. Secret scanning should run before reports, configs, and environment records leave the job boundary.
 
-### The Manifest Is An Index, Not A Second Artifact Store
+### Publish the manifest last
 
-A manifest should identify files, digests, sizes, media types, and the contract version used to interpret them. It can link the run to code, data, image, and parent-model identities. It should not copy every chart, metric row, or training log into one enormous JSON document. Large evidence remains in immutable objects; the manifest gives reviewers and automation one stable route to it.
+Readers treat the committed manifest as the visibility gate. The publisher uploads all content first, verifies the remote bytes, then creates the manifest or a small `committed.json` pointer with an object-store precondition. Amazon S3 can use `If-None-Match: *`; Google Cloud Storage can use a generation-match precondition of zero; Azure Blob Storage supports conditional headers.
 
-This separation matters when artifacts have different lifetimes and access rules. A model and evaluation report may be retained for years, while verbose batch logs expire after weeks. Misclassified examples may contain restricted content that only reviewers can open. The manifest can preserve their digest and governed location without making sensitive rows visible to every experiment-tracking user.
+This operation makes the decision atomic from the consumer's perspective. The object store still holds several independent objects. Consumers gain a simple rule: bundles without a committed manifest remain invisible.
 
-Publication is complete only when every mandatory entry exists and its digest matches. Optional debug artifacts may be absent after a successful run, but the contract must say they are optional. Otherwise downstream automation cannot distinguish “not produced by design” from “upload silently failed.”
+## Separate Run Identity From Attempt Identity
+<!-- section-summary: A logical run groups one intended computation while attempt identities separate retries, publication workspaces, and failure evidence. -->
 
-## Write Artifacts Locally First
-<!-- section-summary: Local artifact writing keeps evidence available even if the tracking server or network has a bad day. -->
+A **run ID** identifies the intended training computation: one config digest, input set, code revision, and requested output. An **attempt ID** identifies one physical execution or publication try. A retry keeps the run ID and receives a new attempt ID.
 
-The training script should write artifacts to a local output directory before it uploads them to a tracking tool. This habit helps during outages. If the MLflow server or W&B API is unavailable near the end of training, the pod can still keep the files on the mounted artifact volume or upload them through a retry job.
+This distinction prevents retries from mixing files. Suppose the first worker trains successfully and loses network access during publication. A second worker can reconcile the first attempt or start `a2` without writing over `a1`. Logs and publication events include both identities, so an operator can reconstruct the sequence.
 
-The writer should create the required directory tree, serialize every required artifact, and return a path map that upload adapters can reuse. Keeping this function free of MLflow or W&B calls makes local failure recovery and unit testing straightforward.
+### Make uploads idempotent
 
-:::expand[Implement a local artifact writer]{kind="example"}
-This fuller helper shows one implementation. The important pattern is that every serializer writes under the same run-scoped output root and the function returns stable paths. A production writer would add temporary files, digests, a manifest, and a commit marker before another system can consume the bundle.
+An idempotent upload produces the same stored state after one call or several calls. Use immutable object keys and content digests. If a retry finds the same key with the expected digest, it can skip the transfer. If the bytes differ, the retry stops and quarantines the attempt. Silent overwrite would hide a determinism or identity failure.
 
-```python
-from pathlib import Path
-import json
-import yaml
+The commit step also needs idempotency. Repeating a conditional create with the same manifest digest can return the already committed result. A different digest for the same logical run requires policy: keep the existing commit, or record a superseding candidate through an explicit new run. Arrival order should never select the winner silently.
 
-import pandas as pd
-import torch
+### Record resumed training explicitly
 
+A training retry may resume from a checkpoint produced by an earlier attempt. The final manifest should name that checkpoint digest and parent attempt. This lineage distinguishes a clean rerun from a resumed computation and helps reviewers interpret runtime, randomness, and optimizer state.
 
-def write_training_artifacts(output_dir: Path, model, metrics: dict, reports: dict, config: dict) -> dict:
-    paths = {
-        "model": output_dir / "model" / "model.pt",
-        "metrics": output_dir / "reports" / "metrics.yaml",
-        "segments": output_dir / "reports" / "segment_metrics.csv",
-        "errors": output_dir / "reports" / "error_examples.parquet",
-        "schema": output_dir / "schema" / "input_schema.json",
-        "config": output_dir / "config" / "resolved_config.yaml",
-        "runtime": output_dir / "environment" / "runtime.yaml",
-    }
+## Connect Lineage Without Copying Governed Data
+<!-- section-summary: Lineage links immutable code, configuration, data, environment, and parent-model identities while governed source systems retain large or sensitive content. -->
 
-    for path in paths.values():
-        path.parent.mkdir(parents=True, exist_ok=True)
+**Lineage** is the chain of identities that explains where an artifact came from. For a model candidate, that chain connects source code, effective config, training and validation data, feature definitions, runtime environment, parent model or checkpoint, evaluation, and the final package digest.
 
-    torch.save(model.state_dict(), paths["model"])
-    paths["metrics"].write_text(yaml.safe_dump(metrics, sort_keys=True))
-    reports["segment_metrics"].to_csv(paths["segments"], index=False)
-    reports["error_examples"].to_parquet(paths["errors"], index=False)
-    paths["schema"].write_text(json.dumps(reports["input_schema"], indent=2))
-    paths["config"].write_text(yaml.safe_dump(config, sort_keys=True))
-    paths["runtime"].write_text(yaml.safe_dump(reports["runtime"], sort_keys=True))
+The manifest should store identifiers that remain resolvable. A Git commit is stronger than a branch name. A container digest is stronger than an image tag. A Delta version, Iceberg snapshot ID, or versioned warehouse table is stronger than `latest`. If a source exposes its own manifest or digest, record that identity as well.
 
-    return paths
-```
-:::
+### Reference large tables at their governed source
 
-This helper writes one output family at a time. It creates directories before writing. It returns paths so the tracking code can upload the same files. It also gives unit tests something concrete to assert.
+Copying a multi-terabyte training table into an experiment tracker wastes storage and weakens catalog controls. Keep the table in the platform that owns its access policies, schema, lineage, deletion procedures, and retention. The training bundle records its catalog name, immutable version, query or split definition, schema digest, and row-count evidence.
 
-The runtime artifact deserves special attention for GPU runs. Even when this moderation example trains on one L40S, the record should name exact runtime details:
+References need retention agreements. Delta time travel, Iceberg snapshots, warehouse clones, and versioned objects can disappear after vacuum or lifecycle cleanup. The model owner and data owner should align retention before a candidate depends on the version. A manifest pointing to expired data preserves history, yet it cannot support reproduction or audit.
 
-```yaml
-runtime:
-  container_image: ghcr.io/signalbend/cover-policy-trainer@sha256:6aa7c73d2d9fb1e211449f013a71ab7d8f7a5590426c95bcb2e70b93c77b56c4
-  gpu_sku: NVIDIA L40S
-  node_pool: gke-cover-policy-l40s-us-central1-a
-  gpu_operator: "26.3.3"
-  nvidia_driver: "580.159.04"
-  cuda: "13.0.2"
-  cudnn: "9.15"
-  nccl: "2.28.8"
-  pytorch: "2.12.0"
-  seed: 20260704
-```
+### Keep sensitive review rows behind a narrower boundary
 
-This record gives future debugging real material. A result from L40S on one driver can differ from a result on H100 or H200 with a different CUDA stack. The article's lesson is plain: record the exact runtime rather than writing only "trained on GPU."
+Per-record predictions and error examples can contain personal data, protected attributes, text, images, or labels with limited access. Store these rows in a governed table or restricted object prefix and place only an immutable reference in the general artifact bundle. Aggregate evaluation reports can remain available to a broader review group.
 
-![Local artifacts before tracking upload](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/local-first-then-track.png)
-*Writing files locally first gives the pod durable evidence before the same outputs are attached to tracking and review systems.*
+## Map The Contract To MLflow 3
+<!-- section-summary: MLflow 3 can represent runs, first-class Logged Models, dataset-linked metrics, signatures, and supporting evidence after the artifact contract is defined. -->
 
-## Log Artifacts To MLflow
-<!-- section-summary: MLflow can store run parameters, metrics, tags, artifacts, and a model with signature under one run. -->
+MLflow Tracking organizes execution evidence around runs. MLflow 3 also treats logged models as first-class entities with model IDs. One run can produce several checkpoints, each with its own model identity, metrics, and dataset context. This fits the distinction between a training execution and the model outputs it creates.
 
-MLflow gives the team a run page where parameters, metrics, artifacts, and the model live together. For SignalBend, MLflow is useful because the training job can log the model with an input example and signature, then attach the reports and manifests reviewers need.
-
-The MLflow adapter starts one run, attaches searchable identity and parameters, logs the human-readable reports, and records the PyTorch model with an input example and inferred signature. The signature gives later loading and serving code a testable input-output contract.
-
-:::expand[Attach the completed bundle to an MLflow run]{kind="example"}
-The complete adapter below maps the local path contract into current MLflow model and artifact APIs. Keeping it outside the training calculation means an upload retry can reuse the verified local bundle without training again.
+The training publisher should still validate its local or staged contract first. MLflow records and indexes the verified result. `name` is the current model-logging argument; `artifact_path` is deprecated in the current Python API. An input example can generate a signature automatically, while an explicit signature gives the team tighter control.
 
 ```python
 import mlflow
-import mlflow.pytorch
+import mlflow.sklearn
 from mlflow.models import infer_signature
 
-
-def log_to_mlflow(run_id: str, config: dict, model, paths: dict, X_example, y_scores) -> None:
-    signature = infer_signature(X_example, y_scores)
-
-    with mlflow.start_run(run_name=run_id):
-        mlflow.set_tags(
-            {
-                "owner": config["run"]["owner"],
-                "model_name": config["run"]["model_name"],
-                "data_snapshot": config["data"]["snapshot_id"],
-                "policy_domain": "cover-image-moderation",
-                "runtime.image": config["runtime"]["image"],
-            }
-        )
-        mlflow.log_params(
-            {
-                "architecture": config["model"]["architecture"],
-                "learning_rate": config["model"]["learning_rate"],
-                "batch_size": config["model"]["batch_size"],
-                "threshold": config["review"]["policy_threshold"],
-            }
-        )
-        mlflow.log_metrics(load_yaml(paths["metrics"]))
-        mlflow.log_artifact(str(paths["metrics"]), artifact_path="reports")
-        mlflow.log_artifact(str(paths["segments"]), artifact_path="reports")
-        mlflow.log_artifact(str(paths["errors"]), artifact_path="reports")
-        mlflow.log_artifact(str(paths["schema"]), artifact_path="schema")
-        mlflow.log_artifact(str(paths["config"]), artifact_path="config")
-        mlflow.log_artifact(str(paths["runtime"]), artifact_path="environment")
-        mlflow.pytorch.log_model(
-            pytorch_model=model,
-            name="model",
-            input_example=X_example,
-            signature=signature,
-        )
+signature = infer_signature(validation_X, validation_predictions)
+with mlflow.start_run(tags={"config_digest": config_digest}) as run:
+    model_info = mlflow.sklearn.log_model(
+        model,
+        name="fraud-ranker-candidate",
+        signature=signature,
+        input_example=validation_X.head(3),
+    )
+    mlflow.log_artifact(manifest_path, artifact_path="evidence")
+    mlflow.log_metric(
+        "average_precision",
+        average_precision,
+        model_id=model_info.model_id,
+        dataset=validation_dataset,
+    )
 ```
-:::
 
-The model logging call uses `name="model"` and includes a signature. That gives downstream systems a clearer contract for the model input and output. The report files stay as artifacts because human reviewers need to open them. The tags make the run searchable by owner, model, snapshot, and runtime image.
+The `validation_dataset` object carries the validation source and digest into MLflow. Supplying it with the metric connects the score to the evaluated dataset instead of leaving that relationship in a tag or naming convention.
 
-## Use W&B Artifacts For Review And Lineage
-<!-- section-summary: W&B artifacts can version model and report files, link them to runs, and help teams review lineage. -->
+The returned model ID supports an immutable `models:/<model_id>` URI. Record that ID in the candidate handoff together with the external bundle manifest digest. If several checkpoints are logged, choose the candidate through the evaluation policy and record the selected model ID. The most recently logged checkpoint has no automatic claim to candidate status.
 
-W&B fits teams that want a collaborative review space with rich charts, artifacts, reports, and lineage. SignalBend can log a model artifact and a review artifact. The model artifact carries deployable files. The review artifact carries reports and evidence.
+MLflow can log parameters, tags, metrics, reports, and model packages. It should keep large governed datasets by reference through dataset metadata and source identity. Sensitive row-level reports may also remain in restricted storage, with a reference artifact or manifest entry available to reviewers.
 
-:::expand[Version model and review evidence with W&B Artifacts]{kind="example"}
-This adapter keeps deployable files and review evidence as two linked artifact types. That separation lets deployment automation request a model artifact while reviewers work with reports and examples under their own access and retention rules.
+## Map The Contract To W&B Artifacts
+<!-- section-summary: W&B Artifacts can version a verified model bundle, reference external data, preserve manifests, and link an immutable version into a registry collection. -->
+
+W&B Artifacts represent versioned collections of files and references. Each logged artifact has a manifest and logical digest. Logging finalizes that artifact version, so later changes create another version. This maps well to a verified artifact bundle.
 
 ```python
 import wandb
 
-
-def log_to_wandb(run_id: str, config: dict, paths: dict) -> None:
-    run = wandb.init(
-        project="signalbend-cover-policy",
-        job_type="train",
-        name=run_id,
-        config=config,
-    )
-
-    model_artifact = wandb.Artifact(
-        name="cover-image-policy",
+with wandb.init(project="risk-models", job_type="train") as run:
+    artifact = wandb.Artifact(
+        name="fraud-ranker",
         type="model",
-        metadata={
-            "data_snapshot": config["data"]["snapshot_id"],
-            "model_name": config["run"]["model_name"],
-            "threshold": config["review"]["policy_threshold"],
-        },
+        metadata={"run_id": run_id, "config_digest": config_digest},
     )
-    model_artifact.add_file(str(paths["model"]), name="model/model.pt")
-    model_artifact.add_file(str(paths["schema"]), name="schema/input_schema.json")
-    run.log_artifact(model_artifact, aliases=["candidate", run_id])
-
-    review_artifact = wandb.Artifact(name=f"{run_id}-review", type="review-packet")
-    review_artifact.add_file(str(paths["metrics"]), name="reports/metrics.yaml")
-    review_artifact.add_file(str(paths["segments"]), name="reports/segment_metrics.csv")
-    review_artifact.add_file(str(paths["errors"]), name="reports/error_examples.parquet")
-    review_artifact.add_file(str(paths["config"]), name="config/resolved_config.yaml")
-    review_artifact.add_file(str(paths["runtime"]), name="environment/runtime.yaml")
-    run.log_artifact(review_artifact, aliases=["candidate-review"])
-
-    run.finish()
-```
-:::
-
-This pattern keeps the model and the review evidence linked to the same run. A reviewer can open the run, inspect charts, then inspect the artifacts. A platform engineer can trace which config and dataset produced the candidate. A future CI process can promote a specific artifact version only after review.
-
-## Turn Run Evidence Into A Candidate Decision
-<!-- section-summary: A candidate decision connects thresholds, artifact identities, limitations, owners, and the requested next state. -->
-
-Artifacts preserve facts about the run, while candidate review interprets those facts. A **review packet** is one compact implementation of that decision boundary. It says whether the run should move forward and connects metrics, guardrails, immutable artifact locations, limitations, and signoff fields. The file saves the review meeting from hunting across dashboards, and its main job is to preserve why the evidence supports the requested next state.
-
-SignalBend can write this packet:
-
-```yaml
-review_packet:
-  run_id: cover-policy-2026-07-04-1700
-  model_name: cover_image_policy
-  recommendation: candidate_for_shadow_review
-  owner: trust-safety-ml
-  data_snapshot: signalbend-cover-policy-train-2026-06-30-v6
-  metrics:
-    valid_macro_f1: 0.842
-    valid_safe_false_positive_rate: 0.031
-    valid_policy_recall:
-      nudity: 0.881
-      violence: 0.836
-      hate_symbols: 0.792
-  required_artifacts:
-    model: model/model.pt
-    metrics: reports/metrics.yaml
-    segment_report: reports/segment_metrics.csv
-    error_examples: reports/error_examples.parquet
-    resolved_config: config/resolved_config.yaml
-    runtime: environment/runtime.yaml
-  open_questions:
-    - "Review hate-symbol false negatives in Spanish and Portuguese markets."
-    - "Confirm reviewer capacity for one-week shadow queue."
+    artifact.add_dir(bundle_dir)
+    artifact.add_reference(
+        "s3://governed-ml-data/fraud/train/manifest.json",
+        name="inputs/training-data",
+        checksum=True,
+    )
+    logged = run.log_artifact(artifact)
+    logged.wait()
 ```
 
-This file gives every reviewer the same anchor. The recommendation says what the ML team wants next. The metrics show the current evidence. The open questions prevent a strong aggregate score from hiding weak spots.
+`add_reference` keeps the external object at its governed URI and adds its metadata to the artifact manifest. Versioned object storage strengthens this pattern because the reference can retain an object version and checksum. A broad bucket prefix with mutable contents gives weaker lineage than a versioned manifest object.
 
-![Review and debug evidence](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/review-debug-evidence.png)
-*When a segment looks suspicious, the review packet points the team from summary metrics to examples and then to the next training fix.*
+After review, the exact artifact version can be linked into a W&B Registry collection and assigned a candidate alias. Aliases are mutable pointers, so release automation should resolve the alias to an immutable version and record that version before acting. Linking makes the artifact available through the registry without copying its bytes into another artifact.
 
-## Debug With Artifacts
-<!-- section-summary: Good artifacts turn failed runs and surprising metrics into targeted investigations. -->
+## Govern Privacy Access Retention And Deletion
+<!-- section-summary: Artifact governance applies data minimization, access boundaries, retention classes, deletion workflows, and supply-chain evidence according to each output's risk. -->
 
-Artifacts help most when something surprises the team. Suppose `cover-policy-2026-07-04-1700` has a strong macro F1, yet the Spanish-language segment shows a high false-positive rate. The team can open `segment_metrics.csv`, find the exact segment, inspect `error_examples.parquet`, and compare the data manifest with the previous run.
+Artifact bundles can contain more sensitive information than model binaries suggest. Resolved configs may expose internal paths. Reports may contain small segments or example records. Pickled models may execute code during deserialization. Dependency files reveal the software supply chain. Governance should classify each object by sensitivity and purpose before publication.
 
-A simple query over the segment report should filter for a minimum support count and the false-positive threshold used by review policy, then sort the failing slices by severity. For this run it returns Spanish uploads at 7.4 percent, Portuguese uploads at 6.8 percent, and Spanish screen captures at 6.4 percent. Those rates all exceed the 6 percent investigation threshold and have enough examples for review.
+### Minimize and separate sensitive content
 
-The next step filters `error_examples.parquet` to safe images predicted as policy violations in the affected market and exports a small governed review sample. If reviewers find label errors, the next dataset manifest records the corrected label source and adjudication. If they find a recurring visual pattern, the next experiment states which feature, augmentation, or data slice is intended to address it. The artifact path connects the aggregate symptom to inspectable evidence without turning the main lesson into dataframe syntax.
+Use aggregate metrics for broad comparison. Keep row-level predictions, error samples, and restricted labels in a narrower governed store. Synthetic test vectors usually provide enough evidence for package validation. Secret values, access tokens, connection strings, and private keys should fail a pre-publication scan.
 
-Now the team has a small review file for human inspection. If the examples reveal a label issue, the next training run should update the dataset manifest and note the label correction. If the examples reveal a feature problem, the next config can adjust the feature set.
+### Apply role-based access at the object boundary
 
-## Putting It Together
-<!-- section-summary: Training artifacts preserve the evidence that lets a team review, debug, compare, and promote a model run. -->
+The experiment-tracking group may need metrics and aggregate reports. A model-review group may need restricted error examples. The serving platform needs the deployable package and signature. Separate objects and prefixes let the platform grant each role the smallest useful scope. Access to a manifest should never imply access to every referenced object.
 
-Training artifacts turn a completed job into inspectable evidence. SignalBend's moderation run writes local files first, logs them to MLflow, optionally versions them with W&B artifacts, and packages them into a review packet. The model file matters, but the model file alone gives weak evidence. The metrics, segment report, error examples, data manifest, schema, resolved config, runtime record, and review packet explain the model.
+### Define retention by responsibility
 
-This closes the "From Notebook to Job" submodule with a script, configuration, and traceable artifacts. The next step is pipeline design: connecting data preparation, training, evaluation, and artifact publishing into a coordinated workflow.
+Verbose logs and intermediate checkpoints often have short retention. Failed-attempt evidence may remain long enough for incident review. Committed candidate bundles, evaluation reports, configuration, lineage, and approval records usually follow the model's supported lifetime plus the required audit period. Legal holds, regulated decisions, and retraining obligations can extend that period.
+
+Dataset retention must match the claim of reproducibility. If policy allows the source snapshot to expire earlier, describe the remaining evidence accurately: the team can inspect the manifest and evaluation, while a complete retrain from identical rows is unavailable.
+
+### Make deletion a governed state transition
+
+Deletion may come from retention expiry, privacy requests, license changes, security response, or model retirement. The workflow should identify affected candidates and descendants before removing bytes. Preserve a non-sensitive tombstone containing the deleted object identity, reason class, authority, and deletion event when policy permits. A registry must prevent future promotion of a candidate whose required artifact or dataset was deleted.
+
+## Hand Off One Candidate Without Deploying It
+<!-- section-summary: Candidate handoff selects one immutable model package and connects its evidence, limitations, owner, and requested next state without serving traffic. -->
+
+Training may produce many checkpoints and experimental packages. The handoff should select exactly one candidate for the next release boundary. That decision compares the required evaluation report, guardrails, package validation, and review policy. It never relies on a filename such as `best.pkl` or a mutable `latest` tag alone.
+
+A useful candidate record contains the logical run ID, committed manifest URI and digest, deployable package digest, MLflow model ID or W&B artifact version, signature identity, evaluation report identity, owner, intended use, known limitations, and requested next state. It also identifies the decision policy and reviewer or automated gate that selected the candidate.
+
+Registration and deployment remain separate actions. Registration makes the candidate discoverable and governed. Release validation can then test the package in a target environment, check infrastructure and policy constraints, and choose a rollout strategy. Release controls continue to govern every registry event, even after training metrics pass.
+
+## Recover Incomplete Publication
+<!-- section-summary: A reconciler inspects attempt state, verifies surviving bytes, completes safe uploads, and commits or quarantines the bundle without retraining blindly. -->
+
+Publication can fail after expensive training has finished. The worker may upload the model and lose connectivity before the report. A process may crash after every object arrives and before the commit pointer is written. The tracking server may accept metrics while the object store rejects the model package.
+
+The absence of a committed manifest keeps all three cases out of candidate selection. A reconciler can then inspect the attempt without guessing what downstream consumers have already seen.
+
+```mermaid
+flowchart TD
+    A["Find Uncommitted Attempt<br/>(staging exists and commit is absent)"] --> B["Recalculate Evidence<br/>(local and remote sizes plus digests)"]
+    B --> C{"Required Bytes Survive?"}
+    C -->|Yes| D["Upload Missing Objects<br/>(idempotent immutable keys)"]
+    D --> E["Repeat Contract Checks<br/>(package, report, references, and secrets)"]
+    E --> F["Commit Manifest<br/>(conditional create)"]
+    C -->|No| G["Quarantine Attempt<br/>(record the missing evidence)"]
+    G --> H["Resume Or Retrain<br/>(policy chooses from trusted checkpoints)"]
+```
+
+### Complete publication from surviving evidence
+
+If the attempt workspace or durable staging prefix still contains every required object, the reconciler recalculates digests and compares them with the attempt records. Matching remote objects remain in place. Missing objects upload to immutable keys. The full validation suite runs again before the conditional commit.
+
+### Quarantine conflicting or incomplete evidence
+
+A digest mismatch means the same identity refers to different bytes. The reconciler should preserve the conflict for investigation, block the candidate, and avoid overwriting either object. If a required file disappeared, the attempt remains incomplete. A trusted checkpoint may support a resumed attempt; otherwise the pipeline retrains under a new attempt identity.
+
+### Make publication status visible
+
+The job state should distinguish `TRAINING_SUCCEEDED`, `PUBLICATION_PENDING`, `COMMITTED`, and `QUARANTINED`. Structured events record every transition with run and attempt IDs. Operators can alert on attempts stuck in publication, while release systems query only committed manifests.
+
+This recovery path saves expensive recomputation when the verified bytes survived. It also preserves the stronger rule: a partial collection of plausible files never turns into a candidate through operator intuition.
+
+## The Main Idea
+<!-- section-summary: A training result earns candidate status after its evidence is classified, verified, committed, linked, governed, and handed to a separate release boundary. -->
+
+A reliable training job leaves more than a model file. It emits operational events, comparable metrics, searchable metadata, durable artifacts, and immutable references to governed inputs. An artifact contract turns those pieces into one expected result.
+
+The publisher writes into an attempt-specific staging area, verifies bytes and behavior, and exposes the bundle by committing its manifest last. Run and attempt identities keep retries separate. Content digests make uploads idempotent. Lineage connects code, configuration, data, environment, evaluation, and parent models without copying large governed datasets.
+
+MLflow 3 Logged Models and W&B Artifacts can implement this evidence model once the lifecycle is clear. The final handoff selects one immutable candidate and sends it to a separate release process. Training success supplies a result; committed evidence makes that result safe to evaluate and govern.
 
 ## References
 
-- [MLflow Python API: `mlflow.pytorch.log_model`](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.pytorch.html)
-- [MLflow Python API: `mlflow.sklearn.log_model`](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.sklearn.html)
-- [Weights & Biases Docs: Artifacts overview](https://docs.wandb.ai/models/artifacts/)
-- [Weights & Biases Docs: Registry overview](https://docs.wandb.ai/models/registry/)
-- [NVIDIA GPU Operator: Platform support](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/platform-support.html)
-- [NVIDIA Deep Learning Frameworks Support Matrix](https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html)
+- [OpenTelemetry Specification: Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/)
+- [OpenTelemetry Specification: Metrics Data Model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/)
+- [MLflow Documentation: Tracking And Logged Models](https://mlflow.org/docs/latest/ml/tracking/)
+- [MLflow Documentation: Model Signatures And Input Examples](https://mlflow.org/docs/latest/ml/model/signatures/)
+- [MLflow Python API: `mlflow.sklearn.log_model`](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.sklearn.html#mlflow.sklearn.log_model)
+- [Weights & Biases Python API: Artifact](https://docs.wandb.ai/models/ref/python/experiments/artifact)
+- [Weights & Biases Documentation: Link An Artifact Version To A Registry Collection](https://docs.wandb.ai/models/registry/link_version)
+- [Delta Lake Documentation: Time Travel](https://docs.delta.io/delta-batch/#query-an-older-snapshot-of-a-table-time-travel)
+- [Apache Iceberg Documentation: Snapshot Maintenance](https://iceberg.apache.org/docs/latest/maintenance/)
+- [Amazon S3 Documentation: Conditional Writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
+- [Google Cloud Storage Documentation: Request Preconditions](https://cloud.google.com/storage/docs/request-preconditions)
+- [Microsoft Azure Storage Documentation: Conditional Headers For Blob Operations](https://learn.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations)
+- [SLSA Specification: Provenance](https://slsa.dev/spec/v1.2/provenance)
+- [SPDX Specification](https://spdx.github.io/spdx-spec/)
+- [CycloneDX Specification](https://cyclonedx.org/specification/overview/)

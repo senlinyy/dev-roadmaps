@@ -7,6 +7,20 @@ order: 4
 id: "article-mlops-governance-and-responsible-ai-third-party-ai-model-supply-chain-risk"
 ---
 
+## Table of Contents
+
+1. [What Third-Party AI Risk Means](#what-third-party-ai-risk-means)
+2. [Map The Component And Supplier Graph](#map-the-component-and-supplier-graph)
+3. [Tier Components By Their Role](#tier-components-by-their-role)
+4. [Perform Evidence-Based Due Diligence](#perform-evidence-based-due-diligence)
+5. [Separate Supplier Claims From Local Assurance](#separate-supplier-claims-from-local-assurance)
+6. [Verify Provenance During Delivery](#verify-provenance-during-delivery)
+7. [Turn Supplier Requirements Into Operations](#turn-supplier-requirements-into-operations)
+8. [Monitor Changes And Outcomes](#monitor-changes-and-outcomes)
+9. [Respond To Incidents And Withdrawals](#respond-to-incidents-and-withdrawals)
+10. [Reassess The Decision And Its Evidence](#reassess-the-decision-and-its-evidence)
+11. [References](#references)
+
 ## What Third-Party AI Risk Means
 <!-- section-summary: Third-party AI risk management controls external components that can change system behavior, data exposure, availability, security, compliance, or customer impact. -->
 

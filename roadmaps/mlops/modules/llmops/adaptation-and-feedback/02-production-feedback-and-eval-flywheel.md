@@ -1,7 +1,7 @@
 ---
 title: "Production Feedback and the Eval Flywheel"
-description: "Turn product outcomes, reviewer corrections, and incidents into governed eval cases and release evidence without training directly on noisy user signals."
-overview: "Understand the feedback lifecycle from production signals and delayed joins through deliberate sampling, causal labels, regression cases, controlled releases, outcome measurement, and lineage repair."
+description: "Turn product outcomes, reviewer corrections, and incidents into governed eval cases and safer releases."
+overview: "Learn how production signals become trustworthy labels, curated evaluation datasets, focused change proposals, staged releases, and verified product improvements."
 tags: ["MLOps", "LLMOps", "production", "feedback"]
 order: 2
 id: "article-mlops-llmops-production-feedback-eval-flywheel"
@@ -10,279 +10,510 @@ aliases:
   - child-adaptation-and-feedback-03-production-feedback-and-eval-flywheel
 ---
 
-## What a Feedback Flywheel Really Is
+## Table of Contents
 
-<!-- section-summary: A production feedback flywheel turns observed outcomes into reviewed examples, evals, and safer releases; automatic training on thumbs-up events sits outside this governed loop. -->
+1. [What the Feedback Flywheel Is](#what-the-feedback-flywheel-is)
+2. [Start With Signals, Feedback, and Labels](#start-with-signals-feedback-and-labels)
+3. [Understand Explicit and Implicit Feedback](#understand-explicit-and-implicit-feedback)
+4. [Connect Delayed Outcomes to the Right Run](#connect-delayed-outcomes-to-the-right-run)
+5. [Sample Useful Evidence Safely](#sample-useful-evidence-safely)
+6. [Use Human Review to Create Trustworthy Labels](#use-human-review-to-create-trustworthy-labels)
+7. [Group Failures Before Choosing a Fix](#group-failures-before-choosing-a-fix)
+8. [Build Evaluation Datasets With Lineage](#build-evaluation-datasets-with-lineage)
+9. [Update Offline Evaluations Carefully](#update-offline-evaluations-carefully)
+10. [Turn Evidence Into a Change Proposal](#turn-evidence-into-a-change-proposal)
+11. [Release in Stages and Measure the Result](#release-in-stages-and-measure-the-result)
+12. [How Current Production Tools Fit Together](#how-current-production-tools-fit-together)
+13. [Measure the Health of the Flywheel](#measure-the-health-of-the-flywheel)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-A **feedback flywheel** is a controlled loop from production evidence to a tested product improvement. It collects signals, joins them to the exact system version, selects useful cases, obtains trustworthy labels, adds regression coverage, changes one or more system components, and measures the result after release.
+## What the Feedback Flywheel Is
+<!-- section-summary: A production feedback flywheel turns real product evidence into reviewed evaluation cases, focused changes, controlled releases, and measured improvements. -->
 
-Use **HelpHarbor**, a support copilot, as the scenario. Agents can accept a draft, edit it, reject it, escalate the case, or reopen the ticket later. Customers may rate the final interaction. Those events are useful, but none is a perfect label. A draft can be accepted because the queue is busy. A heavily edited draft may still have saved time. A thumbs-down may reflect company policy rather than answer quality.
+At a high level, a **production feedback flywheel** is the learning system around an AI product. It collects evidence from real use, works out what that evidence means, turns trustworthy cases into evaluations, proposes a focused improvement, and checks the result in production.
 
-The wrong loop is “collect disliked answers and fine-tune every Friday.” It mixes product dissatisfaction, policy disagreement, missing data, tool failures, and model mistakes. The right loop diagnoses the failure before choosing a fix.
+The word *flywheel* can make the process sound automatic. In practice, the valuable part is careful judgment. A thumbs-down leaves the cause open. A successful purchase records an outcome without proving that an assistant caused it. A tool error points toward service reliability. Teams first move from observation to explanation. That explanation identifies the responsible area: model behavior, knowledge and retrieval, tools, or product policy.
+
+You can think of the flywheel as eight connected responsibilities:
 
 ```mermaid
-flowchart LR
-    A[Production runs and outcomes] --> B[Join to exact system versions]
-    B --> C[Sample cases by value and risk]
-    C --> D[Review and label failure causes]
-    D --> E[Add eval and regression cases]
-    E --> F[Change the owning system layer]
-    F --> G[Offline gate, shadow, and canary]
-    G --> H[Measure later product outcomes]
-    H -. new evidence .-> A
+flowchart TD
+    A["Capture production signals"] --> B["Join them to the exact run"]
+    B --> C["Sample and protect evidence"]
+    C --> D["Review and diagnose cases"]
+    D --> E["Curate evaluation datasets"]
+    E --> F["Propose one focused change"]
+    F --> G["Test and release in stages"]
+    G --> H["Measure live outcomes"]
+    H --> A
+
+    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef judgment fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef change fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C evidence
+    class D,E judgment
+    class F,G change
+    class H result
 ```
 
-Every arrow has an owner and a quality condition. A missing join breaks attribution, weak sampling hides rare harm, poor labels send work to the wrong team, and a release without later outcomes cannot show that the change helped users.
+Each responsibility protects the next one. Weak identifiers make outcome joins unreliable. Biased samples hide quiet users. Vague review labels send engineers toward the wrong component. Leaky evaluation datasets produce impressive scores that disappear in production. A release without a comparison group leaves the team unsure about the effect of its change.
 
-## Feedback Terms in Plain English
+The flywheel therefore serves two goals. It helps the product improve, and it makes the evidence behind each improvement traceable.
 
-<!-- section-summary: Feedback terminology distinguishes source history, dataset connections, sampling rates, subgroups, review resolution, and failure categories. -->
+## Start With Signals, Feedback, and Labels
+<!-- section-summary: Production signals record events, feedback expresses a reaction, and labels interpret evidence under a defined rule or rubric. -->
 
-**Provenance** records where a feedback example came from, who or what labeled it, and which system version produced it. **Lineage** connects a derived label or eval case back to those source records. **Prevalence** is how common an outcome is in the real population; an intentionally oversampled review queue cannot estimate it directly. A **slice** is a subgroup such as one language or product path whose results are reported separately. **Adjudication** is the process where an expert resolves reviewer disagreement. A **taxonomy** is the controlled list of failure categories used to describe and route cases consistently.
+Three words appear throughout feedback systems: **signal**, **feedback**, and **label**. They describe different levels of evidence, from an event the product recorded to an interpretation the team is prepared to use in an evaluation or decision.
 
-A **high-cardinality field** has many unique values, such as a conversation ID, and belongs in governed event or trace storage rather than a metric label. A **holdout** is a hidden set kept out of development decisions for later evaluation. A **shadow release** runs a candidate on copied traffic without using its answer, while a **canary release** serves a small controlled user group. An **interrupted time series** compares measurements before and after a change while accounting for their time order; unlike random assignment, it can still be affected by other events occurring at the same time.
+A **production signal** is something the system observed. Examples include a retry, an edited answer, a tool timeout, an escalation, a citation click, or a completed task. The event can usually be recorded immediately.
 
-## Define Signals and Their Limits
+**Feedback** expresses a reaction to an output or experience. A user rating is direct feedback. Replacing an AI-generated paragraph is behavioral feedback. A reviewer’s written correction is expert feedback.
 
-<!-- section-summary: Explicit ratings, behavioral outcomes, reviewer edits, traces, and incidents measure different things and must keep their provenance and uncertainty. -->
+A **label** is an interpretation created under a defined rule. A reviewer may inspect a trace and label the answer `unsupported_claim`. A business rule may label an order `returned_within_window`. Labels can power metrics, evaluation cases, and later training data, so their definitions need versioning.
 
-HelpHarbor creates a signal catalog:
+The distinction matters because the same signal can support several explanations. Consider an assistant that drafts a customer-service response:
 
-| Signal | What it may indicate | Important limitation |
-| --- | --- | --- |
-| Agent accepted draft | Usefulness | Acceptance can be rushed or habitual |
-| Edit distance | Amount of rewriting | Small wording edits can change legal meaning |
-| Ticket reopened | Resolution failure | The product or shipping system may be the cause |
-| Customer rating | Overall experience | It includes policy, wait time, and delivery outcome |
-| Escalation | Risk or missing capability | Correct escalation is often a success |
-| Tool failure | Dependency reliability | Separate from model-answer quality |
-| Safety incident | Serious control failure | Rare, high priority, and manually reviewed |
+- An agent edits the draft heavily. The answer may contain a factual error, use the wrong tone, omit required policy language, or simply differ from the agent’s preferred style.
+- The customer reopens the case. The answer may have failed, a delivery may have arrived late, or the customer may have asked a new question.
+- The assistant escalates the case. The escalation may be a safe and correct action for a high-risk request.
 
-Each event keeps event time, tenant policy class, conversation ID, trace ID, prompt bundle, model route, retrieval version, tool results, and consent or processing basis. High-cardinality IDs stay in governed event storage, not Prometheus labels. Raw conversations have stricter access and retention than numeric dashboard aggregates.
+The event remains useful. Its meaning is uncertain until the team combines it with context and a clear interpretation rule.
 
-## Join Feedback to the Run
+```mermaid
+flowchart TD
+    A["Observed event<br/>A user retries a task"] --> B["Available context<br/>trace, output, tools, policy, later outcome"]
+    B --> C{"Can a rule explain<br/>the event reliably?"}
+    C -->|"Yes"| D["Programmatic label<br/>for example, tool_timeout"]
+    C -->|"No"| E["Human review<br/>using a rubric"]
+    D --> F["Governed label"]
+    E --> F
 
-<!-- section-summary: Stable trace and response identifiers connect delayed outcomes to the model, prompt, retrieval, tools, and policy that produced them. -->
-
-Feedback often arrives days later. The pipeline needs a durable join:
-
-```sql
-select
-  r.trace_id,
-  r.prompt_bundle_version,
-  r.model_route,
-  r.retrieval_profile,
-  r.tool_failure_class,
-  f.agent_action,
-  f.edit_ratio,
-  f.customer_rating,
-  f.reopened_within_7d
-from llm_run_fact r
-join support_feedback_fact f using (conversation_id)
-where r.started_at >= current_date - interval '30 days';
+    classDef observed fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef review fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B observed
+    class C decision
+    class D,E review
+    class F result
 ```
 
-Do not use a mutable user profile as the only join. One conversation may contain multiple generations. Record which draft the agent viewed and which final response was sent. If a human composed the final answer from scratch, do not label it as the model's accepted output.
+In real systems, a tool timeout is suitable for a deterministic rule because the trace contains the tool result. Helpfulness often needs human judgment because it depends on the user’s goal and the quality of the whole response.
 
-Protect privacy at ingestion. Strip secrets and unnecessary personal fields before analysis. Store a redacted evidence view for labelers and keep source access behind case-level authorization. Honor deletion and retention rules across traces, label queues, eval datasets, and any later training dataset.
+The safest design keeps raw observations separate from interpreted labels. If the rubric changes, the team can relabel the original evidence and compare the old and new definitions.
 
-## Sample Cases Deliberately
+## Understand Explicit and Implicit Feedback
+<!-- section-summary: Explicit feedback states an opinion directly, while implicit feedback infers possible meaning from user behaviour. -->
 
-<!-- section-summary: Useful feedback datasets combine random sampling with risk, disagreement, novelty, and slice sampling so common easy traffic does not hide rare failures. -->
+**Explicit feedback** asks a person to express a judgment. A thumbs-up, a one-to-five rating, a written comment, and an expert review all belong in this group.
 
-Pure random samples mostly contain common, easy tickets. Pure failure samples distort prevalence and can encourage overfitting. HelpHarbor uses several queues:
+Its main advantage is clarity: the system knows that a person intentionally reacted to the output. Its main limitation is participation. People with strong opinions respond more often, rating prompts interrupt the task, and a single score can mix answer quality with price, latency, company policy, or the surrounding product experience.
 
-- a random sample to estimate live quality;
-- all safety and permission incidents;
-- high-edit and rejected drafts;
-- disagreements between automatic graders and human outcomes;
-- novel topics or low-retrieval-score clusters;
-- protected product and language slices;
-- successful cases to preserve behavior during changes.
+**Implicit feedback** comes from behaviour. Common signals include:
 
-Sampling metadata must survive into analysis. If safety incidents were oversampled, do not report their raw fraction as the production incident rate. Weight estimates or use the random sample for prevalence.
+- accepting, editing, or discarding a generated draft;
+- retrying with a new prompt;
+- copying a citation;
+- abandoning a workflow;
+- escalating to a person;
+- reopening a resolved case;
+- completing or reversing the downstream action.
 
-Near-duplicate clustering keeps one shipping outage from contributing 10,000 nearly identical eval rows. Preserve a small representative set plus a traffic-count field. Split related cases together when creating development and held-out sets.
+### Read behaviour in its product context
 
-## Label Failure Cause, Not Only Quality
+Implicit signals cover more traffic because they arise during normal product use. Their meaning depends heavily on the workflow.
 
-<!-- section-summary: A diagnostic taxonomy routes each case toward the appropriate fix: prompt, retrieval, tool, policy, data, model, or human workflow. -->
+Suppose a coding assistant proposes a patch. Immediate acceptance suggests usefulness, although the developer may still discover a bug during review. A large edit suggests a mismatch, although the original patch may have supplied a useful structure. A reverted merge is stronger evidence of a problem, especially after the system connects it to the accepted suggestion. Each event describes a different point in the outcome journey.
 
-Reviewers answer a short rubric:
+A practical signal catalog records four properties for every signal:
+
+1. **What happened?** Define the event in observable terms.
+2. **What might it mean?** List the interpretations the team expects.
+3. **What can confuse it?** Record major sources of ambiguity.
+4. **How will it be used?** Choose prevalence reporting, case discovery, review priority, evaluation, or release monitoring.
+
+This catalog prevents a common analytical mistake: treating every available event as a direct quality score.
+
+## Connect Delayed Outcomes to the Right Run
+<!-- section-summary: Stable identifiers and point-in-time join rules connect later outcomes to the exact output, model route, prompt, retrieval, tools, and policy involved. -->
+
+Many useful outcomes arrive after the model response. A support case may reopen days later. A purchase may be returned later. A code suggestion may fail in continuous integration after the developer commits it. This is **delayed feedback**.
+
+The system needs to answer a precise question: which model output contributed to this later outcome?
+
+That requires an immutable decision or delivery record. In plain language, the record says, “This is the output the product actually showed or used.” It points back to the full trace and captures every version needed to reproduce the decision.
+
+### The decision record is the joining point
 
 ```yaml
-label_schema: helpharbor-feedback-v4
-dimensions:
-  answer_supported: [yes, partial, no]
-  policy_correct: [yes, no, not_applicable]
-  tool_use: [correct, missed, wrong, tool_failed, not_applicable]
-  escalation: [correct, unnecessary, missing, not_applicable]
-  primary_failure:
-    - prompt_instruction
-    - retrieval_missing
-    - retrieval_wrong
-    - tool_contract
-    - dependency_failure
-    - authorization_policy
-    - model_reasoning
-    - source_data
-    - no_system_failure
-  severity: [low, medium, high, critical]
+decision_id: decision_8f31
+interaction_id: interaction_42c0
+trace_id: trace_7ab2
+delivered_output_id: response_c19e
+model_route: primary
+model_version: model_release_17
+prompt_version: answer_policy_9
+retrieval_version: knowledge_index_12
+tool_contract_version: account_tools_4
+policy_version: customer_policy_6
+delivered_at: event_time
+outcome_join_key: governed_case_key
 ```
 
-Labelers see the user's allowed context, retrieved source IDs, tool calls, and policy version. They do not guess whether the model “knew” something. Two reviewers handle high-severity cases, with adjudication on disagreement. Track reviewer agreement and revise ambiguous rubric items.
+This compact record avoids copying an entire conversation into an analytics table. The trace stores detailed execution evidence under tighter access control. The decision record stores the governed identifiers required for joins and comparisons.
 
-The failure label controls the backlog. Missing documents go to knowledge operations. Wrong tool results go to the service owner. A permission problem goes to security. The team considers prompt changes or adaptation only for stable behavioral gaps supported by enough examples.
+A point-in-time join applies a defined attribution window:
 
-## Turn Cases Into Evals and Releases
+```sql
+select d.decision_id, d.trace_id, o.outcome_type
+from decision_record d
+join outcome_event o
+  on o.outcome_join_key = d.outcome_join_key
+ and o.occurred_at >= d.delivered_at
+ and o.occurred_at < d.delivered_at + interval '14 days';
+```
 
-<!-- section-summary: Teams turn incidents and representative feedback into immutable regression cases before releasing a fix, which closes the evidence loop. -->
+The fourteen-day window is a product definition. It should reflect the time in which the output could reasonably affect the outcome. The query also blocks future information from leaking into earlier decisions.
 
-Every accepted case gets provenance, redaction version, labeler decision, and expected behavior. Critical incidents enter a blocking suite. Softer quality examples enter scored slices. Keep some recent cases in a hidden holdout so prompt authors cannot tune directly to every item.
+Some joins remain ambiguous. A user may receive three answers before reopening a case. A developer may combine several suggestions in one commit. The pipeline should mark these cases for attribution review or exclude them from automatic model-quality labels. Choosing the nearest event silently would create confident-looking data with weak causal meaning.
+
+Teams monitor the join itself through:
+
+- **join coverage**: the share of eligible outcomes connected to a decision;
+- **time to label**: the delay between delivery and the final outcome;
+- **ambiguous-join rate**: the share with several plausible decisions;
+- **orphan rate**: outcomes or decisions missing their matching record;
+- **join-rule version**: the transformation used to create each label.
+
+If a faulty rule attached outcomes to the wrong response, lineage should reveal every derived label, dataset, evaluation run, and training artifact affected by that rule. The team can quarantine those artifacts, repair the join, and rebuild them from source events.
+
+## Sample Useful Evidence Safely
+<!-- section-summary: A balanced sampling strategy estimates common quality, discovers rare risks, preserves important slices, and limits privacy exposure. -->
+
+Production systems can generate far more traces than people can review or LLM judges can score. **Sampling** chooses the evidence that enters deeper analysis.
+
+One sampling rule rarely serves every purpose. A useful program combines several queues:
+
+- A **random sample** estimates ordinary production quality.
+- A **risk-triggered sample** captures safety events, permission failures, severe tool errors, or costly actions.
+- A **behavioural sample** captures retries, large edits, abandonment, and escalation.
+- A **slice sample** protects lower-volume languages, routes, tenants, device types, or task categories.
+- A **novelty sample** finds unusual topics and new failure shapes.
+- A **disagreement sample** collects cases in which rules, LLM judges, and human outcomes differ.
+- A **success sample** preserves behaviour that already works well.
+
+Imagine that one product route receives ninety percent of traffic. Pure random sampling will mostly describe that route. A rare high-risk route could remain invisible. Pure failure sampling creates the opposite problem: it produces a useful debugging queue, yet its failure rate cannot represent the whole product. Store the sampling reason and probability with every case so analysts know which estimates require weighting.
+
+Near-duplicate cases also need control. A single upstream outage may produce thousands of nearly identical traces. Clustering those traces and selecting representative examples keeps one incident from dominating the evaluation dataset. The cluster size remains useful as an impact measure.
+
+Privacy starts before review. Collect the fields required for the stated purpose, redact sensitive text, limit tenant access, and give reviewers a purpose-built evidence view. Raw prompts and outputs can contain personal data, secrets, or confidential business context. They should stay out of metric labels and broad dashboards.
+
+```mermaid
+flowchart TD
+    A["Production evidence"] --> B["Apply retention and consent policy"]
+    B --> C["Redact sensitive content"]
+    C --> D["Choose random, risk, slice,<br/>novelty, and disagreement samples"]
+    D --> E["Create restricted review view"]
+    E --> F["Store sampling and redaction lineage"]
+
+    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef protect fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A source
+    class B,C,D,E protect
+    class F result
+```
+
+Deletion must also travel through the lineage graph. Removing a source trace may require deletion or invalidation of derived review tasks, labels, evaluation cases, and training examples, according to the organization’s retention policy and legal obligations.
+
+## Use Human Review to Create Trustworthy Labels
+<!-- section-summary: Human review turns ambiguous production evidence into consistent judgments through clear rubrics, calibrated reviewers, and adjudication. -->
+
+Human review is most valuable for questions that require context: Was the answer supported by the available evidence? Did the assistant follow policy? Was escalation appropriate? Did the response resolve the user’s actual goal?
+
+A good review task gives the reviewer the information needed to answer those questions. For an agentic workflow, this may include the user request, final answer, retrieved sources, tool inputs and results, policy version, and relevant outcome. Showing only the final response forces the reviewer to guess.
+
+### The rubric defines the judgment
+
+The **rubric** defines the judgment. Each dimension should explain the positive case, the negative case, and ambiguous boundaries. For example:
 
 ```yaml
-case_id: feedback-2026-0712-00418
-source: production_review
-trace_ref: trc_redacted_91ea
-slice: international_split_shipment
-expected:
-  required_tool_sequence:
-    - order.get_shipments
-    - policy.get_delivery_options
-  must_escalate: false
-  citation_required: true
-failure_origin: retrieval_wrong
+dimension: citation_support
+question: "Do the cited sources support the important factual claims?"
+labels:
+  supported: "Every important claim is supported."
+  partial: "At least one important claim lacks support."
+  unsupported: "A cited source conflicts with an important claim."
+  cannot_judge: "Required evidence is unavailable."
 ```
 
-Run the candidate and baseline on the expanded suite. Evaluate overall results and slices, then shadow or canary the change. Production monitoring checks whether the targeted failure decreases without raising reviewer burden, cost, latency, or another failure class. One metric improving is not enough.
+The `cannot_judge` option matters. It separates missing evidence from poor model behavior.
 
-## A Delayed Outcome Through the Join
+Teams calibrate reviewers on a shared set of examples before large review rounds. Severe or subjective cases can receive two independent reviews. An expert adjudicator resolves disagreements and improves the rubric. Reviewer agreement reveals unclear instructions, difficult cases, or inconsistent standards; it is a property of the labeling process, not a contest between reviewers.
 
-<!-- section-summary: A delayed outcome provides usable evidence only after the pipeline attaches it to the exact response the user saw and records the join rule, time boundary, and ambiguity. -->
+Concrete production tooling follows these responsibilities. Label Studio can import model predictions as preannotations, present source evidence in a review interface, and export completed annotations. Other annotation platforms can fill the same role. The important design choice is the review contract: controlled access, visible evidence, rubric version, reviewer identity, timestamps, and adjudication history.
 
-Ticket reopen events arrive after the model run and often after several human messages. The pipeline needs more state than `conversation_id`. HelpHarbor records one immutable delivery row whenever a draft is shown:
+For pairwise model comparisons, hide the candidate identity and randomize answer order where possible. This reduces preference caused by brand, position, or familiarity. Domain experts should review high-impact legal, medical, financial, or security behavior because general quality raters lack the required expertise.
 
-```json
-{
-  "delivery_id": "dlv_01K13AF0TQ8E",
-  "conversation_id": "conv_7782",
-  "response_id": "resp_92d1",
-  "trace_id": "trc_6b68f1c0",
-  "shown_at": "2026-07-10T09:14:28Z",
-  "prompt_bundle": "support-v41",
-  "model_route": "standard",
-  "agent_action": "edited_then_sent",
-  "final_message_id": "msg_final_447",
-  "model_text_hash": "sha256:7af9...",
-  "final_text_hash": "sha256:991e..."
-}
+## Group Failures Before Choosing a Fix
+<!-- section-summary: Failure clustering reveals repeated symptoms, while diagnosis assigns the responsible system layer and guides the appropriate repair. -->
+
+Individual cases are useful for debugging. Groups of related cases reveal where engineering effort can have the greatest impact. The team first groups repeated symptoms, then investigates the evidence path and assigns the repair to the system layer that caused the problem.
+
+**Failure clustering** groups cases with similar symptoms, topics, or traces. Embeddings can help discover semantically related answers. Structured trace fields can group tool timeouts, empty retrieval results, missing citations, or policy refusals. A reviewer then checks whether the group represents one meaningful problem.
+
+A cluster is a discovery aid. It is not automatically a root cause. Ten responses may all contain unsupported shipping claims, yet their causes could include missing documents, stale retrieval indexes, failed tools, ambiguous policies, or reasoning errors.
+
+The diagnosis should identify the system layer that owns the repair:
+
+```mermaid
+flowchart TD
+    A["Repeated poor outcome"] --> B{"Where did the evidence path fail?"}
+    B -->|"Required source absent"| C["Data or knowledge repair"]
+    B -->|"Source present, retrieval missed it"| D["Retrieval repair"]
+    B -->|"Tool failed or returned bad data"| E["Tool or dependency repair"]
+    B -->|"Policy caused the response"| F["Policy and product review"]
+    B -->|"Evidence was available and clear"| G["Prompt, workflow, or model review"]
+
+    classDef problem fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef repair fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A problem
+    class B decision
+    class C,D,E,F,G repair
 ```
 
-`delivery_id` identifies the actual product event. `response_id` and `trace_id` lead back to the generated candidate and its tool evidence. The two hashes show that the human changed the text without copying sensitive content into analytics. `final_message_id` connects later ticket history to what the customer received.
+Consider a retrieval-augmented assistant that answers from internal policies. Reviewers find a cluster of unsupported answers about a new returns rule. Trace inspection shows that the policy document never reached the index. A fine-tune would teach the model a temporary policy and hide the ingestion failure. The appropriate solution repairs document ingestion, adds a freshness check, and creates an evaluation case that fails if the current policy cannot be retrieved.
 
-The point-in-time join selects the last delivered message before the reopen event and marks ambiguous conversations instead of manufacturing a label:
+Another cluster may show correct retrieval followed by an answer that repeatedly ignores an explicit exception. That evidence supports a prompt, workflow, or model change. The same visible symptom can therefore lead to a different solution.
 
-```sql
-with ranked_delivery as (
-  select
-    o.outcome_id,
-    o.occurred_at as outcome_at,
-    d.delivery_id,
-    d.response_id,
-    d.trace_id,
-    d.agent_action,
-    row_number() over (
-      partition by o.outcome_id
-      order by d.shown_at desc
-    ) as delivery_rank,
-    count(*) over (partition by o.outcome_id) as candidate_deliveries
-  from support_outcome o
-  join response_delivery d
-    on d.conversation_id = o.conversation_id
-   and d.shown_at <= o.occurred_at
-   and d.shown_at >= o.occurred_at - interval '7 days'
-  where o.outcome_type = 'ticket_reopened'
-)
-select
-  outcome_id,
-  delivery_id,
-  response_id,
-  trace_id,
-  agent_action,
-  case
-    when candidate_deliveries = 1 then 'direct'
-    else 'needs_attribution_review'
-  end as attribution_status
-from ranked_delivery
-where delivery_rank = 1;
+## Build Evaluation Datasets With Lineage
+<!-- section-summary: A governed evaluation dataset preserves representative behavior, critical regressions, expected outcomes, and links back to reviewed source evidence. -->
+
+An **evaluation dataset** is a collection of inputs and expected judgments used to compare system versions. Production feedback improves the dataset by adding cases that reflect real usage and real failures.
+
+The dataset should contain more than failed outputs. It needs:
+
+- representative everyday tasks;
+- critical safety and policy cases;
+- newly discovered regression cases;
+- important product and user slices;
+- successful cases whose behavior must remain stable;
+- difficult cases that expose meaningful differences between candidates.
+
+Each row keeps provenance: the source trace or synthetic origin, redaction version, reviewer decision, rubric version, slice, sampling reason, and expected behavior. The expected behavior can be a deterministic condition, a reference answer, a grading rubric, or a required tool sequence.
+
+### Separate iteration from independent evidence
+
+MLflow’s current GenAI dataset APIs support datasets created from production traces or curated examples and preserve source information. LangSmith supports datasets built from curated cases, production traces, and synthetic examples. Provider tools offer similar managed workflows. These products help manage cases; the team still owns the dataset policy and split design.
+
+Related cases need to stay in the same split. If ten near-duplicates from one incident appear across development and holdout sets, the team may tune to one version and appear to generalize on another. Group cases by source incident, task family, or semantic cluster before splitting.
+
+A useful dataset has at least two working areas:
+
+```mermaid
+flowchart TD
+    A["Reviewed production cases"] --> B["Development set<br/>visible during iteration"]
+    A --> C["Hidden holdout<br/>reserved for final comparison"]
+    B --> D["Improve prompts, retrieval,<br/>tools, workflow, or model"]
+    D --> E["Candidate ready for gate"]
+    E --> C
+    C --> F["Independent release evidence"]
+
+    classDef cases fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef sets fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef proof fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A cases
+    class B,C sets
+    class D,E work
+    class F proof
 ```
 
-The backward seven-day window is a product definition that must match how the reopen metric is reported. `shown_at <= occurred_at` blocks future leakage. `row_number` selects a candidate deterministically, while `candidate_deliveries` exposes whether several delivered answers could have contributed. Those ambiguous rows enter an attribution-review sample and stay out of automatic model-quality labels.
+Keep the hidden holdout small enough to maintain and large enough to expose important regressions. Refresh it through a governed process as production behavior changes. Frequent casual inspection turns a holdout into another development set.
 
-Test the join with synthetic timelines: one delivery followed by a reopen, two deliveries followed by a reopen, an outcome before any delivery, a delivery outside the window, and two tenants reusing the same human-facing ticket number. The final case should prove that tenant and immutable conversation keys participate in the real join even when the simplified query omits tenant columns for readability.
+## Update Offline Evaluations Carefully
+<!-- section-summary: Offline evaluation compares a baseline and candidate on the same governed cases through deterministic checks, human judgments, and calibrated model-based graders. -->
 
-If a join revision later proves wrong, lineage should identify every derived label, eval case, report, and training dataset built from it. Mark those artifacts `quarantined`, stop releases that depend on them, rebuild from source events with the corrected join version, and compare the changed label set. This recovery path is why a feedback pipeline needs versioned transformations rather than a dashboard query copied into a notebook.
+An **offline evaluation** runs a system version against saved cases outside the live user path. It gives the team a controlled place to compare a candidate with the current production baseline.
 
-## Operate the Loop Safely
+Start with deterministic checks for facts the system can verify directly: schema validity, required citations, forbidden tool calls, permission boundaries, latency budgets, and exact business rules. These checks are fast, reproducible, and easy to investigate.
 
-<!-- section-summary: Feedback operations need consent, access control, retention, dataset lineage, poisoning defenses, and a rollback path because production text can be adversarial or sensitive. -->
+Use human review or model-based graders for qualities such as relevance, coherence, groundedness, and instruction following. A model-based grader is useful at scale, although its score is another model output. Teams calibrate it against human judgments, inspect disagreements, version its prompt and model, and keep uncertain or high-impact cases in human review.
 
-User-provided text is untrusted. Attackers may try to place instructions or poisoned examples into future datasets. Automated ingestion must never promote raw feedback directly into prompts or training. Require validation, redaction, provenance, and human review for high-impact data.
+### Compare the baseline and candidate on equal terms
 
-Publish a monthly feedback report with queue volumes, sampling strategy, label agreement, major failure categories, eval cases added, changes released, targeted outcome deltas, and unresolved risks. This keeps the flywheel from becoming an invisible data-collection system.
+OpenAI’s current evaluation guidance recommends task-specific evaluations, production-derived cases, and a mixture of automated metrics and human judgment. Its agent evaluation tools can score final outputs and traces, including tool choices and handoffs. MLflow’s `mlflow.genai.evaluate` evaluates inputs, outputs, and traces with built-in or custom scorers. LangSmith experiments compare versions on datasets and can promote failing production traces into regression cases. Vertex AI’s evaluation service exposes per-row and summary metrics and supports comparison of judge-model ratings with human ratings.
 
-## Measure Whether the Flywheel Improves the Product
+A good comparison asks more than “Did the average score rise?” It checks:
 
-<!-- section-summary: The flywheel is successful only when targeted production outcomes improve under a stable measurement design, not when the team merely accumulates labels. -->
+- baseline and candidate on the same dataset;
+- results for important slices;
+- severe regressions as individual cases;
+- scorer and rubric versions;
+- sample size and uncertainty;
+- latency, token use, and cost;
+- changes in tool use and fallback behavior.
 
-HelpHarbor defines a before-and-after scorecard for each intervention. A retrieval fix for international split shipments should reduce unsupported delivery claims and unnecessary escalations on that slice. It should not be credited for a company-wide fall in reopen rate caused by a shipping recovery.
+Suppose a candidate improves overall helpfulness by answering more directly. The safety slice now contains more policy violations. The aggregate score hides the release blocker. Slice-level gates keep a common improvement from trading away a critical guarantee.
 
-Use a controlled rollout where possible. Stable canary assignment or an A/B test separates the candidate from time trends. When randomization is inappropriate, use a careful interrupted time series and state the limitations. Compare user mix, ticket mix, policy changes, and dependency health.
+## Turn Evidence Into a Change Proposal
+<!-- section-summary: A change proposal links one diagnosed problem to an owned system component, an evaluation target, protected metrics, and a rollback plan. -->
 
-```sql
-select
-  bundle_version,
-  count(*) as conversations,
-  avg(case when reviewer_label = 'supported' then 1.0 else 0.0 end) as support_rate,
-  avg(case when agent_action = 'accepted' then 1.0 else 0.0 end) as accept_rate,
-  avg(edit_ratio) as edit_ratio,
-  avg(case when reopened_within_7d then 1.0 else 0.0 end) as reopen_rate
-from governed_feedback_sample
-where slice = 'international_split_shipment'
-group by bundle_version;
+The feedback flywheel should produce focused engineering decisions. A change proposal connects one diagnosed production problem to one owned repair and defines the proof required for release. This keeps a broad collection of feedback from turning into an equally broad list of unrelated experiments.
+
+1. the observed failure and affected slice;
+2. the evidence supporting the diagnosis;
+3. the component that owns the failure;
+4. the proposed change;
+5. the expected improvement;
+6. the metrics and behaviors that must remain stable;
+7. the offline gate, rollout plan, and rollback condition.
+
+For example, trace review may show that an agent calls a search tool repeatedly after receiving a clear `permission_denied` result. The proposal could change the workflow to stop retrying, explain the access limit, and route eligible requests to approval. The offline suite should verify the stop condition, user explanation, and escalation path. Production monitoring should check permission-denied retries, completion rate, escalation volume, latency, and user feedback.
+
+This structure keeps the solution connected to the diagnosis. A model change needs evidence of a model-level gap. A missing knowledge source needs ingestion and retrieval work. An unreliable API needs service engineering. A restrictive business policy needs product and governance review.
+
+## Release in Stages and Measure the Result
+<!-- section-summary: Progressive delivery moves a candidate through offline gates, shadow traffic, limited live traffic, and promotion using explicit rollback conditions. -->
+
+Passing offline evaluations makes a candidate eligible for production testing. Live systems introduce user mix, dependency behavior, traffic patterns, and delayed outcomes that saved datasets cannot reproduce fully.
+
+A common release path has four stages:
+
+```mermaid
+flowchart TD
+    A["Offline gate<br/>baseline versus candidate"] --> B["Shadow traffic<br/>candidate observes copied inputs"]
+    B --> C["Canary or A/B test<br/>small controlled user share"]
+    C --> D{"Quality, safety, service,<br/>and product gates pass?"}
+    D -->|"Yes"| E["Promote gradually"]
+    D -->|"No"| F["Rollback and preserve evidence"]
+    E --> G["Continue outcome monitoring"]
+    F --> H["Add regression case and revise"]
+
+    classDef test fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef success fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C test
+    class D decision
+    class E,G success
+    class F,H stop
 ```
 
-Include uncertainty and sample size. A two-point change from twelve reviewed cases is a prompt for more evidence, not a launch claim. Safety blockers remain counts and individually reviewed events even when statistical estimates are wide.
+A **shadow release** runs the candidate on copied traffic and discards its output. It reveals latency, errors, tool behavior, and output differences without changing the user experience. It cannot measure real user outcomes because users never see the candidate answer.
 
-## Prevent Feedback Bias From Becoming Product Bias
+A **canary release** serves the candidate to a small controlled share. An A/B test uses stable assignment to compare variants. These stages can measure product outcomes, provided the assignment and attribution rules remain valid.
 
-<!-- section-summary: Feedback is missing non-randomly, so the team audits who can respond, whose signals are absent, and whether optimization harms less-visible groups. -->
+### Immediate and delayed gates answer different questions
 
-Users who submit ratings differ from users who do not. Support agents on a new queue may edit more than experts. Voice users may have no thumbs-up control. Enterprise tenants may block transcript retention. HelpHarbor documents these missingness patterns and does not call the labeled sample representative by default.
+Delayed outcomes require an observation window. A canary that looks healthy after one hour may still increase returns or reopened cases several days later. Teams define immediate gates for safety, errors, latency, and cost, plus delayed gates for business and quality outcomes.
 
-The monthly report compares feedback coverage and outcomes across supported language, channel, region, product, and accessibility paths where lawful and appropriate. Small groups are protected from re-identification and may require aggregate or qualitative review. The team looks for improvements that help the majority while increasing escalations or bad refusals for another slice.
+On Kubernetes, Argo Rollouts can shift traffic in steps, pause between steps, run metric analysis, and abort a canary after a failed check. Managed model endpoints offer provider-specific traffic splitting and monitoring. The platform automates the rollout mechanics; the team supplies meaningful metrics, thresholds, observation windows, and rollback decisions.
 
-Reviewer operations can create bias too. Rotate examples, hide candidate identity when feasible, randomize response order, provide adjudication, and monitor agreement. Do not reward labelers for speed alone on sensitive cases.
+The production comparison should use the same version dimensions stored in the decision record: model, prompt, retrieval, tools, policy, and route. Otherwise, the candidate group may silently contain several different systems.
 
-## Turn the Taxonomy Into Ownership
+## How Current Production Tools Fit Together
+<!-- section-summary: Industrial tools support individual flywheel responsibilities, while the architecture keeps capture, review, evaluation, release, and monitoring loosely coupled. -->
 
-<!-- section-summary: A feedback loop closes faster when each failure class maps to an owner, service-level target, and proof of resolution. -->
+The framework comes first because products change faster than the responsibilities. A production implementation usually combines several systems. Each system should own a clear part of the evidence lifecycle and pass stable identifiers, versions, and lineage to the next part.
 
-HelpHarbor routes `retrieval_missing` to knowledge operations, `tool_contract` to the integration owner, `dependency_failure` to service reliability, and `authorization_policy` to security. `model_reasoning` goes to the LLM team only after evidence, retrieval, and tool behavior have been checked.
+### Capture and trace the run
 
-Each backlog item links the source sample, redacted trace, expected behavior, eval case, proposed component change, owner, and validation report. Closing a ticket requires a passing regression case and production verification. This prevents the “flywheel” from being a dashboard that produces no accountable engineering work.
+OpenTelemetry provides vendor-neutral telemetry APIs and SDKs. Its GenAI semantic conventions describe model, agent, and tool activity. Detailed prompt and response content is sensitive, so teams configure content capture and access deliberately. Structured product events often travel through an event stream into a governed warehouse or lakehouse. Kafka, Amazon Kinesis, and Google Cloud Pub/Sub are common event-stream choices. BigQuery, Snowflake, and Delta Lake are common analytical destinations.
 
-Rollback uses the same release controls as any LLM change. Restore the previous prompt, model, retrieval, or tool bundle, preserve trace evidence, and keep the new regression cases. If the feedback pipeline itself is wrong—for example, a join attached ratings to the wrong draft—quarantine derived labels and models until lineage shows what was affected.
+### Join and curate evidence
 
-Set service targets for the learning system itself. Critical incidents may require review and a blocking regression case within one business day; random quality samples may have a weekly cycle. Track queue age, unassigned severe cases, adjudication delay, lineage failures, and the share of shipped changes with verified production outcomes. These measures expose a common failure mode: a team collects large volumes of feedback but takes weeks to turn urgent evidence into protection. Delete expired source content even when a label task is late; operational convenience does not override the retention contract.
+Airflow or Dagster can schedule delayed-outcome joins and dataset builds. Spark, SQL, or dbt can implement transformations for quality checks and redaction. The storage layer holds durable versions under governed access; Delta Lake, Apache Iceberg, BigQuery, and Snowflake are common choices. Together, these components provide point-in-time joins and reproducible lineage.
 
-The practical workflow instruments outcomes, retains provenance, samples deliberately, diagnoses causes with humans, converts reviewed cases to evals, releases through gates, and verifies the intended outcome in production. Reviewed and traceable feedback provides trustworthy evidence for those decisions.
+### Review ambiguous cases
+
+Label Studio provides configurable labeling interfaces, model preannotations, reviewer annotations, and export. Managed annotation products can provide equivalent review queues. The platform presents the task, while the organization owns rubric design, reviewer calibration, and adjudication.
+
+### Manage offline and production evaluation
+
+MLflow 3 supports production traces and feedback assessments. Its current GenAI APIs also provide datasets, scorers, and offline evaluation. LangSmith connects traces and online evaluators to datasets and offline experiments for LangChain and other instrumented applications.
+
+OpenAI’s current agent evaluation tools support datasets, graders, trace grading, and evaluation runs. The documentation navigation classifies the Evals API under Legacy APIs. The agent-evals guide still directs advanced workflows to Evals alongside datasets. Both parts of the documentation inform capability selection. Vertex AI offers managed GenAI evaluation with summary and per-example results.
+
+MLflow can run automatic evaluations over sampled traces with filters and asynchronous model-based scorers. Databricks exposes this MLflow 3 production-monitoring workflow as a Beta capability, so production adoption should account for that maturity level. LangSmith can also apply online evaluators to sampled or filtered traces.
+
+### Release and observe the candidate
+
+Managed endpoints can split traffic between model versions. Kubernetes teams often use Argo Rollouts for canary and blue-green delivery with automated analysis. Immediate service gates can come from Prometheus and Grafana, an OpenTelemetry backend, or a cloud monitoring service. Product-event stores supply delayed outcome measures.
+
+One practical architecture looks like this:
+
+```mermaid
+flowchart TD
+    A["Application<br/>product events and OTel traces"] --> B["Event stream and governed storage"]
+    B --> C["Join, redact, sample, and curate"]
+    C --> D["Human review and adjudication"]
+    C --> E["Automated trace scoring"]
+    D --> F["Versioned evaluation dataset"]
+    E --> F
+    F --> G["Offline baseline and candidate comparison"]
+    G --> H["Managed endpoint or Argo Rollouts"]
+    H --> I["Service metrics and delayed outcomes"]
+    I --> B
+
+    classDef capture fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef assess fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef change fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C capture
+    class D,E,F assess
+    class G,H change
+    class I outcome
+```
+
+No single product needs to own the entire loop. Stable identifiers and versioned contracts let teams replace a review tool, evaluator, or rollout controller without losing provenance.
+
+## Measure the Health of the Flywheel
+<!-- section-summary: Flywheel metrics reveal whether production evidence reaches decisions quickly, consistently, and with enough coverage to improve the product. -->
+
+A feedback program can collect millions of events and still produce little improvement. Its own operating metrics should show whether collected evidence leads to reviewed cases, owned repairs, controlled releases, and verified outcomes.
+
+Useful measures include:
+
+- **Outcome join coverage:** How much eligible feedback reaches the correct decision record?
+- **Label latency:** How long does evidence wait for its final label?
+- **Reviewer agreement:** Which rubric dimensions produce consistent judgments?
+- **Review backlog age:** Are high-severity cases waiting too long?
+- **Slice coverage:** Do evaluation datasets represent important user and task groups?
+- **Cluster actionability:** How many recurring clusters receive a verified owner and diagnosis?
+- **Regression escape rate:** How often does a known failure return to production?
+- **Production verification rate:** How many shipped changes achieve their target outcome under the release measurement plan?
+
+Read these measures together as a pipeline. Low join coverage means later stages see incomplete evidence. High reviewer disagreement weakens dataset quality. A growing review backlog delays protection. Strong offline scores with frequent production escapes point to missing cases, weak release gates, or changing traffic.
+
+Consider a team that adds many regression cases each week, yet only a small share of proposed fixes reaches a controlled rollout. The bottleneck sits between evaluation and release. Another team may ship changes quickly while delayed outcomes remain unjoined. That team can measure operational speed, but it cannot reliably claim product improvement.
+
+The most useful feedback report follows a small number of important changes from source evidence to production outcome. Volume measures support that story; they do not replace it.
+
+## The Main Idea
+<!-- section-summary: A trustworthy feedback flywheel preserves the chain from observation to interpretation, evaluation, release, and verified outcome. -->
+
+Production feedback creates value through a governed evidence lifecycle. Signals record what happened. Stable identifiers connect later outcomes to the exact system run. Sampling and privacy controls select safe, representative evidence. Human review and deterministic rules turn ambiguous events into labels. Failure diagnosis directs work to the responsible system layer. Curated datasets convert reviewed cases into repeatable evaluations. Progressive delivery tests the change with real traffic, and monitoring verifies the intended outcome.
+
+In essence, the flywheel is a way to learn from production without confusing activity with truth. Its output is a traceable engineering decision backed by evidence.
 
 ## References
 
-- [OpenAI evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
-- [OpenAI working with evals](https://developers.openai.com/api/docs/guides/evals)
-- [OpenAI safety best practices](https://developers.openai.com/api/docs/guides/safety-best-practices)
-- [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+- [OpenAI: Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
+- [OpenAI: Agent evals](https://developers.openai.com/api/docs/guides/agent-evals)
+- [MLflow: Evaluation datasets](https://mlflow.org/docs/latest/genai/datasets/)
+- [MLflow: Evaluate production traces](https://mlflow.org/docs/latest/genai/eval-monitor/running-evaluation/traces/)
+- [MLflow: Feedback assessments](https://mlflow.org/docs/latest/genai/assessments/feedback/)
+- [MLflow: Automatic evaluations](https://mlflow.org/docs/latest/genai/eval-monitor/automatic-evaluations/)
+- [LangSmith: Evaluation concepts](https://docs.langchain.com/langsmith/evaluation)
+- [Label Studio: Connect a model and use predictions](https://labelstud.io/guide/ml.html)
+- [Label Studio: Export annotations](https://labelstud.io/guide/export.html)
+- [Vertex AI: View GenAI evaluation results](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/eval-python-sdk/view-evaluation)
+- [Vertex AI: Evaluate a judge model](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/evaluate-judge-model)
+- [Databricks: MLflow 3 production monitoring for GenAI](https://docs.databricks.com/gcp/en/mlflow3/genai/eval-monitor/production-monitoring)
+- [OpenTelemetry: GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+- [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [OWASP LLM03:2025 Supply Chain](https://genai.owasp.org/llmrisk/llm032025-supply-chain/)

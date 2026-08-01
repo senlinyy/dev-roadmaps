@@ -1,7 +1,7 @@
 ---
 title: "Training-Serving Skew"
-description: "Explain the feature-contract mismatches that cause offline and online model inputs to differ, and how teams prevent, detect, and contain them."
-overview: "Training-serving skew is a parity failure between the data a model learned from and the data it receives in production. This article develops the skew taxonomy, shared contracts, prevention, detection, and incident response."
+description: "Find and prevent the feature-path differences that make a production model receive inputs unlike those used during training."
+overview: "Training-serving skew is an engineering parity failure across feature transformations, sources, time rules, fallbacks, versions, or execution environments. Contracts, shared transformations, feature retrieval, paired comparison, shadow traffic, release gates, and incident response keep both paths aligned."
 tags: ["MLOps", "production", "core", "validation"]
 order: 3
 id: "article-mlops-data-for-ml-systems-training-serving-skew"
@@ -12,257 +12,385 @@ aliases:
   - child-data-quality-03-training-serving-skew
 ---
 
-## Skew Is A Broken Feature Contract
-<!-- section-summary: Training-serving skew occurs when an apparently shared feature has different values or meaning offline and online. -->
+## Table of Contents
 
-**Training-serving skew** occurs when the feature values used to train a model differ systematically from the values supplied during production prediction. The endpoint can remain healthy and schemas can match while the model interprets a different world.
+1. [A Healthy Endpoint Can Still Feed the Model the Wrong Inputs](#a-healthy-endpoint-can-still-feed-the-model-the-wrong-inputs)
+2. [Six Paths Create Training-Serving Skew](#six-paths-create-training-serving-skew)
+3. [Give Every Feature One Testable Meaning](#give-every-feature-one-testable-meaning)
+4. [Transformation Skew Changes the Calculation](#transformation-skew-changes-the-calculation)
+5. [Data-Source Skew Changes the Underlying Record](#data-source-skew-changes-the-underlying-record)
+6. [Time and Availability Skew Changes What Was Knowable](#time-and-availability-skew-changes-what-was-knowable)
+7. [Default and Fallback Skew Changes Missingness](#default-and-fallback-skew-changes-missingness)
+8. [Dependency and Version Skew Changes Companion Assets](#dependency-and-version-skew-changes-companion-assets)
+9. [Execution-Environment Skew Changes Runtime Behaviour](#execution-environment-skew-changes-runtime-behaviour)
+10. [Prevent Skew by Shrinking the Independent Paths](#prevent-skew-by-shrinking-the-independent-paths)
+11. [Detect Skew With Matched Production Evidence](#detect-skew-with-matched-production-evidence)
+12. [Prove Parity Before a Release](#prove-parity-before-a-release)
+13. [Respond to a Skew Incident](#respond-to-a-skew-incident)
+14. [Verify Recovery and Keep Measuring](#verify-recovery-and-keep-measuring)
+15. [References](#references)
 
-The complete skew taxonomy includes:
+## A Healthy Endpoint Can Still Feed the Model the Wrong Inputs
+<!-- section-summary: Training-serving skew appears when the production feature path gives a model different evidence from the feature path used during training. -->
 
-1. Logic and transformation differences.
-2. Schema, encoding, unit, and default differences.
-3. Source and materialization differences.
-4. Event-time, point-in-time, and freshness differences.
-5. Request-only or unavailable features.
-6. Version and configuration mismatches.
+A purchase model was trained with `order_total` measured in dollars. A historical value of `$24.50` entered the training table as `24.5`. The production API receives the same amount from a payment service in cents and passes `2450` into the model.
 
-Prevention starts with a shared feature contract. Detection compares offline and online values, validates payloads, checks feature health, and monitors distributions. Incident response identifies the first mismatched layer and applies a safe fallback or rollback.
+The request has the expected field. Its type is numeric. The endpoint returns `200 OK`, latency stays normal, and the model produces a well-formed score. Every ordinary service check can stay green while the model reads an amount one hundred times larger than the values it learned from.
+
+This is **training-serving skew**. At a high level, it means the feature path used for production prediction disagrees with the path that created the model's training inputs. The disagreement can change a value, its meaning, its timestamp, or the policy used to fill a missing value.
+
+Skew needs to be separated from **data drift** during investigation. If holiday shoppers genuinely spend more and both training and serving calculations represent those purchases in dollars, the population has changed. That is data drift. If the offline path uses dollars and the online path uses cents for the same purchase, the engineering paths disagree. That is a direct parity failure.
+
+Some platforms use “training-serving skew” more broadly for any distribution difference between a training baseline and live inputs. That broader signal is useful, although it overlaps with drift. A direct engineering test asks:
+
+**For the same logical example and prediction time, the training and serving paths should produce the same feature meaning and an equivalent value within the feature's declared tolerance.**
+
+This test gives responders something concrete to reproduce. They can pair one online feature value with an offline recomputation, identify the first layer that disagrees, and repair that layer without assuming the model needs retraining.
+
+## Six Paths Create Training-Serving Skew
+<!-- section-summary: A six-part taxonomy separates calculation, source, time, fallback, version, and runtime differences so each failure reaches the right owner. -->
+
+Skew is a family of failures. One alert may come from a changed SQL formula, another from a stale online store, and another from a different tokenizer library inside the serving image. Treating all of them as “feature drift” hides the responsible system.
+
+A useful investigation follows six layers:
 
 ```mermaid
-flowchart TB
-    Contract["Shared feature contract"] --> Offline["Historical feature path"]
-    Contract --> Online["Serving feature path"]
-    Offline --> Pair["Matched entity and prediction timestamp"]
-    Online --> Pair
-    Pair --> Compare{"Value, event time, source, and version agree?"}
-    Compare -->|yes| Monitor["Continue parity sampling"]
-    Compare -->|no| Classify["Logic, schema, source, time, availability, or version skew"]
-    Classify --> Protect["Fallback, hold release, or rollback"]
-    Protect --> Repair["Correct owner creates a new verified path"]
+%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+flowchart TD
+    A["Paired feature values disagree"] --> B["1. Transformation<br/>Formula, encoding, units, or feature order"]
+    B --> C["2. Data source<br/>Different records, keys, or materialization"]
+    C --> D["3. Time and availability<br/>Different cutoff, window, or freshness"]
+    D --> E["4. Default and fallback<br/>Different treatment of missing or stale data"]
+    E --> F["5. Dependency and version<br/>Different model companions or configuration"]
+    F --> G["6. Execution environment<br/>Different runtime, hardware, or numeric behaviour"]
+    G --> H["Contain the affected path<br/>and repair the first mismatch"]
+
+    classDef signal fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef layer fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef action fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A signal
+    class B,C,D,E,F,G layer
+    class H action
 ```
 
-The comparison needs matched entities and times because two independently sampled populations can differ for legitimate reasons. Classification then points to the responsible layer and response. This avoids treating every skew alert as a model retraining problem.
+The order starts with the closest explanation and moves outward. If the formula differs, a database investigation adds little value. If the formulas match, the team compares source records and materialization. Time rules follow because the same source may expose several historically valid values. Versions and runtime come later because they often explain a path that appears identical in code review.
 
-## The Feature Contract Defines Meaning Once
-<!-- section-summary: A feature contract records entity, value, units, transformation, source, event time, freshness, defaults, and ownership. -->
+Several layers can fail together. A new feature package may change a category vocabulary and introduce a new default. The taxonomy still helps because each mismatch receives its own evidence and recovery check.
 
-A name such as `nearby_drivers` is insufficient. The contract should say which drivers count, within which distance, at which timestamp, under which eligibility filters, in which unit, and how missing or stale data is handled.
+## Give Every Feature One Testable Meaning
+<!-- section-summary: A feature contract defines the value, entity, source, time, fallback, version, and tolerance that both paths must preserve. -->
+
+Parity requires a shared statement of what the feature means. A name such as `recent_orders` leaves the customer identity, order states, and clock open to interpretation. The window boundaries, currency, and response to missing history also need an explicit definition.
+
+A **feature contract** records those choices in a form that engineers can test. It belongs in version control and travels into the training and release evidence.
 
 ```yaml
-feature: nearby_available_drivers_2km
-entity: pickup_zone_id
-prediction_time: request_ts
-definition: "Count online, unassigned standard-ride drivers within 2 km."
-offline_source: warehouse.driver_location_snapshots
-online_source: dispatch.driver_supply_service
-freshness: "latest event at or before request_ts; max age 30 seconds"
-dtype: int64
-default:
-  value: 0
-  allowed_when: "fallback policy is active"
-owner: dispatch-ml-platform
+feature: completed_order_value_30d_usd
+entity: customer_id
+value: "Sum completed order value in USD during the previous 30 days."
+event_time: completed_at
+available_time: feature_available_at
+window: "(prediction_at - 30 days, prediction_at]"
+dtype: float64
+default: {value: 0.0, reason: no_completed_orders}
+max_age: 15 minutes
+tolerance: {absolute: 0.01}
+owner: purchase-features
 ```
 
-Offline and online implementations can use different systems while obeying the same semantic contract. Golden entities and timestamps make that contract testable.
+The entity identifies whose value is being calculated. The event and availability clocks decide which records were knowable. The window defines its open and closed boundaries. The default distinguishes a genuine zero from a lookup failure. The tolerance allows harmless floating-point differences while still catching a unit error.
 
-The production prediction record needs enough state to reproduce one comparison. For request `ride_7842`, the serving path can log the entity, prediction timestamp, feature value, event timestamp, feature-set version, and whether fallback ran:
+The contract also names the source identities and transformation version in a real implementation. Those values may differ between offline and online storage because the warehouse and low-latency store serve different workloads. Their semantic rules must still agree.
 
-```json
-{
-  "request_id": "ride_7842",
-  "pickup_zone_id": "zone_17",
-  "prediction_ts": "2026-07-14T08:03:25Z",
-  "feature_set": "dispatch_features_v12",
-  "features": {
-    "nearby_available_drivers_2km": {
-      "value": 14,
-      "event_ts": "2026-07-14T08:03:12Z",
-      "source_version": "supply-service-6f82c1",
-      "fallback_used": false
-    }
-  }
-}
+One golden example turns the contract into a test. Given a customer, a fixed prediction timestamp, two completed orders inside the window, one cancelled order, and one late-arriving correction, both paths should return the same expected total. Boundary examples cover an order exactly thirty days old, a value one microsecond outside the window, and a missing customer.
+
+## Transformation Skew Changes the Calculation
+<!-- section-summary: Transformation skew arises when training and serving use different formulas, filters, units, encoders, feature order, or preprocessing logic. -->
+
+Start with one raw fact that both paths should interpret identically. **Transformation skew** occurs if the paths apply different calculations to that fact. The final feature then changes even though the source record is the same.
+
+The cents-versus-dollars failure is one example. Other common cases include a thirty-day median offline and a mean online, inclusive window boundaries in SQL and exclusive boundaries in Python, lowercased text during training and original case during serving, or category IDs generated in a different order.
+
+Schema validation may miss all of these. A `float64` remains a `float64` after a unit mistake. An input tensor keeps the same shape after two categorical positions swap. The contract and value comparison expose the semantic difference.
+
+The strongest prevention is one executable transformation used by both paths. TensorFlow Transform, for example, can calculate training-wide statistics such as a vocabulary or normalization constants and export the resulting TensorFlow graph for training and serving. The same graph then applies the learned mapping to live examples.
+
+Many teams use different engines for historical and online work, so literal code sharing may be impractical. A warehouse can calculate large historical windows efficiently while a streaming service maintains current aggregates. In that design, shared contracts, generated specifications, and golden examples define the common behaviour. Each engine implements the contract and must pass the same fixture suite.
+
+A transformation test should compare the final vector delivered to the model. Comparing only intermediate tables can miss feature ordering, casting, normalization, or encoder changes in the serving adapter.
+
+## Data-Source Skew Changes the Underlying Record
+<!-- section-summary: Data-source skew appears when offline and online paths select different records, identities, corrections, or materialized states. -->
+
+The formulas may match exactly and still produce different values. **Data-source skew** occurs if the paths read different records, identities, corrections, or materialized states for the same prediction.
+
+An offline table may contain corrected transactions while the online store keeps the first version. The warehouse may resolve an account alias immediately while the serving path still uses the old ID. A materialization job may skip one region, leaving yesterday's feature values in the online store.
+
+Source skew often hides behind a healthy lookup. The online database returns a row quickly, so the request path sees success. The row can still carry an old value or belong to the wrong entity.
+
+The feature contract should name both source paths and their relationship. For a materialized feature, the online value normally derives from a versioned offline table or the same governed event stream. Materialization evidence records the source version, target version, covered partitions, row count, maximum event time, and completion status.
+
+Feast models this split through Feature Views. Historical retrieval performs point-in-time joins against an offline source, while materialization loads the latest eligible values into an online store for low-latency retrieval. Feast's standard Feature View describes feature data and schema; transformation pipelines and materialization correctness remain operational responsibilities for the team.
+
+Databricks Feature Store can bind feature lookup metadata to a logged model. Model Serving can then retrieve required values automatically from supported online stores, and configured inference tables can preserve the augmented dataframe containing looked-up values. That evidence helps compare what the model received with an offline recomputation.
+
+Feature platforms reduce ad hoc source selection. They still need materialization-lag alerts, key-coverage checks, and versioned backfill policies.
+
+## Time and Availability Skew Changes What Was Knowable
+<!-- section-summary: Time skew occurs when historical and live paths disagree about prediction time, event time, availability, windows, freshness, or late data. -->
+
+Features change over time. A training join needs the value available at the historical prediction moment, while online serving needs a sufficiently fresh value available now.
+
+Three clocks keep that distinction clear:
+
+- **event time** records when the business fact occurred;
+- **availability time** records when the feature path could use it;
+- **prediction time** records when the model made or would have made the decision.
+
+Suppose a transaction happened at 09:50, the prediction ran at 10:00, and a correction arrived at 11:30. A training query executed today can see the correction. That correction was unavailable to the live model at 10:00. Joining only on event time leaks later knowledge into the historical example.
+
+Point-in-time retrieval selects the latest feature value whose event and availability rules satisfy the prediction cutoff. Feast historical retrieval scans backward from each entity-row timestamp within the Feature View time-to-live window. Databricks feature tables also support point-in-time joins when the time-series keys and lookup metadata are defined.
+
+Online retrieval adds freshness. The latest stored value may be two hours old even though the contract allows fifteen minutes. The serving path should record feature event time, retrieval time, observed age, and the action taken after the freshness limit.
+
+Boundary fixtures are essential. Test a value exactly at the start and end of the window, a late arrival, two updates with the same event time, and a daylight-saving transition represented in UTC. These cases force both implementations to make the same choice.
+
+## Default and Fallback Skew Changes Missingness
+<!-- section-summary: Default skew appears when training and serving assign different values or meanings to missing, stale, failed, or unseen inputs. -->
+
+A missing value carries information about the data path. Training might fill missing income with the training median. Serving might use zero after a lookup timeout. Both values are numeric and accepted by the model, yet they describe different situations.
+
+Four conditions should stay distinct:
+
+1. the entity genuinely has no history;
+2. the feature exists and is stale;
+3. lookup failed;
+4. the input category was unseen.
+
+One default value can collapse all four into the same model input. This hides incidents and creates a missingness pattern that training and production handle differently.
+
+The contract assigns a value and reason to each allowed fallback. A companion indicator such as `order_value_30d_missing` lets the model distinguish a real zero from an unavailable lookup. The prediction record captures `fallback_used`, `fallback_reason`, feature age, and source status.
+
+Suppose an online store timeout causes 18 percent of requests to receive zero while training used a median of 72.4. Distribution monitoring will detect a spike around zero, and paired comparison will show direct mismatches. The immediate response may use a previous cached value within an approved age limit or route to a fallback model trained without that feature.
+
+Fallbacks are product decisions. They need a maximum duration, an owner, an alert, a model compatibility check, and an exit condition. Quietly returning a default after every lookup error creates a permanent skew path.
+
+## Dependency and Version Skew Changes Companion Assets
+<!-- section-summary: Version skew occurs when model, feature definitions, encoders, configuration, or preprocessing packages come from different releases. -->
+
+A model rarely travels alone. Its predictions depend on feature definitions, encoder vocabularies, scalers, tokenizers, lookup configuration, policy thresholds, and serving code.
+
+Imagine a model trained with vocabulary version 8, where `mobile=0`, `desktop=1`, and `unknown=2`. A serving deployment rebuilds the vocabulary from recent traffic and assigns `desktop=0`. Every request still produces an integer in the expected range. The model interprets each category using the old mapping.
+
+A release record should bind the model to immutable companion identities:
+
+```yaml
+release: purchase-propensity-42
+model: models:/purchase_propensity/17
+feature_contract: purchase_features_v12
+feature_service: purchase_online_v12
+encoder_digest: sha256:819b7a...
+preprocessing_package: feature_transforms==4.8.2
+serving_image: registry.example/purchase@sha256:3c218f...
+fallback_policy: purchase_fallback_v5
 ```
 
-Without the event timestamp, an investigator cannot tell whether `14` was correct and stale or freshly wrong. Without the concrete feature-set and source versions, a canary that mixes versions can hide the failing population inside aggregate metrics. These fields form the join key between online evidence and offline recomputation.
+Mutable labels such as `latest` cannot prove which bytes ran. Digests, immutable model versions, and reviewed configuration supply that evidence.
 
-## Logic Skew Changes The Transformation
-<!-- section-summary: Logic skew comes from different filters, windows, formulas, units, or preprocessing code. -->
+The serving process reports its loaded identities at startup and with bounded prediction telemetry. A readiness check can withhold traffic if model 17 expects `purchase_features_v12` while the process loaded version 11. Canary dashboards group parity and fallback results by the concrete release identity so mixed versions remain visible.
 
-Offline SQL may calculate a thirty-minute median while the online service calculates a mean. One path may exclude cancelled events. One may use kilometres and the other miles. Text preprocessing may lowercase offline and preserve case online.
+Configuration changes deserve the same control as code. A feature flag that changes a window from thirty to seven days changes the feature definition and requires a new contract or release identity.
 
-Shared transformation libraries reduce duplication when both paths can use the same code. They do not solve differences in source systems, time semantics, or deployment version. Code generation from one contract can help, while parity tests remain necessary.
+## Execution-Environment Skew Changes Runtime Behaviour
+<!-- section-summary: Environment skew appears when equivalent code runs with different libraries, runtimes, hardware, locale, precision, or concurrency behaviour. -->
 
-Golden fixtures should run through both implementations and compare values under declared tolerances. Include missing values, boundary times, unseen categories, and fallback conditions.
+Matching source code still leaves one more layer to verify: the runtime executing it. **Execution-environment skew** occurs if libraries, hardware, locale, precision, or concurrency change the value.
 
-This contract describes the latest known state of each driver, with a maximum age of 30 seconds. The historical query must first select each driver's latest eligible event, then count only drivers whose selected state matches the availability filters. Counting every available event in a time window would include a driver assigned later in the same window.
+Training may use a newer pandas or scikit-learn release than serving. One container may parse dates in UTC and another in local time. CPU inference may use `float64` while a GPU path casts to `float16`. Different image-resizing libraries can round pixels differently. Concurrent state updates can also change a live aggregate even though a batch test passes.
+
+Small numeric differences are expected for some workloads, so the feature contract declares an absolute or relative tolerance. Categorical IDs, booleans, and feature order usually require exact equality. A blanket tolerance can hide a serious discrete mismatch.
+
+Reproducible environments reduce this risk. Keep direct and transitive dependencies in a lockfile, build one reviewed OCI image, deploy by image digest, and record the hardware or execution provider where it affects results. MLflow Models can record Python dependencies, use a uv project or dependency locking, and validate prediction in an isolated environment before deployment.
+
+Environment parity still requires testing on the production target. A model that passes inside the training image may behave differently after conversion to ONNX, TensorRT, or a mobile runtime. Run the golden feature vectors and expected predictions through the actual serving artifact on each supported architecture.
+
+The test result belongs to the release evidence. It records runtime, image digest, dependency lock digest, hardware class, input fixture version, and observed tolerance.
+
+## Prevent Skew by Shrinking the Independent Paths
+<!-- section-summary: Shared transformations, governed feature retrieval, explicit contracts, and bound release identities remove opportunities for the paths to diverge. -->
+
+Every independent implementation gives training and serving another opportunity to disagree. Prevention reduces those separate decisions while preserving the storage and compute patterns each workload needs.
+
+### Share executable transformations where the workload allows
+
+Package preprocessing with the model or in a shared versioned library. A scikit-learn `Pipeline` can carry column transformations and the estimator as one artifact. TensorFlow Transform can carry preprocessing statistics and operations in the exported graph. MLflow can package the model, code, dependencies, signature, and input example.
+
+Shared code covers formulas, casts, encoders, and feature order. It cannot make a stale online store fresh or reconstruct a historical cutoff. Those responsibilities need feature retrieval and time-aware storage.
+
+### Use one feature definition across historical and online retrieval
+
+A feature platform earns its place when several models reuse time-sensitive features or need low-latency lookup. Historical retrieval follows entity keys and prediction timestamps. Online retrieval follows the same registered feature references and returns current values from an online store.
+
+Feast supports this pattern with point-in-time historical retrieval, materialization, Feature Services, and online lookup. Databricks supports stable Unity Catalog feature tables, `FeatureLookup`, model lineage, online stores, and automatic lookup in Model Serving. Newer Databricks Feature Views add declarative feature computation, although they remain preview and should stay outside a production default until their lifecycle fits the workload.
+
+The feature platform coordinates definitions and retrieval. Source correctness, materialization coverage, freshness, fallback, and paired parity still need explicit controls.
+
+### Treat the contract and release record as gates
+
+CI runs schema checks and golden fixtures against every transformation change. The training job records the contract and feature source versions used to create the dataset. The model record binds those identities to preprocessing and dependencies. Deployment admits only a compatible set.
+
+This sequence catches a known mismatch before it reaches production and gives later comparisons stable identities.
+
+## Detect Skew With Matched Production Evidence
+<!-- section-summary: Direct detection pairs an online feature value with an offline recomputation for the same prediction, then uses distribution monitoring as supporting evidence. -->
+
+The clearest skew measurement starts from the same logical event. Sample a production prediction, preserve safe feature evidence, and recompute the expected values using the contract, source version, and prediction cutoff that applied to that request.
+
+### Capture enough state to rebuild the comparison
+
+The prediction record first identifies the request, entity, and prediction time. It also records the feature contract, source or materialization, and serving release versions. Feature event time, observed value, and fallback reason complete the comparison evidence. Sensitive values can stay in a governed evidence store while general telemetry carries safe summaries and references.
+
+Logging only the model input value makes time and source failures hard to separate. Adding feature event time reveals staleness. Adding source version identifies a partial materialization. Adding fallback reason distinguishes genuine missing history from an online lookup error.
+
+### Compare paired values and important segments
+
+The recomputation joins by prediction ID and feature name. It pins historical data and enforces `available_at <= prediction_at`. Each feature applies its declared equality or numeric tolerance. This numeric example measures an absolute delta; discrete features use exact equality.
 
 ```sql
-WITH eligible_driver_events AS (
-  SELECT
-    driver_id,
-    pickup_zone_id,
-    event_id,
-    event_ts,
-    distance_meters,
-    availability_state,
-    ride_type
-  FROM driver_supply_events
-  WHERE event_ts >= TIMESTAMP '2026-07-14 08:02:55+00'
-    AND event_ts <= TIMESTAMP '2026-07-14 08:03:25+00'
-    AND ingested_at <= TIMESTAMP '2026-07-14 08:03:25+00'
-),
-latest_driver_state AS (
-  SELECT
-    *,
-    ROW_NUMBER() OVER (
-      PARTITION BY driver_id
-      ORDER BY event_ts DESC, event_id DESC
-    ) AS state_rank
-  FROM eligible_driver_events
-)
-SELECT COUNT(*) AS nearby_available_drivers_2km
-FROM latest_driver_state
-WHERE state_rank = 1
-  AND pickup_zone_id = 'zone_17'
-  AND distance_meters <= 2000
-  AND availability_state = 'online_unassigned'
-  AND ride_type = 'standard';
+select
+  o.feature_name,
+  o.release_id,
+  o.region,
+  count(*) as compared_pairs,
+  avg(case when abs(o.value - r.value) > c.abs_tolerance then 1.0 else 0.0 end)
+    as mismatch_rate,
+  approx_percentile(abs(o.value - r.value), 0.99) as p99_delta
+from online_feature_capture o
+join offline_recomputation r
+  on r.prediction_id = o.prediction_id
+ and r.feature_name = o.feature_name
+join feature_contract c
+  on c.feature_name = o.feature_name
+ and c.contract_version = o.contract_version
+group by o.feature_name, o.release_id, o.region
 ```
 
-The `ingested_at` predicate excludes an event that happened before the request and arrived afterward, because the live service could not have used it. The lower bound is inclusive because an event exactly 30 seconds old still satisfies `max age 30 seconds`. Zone filtering happens after ranking. Otherwise an earlier `zone_17` row can look current after the same driver has moved to `zone_18`.
+A global mismatch rate can hide one broken region, model route, or fallback state. The parity job calculates required segment views and reports comparison coverage too. Low coverage may mean the logging or recomputation path failed before it found skew.
 
-A five-driver fixture makes the result unambiguous. `driver_1` is online at `08:03:10` and counts. `driver_2` is online at `08:02:58` and then assigned at `08:03:20`, so its latest state excludes it. `driver_3` is online at exactly `08:02:55` and counts. `driver_4` is online at `08:02:54` and is stale. `driver_5` is online in `zone_17` at `08:03:10` and moves to `zone_18` at `08:03:22`; ranking across zones excludes its earlier row. The expected count remains `2`. After that fixture passes in both implementations, the production recomputation may return `11` while the online log contains `14`. That paired mismatch directs the team toward latest-state selection, freshness, ingestion time, filters, or units.
+### Use distribution monitoring as an early warning
 
-## Schema, Encoding, And Defaults Can Preserve Shape While Changing Meaning
-<!-- section-summary: Matching column names can hide category, order, unit, missingness, and default mismatches. -->
+Distribution comparison is cheaper than recomputing every row. Managed platforms such as Vertex AI Model Monitoring and warehouse functions such as BigQuery ML's `ML.VALIDATE_DATA_SKEW` can compare serving feature distributions with a training reference.
 
-A categorical encoder can assign different indices after retraining. Feature order can change in an array. A boolean can arrive as a string and be cast unexpectedly. One path may impute median while another uses zero. These inputs can pass a broad schema and still alter predictions.
+That signal cannot prove the cause. A real customer shift and a unit conversion bug can both change a distribution. Paired values distinguish engineering parity from population drift, while delayed outcome monitoring shows whether either change harms prediction quality.
 
-Version encoders, vocabularies, scalers, feature order, and missing-value policy with the model artifact. Serving loads the approved versions and reports them in telemetry. Payload validation checks names, types, shapes, ranges, units, category policy, and feature-set version.
+## Prove Parity Before a Release
+<!-- section-summary: Golden fixtures, staging replay, shadow comparison, and explicit gates expose skew before a candidate serves user-facing decisions. -->
 
-Missingness should often have its own indicator. A real zero and a fallback zero are different evidence. Prediction logs should record fallback use and reason.
+Unit tests catch formula mistakes inside one component. A release crosses more boundaries: storage, retrieval, packaging, configuration, and the serving runtime. The candidate needs evidence from each of them before it receives user-facing traffic.
 
-An encoder test should load the exact artifact that travels with the model. For example, a `vehicle_type` vocabulary might map `bike=0`, `car=1`, and reserve `unknown=2`. Training and serving tests should feed the same ordered values through the packaged encoder and compare the resulting tensor, including a category absent from training. Rebuilding the vocabulary from live traffic can assign new integers while keeping the input shape valid.
+A strong progression uses four levels:
 
-The serving adapter should also reject a feature-set identity it cannot support. Loading model `eta_v31` with `dispatch_features_v11` should fail startup or readiness, because allowing the process to serve would create a known mismatch. A readiness probe can report both identities so the release controller has evidence for the block.
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+flowchart TD
+    A["1. Golden fixtures<br/>Known raw facts and expected vectors"] --> B["2. Staging replay<br/>Production-shaped requests through the full path"]
+    B --> C["3. Shadow comparison<br/>Copy live requests to the candidate"]
+    C --> D["4. Release gate<br/>Check parity, coverage, freshness, and fallback"]
+    D -->|Pass| E["Canary receives limited user traffic"]
+    D -->|Fail| F["Candidate stays isolated<br/>Evidence returns to its owner"]
 
-## Source And Materialization Skew Changes The Underlying Record
-<!-- section-summary: Offline warehouses and online stores can contain different update, deduplication, and entity-resolution semantics. -->
-
-The warehouse may use corrected events while the online store contains the first event. One system may deduplicate by event ID and another by entity. A user ID mapping may lag in the serving path. A feature store materialization job may omit a partition.
-
-Lineage should connect each feature version to offline and online sources, transformation jobs, materialization status, and ownership. Backfills need policy: should corrected historical values change training only, serving only, or both from a version boundary?
-
-Parity sampling can compute the offline value for recent production requests and compare it with the logged online value. Large mismatch rates by source or materialization version point directly to this layer.
-
-A practical parity job joins sampled prediction records with recomputed features by request ID. It reports both exact mismatch rate for discrete features and absolute error for continuous features.
-
-```python
-import pandas as pd
-
-
-def parity_report(pairs: pd.DataFrame) -> dict[str, float]:
-    delta = pairs["online_value"] - pairs["offline_value"]
-    return {
-        "rows": float(len(pairs)),
-        "mismatch_rate": float((delta != 0).mean()),
-        "mean_absolute_delta": float(delta.abs().mean()),
-        "p99_absolute_delta": float(delta.abs().quantile(0.99)),
-    }
-
-
-report = parity_report(sampled_pairs)
-assert report["mismatch_rate"] <= 0.002
+    classDef test fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef pass fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C test
+    class D gate
+    class E pass
+    class F stop
 ```
 
-The job should group the same report by feature-set version, source version, region, and fallback reason before applying the release threshold. A global 0.1 percent mismatch can still mean every request from one region is wrong. Failed samples remain available behind restricted access so responders can compare raw source events without putting customer identifiers in a dashboard.
+Golden fixtures cover edge conditions cheaply. Staging replay proves the packaged model and retrieval path. Shadow traffic sends a copy of real requests to the candidate while users continue to receive the stable release's response.
 
-## Time Skew Breaks The Prediction-Time World
-<!-- section-summary: Event time, availability time, windows, freshness, and late data determine which value was knowable at prediction. -->
+Istio can mirror a percentage of live requests out of band, and Kubernetes Gateway API also defines request mirroring. The candidate response is discarded. The shadow service must suppress external side effects such as writing decisions, charging accounts, or sending notifications. It writes comparison evidence under a separate route identity.
 
-Training must reconstruct features as they were available at the historical prediction time. Joining a current profile or future-completed event leaks information. Online serving must use a sufficiently fresh value and record its event timestamp.
-
-Window boundaries require exact rules. “Last thirty minutes” can differ by inclusive endpoints, event time versus processing time, and late-arrival handling. Time zones and daylight-saving transitions create further mismatches.
-
-Point-in-time joins protect training. Feature-age checks protect serving. Parity tests use the same entity and prediction timestamp. Monitoring records feature event time, retrieval time, and maximum allowed age.
-
-For `nearby_available_drivers_2km`, boundary tests include events exactly 30 seconds old, one microsecond too old, and exactly at the request timestamp. They also include two state changes for one driver so both paths prove they select the latest eligible state before filtering. A daylight-saving test uses UTC event timestamps and verifies that presentation-time conversion never participates in freshness. A late-arrival fixture has an old `event_ts` and an `ingested_at` after the request; both implementations exclude it because it was unavailable to the live model.
-
-## Request-Only And Offline-Only Features Need A Deliberate Design
-<!-- section-summary: A feature unavailable in one path must be removed, reconstructed, or isolated in a model designed for that path. -->
-
-Serving may know the current request device, session state, or live inventory that is difficult to reconstruct historically. Training may use labels or aggregates unavailable at request time. Adding these features without a plan creates permanent skew or leakage.
-
-Options include logging the request-time value for future training, building historical reconstruction, using a two-stage model, maintaining separate online and batch models, or removing the feature. A fixed fallback value during training rarely teaches the model how the live feature behaves.
-
-The contract should state availability by path and the evidence that supports parity.
-
-## Version And Configuration Skew Changes An Otherwise Shared Path
-<!-- section-summary: Different feature code, flags, thresholds, caches, and model companions can create skew after deployment. -->
-
-Training may use feature package version 12 while serving still runs version 11. A feature flag can change a window. A cache key can omit version. A registry alias can move while workers retain old preprocessing.
-
-Release identity should bind model, feature set, preprocessing, encoders, policy, and serving image. Prediction telemetry reports concrete loaded versions. Canary comparisons separate model changes from feature and policy changes.
-
-One release record can make that binding explicit:
+The release gate uses product-specific thresholds:
 
 ```yaml
-release: eta-serving-2026-07-14.3
-model_version: eta_v31
-feature_set: dispatch_features_v12
-encoder_digest: sha256:819b7a...
-serving_image: registry.example/eta@sha256:3c218f...
-fallback_policy: dispatch_fallback_v4
+parity_gate:
+  minimum_pair_coverage: 0.98
+  maximum_discrete_mismatch_rate: 0.001
+  maximum_p99_continuous_delta: 0.01
+  maximum_fallback_rate: 0.02
+  maximum_feature_age_seconds: 900
+  required_segments: [region, model_route]
 ```
 
-The deployment controller compares these fields with the candidate's approved record. A worker also emits them at startup and on every prediction trace. Mutable tags such as `latest` cannot provide this evidence because the referenced bytes may change without a new release record.
+The gate also requires every expected feature and version identity. A low mismatch rate from a small or biased sample cannot approve the candidate. After the gate passes, a canary release exposes limited user traffic and continues the same comparisons.
 
-Configuration belongs in reviewed versioned state. Runtime overrides are logged and monitored rather than living only in an environment variable.
+## Respond to a Skew Incident
+<!-- section-summary: Incident response limits user impact, classifies the first mismatched layer, repairs its owner boundary, and replays captured evidence. -->
 
-## Prevention Reduces Independent Implementations
-<!-- section-summary: Shared definitions, point-in-time data, versioned assets, feature stores, and release coupling reduce skew opportunities. -->
+Skew incidents often arrive as a model-quality alert, a distribution change, or a spike in fallback. The first action is containment based on product risk.
 
-A feature store can provide shared definitions and offline/online access, but it does not guarantee parity automatically. Teams still design event-time joins, materialization, freshness, and fallback. Some systems need only a shared library and versioned tables; others benefit from a full feature platform.
+Containment may restore the previous complete model-and-feature release, route to a model trained without the failing feature, freeze a last-known-good value within its approved age, or reject requests whose inputs cannot be interpreted safely. Rolling back only the model can preserve the mismatch if the online feature set changed with it.
 
-Prevention controls include contract review, transformation tests, golden fixtures, immutable encoders, point-in-time training joins, materialization checks, feature-version coupling, and staging replay with production payloads.
+The investigation then walks the taxonomy:
 
-The aim is to minimize duplicated logic and make unavoidable dual implementations comparable.
+1. Compare final model input vectors for matched predictions.
+2. Check formulas, units, feature order, and encoders.
+3. Compare source rows, entity resolution, and materialization versions.
+4. Rebuild the time and availability cutoff.
+5. Inspect missingness and fallback reasons.
+6. Confirm release identities, dependencies, image digest, and runtime.
 
-## Detection Uses Several Complementary Checks
-<!-- section-summary: Value parity, payload validation, feature health, and distribution monitoring detect different skew shapes. -->
+Suppose parity failures begin immediately after an encoder release, and every mismatch belongs to an unseen device category. The team pins the earlier model and encoder pair, keeps the new candidate isolated, and replays captured requests against a corrected unknown-category mapping. The repaired release must pass exact category-vector equality before it reaches a canary.
 
-**Row-level parity** compares offline and online values for the same entity and timestamp. It is the strongest direct evidence and can run on a sample due to cost.
+Preserve the failed pairs, source references, release record, and contract version. These records turn the incident into a permanent regression fixture without copying sensitive payloads into general logs.
 
-**Payload validation** checks schema, version, type, range, categories, units, and required freshness at inference time. It catches invalid inputs before prediction.
+```mermaid
+stateDiagram-v2
+    [*] --> Detected
+    Detected --> Contained: "Protect user decisions"
+    Contained --> Classified: "Find first mismatched layer"
+    Classified --> Repaired: "Create compatible release"
+    Repaired --> Replayed: "Run failed pairs and shadow traffic"
+    Replayed --> Recovered: "Parity and health gates pass"
+    Replayed --> Classified: "Evidence still disagrees"
+    Recovered --> [*]
+```
 
-**Feature-health monitoring** checks nulls, age, fallback, lookup errors, materialization lag, and source version. It detects operational failures quickly.
+## Verify Recovery and Keep Measuring
+<!-- section-summary: Recovery requires direct parity, healthy retrieval, stable fallbacks, correct release identities, and later confirmation from outcomes. -->
 
-**Distribution comparison** checks whether online feature and prediction patterns differ from expected references. It can reveal broad mismatch while being less specific than row-level parity.
+A healthy endpoint proves only that the service can answer. Recovery needs evidence that the model receives the intended features again.
 
-**Outcome monitoring** shows whether the mismatch affects quality. Labels arrive later, so early parity and health signals remain important.
+The direct checks come first:
 
-## Incident Response Follows The Taxonomy
-<!-- section-summary: Responders contain product impact, identify the first mismatched boundary, repair it, and verify parity and outcomes. -->
+- matched mismatch rates return inside each feature's tolerance;
+- parity comparison covers the required routes and segments;
+- feature age and materialization lag recover;
+- lookup errors and fallback reasons return to their expected ranges;
+- every process reports the approved model, feature, encoder, policy, and image identities;
+- captured failed pairs pass through the repaired path.
 
-First identify affected models, versions, features, routes, and segments. Apply containment: reject invalid payloads, use a conservative default, disable one feature, route to a fallback model, or restore the previous feature and model release.
+Prediction distributions should also stabilize relative to an appropriate reference. They may settle at a new healthy level if the population changed during the incident, so direct paired evidence remains the primary recovery test.
 
-Then inspect the contract and compare values at each layer: transformation, schema and encoding, source and materialization, time and freshness, availability, and version. Preserve representative prediction rows and offline recomputations.
+Labels arrive later. Outcome metrics eventually confirm that the repaired system restored product quality. Containment and direct parity verification proceed earlier because a severe mismatch can cause harm long before ground truth is available.
 
-Recovery requires more than a healthy endpoint. Parity mismatch returns inside tolerance, feature age and fallback recover, prediction distribution stabilizes, and later outcomes confirm product quality. The incident can produce a new golden fixture or release check.
-
-For the `ride_7842` mismatch, containment could pin the serving deployment to `dispatch_features_v11` together with model `eta_v30`, rather than rolling back only the model. Responders then replay the sampled requests through the repaired v12 path, require the discrete mismatch rate to fall below 0.2 percent in every high-volume region, and confirm the p99 feature age stays under 30 seconds. The team removes containment only after those direct parity checks pass; delayed ETA outcomes provide a later confirmation rather than the first recovery signal.
-
-## Skew Is A Parity Discipline
-<!-- section-summary: Stable feature meaning requires shared contracts, versioned paths, direct comparison, and a tested recovery path. -->
-
-Training-serving skew is not one bug pattern. It is the family of ways two feature paths disagree about logic, schema, source, time, availability, or version. The taxonomy gives every mismatch a place to investigate.
-
-Teams reduce skew by defining meaning once, reconstructing prediction-time values, versioning model companions, comparing paired values, monitoring feature health, and treating fallback as visible product behaviour.
+Long-term prevention comes from converting the incident into a gate. Add the failed boundary value to the golden fixture suite, add the responsible version combination to compatibility checks, and keep a small governed sample of production pairs flowing through recomputation. This turns training-serving parity into a continuously tested property of the system.
 
 ## References
 
-- [Google Rules of ML: Training-serving skew](https://developers.google.com/machine-learning/guides/rules-of-ml#training-serving_skew)
-- [Feast feature views](https://docs.feast.dev/getting-started/concepts/feature-view)
+- [Google Rules of Machine Learning: training-serving skew](https://developers.google.com/machine-learning/guides/rules-of-ml#training-serving_skew)
+- [Google Rules of Machine Learning: measure training-serving skew](https://developers.google.com/machine-learning/guides/rules-of-ml/#rule_37_measure_trainingserving_skew)
+- [TensorFlow Transform pipeline component](https://www.tensorflow.org/tfx/guide/transform)
+- [TensorFlow Transform preprocessing recommendations](https://www.tensorflow.org/tfx/guide/tft_bestpractices)
+- [Feast Feature Views](https://docs.feast.dev/getting-started/concepts/feature-view)
 - [Feast point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [TensorFlow Data Validation](https://www.tensorflow.org/tfx/data_validation/get_started)
+- [Feast platform components](https://docs.feast.dev/getting-started/components/overview)
+- [Databricks Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store)
+- [Databricks Model Serving with automatic feature lookup](https://docs.databricks.com/aws/en/machine-learning/feature-store/automatic-feature-lookup)
+- [MLflow model dependency management](https://mlflow.org/docs/latest/ml/model/dependencies/)
+- [Vertex AI Model Monitoring schemas](https://cloud.google.com/vertex-ai/docs/model-monitoring/schemas)
+- [BigQuery ML.VALIDATE_DATA_SKEW](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-validate-data-skew)
+- [Istio request mirroring](https://istio.io/latest/docs/tasks/traffic-management/mirroring/)

@@ -10,6 +10,21 @@ aliases:
   - child-governance-03-who-approved-this-model
 ---
 
+## Table of Contents
+
+1. [Approval Is Authority Applied To A Defined Use](#approval-is-authority-applied-to-a-defined-use)
+2. [Separation Of Duties Creates Independent Decisions](#separation-of-duties-creates-independent-decisions)
+3. [Policy Ownership Defines The Decision Contract](#policy-ownership-defines-the-decision-contract)
+4. [A Trusted Principal Must Match A Scoped Grant](#a-trusted-principal-must-match-a-scoped-grant)
+5. [The Decision Mechanism Checks State Before It Approves](#the-decision-mechanism-checks-state-before-it-approves)
+6. [Denial And Recovery Are First-Class Outcomes](#denial-and-recovery-are-first-class-outcomes)
+7. [Exceptions Are Narrow, Temporary Risk Decisions](#exceptions-are-narrow-temporary-risk-decisions)
+8. [Periodic Review Rechecks A Live Decision](#periodic-review-rechecks-a-live-decision)
+9. [Tests Prove The Authority Boundaries](#tests-prove-the-authority-boundaries)
+10. [Audit Events Preserve Decision History](#audit-events-preserve-decision-history)
+11. [The Governance Loop Keeps Authority Current](#the-governance-loop-keeps-authority-current)
+12. [References](#references)
+
 ## Approval Is Authority Applied To A Defined Use
 <!-- section-summary: Approval records who accepted residual risk for one model, use, environment, scope, policy version, and time window. -->
 

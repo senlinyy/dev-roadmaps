@@ -1,398 +1,385 @@
 ---
 title: "Trajectory Evals"
-description: "Evaluate agent outcomes, evidence, actions, state transitions, ordering, efficiency, and failure paths from traces."
-overview: "Trajectory evaluation tests the path an agent took, not only its final answer. This article develops a framework for representing paths, choosing assertions, allowing valid variation, and turning failures into release evidence."
+description: "Evaluate agent decisions, tool use, state transitions, handoffs, guardrails, recovery, and outcomes from complete execution traces."
+overview: "A trajectory eval examines the path an agent took through a task. It combines step-level checks, whole-run invariants, calibrated judges, and controlled replay so a correct-looking answer cannot hide an unsafe or broken process."
 tags: ["MLOps","LLMOps","production","evals"]
 order: 2
 id: "article-mlops-llmops-trajectory-evals"
 ---
 
-## Output-Only Evaluation Misses Agent Risk
-<!-- section-summary: Trajectory evals inspect the decisions and effects between a request and final output. -->
+## Table of Contents
 
-A chatbot can often be evaluated from its final response. An agent can retrieve evidence, call tools, update state, hand work to another agent, pause for approval, and create external effects. A polished final sentence cannot prove that those steps were safe or correct.
+1. [A Trajectory Shows How the Agent Reached Its Answer](#a-trajectory-shows-how-the-agent-reached-its-answer)
+2. [Traces, Spans, Events, and State Transitions](#traces-spans-events-and-state-transitions)
+3. [Step Graders and Whole-Trajectory Graders See Different Problems](#step-graders-and-whole-trajectory-graders-see-different-problems)
+4. [Tool Evaluation Covers Selection, Arguments, and Effects](#tool-evaluation-covers-selection-arguments-and-effects)
+5. [Valid Paths Need Invariants and Partial Orders](#valid-paths-need-invariants-and-partial-orders)
+6. [Handoffs and Guardrails Are Part of the Path](#handoffs-and-guardrails-are-part-of-the-path)
+7. [Recovery Evaluation Tests the Difficult Branches](#recovery-evaluation-tests-the-difficult-branches)
+8. [Scores Need Partial Credit and Severity](#scores-need-partial-credit-and-severity)
+9. [Model Judges Need Their Own Evaluation](#model-judges-need-their-own-evaluation)
+10. [Trace Privacy and Completeness Set the Evidence Boundary](#trace-privacy-and-completeness-set-the-evidence-boundary)
+11. [Replay Needs a Deterministic Environment](#replay-needs-a-deterministic-environment)
+12. [Industrial Tools Connect Traces, Scorers, and Review](#industrial-tools-connect-traces-scorers-and-review)
+13. [A Useful Report Points to the Repair](#a-useful-report-points-to-the-repair)
+14. [References](#references)
 
-A **trajectory** is the recorded path through one run: model decisions, tool calls and results, state transitions, approvals, handoffs, errors, and final outcome. A **trajectory eval** grades properties of that path.
+## A Trajectory Shows How the Agent Reached Its Answer
 
-The framework has six dimensions:
+<!-- section-summary: Final-output grading sees the answer, while trajectory grading also sees the decisions and effects that produced it. -->
 
-1. **Outcome** — did the task reach an acceptable result?
-2. **Evidence** — did important claims and decisions use required sources or observations?
-3. **Actions** — were required tools used and forbidden effects avoided?
-4. **State invariants** — did identity, constraints, and business facts remain consistent?
-5. **Sequencing** — did prerequisites happen before consequential actions?
-6. **Efficiency** — did the path use reasonable turns, tools, time, and cost?
+At a high level, a **trajectory** is the recorded path of one agent run. It includes the model turns, tool calls, tool results, guardrails, handoffs, state changes, errors, and final response. A **trajectory eval** checks whether that path followed the rules of the task.
 
-These dimensions allow several valid paths while protecting the properties that matter. The purpose is not to force every run to reproduce one hand-written trace.
+This extra view matters because an agent can reach a correct-looking answer through a bad process. A support agent may quote the correct refund rule from memory without reading the current policy. A scheduling agent may announce a new meeting time even though the calendar write failed. A research agent may use a document containing injected instructions and still produce a plausible summary. Final-answer grading can miss all three failures.
+
+The path also helps diagnose a weak final answer. A trace can show that retrieval returned the wrong source, the model selected the wrong tool, valid arguments were rejected by a tool contract, or the orchestrator lost state after a handoff. The answer says that the run failed. The trajectory shows where useful evidence first appeared.
 
 ```mermaid
-flowchart LR
-    A[Task and initial state] --> B[Observed trajectory]
-    B --> C[Outcome assertions]
-    B --> D[Evidence assertions]
-    B --> E[Action and authority assertions]
-    B --> F[State and sequence assertions]
-    B --> G[Efficiency assertions]
-    C --> H[Dimension report]
-    D --> H
-    E --> H
-    F --> H
-    G --> H
-    H --> I[Release decision and failure owner]
+flowchart TD
+    A["Task and starting state"] --> B["Agent decisions"]
+    B --> C["Tools, guardrails, and handoffs"]
+    C --> D["State changes and outcome"]
+    B --> E["Trajectory graders"]
+    C --> E
+    D --> E
+    E --> F["Scores, severity, and evidence"]
 ```
 
-The report retains each dimension instead of collapsing the run into one opaque score. A correct final answer reached through an unauthorized action remains a blocked failure, while a safe handoff can count as a successful outcome for an unsupported task.
+Trajectory evaluation complements outcome evaluation. An environment grader can prove that the requested record exists. A trajectory grader can prove that the agent used the right account, obtained approval, and handled the tool response honestly. Strong evaluation usually keeps both results.
 
-## Normalize The Trace Before Grading It
-<!-- section-summary: A provider-neutral trajectory representation makes evaluations portable and keeps assertions focused on behaviour. -->
+The eval dataset supplies the task, starting state, tool environment, and expectations. The trajectory is produced by running the agent inside that case. This boundary matters: a trace is evidence from a run, while the case defines the conditions under which that evidence should be judged.
 
-Tracing products store different event shapes. The eval layer should normalize them into a representation that preserves event type, name, arguments, result reference, state update, timing, parent relationship, and status. Large or sensitive payloads can stay in governed stores behind references.
+## Traces, Spans, Events, and State Transitions
+
+<!-- section-summary: A trace is the whole run, spans group timed operations, events record important moments, and state transitions show how the world changed. -->
+
+Tracing vocabulary can feel abstract at first, so start with an ordinary request. Suppose an agent must check a policy and then prepare an approval request. The whole piece of work is one **trace**. The policy lookup, model decision, and approval-tool call are **spans** inside it. A retry or guardrail result can appear as an **event**. The move from `policy_unknown` to `approval_required` is a **state transition**.
+
+### The record hierarchy
+
+A **trace** represents one end-to-end operation. It has a trace identifier and usually contains a tree of spans. A **span** represents one operation with a start, an end, a status, and a parent relationship. Parent links show which model turn caused a tool call or which agent created a subagent. OpenTelemetry uses this structure across distributed systems, and current agent platforms extend spans with model, tool, retrieval, guardrail, and handoff details.
+
+An **event** records a meaningful point inside a span. Examples include a retry scheduled, a token budget crossed, or a guardrail triggered. An **attribute** is a structured fact attached to a trace or span, such as `tool.name`, `tool.version`, `approval.id`, or `tenant.id`. Attributes make deterministic grading possible because the grader reads known fields directly. It no longer has to recover every fact from prose.
+
+A **state transition** records a change that matters to the task. The change may live in agent memory, orchestration state, or an external system. For trajectory grading, the transition needs a reliable before-and-after value or a reference to an authoritative snapshot.
+
+```mermaid
+flowchart TD
+    A["Trace: one workflow run"] --> B["Span: agent turn"]
+    B --> C["Span: policy tool"]
+    B --> D["Span: approval tool"]
+    C --> E["Event: policy found"]
+    D --> F["State transition:<br/>approval_required → approval_requested"]
+```
+
+OpenAI’s Agents SDK currently records model generations, function tools, handoffs, guardrails, and agent runs as spans. Its trace is the enclosing workflow. MLflow and LangSmith use their own trace models, while OpenTelemetry supplies a widely adopted observability foundation. A trajectory evaluator should preserve the common meaning even if provider field names differ.
+
+### A normalized event keeps the contract portable
+
+A compact normalized event can look like this:
 
 ```json
 {
-  "trace_id": "trace_9191",
-  "case_id": "travel_policy_34",
-  "agent_version": "travel-agent@2026.07.05",
-  "events": [
-    {"id":"e1","type":"tool","name":"search_flights","status":"ok"},
-    {"id":"e2","type":"tool","name":"check_policy","status":"ok"},
-    {"id":"e3","type":"state","name":"proposal_ready","status":"ok"},
-    {"id":"e4","type":"output","name":"final_response","status":"ok"}
-  ]
+  "sequence": 4,
+  "type": "tool",
+  "name": "request_approval",
+  "status": "ok",
+  "parent_id": "span_agent_turn_2",
+  "arguments": {"policy_id": "refund-policy-v8"},
+  "state_change": {"approval_status": ["required", "requested"]}
 }
 ```
 
-Normalization prevents the evaluation suite from depending on one observability vendor's UI. OpenAI Agents SDK traces, LangSmith runs, Langfuse observations, Phoenix spans, and OpenTelemetry pipelines can each feed an adapter.
+Normalization should keep only the fields needed for evaluation and debugging. Large documents, raw prompts, and sensitive tool results can stay in controlled stores behind immutable references. Missing fields should produce `trace_incomplete`; an empty value must never count as proof that a check passed.
 
-Trace completeness is itself an evaluation condition. If the system cannot prove which tool arguments ran or which approval applied, the grader should report missing evidence rather than assume the path was safe. Sensitive data needs redaction and retention policy because traces can contain prompts, business records, and tool outputs.
+## Step Graders and Whole-Trajectory Graders See Different Problems
 
-An adapter must make that rule executable. This provider-shaped example treats committed effects as domain observations rather than trusting a span label written by the caller:
+<!-- section-summary: Step graders isolate one decision, while whole-trajectory graders check relationships that stretch across the run. -->
 
-```python
-from dataclasses import dataclass, field
-from typing import Callable
+A **step-level grader** evaluates one bounded decision. It may check whether the agent chose `search_policy`, whether the search query used the correct account type, or whether a handoff target matched the task. These graders are fast and precise. They also make a local defect easy to reproduce because the test can supply the state immediately before the decision.
 
-@dataclass(frozen=True)
-class Event:
-    seq: int
-    name: str
-    status: str
-    effect_committed: bool = False
-    event_type: str = "operation"
-    arguments: dict = field(default_factory=dict)
-    result_ref: str | None = None
-    state_update: dict = field(default_factory=dict)
-    parent_id: str | None = None
-    tool_version: str | None = None
-    approval_id: str | None = None
-    cost_usd: float = 0.0
-    budget_remaining_usd: float | None = None
+Step tests lose part of the system around that decision. A correct tool choice can still participate in an unsafe path. The agent may select `request_approval` correctly, then execute the side effect before approval arrives. It may retrieve the right source during one turn and lose the source version after a handoff.
 
-@dataclass(frozen=True)
-class NormalizedTrace:
-    events: list[Event]
-    failures: list[dict]
+### Whole-trajectory graders protect relationships
 
-def normalize_trace(raw: dict, observe_effect: Callable[[str, str], bool]) -> NormalizedTrace:
-    events: list[Event] = []
-    failures: list[dict] = []
-    valid_spans = []
-    seen_sequences = set()
-    for index, span in enumerate(raw.get("spans", [])):
-        sequence = span.get("sequence")
-        if not isinstance(sequence, int):
-            failures.append({
-                "rule": "trace_incomplete",
-                "span_id": span.get("id"),
-                "source_index": index,
-                "missing": ["sequence"],
-            })
-            continue
-        if sequence in seen_sequences:
-            failures.append({
-                "rule": "trace_incomplete",
-                "span_id": span.get("id"),
-                "source_index": index,
-                "invalid": ["duplicate_sequence"],
-            })
-            continue
-        seen_sequences.add(sequence)
-        valid_spans.append(span)
+A **whole-trajectory grader** reads the full path. It can check that identity stayed consistent, evidence appeared before a claim, approval happened before a write, retries remained within policy, and the final response matched the actual tool outcome. These graders capture relationships across time.
 
-    spans = sorted(valid_spans, key=lambda span: span["sequence"])
-    for span in spans:
-        attrs = span.get("attributes", {})
-        missing = []
-        if "operation.name" not in attrs:
-            missing.append("operation.name")
-        if "status" not in attrs:
-            missing.append("status")
-        is_tool = attrs.get("event.type") == "tool" or "tool.effect" in attrs
-        if is_tool and not attrs.get("tool.version"):
-            missing.append("tool.version")
-        if missing:
-            failures.append({"rule": "trace_incomplete", "span_id": span.get("id"),
-                             "missing": missing})
-            continue
-
-        is_write = attrs.get("tool.effect") == "write"
-        operation_id = attrs.get("tool.operation_id")
-        if is_write and not operation_id:
-            failures.append({"rule": "trace_incomplete", "span_id": span.get("id"),
-                             "missing": ["tool.operation_id"]})
-            continue
-        committed = bool(
-            is_write and observe_effect(attrs["operation.name"], operation_id)
-        )
-        events.append(Event(
-            seq=span["sequence"], name=attrs["operation.name"], status=attrs["status"],
-            effect_committed=committed, event_type=attrs.get("event.type", "operation"),
-            arguments=attrs.get("tool.arguments_redacted", {}),
-            result_ref=attrs.get("result.ref"), state_update=attrs.get("state.update", {}),
-            parent_id=span.get("parent_id"), tool_version=attrs.get("tool.version"),
-            approval_id=attrs.get("approval.id"), cost_usd=float(attrs.get("cost.usd", 0)),
-            budget_remaining_usd=attrs.get("budget.remaining_usd"),
-        ))
-    if not events:
-        failures.append({"rule": "trace_incomplete", "missing": ["gradable_events"]})
-    return NormalizedTrace(events, failures)
+```mermaid
+flowchart TD
+    A["Recorded trajectory"] --> B["Step grader<br/>one decision"]
+    A --> C["Whole-run grader<br/>cross-step relationship"]
+    B --> D["Local defect evidence"]
+    C --> E["Invariant or path evidence"]
+    D --> F["Combined case result"]
+    E --> F
 ```
 
-Sequence validation happens before sorting, so a missing sequence cannot quietly move to the front and look like a valid first event. Duplicate sequence numbers also fail because they make temporal assertions ambiguous. Tool events require `tool.version`; an empty version would prevent a release comparison from proving which contract ran.
+Use both levels for important workflows. A tool router can have a fast unit-style dataset for first-step selection. Full cases can then exercise the router with real prior steps, tool failures, and downstream effects. The step suite helps developers iterate quickly. The trajectory suite shows whether those local decisions compose into safe behaviour.
 
-```python
-def test_missing_sequence_is_incomplete_before_sort():
-    raw = {"spans": [
-        {"id": "span-missing", "attributes": {
-            "operation.name": "lookup_policy", "status": "ok"
-        }},
-        {"id": "span-2", "sequence": 2, "attributes": {
-            "operation.name": "final_answer", "status": "ok"
-        }},
-    ]}
-    trace = normalize_trace(raw, lambda _name, _operation_id: False)
-    assert [event.seq for event in trace.events] == [2]
-    assert trace.failures[0]["missing"] == ["sequence"]
+### Each grader receives a focused evidence view
 
-def test_tool_without_version_is_incomplete():
-    raw = {"spans": [{
-        "id": "tool-1",
-        "sequence": 1,
-        "attributes": {
-            "event.type": "tool",
-            "operation.name": "hold_flight",
-            "status": "ok",
-            "tool.effect": "write",
-            "tool.operation_id": "hold-op-9",
-        },
-    }]}
-    trace = normalize_trace(raw, lambda _name, _operation_id: True)
-    assert trace.events == []
-    assert any(item.get("missing") == ["tool.version"] for item in trace.failures)
+The grader should read the smallest sufficient view. A tool-argument check may need one call and the case input. An approval invariant may need the approval event, effect event, and artifact identifier. A semantic path judge may need a concise trace summary. Sending every token and payload to every grader increases cost, privacy exposure, and distraction.
+
+## Tool Evaluation Covers Selection, Arguments, and Effects
+
+<!-- section-summary: Tool grading checks why a tool was chosen, what arguments it received, and what the external system actually changed. -->
+
+Tool use has three separate questions. **Selection** asks whether the capability fit the task. **Arguments** ask whether the agent supplied correct and authorized values. **Effects** ask what the tool or downstream system actually changed. A check that stops at the tool name covers only the first question.
+
+Suppose a travel agent calls `hold_flight`. The name may be correct, yet the origin airport can be wrong or the hold can exceed the user’s budget. The tool may also reject the request. A final response claiming “the flight is held” fails because the external state never changed.
+
+For read tools, grade query scope, source version, filters, and returned evidence where these properties affect correctness. For write tools, record an operation identifier and inspect an authoritative ledger or sandbox state. A span status written by the caller is weaker evidence than the resulting record.
+
+```mermaid
+flowchart TD
+    A["User task"] --> B["Tool selected"]
+    B --> C["Arguments validated"]
+    C --> D["Authorization checked"]
+    D --> E["Tool executes"]
+    E --> F["Effect verified in sandbox"]
+    F --> G["Agent reports the result"]
 ```
 
-`observe_effect` is a read-only adapter for the real domain system or its immutable eval snapshot. For `hold_flight`, it looks up the reservation by operation ID and returns true only for a committed hold. For `send_email`, it looks up the delivery ledger. A requested tool span, a model claim, or a local `success=true` flag cannot manufacture a committed effect. Adapter contract tests should also cover a rejected request, a committed record, an unknown operation ID, a duplicate sequence, and a truncated trace. Any completeness failure is a blocker before behavior graders run.
+Tool order can carry risk. Identity verification may need to precede account lookup. User confirmation may need to precede a non-refundable booking. Verification may need to follow deployment. These rules belong in trajectory assertions because they relate several events.
 
-## Outcome And Evidence Are Separate Dimensions
-<!-- section-summary: A correct outcome can still fail when the path used unsupported evidence or bypassed a required source. -->
+Tool versions matter too. A candidate tested against `search_policy@8` should never be compared silently with a baseline that used `search_policy@7`. Store the tool contract version and fixture version with the run. If normalization cannot prove which contract executed, the case lacks enough evidence for a release claim.
 
-Outcome grading asks whether the user or business task succeeded. It may check a final structured result, an external record, or a product outcome. Evidence grading asks how the system justified that result.
+## Valid Paths Need Invariants and Partial Orders
 
-A research agent can reach the correct number using an unapproved source. A support agent can cite the right policy by chance without retrieving the current version. A coding agent can produce a passing patch while skipping the required security test. Outcome-only scoring would reward these runs.
+<!-- section-summary: Most agent tasks allow several good paths, so graders should protect required relationships without demanding one exact trace. -->
 
-Evidence assertions can require a source version, tool result, validator, or test before accepting a claim. They should focus on meaningful support rather than demanding every harmless internal reasoning step. For example, “the final refund explanation must cite the policy result used by the eligibility service” is stronger than “the model must call tools in one exact order.”
+An exact reference trajectory is useful for a process with one legal path. Many agent tasks allow harmless variation. Independent searches may run in either order. An agent may ask a clarifying question before a read-only lookup or immediately after it. Exact sequence matching would mark one of those paths wrong even if both satisfy the task.
 
-## Action Assertions Protect Capability Boundaries
-<!-- section-summary: Required, allowed, and forbidden action checks verify how the agent used tools and external effects. -->
+An **invariant** is a condition that must remain true across part or all of the run. The tenant identifier stays fixed. A budget never resets during a handoff. Every committed write refers to an approval for the same artifact. Invariants focus on safety and consistency across many possible paths.
 
-Action assertions ask which capabilities the run used, with which arguments, under which authorization, and with what result. A required action may establish current truth. A forbidden action may protect users even when the final response looks correct.
+A **partial order** states only the ordering relationships that matter. Policy lookup must precede a flight hold. Confirmation must precede a non-refundable booking. Search order remains flexible. This gives the agent room to plan while preserving the control boundary.
 
-Checks should distinguish requests from committed effects. A model can request `send_email`, the approval layer can reject it, and no email is sent. Grading only the model output would mark the tool name as used; grading the trajectory can see the rejection and absence of a committed effect.
-
-Arguments matter as much as tool names. A travel agent may correctly call `search_flights` while using the wrong origin. A data agent may query the correct table with a date window that leaks future labels. Deterministic assertions are appropriate for these crisp properties.
-
-Tools also need version identity. A passing path against `check_policy@7` may behave differently after `check_policy@8`. Eval reports should record agent, prompt, model, tool-contract, policy, dataset, and grader versions.
-
-## State Invariants Hold Across The Whole Run
-<!-- section-summary: State assertions protect facts and constraints that must remain true across model turns and tools. -->
-
-An **invariant** is a condition that must hold throughout a specified part of the run. Tenant identity remains fixed. A requested destination stays the same unless the user corrects it. A budget may decrease, and a handoff cannot reset it. An approval must refer to the same artifact that later executes.
-
-Invariants are stronger than checking the final response because they can expose corruption at the point it occurs. They may read structured run state, tool arguments, approval records, and domain results. The eval should rely on authoritative state where possible rather than extracting every fact from text.
-
-Some invariants are temporal. “No write action before authentication” applies to the prefix of the trajectory. “Every committed effect has a verification event” applies by the end. Naming the scope makes the assertion precise.
-
-## Sequencing Usually Needs A Partial Order
-<!-- section-summary: Most agent paths need prerequisite relationships rather than one exact sequence. -->
-
-Exact sequence assertions are appropriate when the process truly has one legal order. Many agent tasks allow harmless variation. Independent searches may run in either order or in parallel. A clarifying question may happen before or after a read-only lookup.
-
-A **partial order** specifies only the transitions that matter. Policy must be checked before a flight is held. User confirmation must occur before a nonrefundable booking. Verification must occur after a deployment. Other events may appear between them.
-
-```yaml
-assertions:
-  - type: happens_before
-    first: check_travel_policy
-    second: hold_flight
-    second_may_be_absent: true
-
-  - type: no_effect_before
-    event: user_confirmation
-    forbidden_effects: [hold_flight, book_hotel]
-
-  - type: requires_evidence
-    effect: request_manager_approval
-    evidence: policy_result.approval_required
+```mermaid
+flowchart TD
+    A["Task starts"] --> B["Policy checked"]
+    A --> C["Options searched"]
+    B --> D["Proposal prepared"]
+    C --> D
+    D --> E["User confirms"]
+    E --> F["Booking effect committed"]
 ```
 
-This small travel example illustrates the assertion types without defining the article. The eval protects policy and consent while allowing the agent to search flights and hotels in either order.
+The graph describes dependencies, not one transcript. `Policy checked` and `Options searched` can swap order or run concurrently. Both must finish before the proposal. The booking stays unreachable until confirmation.
 
-Graphs can also describe valid path families. A state-machine assertion can require that `execute` is reachable only through `approved`. Use graph matching when branching structure is central; use simple partial-order rules when a few prerequisites capture the risk.
-
-The YAML needs executable semantics, or it remains a policy note. The following grader checks the first two rules against normalized events. Each event has a unique sequence number and an `effect_committed` flag so a rejected tool request is not confused with a real booking:
+A focused deterministic grader can enforce the important relationship:
 
 ```python
-def first_seq(events: list[Event], name: str) -> int | None:
-    return next((event.seq for event in events if event.name == name), None)
-
-def grade_travel_path(events: list[Event]) -> list[dict]:
-    failures: list[dict] = []
-    policy_seq = first_seq(events, "check_travel_policy")
-    hold_seq = first_seq(events, "hold_flight")
-    confirmation_seq = first_seq(events, "user_confirmation")
-
-    if hold_seq is not None and (policy_seq is None or policy_seq >= hold_seq):
-        failures.append({
-            "rule": "policy_before_hold",
-            "evidence": {"policy_seq": policy_seq, "hold_seq": hold_seq},
-        })
-
-    early_effects = [
-        event for event in events
-        if event.effect_committed
-        and event.name in {"hold_flight", "book_hotel"}
-        and (confirmation_seq is None or event.seq < confirmation_seq)
+def approval_precedes_effect(events: list[dict], artifact_id: str) -> bool:
+    approval = next(
+        (e["sequence"] for e in events
+         if e["name"] == "approved" and e["artifact_id"] == artifact_id),
+        None,
+    )
+    effects = [
+        e["sequence"] for e in events
+        if e["name"] == "effect_committed" and e["artifact_id"] == artifact_id
     ]
-    if early_effects:
-        failures.append({
-            "rule": "confirmation_before_effect",
-            "evidence": [{"seq": e.seq, "name": e.name} for e in early_effects],
-        })
-
-    return failures
+    return approval is not None and all(approval < sequence for sequence in effects)
 ```
 
-The first rule allows `hold_flight` to be absent, matching `second_may_be_absent`. When a hold exists, `policy_seq` must also exist and be smaller. The second rule considers committed effects only. A requested hold that policy rejected can appear in the trace without failing this rule, while a committed hold before confirmation produces the exact event sequence as evidence.
+Reference paths still help with debugging and judge calibration. Treat them as examples of accepted behaviour unless the process truly requires exact steps. If several path families are valid, label those families or encode their shared invariants. This avoids teaching the agent to imitate incidental details of one expert trace.
 
-Run the grader against a valid variation and a dangerous path:
+## Handoffs and Guardrails Are Part of the Path
+
+<!-- section-summary: Handoff and guardrail evaluation checks routing, transferred context, authority, and the behaviour that follows a control decision. -->
+
+A **handoff** transfers responsibility from one agent or workflow component to another. Evaluation needs to inspect the trigger, destination, transferred context, and resulting authority. Sending a billing dispute to a general information agent can lose access to the specialist policy. Sending the whole conversation can expose data the destination never needed.
+
+A strong handoff preserves the task, verified facts, unresolved questions, relevant evidence references, and current budget. It also narrows permissions to the destination’s role. The receiving agent should know which actions already occurred so it does not repeat a write or restart an exhausted retry loop.
+
+A **guardrail** is a control that checks input, output, tool use, or state. A guardrail event alone proves only that the check ran. The trajectory must also show how the workflow responded. A blocked action should stay blocked. A request sent for review should remain paused. A sanitized input should be the value used downstream.
+
+```mermaid
+flowchart TD
+    A["Agent proposes action"] --> B{"Guardrail decision"}
+    B -->|allow| C["Tool executes"]
+    B -->|review| D["Workflow pauses"]
+    B -->|block| E["Action rejected"]
+    D -->|approved| C
+    D -->|declined| E
+    C --> F["Outcome verified"]
+```
+
+For example, a document agent may detect prompt injection in an uploaded file. The correct path records the detection, excludes the injected instruction from trusted context, and continues with the user’s original task if safe. A trace that logs `injection_detected=true` and then follows the instruction still fails.
+
+Handoff graders can combine deterministic and semantic checks. Code can verify the destination, permission set, and budget. A calibrated judge can assess whether the handoff summary preserved the unresolved question without adding unsupported facts. Human review remains useful for new routing disputes or high-impact decisions.
+
+## Recovery Evaluation Tests the Difficult Branches
+
+<!-- section-summary: Recovery cases test timeouts, partial success, retries, compensation, and honest terminal states under controlled failure. -->
+
+Happy paths tell the team that the main workflow can succeed. Production reliability depends on the branches that appear after failure. A tool can time out after committing a write. Retrieval can return stale data. A subagent can stop without a handoff. An approval can expire between proposal and execution.
+
+Recovery evaluation starts by injecting one controlled fault into the environment. The fixture may return `timeout_after_commit`, `permission_denied`, `malformed_result`, or `stale_version`. The grader then checks the recovery policy: retry limits, idempotency keys, state reconciliation, fallback, escalation, and final communication.
+
+```mermaid
+flowchart TD
+    A["Tool request"] --> B{"Observed result"}
+    B -->|success| C["Verify outcome"]
+    B -->|known failure| D["Apply bounded recovery"]
+    B -->|uncertain commit| E["Reconcile by operation ID"]
+    D --> F["Retry, fallback, or escalate"]
+    E --> F
+    F --> G["Honest terminal state"]
+```
+
+The uncertain-commit case is especially important. Suppose an email tool times out after accepting the message. Retrying blindly can send a duplicate. A good trajectory queries the delivery ledger with the operation identifier, then reports the confirmed state. The path can end as `sent`, `not_sent`, or `needs_review`; it should never invent certainty.
+
+Recovery graders should check the earliest unsafe point. A later apology cannot erase a duplicate side effect. The report should name the triggering fault, the policy branch chosen, each retry, any compensation, and the final verified state.
+
+Run important recovery cases several times because model choices may vary even under fixed fixtures. One unsafe path among repeated runs matters for approval, permission, and irreversible-effect controls. For softer choices such as fallback wording, report the distribution and inspect disagreement.
+
+## Scores Need Partial Credit and Severity
+
+<!-- section-summary: Partial credit describes how much of the path worked, while severity determines whether a failure can block release. -->
+
+Binary pass or fail works well for hard controls. A write before approval either occurred or it did not. Other paths can be partly correct. An agent may select the right tools and provide valid arguments, then miss one verification step. Treating that run as identical to a completely unrelated path loses useful information.
+
+Partial credit should follow observable dimensions. Tool selection, argument validity, evidence use, state consistency, recovery, outcome, and efficiency can each receive a score or label. Preserve the grader reasons behind those values. A weighted total can help sort results, though it should never override a hard safety failure.
+
+**Severity** describes the consequence of failure. A minor formatting issue can be informational. An unnecessary read-only call may be a warning. A cross-tenant lookup, missing approval, fabricated effect, or unsafe handoff should be a blocker. The same numerical score can therefore lead to different decisions.
+
+```mermaid
+flowchart TD
+    A["Grader findings"] --> B["Dimension scores"]
+    A --> C["Severity labels"]
+    B --> D["Quality comparison"]
+    C --> E{"Any blocker?"}
+    E -->|yes| F["Candidate fails the control"]
+    E -->|no| D
+```
+
+Order also affects partial credit. A path one step away from a valid trajectory differs from a path that uses the wrong tools throughout. Edit distance or path similarity can describe that difference for analysis. These metrics need careful interpretation because one inserted unauthorized write is more severe than several harmless read calls.
+
+Repeated runs add another layer. Report the proportion of runs with each blocker and the distribution of softer scores. A high average cannot conceal one permission bypass. Confidence intervals can help with larger suites, while small critical suites often need direct case-by-case review.
+
+## Model Judges Need Their Own Evaluation
+
+<!-- section-summary: A model judge is another probabilistic component, so its rubric and decisions must be calibrated against expert labels. -->
+
+Deterministic graders should handle crisp properties such as tool names, schemas, identifiers, sequence rules, and environment state. A **model judge** is useful for semantic questions: Was the handoff summary faithful? Did the retrieved evidence support the decision? Was the recovery explanation honest and useful?
+
+The judge needs a narrow rubric. Give it the task and relevant expectations. Add a concise trace view that contains the evidence for the criterion.
+
+Ask for a label, severity, evidence event identifiers, and rationale as structured fields. Requiring evidence identifiers discourages a judgement detached from the run.
+
+Judge calibration compares automated decisions with trusted human labels. Build a calibration set containing clear passes, clear failures, close boundaries, and adversarial outputs. Measure agreement by criterion and slice. A judge that performs well on ordinary summaries may still fail on permission boundaries or long traces.
+
+```mermaid
+flowchart TD
+    A["Expert-labelled traces"] --> B["Judge prompt and model"]
+    B --> C["Structured judgements"]
+    C --> D["Agreement and disagreement analysis"]
+    D --> E["Revise rubric or evidence view"]
+    E --> B
+    D --> F["Approved grader version"]
+```
+
+Disagreement needs review. The judge may have missed evidence, the trace summary may have omitted an event, the expert label may be wrong, or the policy may be ambiguous. Each cause calls for a different repair. Quietly changing the threshold can hide the problem.
+
+Models can also learn to satisfy surface cues in a judge rubric. Periodic expert review and hidden calibration cases help detect this behaviour. Pin the judge model and prompt version in every eval report. A judge change can move scores without any change to the agent.
+
+## Trace Privacy and Completeness Set the Evidence Boundary
+
+<!-- section-summary: Traces must capture enough evidence for grading while limiting sensitive prompts, tool payloads, and business records. -->
+
+Traces can contain some of the most sensitive data in an agent system. Model spans may include prompts and outputs. Tool spans may include account records, documents, file contents, or credentials. Handoff spans can duplicate context across several components.
+
+Collect the minimum evidence required for the grader. Structured attributes can record the tool name, contract version, operation identifier, policy result, and redaction status. Large payloads can stay in a restricted store behind an access-controlled reference. Hashes can prove artifact identity without copying the artifact into every trace.
+
+OpenAI’s Agents SDK tracing documentation currently notes that generation and function spans can contain sensitive inputs and outputs. Its run configuration can disable sensitive-data capture. Similar controls exist in other platforms, but the team still owns data classification, retention, access, and deletion across exported copies.
+
+```mermaid
+flowchart TD
+    A["Raw run data"] --> B["Allowlisted trace fields"]
+    A --> C["Restricted payload store"]
+    B --> D["Trajectory graders"]
+    C -->|approved reference| D
+    D --> E["Scores and evidence IDs"]
+```
+
+Redaction can reduce gradability. If a permission grader needs the tenant identifier, replacing it with a stable fixture identifier preserves the relationship. Removing the field entirely makes cross-tenant checks impossible. Design redaction with the evaluation claim in mind.
+
+Completeness checks should run before behaviour grading. Required spans must arrive, parent links must resolve, sequences must be interpretable, and committed effects must have authoritative evidence. Background exporters may delay the final spans. A runner should flush or wait for trace completion before grading. An incomplete trace receives a separate infrastructure result, not a behavioural pass.
+
+## Replay Needs a Deterministic Environment
+
+<!-- section-summary: Replay compares agent versions against the same starting state, tool behaviour, clock, permissions, and fault conditions. -->
+
+A production trace explains what happened once. Replaying the task against a candidate agent requires the surrounding world. Search results may change, records may be updated, and live APIs may return different faults. A fair comparison rebuilds the case inside a controlled environment.
+
+The eval runner loads versioned fixtures, sets the clock, assigns permissions, and exposes declared tool contracts. Read tools return fixed or versioned results. Write tools act on a disposable sandbox. Fault injectors can produce a timeout, stale result, or permission denial at a named step.
+
+```mermaid
+flowchart TD
+    A["Versioned case and fixture"] --> B["Reset sandbox"]
+    B --> C["Run baseline agent"]
+    B --> D["Run candidate agent"]
+    C --> E["Normalize trajectory"]
+    D --> F["Normalize trajectory"]
+    E --> G["Apply the same graders"]
+    F --> G
+    G --> H["Compare dimensions and paths"]
+```
+
+Replay should preserve relevant causality without imitating every production detail. A refund case needs the account state, policy result, approval boundary, and effect ledger. It usually does not need the original person’s name or full conversation. This also improves privacy.
+
+Some integrations need a live test because authentication, latency, or provider behaviour is the subject. Keep those cases in a separate integration suite and record the external dependency version. Stable sandbox cases support repeatable release comparisons; live cases detect contract and service drift.
+
+## Industrial Tools Connect Traces, Scorers, and Review
+
+<!-- section-summary: Current platforms collect agent traces, apply code or model scorers, attach human feedback, and turn production failures into offline cases. -->
+
+The industrial pattern connects four responsibilities. Instrumentation records the path. A trace store makes runs searchable. Scorers attach judgements to complete traces or selected spans. A review interface lets humans inspect evidence and turn useful production runs into versioned eval cases.
+
+Current OpenAI agent guidance recommends starting with trace grading during workflow debugging. Its trace captures model calls, tool calls, guardrails, and handoffs. Repeatable datasets and eval runs support comparison after the team has defined good behaviour. This guidance is the relevant current surface; OpenAI’s older Evals platform is listed under Legacy APIs and is scheduled for retirement.
+
+LangSmith distinguishes final-response, single-step, and trajectory evaluation. Its trajectory guidance supports exact sequences, unordered tool sets, distance-style comparisons, and full-path judges. LangSmith datasets and experiments can connect offline cases to their outputs, scores, and traces. Online evaluators can score production runs and threads.
+
+MLflow’s current GenAI evaluation can retrieve stored traces with `mlflow.search_traces()` and pass them directly to `mlflow.genai.evaluate()`. Scorers can inspect spans, attributes, outputs, tool trajectories, subagent routing, and retrieved evidence. Expectations and human feedback can be attached to traces for review and later curation.
+
+A focused MLflow call contains only the integration boundary:
 
 ```python
-def test_parallel_search_order_is_allowed():
-    events = [
-        Event(1, "search_hotels", "ok"),
-        Event(2, "check_travel_policy", "ok"),
-        Event(3, "search_flights", "ok"),
-        Event(4, "user_confirmation", "ok"),
-        Event(5, "hold_flight", "ok", effect_committed=True),
-    ]
-    assert grade_travel_path(events) == []
+import mlflow
 
-def test_committed_hold_before_confirmation_is_a_blocker():
-    events = [
-        Event(1, "check_travel_policy", "ok"),
-        Event(2, "hold_flight", "ok", effect_committed=True),
-        Event(3, "user_confirmation", "ok"),
-    ]
-    assert grade_travel_path(events) == [{
-        "rule": "confirmation_before_effect",
-        "evidence": [{"seq": 2, "name": "hold_flight"}],
-    }]
+traces = mlflow.search_traces(
+    filter_string="tag.environment = 'staging'"
+)
+
+results = mlflow.genai.evaluate(
+    data=traces,
+    scorers=[tool_policy_scorer, recovery_judge],
+)
 ```
 
-The first test proves that irrelevant ordering stays flexible. The second proves that a safety violation blocks the release and points to evidence. Add one adapter-contract test per tracing backend: given a recorded provider trace, normalization must preserve event order, committed-effect status, tool version, and approval identity. If the source trace lacks one required field, the adapter should produce an explicit `trace_incomplete` failure instead of a passing empty value.
+The scorer logic still belongs to the application’s contract. A platform can store and execute a grader; it cannot decide which approval, handoff, or recovery rules matter to the product. Keep a portable normalized schema or adapter tests so platform migration does not erase the meaning of historical results.
 
-## Efficiency Is Quality When Resources Are Limited
-<!-- section-summary: Trajectory evaluation can detect unnecessary turns, repeated tools, excessive context, and avoidable cost without rewarding unsafe shortcuts. -->
+## A Useful Report Points to the Repair
 
-Two paths may reach the same safe outcome with very different resource use. An agent that searches the same source ten times, repeatedly hands off, or loops through failed tool arguments creates latency and cost. Efficiency grading measures turns, tool counts, duplicate calls, context growth, latency, token use, and spend.
+<!-- section-summary: Trajectory reports should identify the violated property, earliest evidence, affected layer, severity, and exact evaluation versions. -->
 
-Efficiency should remain subordinate to correctness and safety. A short path that skips policy is worse than a slightly longer compliant path. Release scoring can apply blockers first, then compare efficiency among acceptable runs.
+An overall score helps compare many runs, but engineers need case-level evidence. A useful finding says: `hold_flight` committed before `user_confirmation`, the relevant events were `e7` and `e11`, the failure is a blocker, and the likely owner is the orchestration control. That is much more actionable than “trajectory score 0.42.”
 
-Budgets can also act as invariants. A run should stop or escalate when it reaches its declared turn or cost limit. The eval can verify that the runtime enforced the limit and produced an honest terminal state.
+Failure attribution should separate model decisions, context and retrieval, tool contracts, orchestration, guardrails, environment fixtures, trace infrastructure, and graders. The earliest trustworthy evidence usually points toward the best owner. A wrong tool chosen from a correct tool list differs from a correct tool call rejected by a broken schema.
 
-The grader needs to check the whole budget history, including handoffs:
+Reports should identify the case, trace, agent bundle, environment, tool contracts, grader bundle, and repetitions. Keep hard blockers separate from softer quality scores. Link every human or model judgement to its evidence so reviewers can verify the decision.
 
-```python
-def grade_budget(events: list[Event], max_cost_usd: float) -> list[dict]:
-    failures = []
-    charged = 0.0
-    previous_remaining = max_cost_usd
-    exhausted_at = None
-    for event in events:
-        charged += event.cost_usd
-        if event.budget_remaining_usd is not None:
-            if event.budget_remaining_usd > previous_remaining + 1e-9:
-                failures.append({"rule": "budget_reset", "seq": event.seq})
-            previous_remaining = event.budget_remaining_usd
-        if charged > max_cost_usd and exhausted_at is None:
-            exhausted_at = event.seq
-        elif exhausted_at is not None and event.event_type in {"model", "tool"}:
-            failures.append({"rule": "work_after_budget", "seq": event.seq,
-                             "exhausted_at": exhausted_at})
-    if charged > max_cost_usd and not any(
-        e.name == "budget_exceeded" and e.seq >= exhausted_at for e in events
-    ):
-        failures.append({"rule": "missing_budget_terminal", "charged": charged})
-    return failures
-```
-
-A handoff event may change the active agent while `budget_remaining_usd` must stay flat or fall. Tests should include a legal handoff, a subagent that resets the budget to the original amount, a run that schedules a tool after exhaustion, and a run that emits `budget_exceeded` and stops. This turns the budget from a report field into a trajectory property.
-
-## Choose The Right Grader For Each Property
-<!-- section-summary: Deterministic, model-based, and human graders serve different trajectory dimensions. -->
-
-Deterministic code works well for tool names, schemas, arguments, state values, ordering, budgets, and committed effects. These graders are fast, repeatable, and easy to debug.
-
-Model-based graders help with nuanced qualities such as whether evidence supports a conclusion, whether a plan was relevant, or whether the final explanation fits the user's request. They need a clear rubric, selected trace evidence, structured output, and calibration against human decisions. They should not replace straightforward code assertions.
-
-Human reviewers handle new failure types, high-risk ambiguity, grader disagreement, and rubric design. Their decisions can create labelled examples for later deterministic or model graders. Review interfaces should link every score to trace evidence so people do not reconstruct the run from screenshots.
-
-A release gate usually combines all three. Deterministic blockers protect hard rules. Weighted deterministic and model scores measure softer quality. Human review examines sampled runs and disputed cases.
-
-## Allow Equivalent Paths And Measure Stochasticity
-<!-- section-summary: Repeated trials and path-equivalence rules distinguish acceptable agent variation from flaky safety behaviour. -->
-
-Agents are stochastic. The same case may choose a different source, call an allowed tool twice, or ask a clarification at a different point. The eval must state which variation is acceptable.
-
-Important cases should run several times. Report the per-case pass rate, failure reasons, and path families rather than one average. A nine-out-of-ten wording result may be acceptable. A nine-out-of-ten permission check is unsafe because one run crossed a hard boundary.
-
-Overly strict graders create false positives by requiring exact strings or immediate adjacency. Shallow graders create false negatives by checking only whether a tool name appeared somewhere. Reviewing both error types is part of eval maintenance.
-
-When a case is flaky, inspect traces before changing the threshold. The cause may be model variability, nondeterministic tool data, missing trace events, a stale expected policy, or a brittle assertion. Each needs a different repair.
-
-## Attribute Failure To The Right Layer
-<!-- section-summary: Trajectory evidence distinguishes model decisions, context gaps, tool failures, orchestration errors, and grader defects. -->
-
-A failed trajectory should name the violated property and the earliest useful evidence. “Score 0.71” gives little direction. “`hold_flight` committed before `user_confirmation`” points to orchestration or control. “Required policy source absent from context” points to retrieval. “Correct tool rejected valid arguments” points to the contract or grader.
-
-Failure attribution turns evaluation into engineering work. A production incident can add a case and a new invariant. A recurring irrelevant tool path can improve tool descriptions or routing. A missing trace field can improve instrumentation. A false-positive exact-order check can be replaced with a partial order.
-
-This loop also keeps the suite current. Tool and policy versions change, valid paths evolve, and formerly rare incidents supply important regression sets. Every assertion needs an owner and reason so later teams can distinguish a safety boundary from an obsolete implementation preference.
-
-## Release Decisions Use Dimensions, Blockers, And Evidence
-<!-- section-summary: A trajectory suite reports hard failures, dimension scores, flakiness, and trace links for a versioned candidate. -->
-
-A useful report includes case and trace IDs, version identities, repetitions, blocker failures, dimension scores, latency and cost, and human-readable evidence. Hard violations fail release regardless of the average. Softer dimensions can use thresholds and comparison with the current system.
-
-The suite should cover ordinary success, missing information, tool failure, permission denial, approval, cancellation, recovery, adversarial content, and known incidents. Coverage follows the agent's capabilities and risks rather than one happy-path transcript.
-
-Trajectory evaluation is successful when the team can answer three questions: which path property failed, where the evidence appears, and which system layer owns the repair. That is the advantage over grading only the final answer.
+The central idea is straightforward: final-output grading tells the team whether the answer looks acceptable. Trajectory grading tests whether the agent used a safe, grounded, and reliable path to produce it. That evidence turns agent quality from a vague impression into a set of repairable engineering properties.
 
 ## References
 
-- [OpenAI: Evaluate agent workflows](https://developers.openai.com/api/docs/guides/agent-evals)
-- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/)
-- [OpenAI: Graders](https://developers.openai.com/api/docs/guides/graders)
-- [LangSmith: Evaluation concepts](https://docs.langchain.com/langsmith/evaluation-concepts)
-- [LangSmith: Evaluate an application](https://docs.langchain.com/langsmith/evaluate-llm-application)
-- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenAI — Evaluate agent workflows](https://developers.openai.com/api/docs/guides/agent-evals)
+- [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/)
+- [OpenAI — Deprecations](https://developers.openai.com/api/docs/deprecations)
+- [LangSmith — Application-specific evaluation approaches](https://docs.langchain.com/langsmith/evaluation-approaches)
+- [LangSmith — Evaluation concepts](https://docs.langchain.com/langsmith/evaluation-concepts)
+- [MLflow — Evaluating Production Traces](https://mlflow.org/docs/latest/genai/eval-monitor/running-evaluation/traces/)
+- [MLflow — Search Traces](https://mlflow.org/docs/latest/genai/tracing/search-traces/)
+- [MLflow — Scorer Concepts](https://mlflow.org/docs/latest/genai/concepts/scorers/)
+- [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/)

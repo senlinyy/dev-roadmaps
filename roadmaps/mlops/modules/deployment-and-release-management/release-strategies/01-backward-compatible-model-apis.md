@@ -1,7 +1,7 @@
 ---
 title: "Model API Compatibility"
-description: "Build model serving contracts that let product callers survive model swaps, alias moves, schema updates, and canary releases."
-overview: "Backward-compatible model APIs keep approved requests and useful responses stable while the model version changes behind the endpoint. A supporting example follows a delivery ETA model through request and response contracts, MLflow and Databricks aliases, rollout gates, compatibility tests, and owners."
+description: "Design model-serving contracts that let clients, models, features, decisions, and stored prediction records evolve safely."
+overview: "Model API compatibility protects more than JSON fields. It keeps the public service, internal model signature, feature preparation, decision meaning, and stored prediction records usable across releases, retries, migrations, and rollbacks."
 tags: ["MLOps", "production", "delivery"]
 order: 1
 id: "article-mlops-deployment-and-release-management-backward-compatible-model-apis"
@@ -10,500 +10,500 @@ aliases:
   - child-release-strategies-03-backward-compatible-model-apis
 ---
 
+## Table of Contents
 
-## Why Model API Compatibility Matters
-<!-- section-summary: A backward-compatible model API lets the model change while existing product callers keep sending valid requests and reading useful responses. -->
+1. [Compatibility Keeps Existing Users Working](#compatibility-keeps-existing-users-working)
+2. [Five Contracts Can Change Independently](#five-contracts-can-change-independently)
+3. [Structural Compatibility Protects Shapes and Protocols](#structural-compatibility-protects-shapes-and-protocols)
+4. [Semantic Compatibility Protects Meaning](#semantic-compatibility-protects-meaning)
+5. [Model Signatures Guard the Internal Boundary](#model-signatures-guard-the-internal-boundary)
+6. [Retries Need Stable Outcomes](#retries-need-stable-outcomes)
+7. [Stored Predictions Have Their Own Consumers](#stored-predictions-have-their-own-consumers)
+8. [Compatibility Testing Needs Several Views](#compatibility-testing-needs-several-views)
+9. [Migrate Contracts in Deliberate Stages](#migrate-contracts-in-deliberate-stages)
+10. [Rollback Must Protect the Newest Client](#rollback-must-protect-the-newest-client)
+11. [The Main Idea](#the-main-idea)
+12. [References](#references)
 
-**Model API compatibility** means an approved caller can keep using a model endpoint after you release a new model version. The caller can send the same request shape, receive the same required response fields, and handle the same error categories. The model can improve, add optional metadata, or route to a new registered version behind the endpoint, while the product code keeps working.
+## Compatibility Keeps Existing Users Working
+<!-- section-summary: Compatibility lets an existing client keep making a useful request after the service, model, or surrounding data system changes. -->
 
-Imagine ParcelPilot, a delivery company that shows customers an estimated arrival time. The mobile app calls `POST /v1/eta/predict` before checkout, the dispatcher screen calls it when assigning drivers, and the support dashboard calls it when a customer asks why an order will arrive late. A data science team trains `delivery_eta` version 18 with weather features and better holiday data. The serving team wants to promote it behind the same endpoint currently using version 17.
+At a high level, **model API compatibility** means that an existing client can keep asking for a prediction after the team releases a new implementation. The request remains valid, and the response keeps the meaning the client expects. Failure handling and retry rules also stay predictable. A mobile application or batch job should not require an emergency release because a model changed behind the endpoint.
 
-If the team changes the endpoint carelessly, small serving details can create product outages. A field called `delivery_minutes` might change from an integer to a string. A new required request field might make old mobile apps fail. A reviewed 90 percent prediction interval might quietly change to an 80 percent interval without a contract change, and the dispatcher screen might understate uncertainty. The model might have higher offline accuracy while the product breaks at the API boundary.
+Some compatibility failures are obvious. Removing a required response field can crash a strict client. Changing a number into a string can fail deserialization. ML systems also produce a more dangerous kind of failure: the request succeeds, the server returns `200 OK`, and the response has the expected fields, yet the meaning has changed.
 
-Backward compatibility gives the team a release rule before the model reaches production: **old approved clients must still work**. That rule protects product teams from surprise API changes, and it gives MLOps teams a safe path to release frequent model improvements. You can still introduce a new API version later, yet most model releases should happen behind a stable contract.
+Consider a fraud API that has always returned `risk_score` as a probability from `0.0` to `1.0`. A new model returns an uncalibrated ranking score on the same numerical range. The checkout service still parses the response. Its rule still blocks scores above `0.85`. The integration appears healthy, while the business decision is now based on a different quantity. HTTP success has hidden a semantic break.
 
-This article walks through that contract from the outside in. First we name the pieces that need compatibility. Then we design request and response schemas, connect the endpoint to model registry aliases, test compatibility in CI, and define owners for the release gate.
+Two directions of compatibility matter:
 
-## The Compatibility Map
-<!-- section-summary: Compatibility covers request shape, response shape, behavior, model version references, and ownership. -->
+- **Backward compatibility** asks whether an older approved client can use the newer service. An app released several weeks ago sends the old request and receives a response it understands.
+- **Forward compatibility** asks whether a newer client can tolerate an older service or older data. This matters during partial rollouts and rollbacks. A newly deployed client may send an optional field that the retained service has never seen, or read an event written by an older producer.
 
-When teams first hear "API compatibility," they often think only about JSON fields. JSON matters, but a production model API has more moving parts. The endpoint is a promise between the model platform and every caller that depends on the prediction.
+```mermaid
+flowchart TD
+    A["Compatibility question"] --> B["Old client calls new service"]
+    A --> C["New client calls retained old service"]
+    B --> D["Backward compatibility"]
+    C --> E["Forward and rollback compatibility"]
+    D --> F["Request accepted and meaning preserved"]
+    E --> G["Optional additions tolerated or adapted"]
 
-For ParcelPilot, the promise has these parts:
-
-| Contract area | Beginner-friendly meaning | Production example |
-|---|---|---|
-| **Request contract** | What callers are allowed to send | `pickup_lat`, `dropoff_lat`, `order_created_at`, and `vehicle_type` keep the same names and types |
-| **Response contract** | What callers can expect back | `eta_minutes`, interval bounds, `model_version`, and `explanation_codes` stay available |
-| **Error contract** | How failures appear to callers | Bad input returns `422`, temporary serving failure returns `503`, and model fallback returns a clear fallback code |
-| **Behavior contract** | The product meaning of the output | `eta_minutes` still means minutes from now, not arrival timestamp or rounded display text |
-| **Version contract** | How the serving layer chooses the model | The endpoint targets an alias such as `Champion` instead of hardcoding a registry version in app code |
-| **Owner contract** | Who approves and fixes each part | API owner, model owner, platform owner, product caller owner, and incident owner are named before release |
-
-That table matters because compatibility failures usually cross team boundaries. The model owner may add a feature. The serving owner may update the container. The mobile owner may parse the response with strict client code. The product owner may depend on a threshold. A safe release names those boundaries before the canary starts.
-
-The simplest rule is this: **make required things stable and make new things optional first**. A new model can add response metadata such as `traffic_bucket` or `calibration_band`. A new model should avoid requiring old callers to send a new field such as `rain_intensity` on day one. If the new feature really needs rain data, the serving layer can fill a default from an online feature store or route callers without that field to the older model until clients catch up.
-
-![Backward-compatible ETA API](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/backward-compatible-eta-api.png)
-
-*ParcelPilot keeps mobile, dispatcher, and support callers pointed at the same ETA endpoint while model versions move behind the contract.*
-
-## The Serving Contract
-<!-- section-summary: The serving contract gives the endpoint a reviewed request schema, response schema, error shape, and version metadata. -->
-
-A **serving contract** is the written shape of the model endpoint. It tells a caller what to send and what will come back. In web APIs, teams commonly publish that shape as an OpenAPI document, validate requests in the service, and keep sample requests as contract tests. OpenAPI describes the API surface in JSON or YAML, and JSON Schema gives the field-level rules for objects, strings, numbers, arrays, and optional fields.
-
-For the ETA endpoint, the contract starts with a path:
-
-```yaml
-openapi: 3.1.0
-info:
-  title: ParcelPilot ETA Prediction API
-  version: 1.4.0
-paths:
-  /v1/eta/predict:
-    post:
-      operationId: predictEta
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EtaPredictionRequest"
-            examples:
-              checkout:
-                value:
-                  order_id: "ord_84721"
-                  pickup_lat: 51.5072
-                  pickup_lng: -0.1276
-                  dropoff_lat: 51.5155
-                  dropoff_lng: -0.0922
-                  order_created_at: "2026-07-05T13:15:00Z"
-                  vehicle_type: "bike"
-      responses:
-        "200":
-          description: ETA prediction
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EtaPredictionResponse"
-        "422":
-          description: Request failed validation
-        "503":
-          description: Prediction service temporarily unavailable
-components:
-  schemas:
-    EtaPredictionRequest:
-      type: object
-      required:
-        - order_id
-        - pickup_lat
-        - pickup_lng
-        - dropoff_lat
-        - dropoff_lng
-        - order_created_at
-        - vehicle_type
-      properties:
-        order_id:
-          type: string
-        pickup_lat:
-          type: number
-        pickup_lng:
-          type: number
-        dropoff_lat:
-          type: number
-        dropoff_lng:
-          type: number
-        order_created_at:
-          type: string
-          format: date-time
-        vehicle_type:
-          type: string
-          enum: ["bike", "scooter", "car"]
-        client_features:
-          type: object
-          additionalProperties: true
-      additionalProperties: false
-    EtaPredictionResponse:
-      type: object
-      required:
-        - order_id
-        - eta_minutes
-        - eta_lower_minutes
-        - eta_upper_minutes
-        - interval_nominal_coverage
-        - model_name
-        - model_version
-        - request_id
-      properties:
-        order_id:
-          type: string
-        eta_minutes:
-          type: integer
-          minimum: 0
-        eta_lower_minutes:
-          type: integer
-          minimum: 0
-        eta_upper_minutes:
-          type: integer
-          minimum: 0
-        interval_nominal_coverage:
-          type: number
-          minimum: 0
-          maximum: 1
-        model_name:
-          type: string
-        model_version:
-          type: string
-        model_alias:
-          type: string
-        request_id:
-          type: string
-        explanation_codes:
-          type: array
-          items:
-            type: string
-      additionalProperties: true
+    style A fill:#FFE04F,stroke:#536A9A,color:#111827
+    style B fill:#93C5FD,stroke:#536A9A,color:#111827
+    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style F fill:#FB7185,stroke:#536A9A,color:#111827
+    style G fill:#FB7185,stroke:#536A9A,color:#111827
 ```
 
-The request schema stays strict with `additionalProperties: false` because surprise input fields can hide caller bugs. If the mobile app starts sending `pickupLatitude` instead of `pickup_lat`, the service should reject the request during validation instead of passing a half-empty feature vector into the model. That gives the caller a fast, visible fix.
+Compatibility therefore covers shape and meaning. A useful release question is: **Which existing clients and stored records must remain usable after this change?** The answer defines the compatibility window and the evidence required before release.
 
-The response schema allows extra fields with `additionalProperties: true`. That choice gives the model API room to add optional metadata later. Old clients can keep reading `eta_minutes` while interval-aware clients use the lower bound, upper bound, and named nominal coverage. The model team must measure actual interval coverage on held-out data and production segments. If the model has no reviewed interval, the API should omit interval fields through an explicit contract version instead of inventing a generic confidence value. Some client SDKs still use strict generated types, so the API owner should also tell client owners to ignore unknown response fields during deserialization.
+## Five Contracts Can Change Independently
+<!-- section-summary: A production prediction crosses five contracts, each with its own consumers, owners, and failure modes. -->
 
-The response also includes version metadata. `model_name`, `model_version`, and `model_alias` help the team connect a customer complaint to the exact model that answered the request. `request_id` connects the API response to logs, traces, and prediction tables. These fields may look like operations details, but they are part of the product contract once support and incident teams depend on them.
+A prediction endpoint looks like one interface from the outside. Internally, it crosses several boundaries. Treating all of them as one schema makes reviews confusing because a safe internal model change may have no effect on callers, while a tiny policy change may alter every product decision.
 
-## Adding Fields Without Breaking Callers
-<!-- section-summary: Safe model API changes add optional fields first, keep old fields stable, and move required changes through a versioned migration. -->
+It helps to separate five contracts:
 
-Now the data science team wants version 18 to use weather. The training data includes `rain_mm_last_hour`, `wind_speed_kph`, and `road_closure_count`. The model owner has two choices. They can require callers to send those fields immediately, or the serving layer can fetch them from a feature service while callers keep sending the old request.
+1. **Public service contract.** The HTTP or RPC request, response, errors, timeouts, authentication expectations, and retry behavior visible to callers.
+2. **Internal model signature.** The columns, tensors, parameters, and outputs accepted by the loaded model artifact.
+3. **Feature contract.** The names, types, units, freshness limits, default rules, and ordering used to prepare model inputs.
+4. **Decision semantics.** The business meaning applied to model output, including labels, calibration, thresholds, abstention rules, and policy versions.
+5. **Stored event and output contract.** The prediction records consumed later by monitoring jobs, feedback joins, audits, analytics, and retraining pipelines.
 
-The compatible path uses the second option first. The endpoint accepts the same request, then enriches it before calling the model:
+```mermaid
+flowchart TD
+    A["Client request"] --> B["Public service contract"]
+    B --> C["Feature contract"]
+    C --> D["Internal model signature"]
+    D --> E["Decision semantics"]
+    E --> F["Client response"]
+    E --> G["Stored prediction event"]
+    G --> H["Monitoring, feedback, audit, retraining"]
+
+    style A fill:#93C5FD,stroke:#536A9A,color:#111827
+    style B fill:#FFE04F,stroke:#536A9A,color:#111827
+    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style E fill:#FB7185,stroke:#536A9A,color:#111827
+    style F fill:#93C5FD,stroke:#536A9A,color:#111827
+    style G fill:#FFE04F,stroke:#536A9A,color:#111827
+    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
+```
+
+Suppose a new churn model replaces three one-hot columns with one categorical column. The model signature has changed, but the public API can remain stable because the service performs the new transformation internally. A different release may keep the model artifact unchanged and lower the retention-offer threshold from `0.70` to `0.55`. The JSON and model signature remain stable, yet decision semantics have changed and require a policy review.
+
+The stored event deserves equal attention. A live response can be correct while a monitoring pipeline quietly loses the ability to join predictions to outcomes. For example, renaming `prediction_id` inside an event can reduce label-join coverage days after the release. The online service stays green; quality monitoring loses its evidence.
+
+Each contract needs an owner and a version or release identifier. That identifier does not need to appear in the URL. A response can carry `contract_version`, `model_version`, and `policy_version`, while the stable route remains `/v1/predict`. Separate identifiers make incidents diagnosable because they reveal which layer changed.
+
+## Structural Compatibility Protects Shapes and Protocols
+<!-- section-summary: Structural compatibility preserves fields, types, requiredness, status codes, and other machine-readable rules used by clients. -->
+
+**Structural compatibility** concerns the parts a program can validate mechanically: field names, types, required fields, enum values, message numbers, status codes, and content types. OpenAPI is the common contract language for HTTP APIs. Protobuf schemas play a similar role for gRPC and event messages.
+
+An additive change is usually the safest form of evolution. A service can add an optional request field with a documented default, or add an optional response field that older clients ignore. The provider still needs evidence that real clients tolerate unknown fields. Some generated clients reject them, and some teams configure JSON deserializers strictly.
+
+The direction matters. An optional request field lets an old client call the new service, so it supports backward compatibility. A newly updated client can still fail against a retained service that rejects unknown fields. Before clients start sending the field, update the retained release or place a compatibility facade in front of both releases. An optional response field has the opposite risk: older clients must ignore a field they have never seen.
+
+Structural breaks include:
+
+- removing or renaming a field that a client reads;
+- changing `integer` to `string`, or scalar to array;
+- turning an optional request field into a required one;
+- removing an enum value still present in stored records;
+- changing a successful response from JSON to a different media type;
+- replacing a stable error object with free-form text;
+- shortening a timeout below the caller's established latency budget.
+
+A focused FastAPI boundary makes these rules executable. Pydantic validates the request, FastAPI validates and filters the declared response, and both models feed the generated OpenAPI document.
 
 ```python
-from datetime import datetime
-from typing import Any
-
+from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
+app = FastAPI()
 
-class EtaPredictionRequest(BaseModel):
+class RiskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    account_id: str
+    amount_minor: int = Field(ge=0)
+    currency: str
+    channel: str | None = None  # additive; service owns the default
 
-    order_id: str
-    pickup_lat: float
-    pickup_lng: float
-    dropoff_lat: float
-    dropoff_lng: float
-    order_created_at: datetime
-    vehicle_type: str
-    client_features: dict[str, Any] = Field(default_factory=dict)
+class RiskResponse(BaseModel):
+    prediction_id: str
+    risk_score: float = Field(ge=0, le=1)
+    decision: str
+    reason_codes: list[str] = Field(default_factory=list)
+    policy_version: str | None = None  # additive response field
 
-
-class EtaPredictionResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    order_id: str
-    eta_minutes: int
-    eta_lower_minutes: int
-    eta_upper_minutes: int
-    interval_nominal_coverage: float
-    model_name: str
-    model_version: str
-    model_alias: str
-    request_id: str
-    explanation_codes: list[str] = Field(default_factory=list)
+@app.post("/v1/risk", response_model=RiskResponse)
+def score(request: RiskRequest) -> RiskResponse:
+    return score_with_current_release(request)
 ```
 
-The request model rejects unknown top-level fields, which keeps the input contract clean. The response model allows extra fields, which keeps additive response changes safe. The important part is the release habit around these models. A field moves through stages before it can affect all callers:
+This code protects the shape. Separate semantic tests confirm that `amount_minor` means the smallest currency unit, `risk_score` is calibrated, and `decision` uses the approved threshold.
 
-| Change | Compatible release path |
-|---|---|
-| Add response field | Add it as optional, document it, keep old fields unchanged |
-| Add request field | Add it as optional, backfill or default it in serving, track caller adoption |
-| Rename response field | Add the new field, keep the old field during migration, publish a deprecation date |
-| Change field type | Create a new field or new API version; keep the old type in the existing contract |
-| Remove field | Remove only after callers have migrated and the API owner has evidence |
-| Change model meaning | Keep the output definition stable, or create a new endpoint/version with product approval |
+### Request evolution
 
-This is where model APIs differ from ordinary CRUD APIs. A field can keep the same name and type while the meaning drifts. If `interval_nominal_coverage` used to mean a reviewed 90 percent prediction interval and version 18 changes the construction method or target coverage, the JSON shape stays the same while the product contract changes. The team must either preserve the reviewed meaning or version the field and migrate callers.
+New model inputs rarely need to become new caller requirements. A serving layer can derive a feature, fetch it from an online store, or use an explicit missing-value path. If clients eventually need to supply the value, introduce it as optional and publish its meaning. Adoption telemetry then shows whether a deliberately versioned required field is practical.
 
-![Add weather features safely](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/add-weather-features-safely.png)
+For example, a ranking model may start using `device_class`. Existing clients omit it. The service assigns `UNKNOWN`, logs that fallback, and exposes an adoption metric by client version. Once every supported client sends a validated value, the team can decide whether requiredness adds enough value to justify a new contract.
 
-*The serving layer can enrich old requests with weather features, return optional metadata, and keep existing callers reading the required ETA fields.*
+### Response and error evolution
 
-The API contract should therefore include plain product definitions:
+Required response fields should keep their names, types, units, and nullability throughout the promised support window. Optional metadata can grow around that stable core. Error responses also form a contract: callers may retry `503`, fix input after `422`, and stop after an authorization error. Stable error codes such as `FEATURE_UNAVAILABLE` are safer for programs than human messages, which can change for clarity or localization.
+
+Timeout behavior belongs here too. If the server deadline is three seconds and a new enrichment call routinely needs four, callers see a compatibility failure even though the OpenAPI schema is unchanged. Define deadlines, cancellation behavior, retryable status codes, and any fallback response as part of the public service contract.
+
+## Semantic Compatibility Protects Meaning
+<!-- section-summary: Semantic compatibility keeps the same business interpretation even if fields and types appear unchanged. -->
+
+**Semantic compatibility** asks whether the same value still means the same thing. This is the central ML concern because model outputs are estimates, ranks, labels, or vectors whose interpretation depends on data and policy.
+
+### Units, labels, and ranges
+
+A field called `amount` could represent pounds, pence, dollars, or a normalized training value. A duration could use seconds in one release and milliseconds in another. Both fit inside a number. The contract should name the unit directly, such as `amount_minor` or `latency_ms`, and tests should use boundary values that reveal conversion errors.
+
+Labels need the same care. Suppose a client understands `HIGH` as a risk band and applies its own policy. Replacing that value with `BLOCK` turns an observation into an action. A safe migration adds `decision` while retaining `risk_band`. Callers move to the new field during the support window. Usage telemetry later provides the evidence for removing the old field.
+
+### Calibration, thresholds, and policy
+
+A probability answers a different question from a ranking score. A calibrated `0.8` should correspond to roughly eight positive outcomes among comparable predictions over an appropriate evaluation set. An uncalibrated score of `0.8` may only mean “ranked higher than another case.” A client threshold cannot safely cross that boundary.
+
+Keep raw model output and product decision distinguishable:
 
 ```yaml
-x-ml-contract:
-  output_meaning:
-    eta_minutes: "Predicted minutes from response time until customer delivery."
-    eta_lower_minutes: "Lower bound of the reviewed prediction interval."
-    eta_upper_minutes: "Upper bound of the reviewed prediction interval."
-    interval_nominal_coverage: "Target coverage of the interval; actual coverage is monitored by segment."
-  compatibility_window:
-    response_fields: "Required fields remain stable for at least 180 days."
-    request_fields: "New required fields require a new API version or migration plan."
-  owners:
-    api_owner: "ml-platform-serving@parcelpilot.example"
-    model_owner: "eta-modeling@parcelpilot.example"
-    product_owner: "delivery-experience@parcelpilot.example"
+prediction_id: "pred_7f2a"
+risk_score: 0.82
+score_semantics: "calibrated_probability"
+calibration_version: "isotonic-4"
+decision: "REVIEW"
+policy_version: "manual-review-7"
 ```
 
-That metadata makes the review concrete. The model owner approves model quality, the API owner approves request and response shape, and the product owner approves the meaning of the output in the customer workflow.
+This record tells an investigator that the model produced a calibrated probability and a separate policy converted it into an action. A threshold update can then move through policy review without pretending that the model changed. A recalibrated model can move through model review without hiding behind the same policy version.
 
-## Model Aliases and Version References
-<!-- section-summary: Registry aliases let serving code target a stable name while owners move the alias after validation. -->
+### Freshness, missing values, and feature order
 
-After the API contract is stable, the next question is how the serving layer chooses the model. A fragile service hardcodes version 17 in application code. Every promotion needs a code change, and every rollback needs a code change. A safer serving layer points at a **model alias** such as `Champion`, while the registry maps that alias to a concrete model version.
+Feature values carry context beyond type. A balance observed ten seconds ago differs from a balance observed two days ago. A missing value may mean “unknown,” “not applicable,” “source unavailable,” or a genuine zero. Replacing all missing values with zero can turn an infrastructure problem into confident predictions.
 
-In MLflow Model Registry, an alias is a named reference to a registered model version. The serving service can load `models:/prod.ml_team.delivery_eta@Champion`, and the registry owner can reassign `Champion` from version 17 to version 18 after validation. Databricks recommends Models in Unity Catalog for governed model lifecycle work, and Unity Catalog models use MLflow-compatible client APIs for aliases, permissions, lineage, and discovery.
+A useful feature contract records:
 
-The training job should log a model with a signature and an input example because the serving team needs to know the model input shape. In MLflow 3, use the `name=` parameter when logging a model rather than the older `artifact_path=` style.
+- source and transformation version;
+- unit and allowed range;
+- maximum age at prediction time;
+- missing-value meaning and fallback;
+- ordering for positional arrays;
+- action after a freshness or validation failure.
+
+In an account-risk service, a stale balance might trigger `REVIEW` through a conservative policy. In a low-risk recommendation service, the same issue might use a popularity fallback. The right action depends on the cost of an incorrect prediction. The contract makes that choice explicit so a feature outage has a designed outcome.
+
+Feature ordering deserves special attention for NumPy arrays, tensors, and exported models. Swapping `age_days` and `balance_minor` can produce valid shapes and absurd predictions. Named columns, validated signatures, and golden transformation fixtures reduce that risk.
+
+### Embeddings and vector dimensions
+
+Embeddings create another silent boundary. A search index built with one embedding model should not receive query vectors from a different space. Equal dimensions do not guarantee equal meaning; different dimensions create an immediate structural failure.
+
+A vector contract should carry an embedding model identifier, dimension, normalization rule, and distance metric. A migration usually builds a new index or column, writes both representations for a period, reads from the selected version, and compares retrieval quality before traffic moves. Overwriting the existing vector column removes the rollback path and mixes incompatible spaces.
+
+```mermaid
+flowchart TD
+    A["New embedding model"] --> B["Write vector_v2 beside vector_v1"]
+    B --> C["Build v2 index with declared dimension and metric"]
+    C --> D["Replay search queries against both indexes"]
+    D --> E{"Quality and latency gates pass?"}
+    E -->|"Yes"| F["Move reads to v2"]
+    E -->|"No"| G["Keep v1 active"]
+    F --> H["Retain v1 through rollback window"]
+
+    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style B fill:#93C5FD,stroke:#536A9A,color:#111827
+    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style D fill:#FFE04F,stroke:#536A9A,color:#111827
+    style E fill:#FB7185,stroke:#536A9A,color:#111827
+    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style G fill:#FB7185,stroke:#536A9A,color:#111827
+    style H fill:#93C5FD,stroke:#536A9A,color:#111827
+```
+
+## Model Signatures Guard the Internal Boundary
+<!-- section-summary: The public API validates caller input, while the MLflow signature validates the model-ready data after enrichment and transformation. -->
+
+An **MLflow model signature** declares the inputs, outputs, and optional inference parameters expected by a model artifact. It protects the boundary closest to the model. The public API contract protects a different boundary: the one between the product caller and the service.
+
+The distinction matters because callers rarely send a model-ready matrix. A request may contain an account identifier, amount, currency, and request context. The service fetches governed features, converts units, encodes categories, orders columns, and then calls the model. Requiring the public request to mirror the internal tensor couples every client to the training implementation.
+
+```mermaid
+flowchart TD
+    A["Caller JSON"] --> B["FastAPI and Pydantic validation"]
+    B --> C["Feature lookup and unit conversion"]
+    C --> D["Named model-ready frame"]
+    D --> E["MLflow signature validation"]
+    E --> F["Model inference"]
+    F --> G["Calibration and decision policy"]
+    G --> H["Public response validation"]
+
+    style A fill:#93C5FD,stroke:#536A9A,color:#111827
+    style B fill:#FFE04F,stroke:#536A9A,color:#111827
+    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style E fill:#FB7185,stroke:#536A9A,color:#111827
+    style F fill:#93C5FD,stroke:#536A9A,color:#111827
+    style G fill:#FFE04F,stroke:#536A9A,color:#111827
+    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
+```
+
+MLflow can infer a signature from representative input and output data during logging. Production teams should still review the inferred result. A sample may miss optional columns, nullable values, parameter constraints, or an important output structure.
 
 ```python
-import mlflow
-import mlflow.sklearn
 from mlflow.models import infer_signature
 
-input_example = training_frame[
-    [
-        "pickup_lat",
-        "pickup_lng",
-        "dropoff_lat",
-        "dropoff_lng",
-        "vehicle_type_encoded",
-        "rain_mm_last_hour",
-        "wind_speed_kph",
-    ]
-].head(5)
+model_input = training_frame[MODEL_COLUMNS].head(20)
+signature = infer_signature(model_input, model.predict_proba(model_input))
 
-signature = infer_signature(input_example, model.predict(input_example))
-
-mlflow.set_registry_uri("databricks-uc")
-
-with mlflow.start_run(run_name="delivery-eta-v18"):
-    mlflow.log_metric("mae_minutes", 4.8)
-    mlflow.log_metric("p90_abs_error_minutes", 11.2)
-    mlflow.sklearn.log_model(
-        sk_model=model,
-        name="delivery_eta_model",
-        input_example=input_example,
-        signature=signature,
-        registered_model_name="prod.ml_team.delivery_eta",
-    )
+mlflow.sklearn.log_model(
+    sk_model=model,
+    name="model",
+    input_example=model_input.head(3),
+    signature=signature,
+)
 ```
 
-After the model passes offline evaluation and staging traffic checks, the registry owner can move aliases:
+An internal signature can change without creating a public API version. The serving adapter can map the stable request to the new signature. Its tests check the exact column names and order, then exercise missing values, unit conversions, and stale features. The public validator protects callers, while the model signature protects inference.
 
-```python
-from mlflow import MlflowClient
+## Retries Need Stable Outcomes
+<!-- section-summary: Retry compatibility defines whether repeating a request is safe and how the service recognizes a duplicate action. -->
 
-client = MlflowClient()
+A prediction request can finish on the server after the client has already timed out. The client sees no response and has to decide whether a retry is safe. A pure scoring endpoint can often recompute the prediction, although a model release between attempts may produce a different answer. An endpoint that also creates a durable action needs stronger protection.
 
-client.set_registered_model_alias(
-    name="prod.ml_team.delivery_eta",
-    alias="Candidate",
-    version="18",
-)
+Imagine a risk endpoint that scores a payout and automatically places high-risk payouts on hold. The first POST creates the hold, but the response is lost. A blind retry could create a second case or send a second notification. The client should send a stable operation key, and the service should store the completed result against that key.
 
-candidate = client.get_model_version_by_alias(
-    name="prod.ml_team.delivery_eta",
-    alias="Candidate",
-)
+```mermaid
+flowchart TD
+    A["POST with operation_id and request hash"] --> B{"Operation already recorded?"}
+    B -->|"No"| C["Score and apply the action once"]
+    C --> D["Store status and response"]
+    D --> E["Return response"]
+    B -->|"Same key and same hash"| F["Return stored response"]
+    B -->|"Same key and different hash"| G["Reject key reuse"]
 
-print(candidate.version)
+    style A fill:#93C5FD,stroke:#536A9A,color:#111827
+    style B fill:#FFE04F,stroke:#536A9A,color:#111827
+    style C fill:#FB7185,stroke:#536A9A,color:#111827
+    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style E fill:#93C5FD,stroke:#536A9A,color:#111827
+    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style G fill:#FB7185,stroke:#536A9A,color:#111827
 ```
 
-`Candidate` gives the rollout system a stable reference for the version under test. `Champion` should stay on version 17 until the canary gate passes. That small naming choice protects production callers because the release can shift traffic or aliases without asking mobile, dispatch, and support systems to change their own code.
+The operation record should outlive the client's retry window. It should bind the key to a canonical request hash so accidental reuse cannot apply a stale result to different input. The returned prediction, decision, policy version, and action identifier should match the first successful attempt.
 
-## Compatibility Tests in CI
-<!-- section-summary: Compatibility tests replay approved request and response examples before the model or endpoint can reach production. -->
+HTTP defines safe and idempotent method semantics, but many prediction APIs use POST. The application contract therefore has to state whether POST is retryable, which failures permit a retry, how long deduplication lasts, and whether a second computation may observe a newer model release. Clients should not infer these rules from a generic `500` response.
 
-A compatibility contract helps only when CI checks it. The release pipeline should fail before production if a new endpoint version rejects old requests, removes required response fields, changes important types, or changes the documented error shape.
+## Stored Predictions Have Their Own Consumers
+<!-- section-summary: Prediction events remain contracts long after the online response has finished. -->
 
-ParcelPilot keeps a small set of approved contract examples in the API repository:
+Production predictions are often stored or emitted to a stream. Those records support delayed quality measurement, outcome joins, incident investigation, regulatory evidence, analytics, and retraining. Their compatibility window can be much longer than the online API's window because old events may remain in object storage or a warehouse for months or years.
 
-```json
-{
-  "name": "checkout_bike_order_v1",
-  "request": {
-    "order_id": "ord_84721",
-    "pickup_lat": 51.5072,
-    "pickup_lng": -0.1276,
-    "dropoff_lat": 51.5155,
-    "dropoff_lng": -0.0922,
-    "order_created_at": "2026-07-05T13:15:00Z",
-    "vehicle_type": "bike"
-  },
-  "required_response_fields": [
-    "order_id",
-    "eta_minutes",
-    "eta_lower_minutes",
-    "eta_upper_minutes",
-    "interval_nominal_coverage",
-    "model_name",
-    "model_version",
-    "request_id"
-  ]
+A useful event contains durable identifiers and provenance:
+
+- `prediction_id` for feedback joins and incident lookup;
+- `contract_version`, `model_version`, and `policy_version`;
+- event time and feature observation time;
+- raw score and final decision, if policy is separate;
+- a governed reference to input data or an approved feature snapshot;
+- enough routing context to segment quality without storing unnecessary sensitive data.
+
+Protobuf is common for typed events and RPC messages. Field numbers are the wire identity, so a deleted number must never be reused. Reserved names also protect ProtoJSON and generated clients from an old field returning with a new meaning.
+
+```proto
+syntax = "proto3";
+package predictions.v1;
+
+message PredictionRecorded {
+  string prediction_id = 1;
+  string contract_version = 2;
+  string model_version = 3;
+  double risk_score = 4;
+  string decision = 5;
+
+  reserved 6;
+  reserved "legacy_label";
+
+  optional string policy_version = 7;
 }
 ```
 
-The CI test posts each old request to the candidate container and checks the response contract:
+Buf can compare the proposed schema with the version on the main branch and fail CI on incompatible Protobuf changes:
+
+```yaml
+# buf.yaml
+version: v2
+breaking:
+  use:
+    - FILE
+```
+
+```bash
+buf breaking --against '.git#branch=main'
+```
+
+`FILE` is a conservative policy that also protects generated source compatibility. `WIRE_JSON` is a useful minimum for systems that expose Protobuf through JSON because JSON field names are part of the encoded data. Binary Protobuf handles unknown fields more flexibly than ProtoJSON, so teams should choose the rule category from their real transport and consumer set.
+
+Schema checks still miss business meaning. A producer can keep `risk_score` as `double` and quietly change it from probability to ranking score. Add semantic fixtures and replay tests beside Buf. Monitoring should also track event production rate, decode failures, unknown versions, feedback-join coverage, and lag by contract version.
+
+## Compatibility Testing Needs Several Views
+<!-- section-summary: Schema checks, consumer tests, transformation fixtures, and production-like replays catch different compatibility failures. -->
+
+No single test can prove compatibility because the contracts fail in different ways. A strong CI gate combines fast structural checks with a small amount of production-like evidence.
+
+### Schema and provider checks
+
+Compare the proposed OpenAPI or Protobuf schema with the released baseline. Then start the candidate service and replay requests from every supported public contract. Assert the status code, required fields, types, error codes, and timeout budget. Keep examples small and representative: an ordinary request, optional fields absent, unknown enum, boundary values, missing features, and a dependency failure.
+
+### Consumer-driven checks
+
+Consumer-driven contracts help if independently deployed teams use the API. With Pact, each consumer records the minimal request and response interaction it relies on. Provider verification replays those interactions against the candidate provider. A Pact Broker compatibility check can then answer whether the selected consumer and provider versions have a verified combination for an environment.
+
+This adds coordination infrastructure, so it should solve a real ownership problem. A single service and client released from one repository may get enough value from typed builds, OpenAPI comparison, and end-to-end fixtures. A shared platform API with many independently released clients benefits much more from consumer-owned expectations.
+
+### Golden transformations
+
+A **golden fixture** is a reviewed input with an expected intermediate representation. It tests the adapter between the public request and model-ready data. Golden fixtures should cover unit conversion, category encoding, column order, missing values, and freshness decisions.
 
 ```python
-import requests
+def test_public_request_maps_to_model_signature():
+    frame = to_model_frame(load_fixture("old_client_missing_channel.json"))
 
-
-def test_old_checkout_request_still_works(candidate_url, contract_example):
-    response = requests.post(
-        f"{candidate_url}/v1/eta/predict",
-        json=contract_example["request"],
-        timeout=2,
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-
-    for field in contract_example["required_response_fields"]:
-        assert field in payload
-
-    assert isinstance(payload["eta_minutes"], int)
-    assert payload["eta_lower_minutes"] <= payload["eta_minutes"]
-    assert payload["eta_minutes"] <= payload["eta_upper_minutes"]
-    assert 0 < payload["interval_nominal_coverage"] < 1
-    assert payload["model_name"] == "prod.ml_team.delivery_eta"
+    assert list(frame.columns) == MODEL_COLUMNS
+    assert frame.loc[0, "amount_minor"] == 12_500
+    assert frame.loc[0, "channel"] == "UNKNOWN"
+    assert frame.loc[0, "balance_is_stale"] == 0
 ```
 
-This test checks the endpoint from the caller's side. It does not care whether the service uses FastAPI, KServe, BentoML, a custom container, or a managed serving platform. The caller sends JSON and receives JSON. That keeps the compatibility test tied to the product boundary.
+The expected prediction itself should usually use a tolerance or semantic property. Floating-point output can shift across compatible model releases. More durable assertions include score range, monotonic relationships, allowed labels, interval ordering, and a stable policy decision for protected fixtures.
 
-The model team should also keep model-level signature checks. The API contract says what callers send to the endpoint. The MLflow signature says what the model artifact expects after serving enrichment. If either shape changes, the release reviewer needs to know. The endpoint can remain backward compatible while the internal model signature changes, as long as the serving layer still maps old requests into the new model input.
+### Replay and shadow evidence
 
-A practical GitHub Actions gate might look like this:
+Replay a governed sample of recent requests through the current and candidate paths. First count rejected requests and cases that use the missing-feature path. Check whether the latency budget still holds. Then inspect score distributions, decision changes, and important user segments. Shadow traffic can provide fresher evidence without exposing candidate decisions to users. Apply the normal production-data controls to every replay sample.
 
-```yaml
-name: eta-api-compatibility
+```mermaid
+flowchart TD
+    A["Candidate contract change"] --> B["Schema compatibility check"]
+    B --> C["Old-client provider tests"]
+    C --> D["Consumer-owned interactions"]
+    D --> E["Golden feature transformations"]
+    E --> F["Replay or shadow comparison"]
+    F --> G{"Structural and semantic gates pass?"}
+    G -->|"Yes"| H["Eligible for progressive delivery"]
+    G -->|"No"| I["Repair contract, adapter, or policy"]
 
-on:
-  pull_request:
-    paths:
-      - "services/eta-api/**"
-      - "contracts/eta-api/**"
-      - ".github/workflows/eta-api-compatibility.yml"
-
-jobs:
-  contract-test:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: python -m pip install --require-hashes -r services/eta-api/requirements-dev.lock
-      - run: pytest services/eta-api/tests/test_contract_compatibility.py
-        env:
-          CANDIDATE_MODEL_ALIAS: Candidate
+    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style B fill:#93C5FD,stroke:#536A9A,color:#111827
+    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style D fill:#FFE04F,stroke:#536A9A,color:#111827
+    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style F fill:#93C5FD,stroke:#536A9A,color:#111827
+    style G fill:#FB7185,stroke:#536A9A,color:#111827
+    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style I fill:#FB7185,stroke:#536A9A,color:#111827
 ```
 
-The `environment: staging` line gives GitHub Actions a place to apply environment protection rules, secrets, and deployment approvals. The exact approval setup belongs in the repository settings, but the workflow should make the deployment target visible in code.
+Production telemetry closes the gap left by CI. Record contract version, client version, model version, policy version, validation result, deprecated-field usage, adapter path, and fallback reason. These fields let the team see which clients still depend on an old contract and whether the candidate creates a new failure pattern.
 
-## Canary Gates and Owners
-<!-- section-summary: A canary sends a small slice of traffic to the candidate model while owners watch compatibility, latency, errors, and prediction quality. -->
+## Migrate Contracts in Deliberate Stages
+<!-- section-summary: Safe migrations introduce the new contract alongside the old one, measure adoption, and remove old behavior only after evidence supports it. -->
 
-After CI passes, the team still needs a production-safe release step. A **canary** sends a small percentage of real traffic to the candidate version while most users stay on the stable version. This is useful for model APIs because offline metrics rarely cover every live segment. Weather, new restaurants, app versions, missing features, and customer behavior can show issues that validation data missed.
+Some changes cannot stay additive forever. A field may have a misleading name, an event may carry sensitive data, or a score may need a new semantic definition. A staged migration creates time for clients and stored data to move safely.
 
-With Argo Rollouts, the platform team can define canary steps and pause points. A service mesh or ingress controller can handle precise traffic routing, and analysis checks can query Prometheus before the rollout moves forward.
+A common sequence is:
 
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
-metadata:
-  name: eta-api
-  namespace: ml-serving
-spec:
-  replicas: 12
-  strategy:
-    canary:
-      stableService: eta-api-stable
-      canaryService: eta-api-canary
-      trafficRouting:
-        istio:
-          virtualService:
-            name: eta-api
-            routes:
-              - primary
-      steps:
-        - setWeight: 5
-        - pause:
-            duration: 20m
-        - analysis:
-            templates:
-              - templateName: eta-compatibility-checks
-        - setWeight: 25
-        - pause:
-            duration: 30m
-        - setWeight: 50
-        - pause:
-            duration: 30m
+1. **Introduce.** Add the new field, route, or event version. Keep the old path working.
+2. **Adapt.** Translate old requests into the new internal form. For stored data, dual-write both formats or publish a versioned event with an explicit converter.
+3. **Observe.** Measure reads, writes, validation failures, and client versions for both paths.
+4. **Deprecate.** Publish the replacement, owners, support window, and removal conditions. Alert owners of active consumers.
+5. **Remove.** Stop the old path only after usage reaches the agreed threshold, archives remain readable, rollback is safe, and the responsible owners approve.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Introduced
+    Introduced --> DualSupport: adapter or dual write active
+    DualSupport --> Deprecated: supported clients migrated
+    Deprecated --> Removed: usage and rollback gates pass
+    DualSupport --> Introduced: compatibility issue found
+    Deprecated --> DualSupport: active consumer discovered
+    Removed --> [*]
 ```
 
-The rollout checks should include API compatibility signals and model quality proxies. For example:
+Adapters are especially useful at the public boundary. An old request can map to the new internal feature contract without forcing every caller to understand model details. Dual-read is useful during storage migrations: readers prefer the new field and fall back to the old field. Dual-write supports mixed consumers, although it needs a consistency check because two representations can diverge.
 
-```yaml
-groups:
-  - name: eta-api-release
-    rules:
-      - alert: EtaApiCandidateValidationErrorsHigh
-        expr: |
-          sum(rate(http_requests_total{
-            service="eta-api",
-            status=~"4..",
-            model_alias="Candidate"
-          }[5m])) > 2
-        for: 10m
-        labels:
-          severity: page
-          owner: ml-platform-serving
-        annotations:
-          summary: "Candidate ETA API is rejecting too many requests"
+### Route, header, or event version
+
+A new URL such as `/v2/risk` is clear and easy to route, document, and retire. It also duplicates endpoint surface and asks callers to migrate. Use it for a genuinely incompatible public meaning or structure.
+
+A media-type or header version keeps the URL stable and can support fine-grained negotiation. It is less visible in browser tools, gateway configuration, and casual debugging. It works best if the organization already has strong API governance around negotiated versions.
+
+Event versions often belong in the schema name or topic, such as `predictions.v2.PredictionRecorded`, because old records and consumers live for a long time. A version field inside one loosely typed event is convenient, but every consumer must branch correctly and schema tooling has less power.
+
+A new model does not automatically need a new public API major version. The same contract can continue if request shape and response meaning remain stable. Decision policy and reliability expectations must remain inside their published bounds too. Public versioning follows caller-visible incompatibility, not the model registry version.
+
+## Rollback Must Protect the Newest Client
+<!-- section-summary: A release is safely reversible only if clients deployed during the release can still use the retained service or a compatibility adapter. -->
+
+Rollback plans often focus on the server: keep the previous container or model version, then route traffic back. That is only half of the problem. Clients may have deployed during the release and started using an additive field or a new event version. Sending those clients to an older server can turn a model rollback into an API outage.
+
+Before release, test the combinations that can exist during recovery:
+
+- oldest supported client with candidate service;
+- newest client with retained service;
+- candidate producer with retained event consumer;
+- retained producer with candidate event consumer;
+- both model versions behind the current decision policy;
+- both model signatures through the serving adapter.
+
+```mermaid
+flowchart TD
+    A["Candidate release adds optional client capability"] --> B{"Retained service accepts it?"}
+    B -->|"Yes"| C["Direct rollback remains safe"]
+    B -->|"No"| D["Place compatibility facade before both releases"]
+    D --> E["Facade ignores, defaults, or translates the field"]
+    E --> F["Test newest client against retained release"]
+    F --> C
+
+    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
+    style B fill:#FFE04F,stroke:#536A9A,color:#111827
+    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
+    style D fill:#FB7185,stroke:#536A9A,color:#111827
+    style E fill:#93C5FD,stroke:#536A9A,color:#111827
+    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
 ```
 
-This alert catches a classic compatibility failure: old callers send requests that the candidate endpoint rejects. The team should also watch `5xx` errors, 95th-percentile (**p95**) latency, fallback rate, missing feature rate, and online error proxy metrics such as customer ETA correction events. P95 is the latency that 95 percent of requests meet or beat. When labels arrive later, the model owner should compare actual arrival times against predictions by city, vehicle type, weather band, and app version.
+The compatibility facade can ignore an optional field, supply a stable default, translate an old name, or route a request to a compatible implementation. Keep it thin and observable. Log every adapter path and retire it through the same migration evidence used for public fields.
 
-Owners make the gate real:
+Data rollback needs equivalent planning. If the candidate writes a new event or vector format, the retained reader must understand it, or the migration must preserve the old representation. Backward-compatible storage is what makes server rollback operationally real.
 
-| Owner | Release responsibility |
-|---|---|
-| **API owner** | Approves OpenAPI changes, compatibility tests, error shape, and client migration notes |
-| **Model owner** | Approves offline evaluation, model signature, feature defaults, and quality thresholds |
-| **Platform owner** | Owns rollout YAML, routing, serving health, capacity, and rollback commands |
-| **Product caller owner** | Confirms mobile, dispatch, support, and batch callers can parse the response |
-| **Incident owner** | Confirms alerts, runbook, escalation path, and rollback decision points |
+## The Main Idea
 
-A model release should stop if any owner cannot explain how to roll back their part. That sounds strict, but it saves time during incidents. The team wants the rollback path decided before the pager rings.
+Model API compatibility is the discipline of preserving useful behavior across change. The public service, model signature, feature preparation, decision semantics, and stored prediction event are related contracts with different consumers and lifetimes.
 
-![Compatibility release gate](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/compatibility-release-gate.png)
+OpenAPI with FastAPI and Pydantic can protect an HTTP boundary. MLflow signatures can validate model-ready input and output. Protobuf with Buf can protect RPC and event schemas. Pact can capture expectations owned by independently deployed consumers. These tools find structural problems; semantic fixtures, replay comparisons, contract telemetry, and explicit policy versions protect meaning.
 
-*The release gate joins contract examples, CI checks, aliases, canary traffic, owner review, and rollback choices before `delivery_eta` reaches full traffic.*
-
-## Putting It Together
-<!-- section-summary: A compatible model API separates caller stability from model improvement, then enforces that separation with schemas, aliases, tests, canaries, and owners. -->
-
-Backward-compatible model APIs let teams improve models without surprising every product caller. The stable part is the API contract: approved requests keep working, required response fields stay useful, error categories stay predictable, and output definitions keep their product meaning. The flexible part is the model implementation behind the endpoint: the model version, internal features, registry alias, container image, and canary traffic can move through a controlled release process.
-
-For ParcelPilot, version 18 can use weather features because the serving layer enriches old requests. The response can add optional metadata because clients keep parsing the required fields. MLflow and Databricks aliases let the platform target `Candidate` and `Champion` rather than asking callers to hardcode versions. CI replays old contract examples, and the canary gate watches live validation errors, latency, fallback, and prediction quality proxies.
-
-The important habit is ownership. The model owner cannot carry API compatibility alone, and the API owner cannot judge prediction quality alone. A good release names the API, model, platform, product, and incident owners before production traffic moves. That gives the team a clean release path and a clean rollback path.
+The strongest release process asks three questions. Can every supported old client use the candidate? Can the newest client use the retained release during rollback? Do identical-looking values still carry the same units, freshness, score semantics, and decision policy? Clear answers turn compatibility from a documentation claim into release evidence.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [MLflow Model Signatures and Input Examples](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [Databricks MLflow 3 for models](https://learn.microsoft.com/en-us/azure/databricks/mlflow/mlflow-3-install)
-- [OpenAPI Specification v3.2.0](https://spec.openapis.org/oas/v3.2.0.html)
-- [JSON Schema object reference](https://json-schema.org/understanding-json-schema/reference/object)
-- [GitHub Actions workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
-- [GitHub Actions environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
-- [Argo Rollouts canary strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)
-- [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html)
+- [FastAPI request body validation](https://fastapi.tiangolo.com/tutorial/body/)
+- [FastAPI response models](https://fastapi.tiangolo.com/tutorial/response-model/)
+- [MLflow model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
+- [Protocol Buffers language guide](https://protobuf.dev/programming-guides/proto3/)
+- [Protocol Buffers compatibility practices](https://protobuf.dev/best-practices/dos-donts/)
+- [ProtoJSON format and compatibility](https://protobuf.dev/programming-guides/json/)
+- [Buf breaking change detection](https://buf.build/docs/breaking/)
+- [Buf breaking rules and categories](https://buf.build/docs/breaking/rules/)
+- [Pact provider and consumer verification](https://docs.pact.io/getting_started/how_pact_works)
+- [Pact Broker deployment compatibility checks](https://docs.pact.io/pact_broker/can_i_deploy)
+- [RFC 9110: HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html)

@@ -1,251 +1,476 @@
 ---
 title: "Data Leakage"
-description: "Explain the common ways future information sneaks into training and breaks trust."
-overview: "Data leakage happens when training or evaluation uses information that would not be available at prediction time. This article shows common leakage paths in production ML and how teams catch them before release."
+description: "Learn how illegitimate information enters ML development, inflates evaluation, and fails at the real decision boundary."
+overview: "Data leakage occurs when model development or evaluation receives information that the real decision could not legitimately use. This tutorial explains the major leakage paths, the reasoning needed to find them, and the industrial controls that prevent contaminated models from reaching production."
 tags: ["MLOps", "core", "datasets"]
 order: 3
 id: "article-mlops-data-for-ml-systems-data-leakage-explained"
 ---
 
-## Data Leakage Lets The Model Learn From Forbidden Information
-<!-- section-summary: Data leakage happens when model training or evaluation uses data that would be unavailable at prediction time. -->
+## Table of Contents
 
-**Data leakage** happens when a model learns from information that would be unavailable when the model runs in production. The score can look excellent during development because the model sees hints from the future, the target, or repeated entities across splits. Production then exposes the truth because those hints are absent.
+1. [What Data Leakage Means](#what-data-leakage-means)
+2. [The Prediction Contract Draws The Boundary](#the-prediction-contract-draws-the-boundary)
+3. [The Seven Leakage Paths](#the-seven-leakage-paths)
+4. [Target Leakage Gives The Model The Answer](#target-leakage-gives-the-model-the-answer)
+5. [Temporal And Availability Leakage Use Future Knowledge](#temporal-and-availability-leakage-use-future-knowledge)
+6. [Split And Entity Leakage Test Memory Instead Of Generalization](#split-and-entity-leakage-test-memory-instead-of-generalization)
+7. [Preprocessing Leakage Lets Evaluation Data Influence Fitting](#preprocessing-leakage-lets-evaluation-data-influence-fitting)
+8. [Post-Outcome Proxies Reveal The Response To The Outcome](#post-outcome-proxies-reveal-the-response-to-the-outcome)
+9. [Duplicate And Near-Duplicate Leakage Inflate Evaluation](#duplicate-and-near-duplicate-leakage-inflate-evaluation)
+10. [Human And Process Leakage Cross The Review Boundary](#human-and-process-leakage-cross-the-review-boundary)
+11. [Detect Leakage With Time, Causal, And Lineage Reasoning](#detect-leakage-with-time-causal-and-lineage-reasoning)
+12. [Build Leakage Prevention Into The Data Path](#build-leakage-prevention-into-the-data-path)
+13. [Where Industrial Tools Fit](#where-industrial-tools-fit)
+14. [Make Leakage Evidence A Release Gate](#make-leakage-evidence-a-release-gate)
+15. [Repair A Leakage Incident](#repair-a-leakage-incident)
+16. [The Main Idea](#the-main-idea)
+17. [References](#references)
 
-Leakage has four major paths. **Temporal leakage** uses facts created after prediction time. **Target leakage** includes the answer or a proxy created by the outcome process. **Transformation leakage** lets validation or test data influence preprocessing, selection, or tuning. **Entity contamination** puts related or duplicate examples on both sides of an evaluation boundary. Point-in-time joins, pipeline fitting boundaries, group-aware splits, and lineage checks address different paths; no one train-test split prevents all four.
+## What Data Leakage Means
+<!-- section-summary: Leakage gives model development information that the real decision could not legitimately use, creating an evaluation advantage that disappears in production. -->
+
+At a human level, **data leakage** means the model gets an unfair look at information during development. The real decision would have no legitimate access to that information, yet training, tuning, or evaluation receives it anyway.
+
+Imagine a model that predicts whether a payment will later be confirmed as fraud. During development, one input says whether the transaction was refunded. Refunds often happen after investigators confirm fraud. The model appears highly accurate because the organization has already reacted to the outcome. At authorization time, that reaction has not happened.
+
+Leakage creates a false evaluation. The score measures performance in a privileged development environment instead of the production decision. Deployment removes the privilege, and the model loses the relationship it depended on.
+
+The forbidden information can enter through a feature column, a join, a split, a preprocessing step, a duplicate example, or a human workflow. It can also influence model choice without appearing in the final training table. This is why leakage review covers the whole development process.
+
+The practical leakage test asks: for this exact entity and decision time, could the deployed system legitimately produce this value and fitted transformation before the outcome began?
+
+Every important control in leakage prevention comes from making that question precise.
+
+## The Prediction Contract Draws The Boundary
+<!-- section-summary: A prediction contract defines the entity, decision time, available information, target window, split claim, and action the model will support. -->
+
+Leakage cannot be judged from a column name alone. The same field may be legitimate for one prediction and forbidden for another. Teams first need a **prediction contract** that describes the real decision.
+
+The contract identifies the entity being scored and the moment the score is required. It defines the future outcome window used for the label. It also records the action that follows the prediction and the population the evaluation claims to represent.
+
+Consider a maintenance model that runs at 08:00 and predicts equipment failure during the next seven days. A temperature reading received at 07:55 is potentially valid. A technician report entered at 11:00 is unavailable. A repair code created after failure is part of the outcome process. A random row split across repeated readings from the same machine may test familiarity with machines instead of performance on new equipment.
+
+Four timestamps make the boundary visible:
+
+- **Event time** records the real-world moment a fact occurred.
+- **Available time** records the moment the ML system could retrieve that fact.
+- **Decision time** records the moment the prediction must be produced.
+- **Outcome time** records the event used to create the target.
 
 ```mermaid
-flowchart TB
-    Contract["Prediction contract: entity, decision time, target window"] --> Audit{"Where can information cross the boundary?"}
-    Audit --> Time["Time: facts recorded after prediction"]
-    Audit --> Target["Target: outcome or downstream-action proxy"]
-    Audit --> Fit["Fitting: validation or test influences transformations"]
-    Audit --> Entity["Entity: related examples cross evaluation splits"]
-    Time --> Controls["Point-in-time joins and availability timestamps"]
-    Target --> Controls2["Feature review and separate label pipeline"]
-    Fit --> Controls3["Fit preprocessing inside training folds"]
-    Entity --> Controls4["Group, time, or entity-aware splits"]
+flowchart TD
+    A["Entity and decision time T"] --> B["Information available<br/>to the deployed system by T"]
+    B --> C["Feature vector used<br/>for the decision"]
+    C --> D["Action or intervention"]
+    D --> E["Future outcome window"]
+    E --> F["Label produced after<br/>the outcome matures"]
+    G["Late source arrival"] --> H{"Available by T?"}
+    H -->|"Yes"| B
+    H -->|"No"| I["Exclude from the feature row"]
+    E --> J["Outcome-derived records"]
+    J --> I
+
+    classDef contract fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef valid fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef future fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A contract
+    class B,C valid
+    class D,E,F,G,H work
+    class I,J future
 ```
 
-This map gives each leakage path a matching control. A point-in-time join can prevent future records from entering a feature, yet it cannot stop a target encoder from learning category statistics from validation labels. A training-only preprocessing pipeline protects the fitting boundary, yet it cannot detect two accounts from the same household on opposite sides of a split. The review needs the full taxonomy because each control protects a different information boundary.
+The causal direction matters as much as the timestamps. If the outcome or a response to the outcome creates the feature, the value usually belongs outside the input boundary. A timestamp check can miss that relationship where systems backfill a late field with an earlier date.
 
-The previous article explained split purpose and shape. Leakage analysis asks a stricter question about every value and transformation: could the deployed system have produced this input, using only information and fitted state available at that prediction moment? This question covers timestamps, but also target-derived fields, globally fitted encoders, duplicates, household relationships, and human decisions made after a model score.
+## The Seven Leakage Paths
+<!-- section-summary: Seven recurring leakage paths cross feature, time, split, fitting, process, and similarity boundaries in different ways. -->
 
-## A Subscription Churn Model As A Supporting Example
-<!-- section-summary: A churn example shows temporal, target, preprocessing, and entity leakage around one weekly prediction moment. -->
+Leakage enters through several different boundaries. Naming the failed boundary tells the team which evidence to inspect and which control can stop the same path. Seven patterns cover most production cases:
 
-**StreamNest** is a video subscription product. The team wants to predict whether an active subscriber will cancel in the next 30 days, so the retention team can offer help, plan content recommendations, or improve onboarding. The model runs every Monday morning for active subscribers.
+1. **Target leakage** places the answer, or a direct transformation of it, inside the inputs.
+2. **Temporal and availability leakage** uses facts the system could not know by decision time.
+3. **Split and entity leakage** places related entities or time periods on both sides of an evaluation boundary.
+4. **Preprocessing leakage** fits transformations or feature selection with validation or test information.
+5. **Post-outcome proxy leakage** uses fields created by the organization's response to the outcome.
+6. **Duplicate and near-duplicate leakage** places the same underlying example in training and evaluation.
+7. **Human and process leakage** lets protected evaluation knowledge influence features, labels, tuning, or release choices.
 
-For StreamNest, one example represents one subscriber at one weekly scoring date. The entity is `subscriber_id_hash`, the prediction timestamp is `score_week_start_ts`, and the target is `churned_next_30d`. Features should describe activity before Monday morning: watch minutes, failed payments before the score time, support tickets already opened, plan type, tenure, and device mix.
+```mermaid
+flowchart TD
+    A["Could production legitimately know<br/>this information at decision time?"] --> B{"Where did the advantage enter?"}
+    B --> C["Feature meaning"]
+    B --> D["Time and availability"]
+    B --> E["Dataset boundaries"]
+    B --> F["Development process"]
+    C --> G["Target leakage"]
+    C --> H["Post-outcome proxy"]
+    D --> I["Temporal leakage"]
+    E --> J["Entity or split leakage"]
+    E --> K["Duplicate overlap"]
+    F --> L["Preprocessing leakage"]
+    F --> M["Human or process leakage"]
 
-The tempting fields arrive later. Cancellation reason, win-back offer response, final invoice status, last-watch date after the scoring date, and support tickets opened after the scoring date all describe the future. They can help analysts explain churn after it happens, yet they should stay out of the model inputs for Monday morning scoring.
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef boundary fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef leak fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B question
+    class C,D,E,F boundary
+    class G,H,I,J,K,L,M leak
+```
 
-Here is the contract the team reviews:
+Each path needs a different control. A chronological split cannot remove a refund flag created after fraud confirmation. A scikit-learn pipeline protects fitting scope, yet it cannot stop two copies of the same document from crossing splits. The taxonomy keeps prevention tied to the actual information path.
 
-| Field | Allowed as feature? | Reason |
-|---|---|---|
-| `watch_minutes_14d_before_score` | yes | Known before Monday scoring |
-| `failed_payment_count_30d_before_score` | yes | Known before Monday scoring |
-| `support_ticket_count_7d_before_score` | yes | Known before Monday scoring |
-| `cancel_reason` | no | Filled after a subscriber cancels |
-| `days_until_cancel` | no | Derived from the future target window |
-| `retention_offer_accepted` | no | Happens after the model selects outreach candidates |
+## Target Leakage Gives The Model The Answer
+<!-- section-summary: Target leakage places the label or a direct derivation of the label among the model inputs. -->
 
-This review is plain, and that is why it works. Every feature needs an availability rule tied to `score_week_start_ts`. Any field without that rule should pause the release review.
+The most obvious leakage path puts the answer inside the model input. It often comes from convenience columns retained during dataset assembly or from helpers used to construct the label.
 
-![StreamNest churn timeline showing allowed pre-score features on the left and blocked future data such as cancel reason, days until cancel, and offer accepted on the right](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/future-information-boundary.png)
+**Target leakage** means the feature contains the label itself or a direct calculation from the label.
 
-*The score-time boundary makes leakage visible: features can use facts known before scoring, while future cancellation evidence stays blocked.*
+A churn dataset may include `days_until_cancellation`. A credit model may include `defaulted_within_90d` under a renamed field. A document classifier may receive a file path containing the category label. The learning algorithm has little reason to discover a useful pattern because the answer is already encoded.
 
-## Future Information Leakage
-<!-- section-summary: Future information leakage uses data recorded after the prediction timestamp as if it were available before scoring. -->
+Target leakage can enter during table construction. A broad `SELECT *` may retain the target and helper columns used to build it. An analyst may create a convenience field such as `target_date - decision_date` and forget to remove it. Feature selection then identifies the field as extremely predictive.
 
-**Future information leakage** is the most direct leakage path. It uses a value recorded after prediction time to train a model that will run earlier. StreamNest might accidentally include `last_watch_ts` from the full customer history. That field gives the model a strong hint because subscribers who cancel often stop watching before the label window ends.
+### Prevention
 
-The fix starts with source filters. Feature queries should limit source events to values at or before `score_week_start_ts`. The query should also create feature names that include the lookback window, because a name like `watch_minutes` hides the timing rule.
+Keep feature and label pipelines logically separate. The feature path ends at decision time. The label path opens after the outcome window matures. Join the resulting target onto examples by a reviewed key, then expose only an explicit allowlist of features to training.
+
+Schema tests should fail if the target, label timestamp, outcome identifier, or target-building helpers appear in the feature set. A high-importance review adds another layer, because renamed or transformed target fields can pass a simple name check.
+
+### Detection
+
+Inspect the strongest individual features before approving a surprising metric. Trace each one to its source expression and owner. Remove the field and retrain. A dramatic collapse provides an investigation signal. It identifies the dependency that deserves causal and time review without establishing the cause by itself.
+
+## Temporal And Availability Leakage Use Future Knowledge
+<!-- section-summary: Temporal leakage attaches future or late-arriving facts to an earlier decision, even where their event timestamps appear valid. -->
+
+**Temporal leakage** uses information from after the decision to predict an earlier outcome. The common version joins a historical row to the latest record in a mutable table. Every old example then receives today's account state, current plan, or final case status.
+
+Availability leakage is subtler. A fact may have happened before the decision but reached the platform later. Suppose a payment failed at 09:50, the model scored an account at 10:00, and the event arrived at 10:12. Event time says the failure happened early enough. Available time shows that production could not use it.
+
+### Point-in-time retrieval
+
+A point-in-time join selects the newest record that was both valid and available for each historical decision. The SQL shape below keeps the timing rule close to the data:
 
 ```sql
-SELECT
-  e.subscriber_id_hash,
-  e.score_week_start_ts,
-  SUM(w.watch_minutes) AS watch_minutes_14d_before_score
-FROM ml_examples.churn_scoring_weeks e
-LEFT JOIN warehouse.watch_events w
-  ON w.subscriber_id_hash = e.subscriber_id_hash
-  AND w.event_ts >= TIMESTAMP_SUB(e.score_week_start_ts, INTERVAL 14 DAY)
-  AND w.event_ts < e.score_week_start_ts
-GROUP BY e.subscriber_id_hash, e.score_week_start_ts;
+WITH eligible AS (
+  SELECT
+    d.decision_id,
+    d.account_id,
+    d.decision_time,
+    f.failed_payments_10m,
+    f.event_time,
+    f.available_at,
+    f.feature_record_id,
+    ROW_NUMBER() OVER (
+      PARTITION BY d.decision_id
+      ORDER BY
+        f.event_time DESC,
+        f.available_at DESC,
+        f.feature_record_id DESC
+    ) AS feature_rank
+  FROM ml_decisions d
+  LEFT JOIN account_features f
+    ON f.account_id = d.account_id
+    AND f.event_time <= d.decision_time
+    AND f.available_at <= d.decision_time
+)
+SELECT *
+FROM eligible
+WHERE feature_rank = 1;
 ```
 
-The important rule is the upper bound on `w.event_ts`. The feature query only uses events before the scoring week starts. This same shape should appear in payments, support tickets, recommendations, and other time-windowed features.
+The two upper bounds protect different facts. The event-time condition blocks future events. The availability condition blocks information that arrived too late.
 
-## Target And Preprocessing Leakage
-<!-- section-summary: Target leakage and preprocessing leakage let the label or evaluation data influence feature creation before training. -->
+The source contract must define the winning record for tied timestamps through a stable key such as `feature_record_id`, or quarantine ambiguous duplicates before retrieval.
 
-**Target leakage** happens when a feature directly or indirectly includes the answer. StreamNest could create `has_cancel_ticket_next_30d`, `retention_offer_sent`, or `refund_issued_after_cancel`. Those fields predict churn because they describe the churn process itself.
+Feast historical retrieval and Databricks time-series feature tables provide point-in-time joins. Reviewed warehouse or lakehouse SQL can implement the same contract. The technology helps execute the rule; source history and timestamps determine whether the rule is possible.
 
-**Preprocessing leakage** happens when transformations learn from validation or test data before model review. For example, a scaler can compute means from the full dataset, or a target encoder can use labels from the validation month while building category statistics. The model may then receive information from rows that should have stayed outside training.
+### Verification
 
-In Python, the safer pattern is to fit preprocessing on training rows and apply it to validation or test rows through a pipeline:
+Build tiny boundary fixtures. Place one event before the decision, one at the boundary, one after it, and one late-arriving event with an earlier event time. Assert the selected value and provenance. Re-run the query against a historical snapshot to verify reproducibility.
+
+## Split And Entity Leakage Test Memory Instead Of Generalization
+<!-- section-summary: Split leakage places related entities, groups, or overlapping time windows in training and evaluation, weakening the claim that the model generalizes. -->
+
+**Split leakage** occurs when the evaluation set is too closely related to training. The model may recognize an entity, household, device, location, patient, document source, or nearby time period instead of learning a pattern that transfers to the intended population.
+
+Suppose one patient contributes twenty visits. A random row split places some visits in training and others in validation. The model can learn patient-specific signals. That design may answer “How well do we score future visits for known patients?” It cannot support a claim about unseen patients.
+
+The correct split follows the deployment claim. Use an entity or group holdout for unseen entities. Use a chronological holdout for future periods. Use both where the model must face new entities in a future period. Label windows that overlap a boundary may require a gap so training outcomes cannot cross into evaluation time.
+
+### Group-aware fitting
+
+scikit-learn's `GroupKFold` keeps each group on one side of a cross-validation fold. `TimeSeriesSplit` preserves temporal order for equally spaced time-series samples. Industrial pipelines often create explicit split assignments in Spark, dbt, or warehouse SQL and persist those assignments with the dataset manifest.
+
+An overlap check should compare more than the row identifier. Review account, household, device, source document, location, and any domain group that could provide a memory path. Record which overlaps are expected and which evaluation claim they permit.
+
+### A concrete check
+
+For a support model, the release claim targets new organizations. The team groups rows by `organization_id` before cross-validation. A second report measures whether the same contact, email domain, or conversation thread appears across folds. The organization split protects the main claim; the additional report catches hidden identity links.
+
+## Preprocessing Leakage Lets Evaluation Data Influence Fitting
+<!-- section-summary: Preprocessing leakage learns transformation state from validation or test rows before evaluation. -->
+
+Models learn more than estimator weights. Imputers learn replacement values. Scalers learn means and variances. Encoders learn categories or target statistics. Feature selectors and dimensionality reducers learn which directions look useful.
+
+**Preprocessing leakage** occurs if those steps fit on validation or test data. Even an unsupervised scaler reveals properties of the held-out distribution. A target encoder can reveal label rates directly if it sees protected labels.
+
+The safe order is split first, then fit. Cross-validation must refit every learned transformation inside each training fold. Validation rows receive `transform` or `predict`; they never contribute to `fit`.
 
 ```python
-from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GroupKFold, cross_val_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
-numeric_features = ["watch_minutes_14d_before_score", "failed_payment_count_30d_before_score", "tenure_days"]
-categorical_features = ["plan_type", "primary_device_family"]
-
-preprocess = ColumnTransformer(
-    transformers=[
-        ("num", Pipeline([("imputer", SimpleImputer()), ("scaler", StandardScaler())]), numeric_features),
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
-    ]
+pipeline = make_pipeline(
+    SimpleImputer(strategy="median"),
+    StandardScaler(),
+    LogisticRegression(max_iter=1000),
 )
 
-model = Pipeline(
-    steps=[
-        ("preprocess", preprocess),
-        ("classifier", LogisticRegression(max_iter=1000)),
-    ]
+cv = GroupKFold(n_splits=5)
+scores = cross_val_score(
+    pipeline,
+    X,
+    y,
+    groups=organization_id,
+    cv=cv,
+    scoring="roc_auc",
 )
-
-model.fit(X_train, y_train)
-validation_scores = model.predict_proba(X_validation)[:, 1]
 ```
 
-The pipeline fits imputers, scalers, encoders, and the classifier during `model.fit(X_train, y_train)`. Validation data only flows through the already fitted transformation path. This pattern aligns with scikit-learn's guidance to avoid leakage during preprocessing.
+The pipeline fits the imputer, scaler, and classifier separately inside each training fold. `GroupKFold` keeps organizations from crossing folds. The snippet protects two boundaries with separate mechanisms.
 
-![Safe preprocessing diagram showing scalers, imputers, and encoders fitted on train rows and then applied to validation and test rows, with fit-on-all-rows marked as leakage](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/train-only-preprocessing.png)
+Target encoding needs additional care. Training rows should receive out-of-fold encodings, while validation and test rows use statistics fitted from the training partition. Feature selection, PCA, text vocabulary building, and learned embeddings follow the same fitting rule.
 
-*Preprocessing stays leakage-safe when it learns statistics from training rows first, then applies those fitted steps to validation and test rows.*
+Hyperparameter search belongs inside the development boundary. The final test set remains sealed until model and preprocessing choices are fixed.
 
-## Entity Leakage Across Splits
-<!-- section-summary: Entity leakage happens when the same real-world person, account, device, or item appears on both sides of a split in a way that inflates evaluation. -->
+## Post-Outcome Proxies Reveal The Response To The Outcome
+<!-- section-summary: Post-outcome proxies encode actions, statuses, or administrative records created because the outcome occurred or was suspected. -->
 
-**Entity leakage** appears when the same real-world entity crosses split boundaries and gives the model an easy memory path. StreamNest scores subscribers weekly, so one subscriber can appear many times. If the team randomly splits weekly rows, the model may train on a subscriber in March and evaluate on the same subscriber in April.
+A **post-outcome proxy** is a field produced by the outcome process. It may have a different name and business purpose from the target, yet it carries the organization's response to that target.
 
-Sometimes that design is acceptable because production also scores the same subscriber repeatedly. The danger comes when the evaluation question claims the model generalizes to new subscribers while the split contains repeated subscribers across train and test. The split should match the claim.
+Examples include a refund issued after confirmed fraud, a cancellation reason added after churn, a repair code entered after equipment failure, or a treatment prescribed after diagnosis. These fields can be powerful predictors because humans and systems created them after observing evidence close to the answer.
 
-StreamNest can run an overlap check:
+### Use causal reasoning
 
-```sql
-WITH train_entities AS (
-  SELECT DISTINCT subscriber_id_hash
-  FROM ml_curated.churn_examples
-  WHERE split_name = 'train'
-),
-test_entities AS (
-  SELECT DISTINCT subscriber_id_hash
-  FROM ml_curated.churn_examples
-  WHERE split_name = 'test'
-)
-SELECT
-  COUNT(*) AS overlapping_subscribers
-FROM train_entities tr
-JOIN test_entities te
-  USING (subscriber_id_hash);
-```
+Ask what caused the field to exist. If confirmation of the target, investigation of the target, or an intervention after the target produced the field, the feature sits downstream of the outcome. Moving its timestamp backward or joining it from a current-state table cannot make it legitimate.
 
-If the release review targets all active subscribers, a time split with repeated entities can make sense. If the model supports a new-market launch with many new subscribers, the team may need an entity holdout or a separate new-subscriber test slice.
+Suppose a model predicts whether a support case will escalate within 24 hours. `senior_agent_assigned` may appear before the formal escalation timestamp. A senior agent was assigned because the frontline team already saw signs of escalation. The field may encode a human judgment unavailable at the initial routing decision.
 
-## Point-In-Time Joins
-<!-- section-summary: Point-in-time joins attach historical feature values as they existed at each prediction timestamp. -->
+### Align the feature with the use case
 
-A **point-in-time join** attaches feature values to examples as of each row's prediction timestamp. This is the core operation behind leakage-free training data for time-based models. The join should choose the latest valid feature record at or before the scoring timestamp, with freshness limits where needed.
+The same field can be valid for a later decision. Senior-agent assignment may help predict resolution time after escalation has started. Prediction contracts determine legitimacy by decision time and purpose.
 
-For StreamNest, a subscriber plan feature may update whenever the user changes plans. The model should use the plan that was active on Monday morning, not the plan after cancellation. A point-in-time query can express that rule:
+Feature review should include a causal note: who or what creates the field, which event triggers it, and whether the proposed model action happens before that trigger.
 
-```sql
-WITH ranked_plan AS (
-  SELECT
-    e.subscriber_id_hash,
-    e.score_week_start_ts,
-    p.plan_type,
-    p.updated_ts,
-    ROW_NUMBER() OVER (
-      PARTITION BY e.subscriber_id_hash, e.score_week_start_ts
-      ORDER BY p.updated_ts DESC
-    ) AS plan_rank
-  FROM ml_examples.churn_scoring_weeks e
-  JOIN warehouse.subscriber_plan_history p
-    ON p.subscriber_id_hash = e.subscriber_id_hash
-    AND p.updated_ts <= e.score_week_start_ts
-)
-SELECT
-  subscriber_id_hash,
-  score_week_start_ts,
-  plan_type
-FROM ranked_plan
-WHERE plan_rank = 1;
-```
+## Duplicate And Near-Duplicate Leakage Inflate Evaluation
+<!-- section-summary: Exact or semantically similar examples across splits let evaluation reward memorization and repeated content. -->
 
-Feature-store systems such as Feast provide point-in-time retrieval so teams avoid rewriting this logic for every model. Even when a team writes SQL directly, the same principle applies: the feature value must represent what the model could have known at prediction time.
+Duplicate leakage places the same underlying example in training and evaluation. Exact row identifiers catch only the simplest form. Copies may differ in formatting, metadata, image crop, timestamp, language, or a small edit while preserving nearly identical predictive content.
 
-## Prove The Prediction-Time Boundary
-<!-- section-summary: A leakage review checks feature availability, label definitions, preprocessing, entity overlap, and suspicious metric jumps. -->
+A document classifier may train on one copy of a policy page and test on the same page with a new crawl timestamp. An image model may see two crops from the same original image. A transaction model may receive retry records for one purchase in different splits.
 
-Leakage reviews should happen before model approval, especially when a new feature group creates a large score jump. The reviewer should ask for evidence, not reassurance. A short checklist helps the team make the review repeatable.
+Research on language-model datasets has shown that near-duplicate train-test overlap can distort evaluation and increase memorization. The same principle applies to smaller production models: a held-out copy is weak evidence of generalization.
 
-| Check | Evidence to request | StreamNest example |
-|---|---|---|
-| Prediction timestamp exists | Dataset column and contract | `score_week_start_ts` on every row |
-| Feature availability rule exists | Feature definition file | All windows end before score time |
-| Label query is separate from features | SQL review | `churned_next_30d` only appears as target |
-| Preprocessing fits on train only | Pipeline code or test | Encoders and scalers fitted in training pipeline |
-| Entity overlap is intentional | Overlap query and release claim | Weekly repeat subscribers reviewed explicitly |
-| Metric jump has explanation | Diff report and feature review | New support-ticket feature checked for future tickets |
+### Detect similarity before splitting
 
-The team should also add a suspicious-feature report. Very high single-feature importance for a field with vague timing should trigger review. A model that suddenly reaches near-perfect validation performance usually deserves a data investigation before any release celebration.
+Normalize stable content and compute exact hashes first. For text, MinHash or locality-sensitive hashing can form similarity clusters. Image perceptual hashes or embedding similarity can identify transformed copies. Domain identifiers such as original document, session, order, or study provide stronger grouping where available.
 
-Leakage checks should run at several boundaries. Dataset construction checks timestamps and join eligibility. Training checks which rows fit transforms and tune hyperparameters. Evaluation checks entity overlap and confirms that the protected test set influenced no model choice. Release review checks whether every feature can be produced with the same source, timing, and policy in production.
+Assign the whole duplicate cluster to one split. Deduplicating each split independently leaves cross-split overlap in place. The manifest records the normalization version, similarity method, threshold, cluster count, removed examples, and remaining overlap.
 
-When a check fails, quarantine the affected dataset version and preserve its manifest, queries, and report. The data owner determines whether the source timestamp is wrong, the join used a future record, the label entered the feature path, or the split contract was violated. The team then rebuilds a new dataset identity and reruns every experiment that used the contaminated version. Editing the dataset under the old version would leave earlier run evidence pointing at changed content.
+### Check the intended unit
+
+Some repeated examples are legitimate production frequency. Removing every duplicate may change the population the model will serve. The evaluation boundary still needs independent underlying cases. Keep frequency through weights or training policy while protecting the test set from copies of training examples.
+
+## Human And Process Leakage Cross The Review Boundary
+<!-- section-summary: Human choices leak protected information through repeated test use, outcome-aware feature design, annotation context, and manual data repair. -->
+
+Leakage can happen outside code. People see evaluation results, inspect outcomes, modify features, and choose the best-performing candidate. Those choices transmit information back into development.
+
+Repeatedly checking the test set turns it into a validation set. A team tries many feature sets, keeps the one with the highest test score, and reports that same score as independent evidence. The final model has indirectly fitted human decisions to the test set.
+
+Annotation can create another path. A reviewer labels an early-risk case while seeing later notes that reveal the outcome. A data-cleaning analyst repairs ambiguous rows after reading the target. A domain expert proposes a feature after studying failed test examples. Each action may be reasonable for exploration, but the protected evaluation claim has changed.
+
+### Protect the process
+
+Use separate development, validation, and test responsibilities. Track model and feature choices against validation evidence. Restrict test-set access, record every evaluation, and create a new protected holdout after extensive test reuse.
+
+Labeling instructions should state the observation cutoff. Annotation interfaces hide post-decision notes and outcomes for tasks that require an earlier perspective. Adjudication records the evidence visible to reviewers.
+
+Human review remains valuable. The control is to distinguish exploratory feedback from independent evaluation and to version the dataset after protected information influenced a decision.
+
+## Detect Leakage With Time, Causal, And Lineage Reasoning
+<!-- section-summary: Detection combines prediction-time reconstruction, causal review, split overlap, pipeline inspection, suspicious metrics, and source lineage. -->
+
+No single test can prove a dataset is leakage-free. Detection works by following information from its source to the prediction and asking whether each crossing is legitimate.
+
+### Reconstruct one decision
+
+Choose a few historical examples and replay them from the source systems. Use the original decision time and source snapshots. Confirm that every input existed, had arrived, passed its freshness rule, and used transformation state fitted from earlier development data.
+
+This exercise often finds problems hidden by aggregate checks: a mutable dimension table, a label helper retained by `SELECT *`, an ingestion delay, or a human status field created downstream.
+
+### Review causality and availability
+
+For every important feature, record its producer, triggering event, event time, available time, and relationship to the target. Ask whether the outcome or a response to the outcome causes the feature. Ask whether production can retrieve it before the action.
+
+Feature importance and excellent metrics are investigation signals. They cannot establish legitimacy. A genuinely strong feature may dominate the model, while a subtle leak may spread across many columns.
+
+### Compare evaluation designs
+
+Compare a random split with time, group, and duplicate-cluster holdouts that reflect the deployment claim. A large score drop reveals dependence on proximity or identity. The stricter score may be the honest estimate.
+
+Run exact and near-duplicate overlap reports. Measure entity, household, device, session, location, and source overlap according to the domain. Verify that preprocessing and tuning fit only within each training fold.
+
+### Trace lineage
+
+Follow the dataset lineage from raw tables through transformations, feature tables, split assignments, training runs, and model versions. Inspect SQL and pipeline changes behind sudden metric improvements. Lineage turns a vague concern into a concrete source expression and affected release set.
+
+## Build Leakage Prevention Into The Data Path
+<!-- section-summary: A reliable data path enforces the prediction contract through reviewed sources, point-in-time retrieval, split-aware fitting, immutable identities, and release evidence. -->
+
+Leakage prevention works best as part of dataset construction, training, and release. A late checklist can catch obvious columns, while automated boundaries stop the same error from returning.
 
 ```mermaid
-sequenceDiagram
-    participant B as Dataset builder
-    participant V as Leakage validation
-    participant T as Training pipeline
-    participant R as Release review
-    B->>V: Dataset version and prediction contract
-    V->>V: Check time, target, fit, and entity boundaries
-    alt boundary passes
-        V->>T: Publish immutable dataset identity
-        T->>R: Candidate and lineage
-        R->>R: Verify production feature availability
-    else boundary fails
-        V->>B: Quarantine version with evidence
-        B->>B: Correct source or transformation
-        B->>V: Publish a new dataset version
-    end
+flowchart TD
+    A["Prediction contract<br/>entity, decision time, target window"] --> B["Feature and label<br/>source review"]
+    B --> C["Point-in-time feature build<br/>with event and availability time"]
+    C --> D["Entity, time, and similarity<br/>group assignment"]
+    D --> E["Immutable split manifests"]
+    E --> F["Fold-local preprocessing<br/>and tuning pipeline"]
+    F --> G["Leakage reports<br/>time, overlap, lineage, ablation"]
+    G --> H{"Independent release<br/>review passes?"}
+    H -->|"No"| I["Quarantine dataset or candidate"]
+    H -->|"Yes"| J["Register model with<br/>dataset and feature lineage"]
+
+    classDef contract fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef block fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A contract
+    class B,C,D,E,F,G,H work
+    class I block
+    class J release
 ```
 
-This response path matters because leakage invalidates the meaning of the evaluation, not only one metric row. A model trained from contaminated evidence should return to the candidate state even when its serving tests pass.
+### Make time a first-class field
 
-## Habits That Prevent Leakage
-<!-- section-summary: Leakage prevention improves when teams make prediction time, label windows, and train-only preprocessing normal review habits. -->
+Every example carries an entity, decision time, and label window. Time-varying sources keep event and availability timestamps. Point-in-time tests cover boundary and late-arrival cases. Mutable current-state tables stay outside historical training unless the platform can reconstruct earlier states.
 
-Leakage prevention is easier when it is part of the normal dataset workflow. StreamNest adds three habits to every training-data pull request. First, each example table must have a prediction timestamp. Second, the label query must state the future window it uses. Third, preprocessing code must show which rows are used for fitting encoders, imputers, and scalers.
+### Freeze split identities
 
-Those habits make review concrete. Instead of asking whether the dataset "looks safe," a reviewer can inspect the timestamp, label window, and fit boundary. That keeps leakage from hiding inside a clever join or a convenient preprocessing helper.
+Create split assignments before preprocessing and tuning. Group related entities and duplicate clusters according to the evaluation claim. Persist the assignment logic, seed where relevant, row counts, group counts, time ranges, and overlap reports.
 
-## Putting It Together
-<!-- section-summary: Leakage prevention protects the promise that model evaluation reflects the information production will actually have. -->
+### Fit transformations inside the split
 
-For StreamNest, leakage prevention means every feature has a time boundary, every target comes from a reviewed label query, preprocessing fits only on training rows, and entity overlap matches the release claim. These habits keep the model from learning future cancellation evidence that Monday morning scoring would never have.
+Package imputation, scaling, encoding, feature selection, and the estimator in one pipeline. Cross-validation refits that pipeline for every training fold. Target-dependent transforms use out-of-fold values for training examples.
 
-The next article stays with labels and asks how teams create trustworthy targets when humans must interpret examples. It covers annotation instructions, blind overlap, agreement, adjudication, versioned label releases, and the operating checks that keep the labeling process healthy.
+### Preserve lineage and evidence
 
-![Leakage review checklist with prediction timestamp, feature availability, label query, train-only preprocessing, entity overlap, review evidence, and trusted score](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/leakage-review-checklist.png)
+Give every dataset build a new immutable identity. Record source snapshots, transformation code, feature definitions, label query, split manifest, deduplication version, and validation reports. Link that identity to experiment runs and registered models.
 
-*A leakage review asks for concrete evidence around time, labels, preprocessing, and entity overlap before the team trusts the model score.*
+## Where Industrial Tools Fit
+<!-- section-summary: Industrial stacks provide time-aware retrieval, split-safe fitting, data tests, similarity processing, lineage, and immutable experiment evidence. -->
+
+Leakage prevention is a system of controls. Different tools enforce time-aware retrieval, fitting scope, split independence, source quality, and lineage. The prediction contract supplies the meaning that connects those technical controls to the real decision.
+
+### Historical construction
+
+Warehouses and lakehouses such as BigQuery, Snowflake, and Databricks execute point-in-time SQL over versioned sources. Delta Lake and Apache Iceberg snapshots support reproducible source reads. dbt or Spark can build feature and label tables under separate models. Feast and Databricks Feature Engineering provide point-in-time feature retrieval where the source has suitable history and timestamps.
+
+### Training boundaries
+
+scikit-learn `Pipeline` and `ColumnTransformer` keep learned preprocessing with the estimator. `GroupKFold` protects group boundaries, and `TimeSeriesSplit` supports ordered time-series evaluation. Distributed teams can generate fixed fold or split assignments in Spark and pass those identities to training frameworks.
+
+Target encoders, feature selectors, and embedding models need fold-local fitting even where the API sits outside scikit-learn. Pipeline structure matters more than a particular library name.
+
+### Data checks and similarity
+
+dbt tests, Great Expectations, Soda, or Deequ can verify schema, keys, null rules, accepted ranges, and source relationships. Add domain-specific assertions for `available_at <= decision_time`, forbidden columns, split overlap, and label windows. Generic data quality checks cannot infer whether a refund is downstream of fraud; feature review supplies that causal knowledge.
+
+Exact hashes work in SQL or Spark. Large text and image collections may use MinHash, locality-sensitive hashing, perceptual hashing, or embedding similarity. The similarity job outputs durable cluster identifiers so split assignment can keep related examples together.
+
+### Lineage and experiment evidence
+
+MLflow dataset tracking records dataset names, digests, schemas, profiles, and sources as run inputs. OpenLineage connects jobs, runs, and datasets across orchestrators and data platforms. Native catalog lineage in systems such as Unity Catalog can expose affected tables and models.
+
+These systems improve traceability. Reproducibility still requires immutable or version-addressable source content because a metadata link to a mutable table cannot restore the rows used by an old run.
+
+## Make Leakage Evidence A Release Gate
+<!-- section-summary: A release gate requires concrete evidence for timing, feature legitimacy, split independence, fitting scope, duplication, lineage, and protected evaluation. -->
+
+A release reviewer should be able to verify the prediction boundary without trusting an informal assurance that the data is safe.
+
+The dataset package identifies entity, decision time, label window, action, and evaluation population. Every feature has an owner, source, event-time rule, availability rule, and causal explanation. Point-in-time fixtures prove boundary behaviour.
+
+The split package reports time ranges, group assignments, entity overlap, duplicate clusters, and any allowed overlap. Training evidence shows preprocessing and feature selection fitted within training folds. The experiment record links the dataset digest, code version, parameters, model, and evaluation result.
+
+Protected test evidence records who ran the evaluation and how many model choices had access to its results. Repeated use requires a new independent holdout or an honest reclassification of the old test set as development data.
+
+A suspicious metric jump pauses approval until the team traces the added features and pipeline changes. The gate records the explanation and evidence. High performance can pass after the information path is legitimate and reproducible.
+
+## Repair A Leakage Incident
+<!-- section-summary: Leakage repair quarantines contaminated evidence, traces affected models, rebuilds a new dataset, retrains candidates, and restores trust through independent evaluation. -->
+
+A leakage incident invalidates the evaluation claim. Serving health checks may remain green while the model relies on an input or relationship absent from the intended production decision.
+
+Containment starts by stopping promotion of affected candidates. For a deployed model, the owner evaluates consequence and switches to an approved earlier model, rules path, or other safe fallback. The contaminated dataset and reports stay preserved under their original identities for investigation.
+
+```mermaid
+flowchart TD
+    A["Leakage suspected or confirmed"] --> B["Freeze candidate promotion<br/>and preserve evidence"]
+    B --> C["Trace dataset lineage to<br/>runs, models, and endpoints"]
+    C --> D{"Affected model<br/>currently serving?"}
+    D -->|"Yes"| E["Apply approved rollback<br/>or fallback"]
+    D -->|"No"| F["Keep candidate quarantined"]
+    E --> G["Correct source, join,<br/>split, fitting, or process"]
+    F --> G
+    G --> H["Publish a new dataset identity"]
+    H --> I["Retrain and repeat<br/>leakage verification"]
+    I --> J["Evaluate on an independent<br/>protected holdout"]
+    J --> K["Review new release evidence"]
+
+    classDef alert fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef healthy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A alert
+    class B,C,E,F,G,H,I work
+    class D,J gate
+    class K healthy
+```
+
+Lineage identifies every run and model trained from the contaminated dataset. The investigation classifies the failed boundary and determines the first affected version. Teams repair the source, query, split logic, fitting scope, similarity grouping, or human process that introduced the information.
+
+The corrected build receives a new dataset identity. All affected experiments rerun because earlier metrics no longer describe a legitimate evaluation. A fresh protected holdout may be necessary if test knowledge influenced human choices.
+
+The incident review adds a durable control. Examples include an availability-time assertion, a forbidden lineage edge from outcome tables, a group-overlap test, pipeline enforcement, a similarity report, or stricter test access. Monitoring then compares real production performance with the corrected offline estimate.
+
+## The Main Idea
+<!-- section-summary: Leakage prevention preserves the promise that development and evaluation use the same legitimate information available to the real decision. -->
+
+Data leakage gives model development an information advantage that the real decision cannot use. The advantage may come from the target, the future, related entities, globally fitted preprocessing, post-outcome records, duplicate examples, or human exposure to protected evaluation.
+
+The prediction contract is the foundation. It defines the entity, decision time, available information, target window, action, and population. Point-in-time joins enforce the time boundary. Group and similarity-aware splits enforce independence. Pipelines enforce fitting scope. Causal feature review finds outcome-derived proxies. Lineage and immutable dataset identities make every claim traceable.
+
+The strongest release evidence reconstructs the complete information path for representative decisions. It shows what production knew, how the feature was computed, which data fitted each transformation, which examples remained independent, and which protected evidence guided model choice. A model can then earn trust from a realistic evaluation instead of a privileged development shortcut.
 
 ## References
 
-- [scikit-learn common pitfalls: data leakage](https://scikit-learn.org/stable/common_pitfalls.html#data-leakage)
-- [Feast point-in-time joins documentation](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
-- [TensorFlow Data Validation get started guide](https://www.tensorflow.org/tfx/data_validation/get_started)
-- [dbt data tests documentation](https://docs.getdbt.com/docs/build/data-tests)
+- [scikit-learn documentation: Common pitfalls and data leakage](https://scikit-learn.org/stable/common_pitfalls.html#data-leakage)
+- [scikit-learn documentation: Pipeline](https://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html)
+- [scikit-learn documentation: GroupKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupKFold.html)
+- [scikit-learn documentation: TimeSeriesSplit](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html)
+- [Feast documentation: Point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
+- [Databricks documentation: Point-in-time feature joins](https://docs.databricks.com/aws/en/machine-learning/feature-store/time-series)
+- [MLflow documentation: Dataset tracking](https://mlflow.org/docs/latest/dataset/)
+- [OpenLineage documentation](https://openlineage.io/docs/)
+- [dbt documentation: Data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [Kaufman et al.: Leakage in Data Mining — Formulation, Detection, and Avoidance](https://doi.org/10.1145/2382577.2382579)
+- [Kapoor and Narayanan: Leakage and the Reproducibility Crisis in ML-based Science](https://arxiv.org/abs/2207.07048)
+- [Lee et al.: Deduplicating Training Data Makes Language Models Better](https://research.google/pubs/deduplicating-training-data-makes-language-models-better/)

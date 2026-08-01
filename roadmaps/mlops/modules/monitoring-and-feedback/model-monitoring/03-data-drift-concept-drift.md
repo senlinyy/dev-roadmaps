@@ -10,6 +10,21 @@ aliases:
   - child-model-monitoring-01-data-drift-concept-drift
 ---
 
+## Table of Contents
+
+1. [Drift Means That Production Has Changed](#drift-means-that-production-has-changed)
+2. [Data Drift Changes the Inputs](#data-drift-changes-the-inputs)
+3. [Concept Drift Changes the Relationship](#concept-drift-changes-the-relationship)
+4. [Observable Drift and Hidden Drift Need Different Evidence](#observable-drift-and-hidden-drift-need-different-evidence)
+5. [The Reference Window Defines the Question](#the-reference-window-defines-the-question)
+6. [A Drift Score Needs Plain-English Context](#a-drift-score-needs-plain-english-context)
+7. [Segments and Versions Tell You Where the Change Entered](#segments-and-versions-tell-you-where-the-change-entered)
+8. [Combine Signals Before Choosing a Cause](#combine-signals-before-choosing-a-cause)
+9. [How Teams Run Drift Monitoring](#how-teams-run-drift-monitoring)
+10. [Repair, Update the Baseline, or Retrain](#repair-update-the-baseline-or-retrain)
+11. [The Main Idea](#the-main-idea)
+12. [References](#references)
+
 ## Drift Means That Production Has Changed
 <!-- section-summary: Drift describes a change in the data or in the real-world relationship a model learned, and it gives the team a reason to investigate. -->
 
@@ -44,6 +59,8 @@ The distinction changes the first production action. If a campaign deliberately 
 
 Teams therefore pair every drift result with basic feature evidence: schema version, null rate, freshness, category coverage, range checks, and training-serving parity. Distribution monitoring is good at saying that a population moved. Contract checks are better at saying that a known rule broke. Reading them together keeps an early warning from turning into the wrong engineering project.
 
+In a BigQuery stack, dbt can test the current production model for required columns, accepted categories, range rules, and missing entities before an Evidently task compares distributions. Suppose a currency adapter multiplies one region's values by 100. The dbt range test returns the affected rows and blocks publication, while the Evidently report shows the resulting shape change for investigation. The team repairs and rebuilds the partition before publishing another drift result. This ordering gives a known contract violation priority over a statistical comparison.
+
 ## Concept Drift Changes the Relationship
 <!-- section-summary: Concept drift occurs when the same input can lead to a different outcome because the real-world relationship learned by the model has changed. -->
 
@@ -60,6 +77,8 @@ A residual often makes concept drift easier to see. A **residual** is the differ
 Concept drift can be sudden, gradual, recurring, or limited to one segment. A new regulation can change approval outcomes on a single date. Customer preferences may move over several months. Holiday fraud can return every year. A supplier change may affect one device family. The monitor keeps time and segment identity visible because one global monthly accuracy number would flatten these different shapes into the same vague decline.
 
 When labels are delayed, teams can maintain an early and a final view. Reviewer disagreement, override rate, or a short-term proxy can raise an investigation quickly. The final view uses the outcome contract and mature cohort from the prediction-quality monitor. A proxy receives a measured relationship to the final outcome and a clear owner; otherwise it can drift independently and give the team false confidence.
+
+A common implementation stores reviewer actions and later outcomes beside the prediction ID in a Delta table. dbt builds the mature cohort after the label window closes, and a pinned scikit-learn task calculates calibration and error by score band. Prometheus may show the override rate within minutes, while the cohort result appears weeks later. When both move for the same model route and segment, the team has an early warning followed by direct evidence that the learned relationship changed.
 
 ![Side-by-side comparison of data drift changing the input mix and concept drift changing the outcome for familiar inputs](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/data-vs-concept-drift.png)
 
@@ -78,6 +97,8 @@ Suppose a fraud model's high-risk score share doubles overnight, while input dis
 
 This delay is why a good drift dashboard keeps different claims separate. It can say “the input distribution moved,” “the prediction distribution moved,” or “mature quality declined.” Combining them into one generic health score hides which evidence is available and which conclusion is still waiting.
 
+The stack often follows the same separation. Prometheus carries low-cardinality score shares, action rates, feature age, and fallback use for fast response. Governed Delta tables retain prediction records and delayed labels, while dbt builds the mature comparison. Grafana links the fast alert to the slower cohort report through route, version, segment, and prediction-time window. The tools run at different speeds because the evidence itself arrives at different speeds.
+
 ## The Reference Window Defines the Question
 <!-- section-summary: A drift result only has meaning when the reader knows what production data was compared with and why that reference represents a useful expectation. -->
 
@@ -94,6 +115,8 @@ A mature system can keep several baselines because they answer different questio
 Baseline promotion follows a controlled workflow. The monitor first runs the proposed reference beside the current reference through a complete business cycle. Owners review alerts under both references. They also confirm that mature quality remains healthy for important segments.
 
 The approved record points to the exact data snapshot and stores the filters used to build it. Its feature definitions preserve the meaning of each comparison. The record also keeps the approval reason and reviewers. Rolling back means selecting the previous `baseline_id`; it should not require rebuilding history from an undocumented query.
+
+Managed monitoring exposes the same choice through window configuration. Azure Machine Learning, for example, accepts rolling lookback sizes and offsets. A weekly monitor can use `P7D` for the current production window and a reference offset of at least `P7D` so the two windows do not overlap. A team comparing against a longer healthy period can give the reference a larger lookback while keeping that offset explicit. The managed job schedules the calculation, while the organization still records why those dates represent a useful baseline and which `baseline_id` reviewers approved.
 
 Window size also changes the signal. A short window reacts quickly and may contain too few examples. A longer window is more stable and can hide a short incident inside mostly healthy traffic. Monitoring frequency should follow traffic volume and response speed. A busy payment model may support hourly windows, while a low-volume medical workflow may need weeks of carefully governed evidence.
 
@@ -133,6 +156,10 @@ Segment selection combines domain risk and system architecture. Product segments
 
 The monitor limits combinatorial growth. It computes approved one-dimensional segments and a few reviewed intersections that have a real operating purpose. For example, `region × model_route` may be useful during a canary, while every possible combination of five customer attributes creates noise and privacy risk. Low-volume segments use longer windows or manual analysis, with their sample size shown openly.
 
+When serving already writes governed inference tables, the transformation job can derive segments from the captured request identity. Databricks documents the new Unity AI Gateway experience as Beta, while the inference-table documentation marks support for route-optimized endpoints as Public Preview. The applicable lifecycle and limitations therefore depend on the endpoint path and region. The captured `served_entity_id` can join `system.serving.served_entities` to recover the served model identity. A team whose change policy excludes the applicable preview state should write the route and model identity into its own governed decision table instead.
+
+Application fields such as feature version and region still have to travel in the governed request, response, or a linked decision record. A Spark SQL model then produces the approved `region × model_route` groups and rejects rows whose required identity is missing. The drift library receives reviewed cohorts instead of deciding which production segments exist.
+
 ## Combine Signals Before Choosing a Cause
 <!-- section-summary: Drift diagnosis compares inputs, predictions, quality, feature health, and system identity so the response follows evidence instead of one score. -->
 
@@ -151,6 +178,28 @@ An apparent quality improvement with falling label coverage takes a different pa
 Another common pattern is a prediction shift without input drift. The team checks artifact identity, preprocessing package, and policy version. If the candidate model alone produces more high scores from comparable inputs, the release comparison should explain whether the behaviour was expected. If both models produce the same scores but action volume changes, the decision policy or downstream eligibility rule is the stronger suspect.
 
 A population shift can also expose a model weakness without changing the underlying concept. Suppose larger homes make up more production traffic and error rises only beyond the size range represented in training. The model owner can limit automated estimates for that unsupported range, collect more examples, and train a candidate with broader coverage. The cause is data drift with poor generalization, while the remediation can still include a new model. Diagnosis explains the need for model work and shapes that work.
+
+Teams often make this diagnosis reproducible with one evidence mart. dbt joins feature-health results, drift outputs, prediction summaries, policy versions, and mature quality by time window, model route, and governed segment. The detailed source tables remain separate, while the mart gives an incident dashboard aligned rows such as “feature freshness failed,” “input drift rose,” and “quality unavailable” for the same route. Airflow publishes the mart only after every input reports its coverage and freshness, which prevents a missing quality table from appearing as healthy quality.
+
+The next diagram turns evidence strength and possible harm into a response guide. The plotted positions are illustrative operating judgments, not probabilities or outputs from a drift test:
+
+```mermaid
+quadrantChart
+  title Match the Response to Evidence and Decision Harm
+  x-axis Evidence uncertain --> Evidence verified
+  y-axis Decision harm low --> Decision harm high
+  quadrant-1 Contain and investigate
+  quadrant-2 Repair measurement first
+  quadrant-3 Restore monitoring
+  quadrant-4 Observe or plan
+  Outcome join failed: [0.18, 0.84]
+  Quality regression on one route: [0.86, 0.86]
+  Small stable population shift: [0.79, 0.20]
+  Monitoring job is stale: [0.16, 0.32]
+  Drift is high and labels are pending: [0.62, 0.48]
+```
+
+A high-harm signal with weak evidence sends the team to the upper-left: restore trustworthy measurement before blaming the model. Verified quality loss on one route belongs in the upper-right and supports containment such as pausing that route. A small, well-understood shift can remain under observation. The middle case—high drift while labels are pending—shows why drift alone rarely decides whether to retrain.
 
 ## How Teams Run Drift Monitoring
 <!-- section-summary: A production drift job selects governed windows, validates them, computes versioned comparisons, stores the evidence, and sends bounded alerts. -->
@@ -172,15 +221,41 @@ evaluation = report.run(
 
 The code performs the comparison. The production workflow supplies the meaning around it. Before this step, the job selects the approved `baseline_id`, verifies the schema, and checks that both windows contain enough rows. Afterward, it writes feature-level results to a warehouse table with the method, threshold, time ranges, segment, data version, and library version.
 
+One stored result can carry the context that a drift score alone lacks:
+
+```json
+{
+  "run_id": "drift_run_7F2A",
+  "baseline_id": "holiday-reference-v3",
+  "current_window_id": "production-week-42",
+  "feature": "bedroom_count",
+  "method": "jensen_shannon",
+  "score": 0.18,
+  "alert_threshold": 0.12,
+  "reference_count": 184000,
+  "current_count": 51700,
+  "segment": {"region_group": "north", "model_route": "primary"},
+  "feature_contract_status": "pass",
+  "mature_quality_status": "pending",
+  "decision": "investigate"
+}
+```
+
+The alert can link to this row through `run_id`. Responders immediately see which comparison moved, how much evidence supports it, whether a known feature rule failed, and whether mature quality is available. The record keeps “drift detected” separate from the later decision to observe, repair, recalibrate, or retrain.
+
 A typical scheduled run has five stages. Airflow, Dagster, or the managed pipeline first waits for complete reference and current partitions. dbt, Great Expectations, or TensorFlow Data Validation checks schema, counts, missingness, and contract rules. The comparison task then computes drift with pinned methods and library versions. A publishing task stores summary and feature-level results, while a separate notification task sends only actionable signals to Prometheus, Cloud Monitoring, Azure Monitor, or the incident platform.
 
 Each run writes a manifest containing its input snapshots, row counts, rejected rows, baseline ID, code revision, start and finish times, and status. Detailed results retain before-and-after quantiles or category shares and a bounded sample of representative records. If validation fails, the comparison is marked unavailable and publication stops. This behaviour distinguishes “no drift” from “the job could not measure drift.”
 
 The orchestrator also supports backfills. If a source partition arrives late, the team reruns the exact affected window with the same baseline and configuration, then records a metric revision. Historical results are not silently overwritten. A corrected result links back to the previous run so investigators and release reviewers know that the evidence changed after its original publication.
 
+![A production drift run selecting windows, validating data, comparing distributions, storing evidence, publishing a bounded signal, and investigating](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/drift-monitoring-production-run.png)
+
+*A drift score earns an alert only after the windows pass validation. The detailed result remains reproducible in governed storage, while the bounded alert starts an investigation rather than choosing a remediation by itself.*
+
 Prometheus or the cloud monitor receives a small alert signal. The warehouse retains the detailed result and representative rows for investigation. This boundary matters because changing a library default should never silently redefine which baseline or production population the organization monitors.
 
-Managed platforms can package collection, scheduled comparison, dashboards, and alerts. Azure Machine Learning offers built-in tabular drift and data-quality signals. Gemini Enterprise Agent Platform Model Monitoring v2 can monitor tabular models on Google or other serving infrastructure and remains Preview as checked on 18 July 2026. Databricks data profiling can compare governed Delta tables over time. A specialist platform such as Arize, Fiddler, WhyLabs, or NannyML can help with large cross-platform fleets or delayed-label analysis. The best starting point is still the smallest toolset that preserves the required evidence and that the team can operate reliably.
+Managed platforms can package collection, scheduled comparison, dashboards, and alerts. Azure Machine Learning offers built-in tabular drift and data-quality signals. Gemini Enterprise Agent Platform Model Monitoring v2 can monitor tabular models on Google or other serving infrastructure and remains in Preview. Databricks data profiling can compare governed Delta tables over time. A specialist platform such as Arize, Fiddler, WhyLabs, or NannyML can help with large cross-platform fleets or delayed-label analysis. The best starting point is still the smallest toolset that preserves the required evidence and that the team can operate reliably.
 
 Evidently is a practical library when the team wants transparent reports inside its own Python pipeline. TensorFlow Data Validation fits a TFX-oriented workflow and can validate schema and distribution statistics at scale. Managed cloud monitors reduce integration work when model collection and registry already live in that provider; the service can then reuse the provider's storage and alerting path. Specialist platforms suit fleets where many models, clouds, and teams need a common investigation experience. Tool adoption follows the operating boundary. Every choice still needs defined baselines and segments, an honest label-maturity rule, and an owner for action.
 
@@ -224,5 +299,7 @@ The drift score provides the first clue. A meaningful reference, visible distrib
 - [SciPy Wasserstein distance](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wasserstein_distance.html)
 - [Azure Machine Learning model monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-monitoring?view=azureml-api-2)
 - [Google Model Monitoring overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-monitoring/overview)
+- [Databricks AI Gateway inference tables](https://docs.databricks.com/aws/en/ai-gateway/inference-tables-serving-endpoints)
+- [Databricks system tables reference](https://docs.databricks.com/gcp/en/admin/system-tables/)
 - [Databricks data profiling](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-quality-monitoring/data-profiling/)
 - [Google Rules of ML: monitoring](https://developers.google.com/machine-learning/guides/rules-of-ml#monitoring)

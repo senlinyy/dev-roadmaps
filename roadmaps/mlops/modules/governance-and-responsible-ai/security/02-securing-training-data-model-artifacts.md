@@ -10,6 +10,17 @@ aliases:
   - child-security-01-securing-training-data-model-artifacts
 ---
 
+## Table of Contents
+
+1. [What Securing ML Assets Means](#what-securing-ml-assets-means)
+2. [A Supporting Example: Retail Personalization](#a-supporting-example-retail-personalization)
+3. [Classify the Assets](#classify-the-assets)
+4. [Design Storage Boundaries](#design-storage-boundaries)
+5. [Least Privilege for Training Jobs](#least-privilege-for-training-jobs)
+6. [Protect Model Artifacts and Containers](#protect-model-artifacts-and-containers)
+7. [Release Evidence and Audit Logs](#release-evidence-and-audit-logs)
+8. [Validate The Design And Diagnose Failures](#validate-the-design-and-diagnose-failures)
+9. [References](#references)
 
 ## What Securing ML Assets Means
 <!-- section-summary: Securing ML assets means controlling who can read, write, promote, and serve the data and artifacts behind a model. -->

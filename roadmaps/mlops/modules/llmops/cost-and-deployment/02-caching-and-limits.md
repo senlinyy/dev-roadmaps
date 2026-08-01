@@ -1,214 +1,464 @@
 ---
 title: "Caching and Limits"
 description: "Control LLM latency, cost, and overload by separating provider prompt caching, application result caches, admission control, queues, and graceful degradation."
-overview: "Caching avoids repeated work. Limits decide which new work the system may accept. This article builds both controls from their shared purpose, then explains cache identity, invalidation, semantic risk, quotas, backpressure, circuit breakers, and operational evidence."
+overview: "Caching avoids repeated work. Limits decide which new work the system may accept. Build both controls from their shared purpose, then connect cache identity, invalidation, semantic risk, quotas, backpressure, circuit breakers, and operational evidence."
 tags: ["MLOps","LLMOps","advanced","deployment"]
 order: 2
 id: "article-mlops-llmops-caching-and-limits"
 ---
 
-An LLM application can fail even when every model response is correct. A burst of requests can exhaust provider capacity. One tenant can consume the shared budget. Repeated long prompts can make a simple interaction slow and expensive. Automatic retries can turn a temporary problem into an outage.
+## Table of Contents
 
-Two families of controls address this. **Caching** avoids work whose result can be safely reused. **Limits** decide how much new work the system will admit. They are related, but they are not interchangeable: a cache lowers average demand, while admission control protects the system when misses and traffic still exceed capacity.
+1. [Caching and Limits Control Two Production Problems](#caching-and-limits-control-two-production-problems)
+2. [A Cache Is a Governed Copy of Reusable Work](#a-cache-is-a-governed-copy-of-reusable-work)
+3. [Provider Prompt Caches Reuse Prefix Computation](#provider-prompt-caches-reuse-prefix-computation)
+4. [Exact and Semantic Result Caches Make Different Promises](#exact-and-semantic-result-caches-make-different-promises)
+5. [Retrieval and Tool Caches Follow Source Semantics](#retrieval-and-tool-caches-follow-source-semantics)
+6. [Identity, Freshness, and Invalidation Decide Cache Correctness](#identity-freshness-and-invalidation-decide-cache-correctness)
+7. [Rate Limits, Quotas, and Concurrency Allocate Capacity](#rate-limits-quotas-and-concurrency-allocate-capacity)
+8. [Run Budgets Bound Tokens, Tools, Steps, Time, and Spend](#run-budgets-bound-tokens-tools-steps-time-and-spend)
+9. [Backpressure, Queues, Retries, and Idempotency Work Together](#backpressure-queues-retries-and-idempotency-work-together)
+10. [Safe Fallback Preserves an Honest Product](#safe-fallback-preserves-an-honest-product)
+11. [Observability and Evaluation Measure Correctness as Well as Savings](#observability-and-evaluation-measure-correctness-as-well-as-savings)
+12. [Roll Out Each Control With Evidence](#roll-out-each-control-with-evidence)
+13. [Common Failures Have Specific Repairs](#common-failures-have-specific-repairs)
+14. [Incident Response Reduces New Work First](#incident-response-reduces-new-work-first)
+15. [Main Idea](#main-idea)
+16. [References](#references)
 
-## See The Control System Before Choosing A Cache
-<!-- section-summary: A production request passes through admission, reuse, execution, and degradation controls; each solves a different failure mode. -->
+## Caching and Limits Control Two Production Problems
 
-Use a legal research assistant called CaseLens as a supporting example. A lawyer asks it to search approved documents and produce a cited answer for one client matter. The request may contain a long policy prefix, retrieval results, tool calls, and generated text. Other lawyers may ask identical or similar questions.
+<!-- section-summary: Caching avoids safe-to-reuse work, while limits prevent a service from accepting more new work than it can complete reliably. -->
 
-The request path has four control stages:
+At a high level, caching and limits keep an LLM product from paying for the same work repeatedly or accepting more work than it can finish safely. Both problems can appear while every individual model call still works.
 
-```mermaid
-flowchart LR
-    R["Request and tenant context"] --> A{"Admit new work?"}
-    A -->|No| D["Queue, reject, or degrade"]
-    A -->|Yes| C{"Safe reusable work?"}
-    C -->|Prompt prefix hit| P["Provider reuses prefix computation"]
-    C -->|Application hit| H["Return validated cached result"]
-    C -->|Miss| E["Execute model and tools"]
-    P --> E
-    E --> V["Validate and record outcome"]
-    V --> W{"Eligible to cache?"}
-    W -->|Yes| S["Store under bounded identity and TTL"]
-    W -->|No| X["Return without storing"]
-    H --> O["Observed response"]
-    S --> O
-    X --> O
-    D --> O
-```
+Imagine hundreds of users asking for the same public return policy. Generating an identical explanation every time wastes input processing, output tokens, and latency. Now imagine one agent repeatedly calling search because it cannot settle on an answer. That run can consume minutes of worker time and a large token bill. A traffic burst, automatic retry loop, or large document upload can create the same pressure across the whole service.
 
-The diagram separates several mechanisms that are often bundled under “LLM optimization.” Provider prompt caching reuses model-side computation for a repeated prefix but still produces a new response. An exact result cache returns an earlier application result. A semantic cache may return an earlier result for a merely similar request. Rate limits and quotas govern admission. Queues move accepted work out of the live path. Circuit breakers stop calls to a dependency that is already failing.
+**Caching** stores reusable work so a later request can avoid some computation. **Limits** place boundaries around new work. The first control reduces average demand. The second protects the system during cache misses, traffic spikes, slow dependencies, and unusual agent behavior.
 
-Before adding any mechanism, name the work it avoids, the identity that proves reuse is valid, the maximum acceptable staleness, and the fallback on failure. Without those four answers, a cache is just an uncontrolled second source of truth.
-
-## Prompt Caching Reuses A Prefix, Not An Answer
-<!-- section-summary: Provider prompt caching reduces repeated input processing when the beginning of a request is identical; it does not reuse the generated answer or remove the need for rate controls. -->
-
-LLM requests often start with the same system instructions, tool definitions, schemas, and examples. A provider can retain intermediate computation for this identical prefix and reuse it when a later request begins the same way. The variable user question and retrieved context still receive fresh processing, and the model still generates a new answer.
-
-For CaseLens, put stable instructions first: the role, citation policy, allowed tools, output schema, and firm-wide safety rules. Put volatile material later: matter permissions, the current question, retrieved passages, and conversation-specific state.
+You can think of the production path as four gates. The service first decides whether it has capacity and budget. It then checks whether valid work already exists. A miss enters bounded execution. A failure or exhausted budget enters an explicit fallback.
 
 ```mermaid
-flowchart TB
-    subgraph Stable["Stable prefix"]
-        S1["System and safety instructions"] --> S2["Tool definitions"]
-        S2 --> S3["Output schema and examples"]
-    end
-    subgraph Variable["Variable suffix"]
-        V1["Tenant and matter facts"] --> V2["Retrieved evidence"]
-        V2 --> V3["Current question"]
-    end
-    Stable --> Variable
+flowchart TD
+    A["Request"] --> B{"Capacity and budget available?"}
+    B -->|No| C["Reject, queue, or reduce scope"]
+    B -->|Yes| D{"Reusable work still valid?"}
+    D -->|Yes| E["Return governed cached result"]
+    D -->|No| F["Run bounded model and tools"]
+    F --> G{"Completed within limits?"}
+    G -->|Yes| H["Validate and consider caching"]
+    G -->|No| I["Safe fallback or escalation"]
+    H --> J["Observed response"]
+    E --> J
+    C --> J
+    I --> J
 ```
 
-OpenAI's current prompt-caching documentation says eligible requests are cached automatically and that hits depend on exact prefix matches. It also exposes cached-token usage so the effect can be measured. Model-specific eligibility, pricing, thresholds, and retention can change, so keep those details in provider configuration or a current runbook rather than hard-coding them into the application architecture.
+Each gate owns a different decision. A cache hit says an earlier computation remains suitable. Admission control says the platform can start more work. A run budget says one accepted task can consume only a bounded amount. Fallback says what useful and truthful service remains after a boundary is reached.
 
-Several small changes can destroy a useful prefix: inserting a request ID near the top, changing tool order, serializing the same schema differently, or placing retrieved passages before stable instructions. A good trace therefore records the model, prompt-template version, prefix fingerprint, input tokens, cached tokens, and latency. A low hit rate should lead to an inspection of prefix stability, not a guess that “the cache is broken.”
+## A Cache Is a Governed Copy of Reusable Work
 
-Prompt caching does not create cross-request answer staleness because the answer is generated again. It also does not guarantee capacity, fairness, or a lower output-token bill. Those remain separate controls.
+<!-- section-summary: Cache keys identify reusable work, TTLs limit age, eviction bounds storage, and invalidation removes entries after meaningful source changes. -->
 
-## Result Caching Requires A Complete Identity
-<!-- section-summary: An application result can be reused only when the cache key represents every input and policy decision that could change the valid answer. -->
+A cache is a fast, disposable copy of work that can be recomputed from an authoritative source. It may store a model result, a retrieval response, a tool result, an embedding, or provider-side prompt computation. Production safety depends on four basic concepts: cache key, time to live, eviction, and invalidation.
 
-An **exact result cache** returns a previously produced result when the application decides that the new request is equivalent. The difficult part is not `GET` and `SET`; it is defining equivalence.
+A **cache key** identifies the work. Two requests share a key only if every difference that can change the valid result has been represented. A support answer may depend on tenant, user permission class, locale, source revision, prompt version, retrieval settings, model policy, and requested output format. Using question text alone can return another user’s answer or an answer based on withdrawn evidence.
 
-For a cited legal answer, the question text alone is not enough. The valid result also depends on tenant and matter boundaries, corpus revision, jurisdiction, retrieval configuration, prompt and tool versions, model policy, output schema, and the caller's permission class. If any of those can change the answer, it belongs in the identity or makes the route ineligible for caching.
+A **time to live**, usually shortened to **TTL**, gives an entry an expiration time. A sixty-second inventory result and a one-day public glossary entry express different freshness promises. TTL sets a maximum age for ordinary reuse. Urgent source withdrawal and permission revocation still require immediate invalidation.
 
-A compact key contract makes that reasoning visible:
+**Eviction** removes entries to stay within a storage or memory limit. Redis supports policies such as least recently used and least frequently used. Eviction is a capacity decision: any evicted entry should be safe to recompute. Durable workflow state, approvals, and business records belong in authoritative storage.
+
+**Invalidation** marks cached work unusable after a meaningful change. Common triggers include a source revision, prompt release, policy update, model change, permission change, safety incident, or corrected answer. Versioned keys handle normal releases. A revocation mechanism handles urgent removals that cannot wait for TTL.
+
+The key construction should be deterministic and reviewable. Canonical JSON plus a cryptographic digest avoids differences caused by dictionary order:
+
+```python
+import hashlib
+import json
+
+
+def answer_cache_key(identity: dict[str, str]) -> str:
+    required = {
+        "tenant_id",
+        "permission_class",
+        "request_digest",
+        "source_revision",
+        "prompt_version",
+        "retrieval_version",
+        "model_policy",
+        "locale",
+    }
+    missing = required - identity.keys()
+    if missing:
+        raise ValueError(f"missing cache identity: {sorted(missing)}")
+
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode()).hexdigest()
+    return f"llm-result:v4:{digest}"
+```
+
+The stored value should carry its creation time, source references, validation result, and cache-contract version. On a hit, the application still performs cheap checks such as current authorization and emergency revocation. Redis `SET` with `EX` can attach a TTL, while `maxmemory` and an eviction policy keep cache memory bounded.
+
+## Provider Prompt Caches Reuse Prefix Computation
+
+<!-- section-summary: Provider prompt caching reuses model-side computation for an exact stable prefix and still generates a fresh output for the variable suffix. -->
+
+LLM requests often repeat a long opening: system instructions, tool definitions, output schemas, examples, or a shared document. A provider prompt cache can reuse intermediate computation for that identical prefix. The variable question still receives fresh processing, and the model still generates a new output.
+
+In another term, a provider prompt cache speeds up reading the repeated opening. It is different from an application result cache, which can return an earlier final answer without a new model call.
+
+Prompt layout directly affects hits. Stable material belongs first. Request IDs, timestamps, retrieved records, conversation changes, and the current user message belong after the reusable boundary. Changing tool order or serializing the same schema differently can create a miss because the prefix bytes or tokens change.
+
+```mermaid
+flowchart TD
+    A["Stable instructions"] --> B["Stable tool definitions"]
+    B --> C["Stable examples or document"]
+    C --> D["Provider cache boundary"]
+    D --> E["Current user and tenant context"]
+    E --> F["Current retrieved evidence"]
+    F --> G["Fresh model output"]
+```
+
+Provider behavior must be checked for the exact model and API:
+
+OpenAI’s current documentation distinguishes GPT-5.6 and later families from earlier models. Newer families support implicit or explicit cache breakpoints and use `prompt_cache_key` for more reliable matching. In explicit mode, the request places `prompt_cache_breakpoint: {"mode": "explicit"}` on the final stable content block and puts changing content afterward. They report reads in `cached_tokens` and writes in `cache_write_tokens`. Earlier eligible models use their documented automatic exact-prefix behavior and reject the newer breakpoint fields.
+
+The rendered prefix before that breakpoint must meet the provider’s minimum size. OpenAI’s documented threshold is 1,024 tokens for eligible prompt caching. The application should log both read and write token counts because repeated cache writes with few later reads can increase cost on models that charge for writes.
+
+Anthropic supports cache controls on cacheable content blocks and reports cache-read and cache-creation tokens. Its API documentation describes automatic and explicit breakpoints, with platform-specific differences. Amazon Bedrock supports prompt-cache checkpoints for supported models, yet its Anthropic route has different automatic-cache support from the direct Claude API. Google’s supported Gemini routes offer implicit and explicit context caching; an explicit cache is a named resource with its own TTL and storage behavior.
+
+These differences affect pricing, retention, rate-limit accounting, supported content, minimum size, and control fields. Keep provider details in a tested adapter and current runbook. The architecture should depend only on the shared promise: an exact stable prefix may receive model-side computational reuse.
+
+## Exact and Semantic Result Caches Make Different Promises
+
+<!-- section-summary: Exact result caches reuse equivalent inputs, while semantic caches infer equivalence from similarity and therefore require stronger evaluation and policy gates. -->
+
+An **exact result cache** returns a previous application result after deterministic normalization produces the same complete identity. Normalization might trim harmless whitespace or canonicalize a structured request. It must preserve every detail that changes meaning.
+
+A **semantic cache** goes further. It embeds the new request, searches earlier requests, and may return an answer whose wording differs. The cache is making a product-level claim: the old answer is valid for the new intent. Vector similarity alone cannot prove that claim.
+
+Consider two policy questions: “Can contractors access the benefit?” and “Can employees access the benefit?” The sentences are close in embedding space, while the answer may depend entirely on the changed role. Similar risks appear with locale, plan tier, jurisdiction, product version, customer identity, and requested time period.
+
+A semantic hit therefore needs hard filters before and after similarity:
+
+```mermaid
+flowchart TD
+    A["New request"] --> B["Apply tenant and route boundary"]
+    B --> C["Extract exact constraints"]
+    C --> D["Search similar cached requests"]
+    D --> E["Filter locale, policy, source, and age"]
+    E --> F{"Similarity clears route threshold?"}
+    F -->|No| G["Generate fresh result"]
+    F -->|Yes| H{"Exact constraints and evidence valid?"}
+    H -->|No| G
+    H -->|Yes| I["Return marked semantic hit"]
+```
+
+Redis provides a current industrial implementation through vector search, metadata filters, TTLs, and bounded memory. The embedding field finds nearby requests. Tenant, locale, model version, policy version, and safety state remain hard filters. Redis documentation also stresses threshold tuning: a loose threshold raises wrong-hit risk, while a tight threshold removes much of the benefit.
+
+Semantic result caching fits repetitive, low-risk, slowly changing routes such as public FAQ explanations or generic formatting help. Personalized advice, financial decisions, medical guidance, legal interpretation, live incident diagnosis, and permission-dependent answers usually demand fresh execution or much stronger domain validation.
+
+Evaluation uses labeled request pairs with a domain-approved equivalence decision. Measure unsafe-hit rate, false misses, answer-quality delta, evidence validity, and savings. Cache hit rate alone rewards aggressive reuse even if the returned meaning is wrong.
+
+## Retrieval and Tool Caches Follow Source Semantics
+
+<!-- section-summary: Retrieval and tool caches inherit the authorization, freshness, side-effect, and invalidation rules of the systems whose work they reuse. -->
+
+An LLM pipeline performs expensive work outside the model. It may embed a query, retrieve documents, rerank candidates, fetch account state, call a weather API, or run a database query. Caching these stages can save more time than caching the final answer while preserving fresh generation.
+
+A retrieval cache can store candidate document IDs or ranked chunks for a query. Its identity includes tenant, user access class, source snapshot, filter set, embedding model, retrieval algorithm, and reranker version. Source permission changes and document deletion must invalidate the cached candidates before they enter model context.
+
+A read-only tool result can be cached according to the source’s meaning. A public country-code lookup may tolerate a long TTL. Current inventory may tolerate only seconds. A security alert or payment status may require a direct authoritative read. The tool contract should state the freshness bound so the agent can tell the user what the result represents.
+
+Mutating tools require a different concept: **idempotency**. An operation is idempotent if repeating the same intended request produces the same external effect as performing it once. An idempotency key identifies one business operation across retries. It prevents a network timeout from creating two refunds, two messages, or two deployments.
+
+```mermaid
+flowchart TD
+    A["Tool proposal"] --> B{"Read or external effect?"}
+    B -->|Read| C["Check source-aware cache"]
+    C -->|Fresh hit| D["Return cached observation"]
+    C -->|Miss| E["Read authoritative source"]
+    E --> F["Store with source TTL and revision"]
+    B -->|External effect| G["Authorize operation"]
+    G --> H["Execute with idempotency key"]
+    H --> I["Return authoritative effect ID"]
+```
+
+An idempotency record is neither a general result cache nor permission. The service compares the repeated request with the original operation and returns the recorded outcome only inside its documented scope. Authorization still runs, and a changed payload requires a new operation or an explicit conflict. AWS and Stripe APIs provide common industrial examples through client tokens or idempotency keys.
+
+Errors and partial results deserve conservative caching. A transient provider error should rarely become a normal cached answer. “Record unavailable” may be safe for a few seconds if the source contract says so. Tool output containing a short-lived signed URL should expire before the URL. The source semantics determine the rule.
+
+## Identity, Freshness, and Invalidation Decide Cache Correctness
+
+<!-- section-summary: Safe reuse requires a complete identity, an acceptable age, and a reliable response to source, permission, policy, and release changes. -->
+
+Every cache hit should answer three questions. Does this entry belong to the same authorized identity and task? Is its age acceptable for the product promise? Has any change invalidated the assumptions behind it?
+
+Identity includes security and behavior. Tenant, user or permission class, data region, route, locale, prompt version, tool set, model policy, source revision, and output schema can all matter. Shared public content may omit user identity. Personalized results usually cannot.
+
+Freshness has two clocks. **Age freshness** compares the entry with its TTL. **Version freshness** compares source, policy, and release versions. A result created one second ago can already be invalid after an urgent document withdrawal. A stable public definition can remain valid across a model outage if its source revision remains active.
+
+Invalidation needs both ordinary and emergency paths:
+
+```mermaid
+flowchart TD
+    A["Validated result"] --> B["Store under versioned key and TTL"]
+    B --> C{"What changed?"}
+    C -->|Ordinary release| D["Write new version namespace"]
+    C -->|Source update| E["Advance source revision"]
+    C -->|Permission change| F["Reject hit during authorization"]
+    C -->|Safety incident| G["Add emergency revocation"]
+    D --> H["Old entries expire or evict"]
+    E --> H
+    F --> H
+    G --> H
+```
+
+Versioned namespaces make releases predictable. A prompt change writes under `answer:v5` while `answer:v4` ages out. This avoids a large delete operation in the critical path. Emergency revocation adds an entry ID, source ID, or version to a fast deny set so a known-bad result cannot be served during that TTL window.
+
+Cache stampedes need their own control. A popular key can expire and send hundreds of identical misses downstream. Request coalescing lets one worker recompute while peers wait briefly. TTL jitter spreads related expirations across time. A stale-while-revalidate path may serve a slightly older result only for routes whose freshness policy explicitly allows it.
+
+## Rate Limits, Quotas, and Concurrency Allocate Capacity
+
+<!-- section-summary: Rate limits control arrival speed, quotas control accumulated consumption, and concurrency limits control simultaneous pressure on workers and dependencies. -->
+
+A **rate limit** caps how quickly work arrives, such as requests or tokens per minute. A **quota** caps total consumption over a longer window, such as tokens, tool calls, or currency per day. A **concurrency limit** caps the number of tasks running at the same time. These controls protect different resources.
+
+Request counts alone are weak for LLM workloads. One classification may use a few hundred tokens. A long-context agent can use many model calls, retrievals, and thousands of output tokens. Admission should estimate the work and reserve enough capacity before execution. Actual usage then reconciles the reservation.
+
+Limits usually form a hierarchy. The user gets a burst allowance. The tenant gets shared tokens and concurrency. Interactive routes reserve capacity ahead of background indexing. The model adapter stays below provider request and token limits. The whole system stays within worker, database, and cost boundaries.
+
+A **token bucket** is a common rate-limit algorithm. Tokens enter a bucket at a fixed rate up to a maximum. Each request consumes one or more tokens. The maximum permits a short burst, while the refill rate controls sustained traffic. Envoy’s local rate-limit filter implements this pattern at the gateway:
 
 ```yaml
-namespace: caselens-answer-v3
-scope:
-  tenant: firm-27
-  matter: matter-884
-identity:
-  normalized_request_digest: sha256:...
-  corpus_snapshot: legal-docs-2026-07-15
-  prompt_version: cited-answer-12
-  retrieval_policy: hybrid-rerank-4
-  model_policy: research-standard-7
-  permission_class: matter-counsel
-freshness:
-  expires_at: 2026-07-16T14:00:00Z
+typed_config:
+  "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+  stat_prefix: llm_ingress
+  token_bucket:
+    max_tokens: 20
+    tokens_per_fill: 10
+    fill_interval: 1s
+  filter_enabled:
+    default_value: {numerator: 100, denominator: HUNDRED}
+  filter_enforced:
+    default_value: {numerator: 100, denominator: HUNDRED}
 ```
 
-This is more than a storage key. It is the proof behind the reuse decision. Store the result together with citations, source versions, validation outcome, creation time, and provenance. On a hit, the application can still perform cheap checks: is the user still authorized, is the corpus snapshot still active, and did any cited source receive an urgent revocation?
+This local bucket protects one Envoy process or configured local scope. A distributed tenant quota needs shared state or a global rate-limit service. Gateway request limits also lack token awareness unless the application supplies cost descriptors. Many teams combine a fast edge burst limit with an application admission service that tracks tenant tokens, concurrency, and spend.
 
-**Time to live (TTL)** sets an upper bound on how long an entry remains reusable. TTL is useful, but it is not a complete invalidation strategy. A document withdrawal, permission change, policy release, or discovered unsafe answer may need immediate invalidation. Versioned keys avoid expensive broad deletes for ordinary releases; a revocation index handles exceptional cases that cannot wait for expiry.
+Provider limits create an outer ceiling. OpenAI currently documents separate measures such as requests and tokens across time windows and exposes remaining capacity in response headers. Other providers organize limits by account, project, region, model, or provisioned throughput. Read the target provider’s current quota contract and leave headroom for retries and measurement error.
 
-Caching also creates concurrency problems. When a popular key expires, many workers may compute it at once—a **cache stampede**. Request coalescing lets one worker fill the entry while others wait briefly or use a permitted stale value. Add TTL jitter so many related keys do not expire at exactly the same second. Bound memory and select an eviction policy so the cache cannot grow without limit.
+Return `429 Too Many Requests` for a caller-specific admission limit and include `Retry-After` where a temporary window has a meaningful retry time. A `503` can describe temporary service unavailability. The response should identify the user’s next safe action without revealing another tenant’s consumption.
 
-## Semantic Caching Changes The Product Meaning
-<!-- section-summary: A semantic cache treats similar requests as reusable, so its threshold, scope, and validation are quality and security decisions rather than ordinary performance tuning. -->
+## Run Budgets Bound Tokens, Tools, Steps, Time, and Spend
 
-An exact cache asks, “Are these inputs the same under our normalization rules?” A **semantic cache** asks, “Are these requests similar enough that the old answer should serve the new one?” It usually embeds a request, retrieves nearby prior requests, applies metadata filters, and compares a similarity score with a threshold.
+<!-- section-summary: A run budget gives one accepted request finite allowances for context, output, tool calls, agent steps, elapsed time, retries, and estimated cost. -->
 
-That can help narrow, low-risk routes such as rewriting a generic product explanation. It is far more dangerous for legal, medical, financial, personalized, or rapidly changing answers. “Can this employee be dismissed?” and “Can this contractor be dismissed?” may be close in vector space while depending on different law and evidence. A high similarity score is not proof of equivalent intent.
+A **budget** is the maximum amount of a resource that one task may consume. Admission limits control work across users and time. A run budget controls the behavior of one accepted request.
 
-A safe semantic decision is therefore a policy pipeline:
+Agents need multiple budgets because no single number captures their work. An input-token budget bounds assembled context. An output-token budget bounds generation. Tool and step budgets prevent loops. An elapsed-time deadline keeps the user experience finite. Retry and cost budgets stop a failing dependency from multiplying spend.
+
+Budget values should follow the route and risk. A chat classification can allow one model call and no tools. A research task can allow several searches and a longer deadline. A high-impact tool may consume an action budget only after approval. The model can receive the remaining step count as guidance, while the orchestrator enforces the counters.
+
+```yaml
+route: cited_support_answer
+budget:
+  input_tokens: 24000
+  output_tokens: 1200
+  model_calls: 3
+  tool_calls:
+    search_knowledge: 4
+    read_document: 6
+  agent_steps: 10
+  retries: 2
+  elapsed_seconds: 45
+  estimated_cost_usd: 0.40
+on_exhaustion:
+  search_knowledge: answer_from_verified_evidence
+  input_tokens: summarize_or_drop_low_priority_context
+  elapsed_seconds: return_partial_with_limit_reason
+```
+
+The context builder spends input budget intentionally. System and safety instructions have highest priority. Current user intent, tool schemas, and essential evidence follow. Old conversation turns and low-ranked retrievals may be summarized or removed. Truncating arbitrary tokens at the model boundary can cut a citation, schema, or instruction in half.
+
+Budget exhaustion is a normal runtime outcome. The orchestrator records which allowance ended the run and chooses a defined response: use verified evidence already collected, ask the user to narrow the task, enqueue an approved background job, or return a partial result marked with its limitation. Quietly continuing under an untracked “emergency” budget defeats the control.
+
+## Backpressure, Queues, Retries, and Idempotency Work Together
+
+<!-- section-summary: Backpressure slows producers as downstream capacity fills, bounded queues defer suitable work, and limited idempotent retries recover from transient failures. -->
+
+**Backpressure** is the signal that asks producers to slow down because downstream work cannot keep pace. Without it, requests continue entering memory, queues, database connections, and provider calls until latency and failures spread across the service.
+
+A queue can absorb a short burst or move delay-tolerant work into the background. It creates scheduling flexibility; it creates no new capacity. If arrivals stay above completions, queue age rises and results can arrive after users no longer need them.
+
+Bound the queue by tenant, route, count, estimated tokens, and oldest acceptable age. Separate interactive work from batch evaluation or document indexing. Track the age of the oldest eligible job alongside depth. Expired or cancelled work should leave the queue before consuming provider capacity.
+
+Retries address a narrow class of transient failures. Follow a provider’s `Retry-After` value where supplied. Otherwise, use exponential backoff with random jitter. Cap attempts and total elapsed time. OpenAI’s official SDKs already retry eligible rate-limit errors, so an extra application loop can accidentally multiply retries.
 
 ```mermaid
-flowchart LR
-    Q["New request"] --> B["Tenant and route boundary"]
-    B --> N["Normalized intent and constraints"]
-    N --> K["Retrieve similar candidates"]
-    K --> F["Filter corpus, policy, locale, permissions, and age"]
-    F --> T{"Similarity above route threshold?"}
-    T -->|No| M["Run model"]
-    T -->|Yes| G{"Citations and invariants still valid?"}
-    G -->|No| M
-    G -->|Yes| H["Serve marked cache hit"]
+sequenceDiagram
+    participant C as Caller
+    participant A as Admission
+    participant Q as Bounded queue
+    participant W as Worker
+    participant D as Dependency
+
+    C->>A: Request with operation ID
+    A->>A: Reserve tenant budget
+    A->>Q: Enqueue before deadline
+    Q->>W: Deliver eligible work
+    W->>D: Call with idempotency key
+    D-->>W: Temporary 429 + Retry-After
+    W->>W: Wait, jitter, check deadline
+    W->>D: Retry same operation
+    D-->>W: Original or completed result
+    W-->>C: Final status
 ```
 
-The route—not the cache library—should define the threshold and invariants. CaseLens might prohibit semantic answer caching entirely while allowing semantic reuse of a document classification step. Another product might require that extracted entities, locale, policy version, and requested output mode match exactly even when the free-text wording is similar.
+Idempotency protects retries that may create an external effect. The same key must describe the same normalized operation and scope. The domain service stores the result or detects an in-progress request. A changed payload with the same key should return a conflict. Reads and pure computations may be naturally repeatable; payments, messages, deployments, and record creation need explicit guarantees.
 
-Evaluate semantic caching with a labeled set of request pairs. Measure unsafe-hit rate, false misses, answer-quality delta, citation validity, and latency/cost savings. A high hit rate is not success if it returns plausible answers to non-equivalent questions.
+## Safe Fallback Preserves an Honest Product
 
-## Limits Allocate Scarce Capacity
-<!-- section-summary: Provider rate limits describe upstream capacity; application quotas and concurrency limits allocate that capacity among users, tenants, routes, and workloads. -->
+<!-- section-summary: Fallback defines a smaller trustworthy service after capacity, budget, cache, model, or tool failure and keeps changed capability visible to the user. -->
 
-**Rate limits** cap work over time, such as requests or tokens per minute. **Concurrency limits** cap simultaneous work. **Quotas** cap consumption over a longer budget window, such as tokens or currency per day. These controls answer different questions.
+A fallback is the product behavior after the preferred path cannot complete safely. Good fallback preserves a truthful, useful subset of the service. It never crosses a permission or data-residency boundary to improve availability.
 
-Provider limits protect the upstream service and may vary by model, organization, project, or usage tier. The application sees them as a hard outer boundary. Product controls sit inside that boundary and express business policy: reserve capacity for interactive traffic, prevent one tenant from monopolizing workers, bound an agent's steps, and stop a background evaluation from draining the live budget.
+A support assistant may return verified source links without synthesis. A research task may move to a background queue and notify the user. A long agent run may present collected evidence and ask for a narrower question. A cache failure may trigger bounded fresh computation. Each route should document acceptable reductions before an incident.
 
-Token-based controls matter because two requests can consume radically different capacity. A short classification and a long agent run should not count as equal. Estimate input size before admission, set maximum output and tool-step budgets, then reconcile the estimate with actual usage.
+A **circuit breaker** protects a failing dependency. Calls pass normally in the closed state. Repeated qualifying failures open the breaker and fail fast. After a cool-down, a small number of probes enter a half-open state. Successful probes close the breaker; failure opens it again.
 
-Hierarchical admission makes fairness explicit:
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: failure threshold reached
+    Open --> HalfOpen: cool-down ends
+    HalfOpen --> Closed: probes succeed
+    HalfOpen --> Open: probe fails
+```
 
-| Boundary | Example question |
-| --- | --- |
-| Request | Is this context, output, and step budget allowed? |
-| User | Is this burst consistent with the user's product tier? |
-| Tenant | Has this customer reached its shared budget or concurrency? |
-| Route | Should live chat outrank document re-indexing? |
-| Model/provider | Is there upstream headroom for this workload? |
-| System | Can queues and workers stay within latency and memory targets? |
+Breaker scope should match the failure domain. A web-search outage can disable that tool while internal retrieval continues. One model-region failure can route to an approved alternative whose quality, data controls, and budget fit the task. A broad global breaker can remove healthy capabilities along with the failed one.
 
-The order matters. Reject an oversized request before consuming a tenant token. Reserve capacity before starting expensive retrieval. Release reservations when requests fail. Use an idempotency key so a client retry does not spend the quota twice.
+Fallback quality belongs in evaluation. A smaller model may miss required reasoning. A cached public answer may be stale for a live incident. A partial answer may need prominent wording that evidence collection ended early. “Available” has little value if the reduced mode violates the product promise.
 
-Return a clear outcome. A `429` means the caller exceeded an admission rule and should retry only when advised. A `503` more often signals temporary service unavailability. Include a bounded retry delay where appropriate, but do not reveal other tenants' usage or internal capacity.
+## Observability and Evaluation Measure Correctness as Well as Savings
 
-## Backpressure Prevents A Queue From Hiding Overload
-<!-- section-summary: Backpressure slows or rejects producers when downstream work cannot keep up, preserving a bounded queue and a useful latency promise. -->
+<!-- section-summary: Operational evidence explains reuse, rejection, budget exhaustion, queue pressure, retries, and fallback while evaluation measures the quality of each decision. -->
 
-A queue absorbs short bursts and separates request acceptance from execution. It does not create capacity. If work arrives faster than workers complete it, queue age grows until the product has only moved the outage into the future.
+Caching and limits are quality controls with cost benefits. A dashboard showing only cache hit rate and saved tokens can hide cross-tenant reuse, stale answers, unfair throttling, or agent tasks that end before producing value.
 
-Track both queue depth and age of the oldest eligible job. Depth alone is misleading because jobs vary in cost. Set a maximum age, maximum pending work per tenant, and cancellation policy. Interactive requests may be rejected quickly; document ingestion or nightly evaluation may be accepted for background completion.
+Each request should record the cache contract and admission decision. Useful fields include route, tenant class, key version, cache type, hit or miss, entry age, source revision, invalidation reason, estimated and actual tokens, provider cached tokens, queue wait, budget exhaustion reason, retry count, breaker state, fallback mode, latency, cost, and task result. Hash or omit sensitive key material.
 
-Use provider batch processing only when its completion window and operational contract fit the job. OpenAI's current Batch API, for example, is asynchronous and uses per-request IDs to reconcile outputs. It is suitable for workloads such as eval scoring or embeddings that do not need an immediate response, not as a transparent substitute for live chat.
+Different caches need different success measures:
 
-When an upstream service returns a rate-limit or transient error, retry with exponential backoff and random jitter. Respect provider retry hints. Cap attempts and elapsed time. Retrying every failed request immediately synchronizes clients into another spike—the **thundering herd** problem.
+- Provider prompt caches: read tokens, write tokens, time to first token, prefix stability, and net cost.
+- Exact result caches: eligible requests, valid hits, stale-hit rate, authorization failures, and latency saved.
+- Semantic caches: unsafe-hit rate, false misses, evidence validity, and task-quality delta.
+- Retrieval and tool caches: source age, invalidation lag, source-call reduction, and permission correctness.
 
-## Circuit Breakers And Degradation Bound Failure
-<!-- section-summary: A circuit breaker stops repeated calls to an unhealthy dependency, while a degradation policy defines what useful and honest service remains. -->
+Limit telemetry should explain demand that the product declined. Track rate-limit decisions by user and tenant class, reserved versus actual tokens, active concurrency, queue depth and age, run-budget exhaustion, provider `429` responses, retry amplification, and fallback success. High denial rates can signal abuse, a broken estimator, an overly small product limit, or insufficient capacity.
 
-A **circuit breaker** observes calls to one dependency. In the closed state, calls flow normally. After a threshold of qualifying failures, it opens and fails fast. After a cool-down, a small number of probe calls enter the half-open state. Success closes the circuit; failure opens it again.
+Evaluation needs adversarial and load cases. Change a user’s permission after a result enters the cache. Withdraw a cited document. Send semantically close questions with different critical facts. Expire a hot key under load. Exhaust one tenant’s quota and verify another tenant remains healthy. Force tool timeouts, provider rate limits, and partial failures. Reuse an idempotency key with changed arguments and expect a conflict.
 
-Breakers should be scoped to the real fault domain: provider, model, region, or tool—not necessarily the whole application. A failed web-search tool should not disable a response that can honestly rely on approved internal documents.
+The final gate compares task success, latency distributions, cost per successful outcome, valid reuse, stale exposure, rejected demand, and degraded-mode quality. Savings count only after correctness remains within the route’s acceptance threshold.
 
-Degradation is a product decision. CaseLens might switch a background summarization job to a slower model, offer search results without synthesized advice, or ask the lawyer to retry later. It must not silently remove citations or cross a data-residency boundary to keep the page green. The response should state when a reduced mode changes capability.
+## Roll Out Each Control With Evidence
 
-Timeouts, retries, concurrency limits, and circuit breakers must be designed together. A timeout bounds one attempt. A retry handles a limited transient failure. A concurrency limit prevents too many attempts at once. A breaker stops attempts when evidence says the dependency is unhealthy.
+<!-- section-summary: Safe rollout observes decisions before enforcement, compares cache hits with fresh execution, canaries bounded traffic, and keeps a fast disable path. -->
 
-## Operate The Controls As Quality Features
-<!-- section-summary: Cache and limit telemetry must explain saved work, unsafe reuse, rejected demand, queue pressure, and degraded outcomes rather than celebrating hit rate alone. -->
+Caching and admission changes can alter answers and availability, so rollout should reveal their decisions before they control all traffic. Each mechanism also needs an emergency disable switch independent of a full deployment.
 
-Observe the complete decision path. For each request, record the route and tenant class, admission outcome, estimated and actual tokens, queue wait, cache type and key version, hit or miss, staleness age, provider cached tokens, retry count, breaker state, degraded mode, latency, cost, and quality outcome. Protect or hash sensitive key material.
+Start cache rollout with shadow reads. The application looks up entries and records potential hits while fresh execution still serves the user. Compare the cached candidate with the fresh result, evidence, authorization, and latency. After the contract passes evaluation, serve exact hits to a small traffic segment.
 
-Useful questions include:
+Semantic caches need a stricter sequence. Build a labeled pair set, choose route-specific hard filters, sweep similarity thresholds offline, and shadow candidates in production. Human review of high-impact disagreements can uncover missing constraints. Canary only the narrow routes with acceptable unsafe-hit evidence.
 
-- Did lower latency come from prompt caching, answer reuse, a smaller model, or skipped work?
-- Are misses caused by legitimate corpus changes or accidental prompt-prefix churn?
-- Which tenant or background route creates queue age?
-- Do semantic hits pass the same quality and citation checks as fresh answers?
-- Are 429 responses controlling bursts, or is the product permanently under-provisioned?
-- Does degradation preserve the promised safety and evidence?
+Limits can also run in observe-only mode. Envoy supports separate enabled and enforced fractions for local rate limiting, for example. Log which requests would receive a denial, then check tenant fairness, route priorities, and user experience before enforcing a small percentage.
 
-Test the failure paths deliberately. Change a permission after an answer is cached. Revoke a cited document. Expire a hot key under load. Send two requests with the same idempotency key. Exhaust one tenant's quota while another remains active. Force the provider to return 429s and timeouts. Open a breaker and verify that the user sees the intended reduced mode.
+```mermaid
+flowchart TD
+    A["Define contract and success metrics"] --> B["Offline tests"]
+    B --> C["Shadow decisions"]
+    C --> D["Small canary"]
+    D --> E{"Correctness and capacity healthy?"}
+    E -->|No| F["Disable and repair"]
+    E -->|Yes| G["Expand gradually"]
+    G --> H["Routine review and incident drills"]
+```
 
-The release gate should compare more than cost. Track latency distributions, cost per successful task, cache eligibility, exact and semantic hit quality, stale-hit rate, rejected demand, queue age, dependency error rate, and task success. A cheaper system that serves invalid evidence or rejects the wrong users has not improved.
+Warm-cache and cold-cache load tests reveal different behavior. A release can appear healthy with a full cache and overload providers immediately after invalidation. Test ordinary key-version changes, regional cache loss, popular-key expiry, and total cache unavailability. Capacity plans should survive the agreed cold-cache scenario.
 
-## Build The System In This Order
-<!-- section-summary: Start with bounded requests and admission, then stabilize prompt structure, add exact caches, and introduce semantic reuse only after route-specific evidence supports it. -->
+## Common Failures Have Specific Repairs
 
-Begin with request budgets, tenant boundaries, concurrency controls, timeouts, and honest error handling. Those controls protect the system before any cache is warm. Next, make stable prompt prefixes truly stable and measure provider-side caching. Add exact result caching only to routes with a complete identity and invalidation story. Introduce queues for work that can be delayed. Add circuit breakers and explicit degradation for dependencies whose failure would otherwise cascade.
+<!-- section-summary: Cache leaks, stale results, stampedes, retry storms, unfair limits, and runaway agents each point to a specific authoritative control. -->
 
-Semantic caching comes last. It requires a route-specific equivalence policy and an evaluation set, not merely a vector index.
+The visible symptom often looks like “the LLM is slow” or “the answer is wrong.” Repair starts by identifying which reuse or admission promise failed.
 
-The central design is simple: reuse only when identity proves the work is still valid; admit new work only when budgets and downstream capacity allow it; and make every rejection, stale boundary, and degraded response visible. That is how caching and limits support product correctness instead of acting as a collection of isolated optimization tricks.
+### A Cache Hit Crossed an Identity Boundary
 
-![CaseLens control stack separates safe reuse, fair limits, clear degradation, and observability.](/content-assets/articles/article-mlops-llmops-caching-and-limits/caching-control-stack.png)
+A result appears under the wrong tenant, user, locale, or permission class. Disable the affected namespace, add emergency revocation, and inspect key construction plus authorization on hits. Derived cache entries and traces may contain exposed data. Rebuild under a new version and add negative cross-boundary tests.
 
-*The control stack separates safe reuse, fair limits, and clear degradation so legal research stays bounded and auditable.*
+### Freshness or Invalidation Failed
+
+An answer cites withdrawn content or old policy. Revoke entries referencing the source, advance the source revision, and measure invalidation lag. The long-term repair may combine versioned keys, source-to-cache lineage, shorter TTL, and a fast deny set for urgent changes.
+
+### A Popular Miss Overloaded the Dependency
+
+Many workers recompute the same expired key. Add request coalescing, TTL jitter, bounded stale reuse for eligible routes, and cold-cache load tests. Confirm that the cache memory policy retains genuinely hot entries without treating the cache as permanent storage.
+
+### Retries Multiplied the Outage
+
+Application retries, SDK retries, queue redelivery, and agent retries can stack. Map every retry layer and choose one owner per dependency.
+
+Honor `Retry-After` and cap attempts plus elapsed time. Side effects require idempotency. A breaker can stop calls after evidence shows the dependency is unhealthy.
+
+### Limits Produced Unfair or Wasteful Admission
+
+One tenant consumes shared capacity, or cheap work is rejected behind expensive work. Add tenant and route isolation, token-aware reservations, separate interactive and background queues, and tested priority rules. Compare reserved with actual consumption so the estimator improves.
+
+### One Agent Consumed Excessive Work
+
+The orchestrator allowed repeated model or tool calls without useful progress. Enforce step, tool, token, retry, time, and cost budgets. Record the exhaustion reason and evaluate the defined partial response. Repeated exhaustion on normal tasks may indicate poor tool design or orchestration rather than an intentionally difficult request.
+
+## Incident Response Reduces New Work First
+
+<!-- section-summary: Cache or overload incidents stop unsafe reuse and excess admission, preserve evidence, reconcile effects, repair the control, and recover gradually. -->
+
+A cache correctness incident starts by stopping unsafe hits. Disable the namespace or semantic route, add a revocation rule, and force fresh execution only if the downstream system has capacity. If safe fresh capacity is unavailable, reject or queue work with a clear explanation.
+
+An overload incident starts by reducing new work. Tighten admission, pause background routes, cap concurrency, open a breaker for the failing dependency, and stop unbounded retries. Preserve capacity for health checks, operator actions, and the highest-priority user paths.
+
+Next, preserve the cache key version, entry provenance, source revision, and policy or prompt versions. Admission reason, queue state, budget counters, retry chain, provider headers, and external effect IDs complete the decision evidence.
+
+Sensitive cache values require the same access controls as their source data.
+
+Scope the impact through concrete questions. Which routes and tenants could receive the entry? Which source change failed to propagate? Did any mutating tool execute twice? Which jobs are now too old to provide value? Can the service handle a cold-cache recovery without creating a second overload?
+
+Recovery proceeds gradually. Repair and test the authoritative control, invalidate affected entries, reconcile external effects, and restore traffic through a small canary. Watch valid-hit rate, provider capacity, queue age, budget exhaustion, and fallback quality. Keep the emergency lever available until the cache and downstream system reach a stable operating state.
+
+Residual uncertainty remains. Provider cache semantics, billing, model support, retention, and quota behavior can change. Semantic similarity can miss a domain-specific distinction. Token estimators can undercount. A layered design limits those risks through provider adapters, hard identity filters, current documentation checks, conservative budgets, shadow evaluation, and tested disable paths.
+
+## Main Idea
+
+<!-- section-summary: Production LLM systems reuse work only under a valid identity and admit new work only inside explicit capacity and run budgets. -->
+
+Caching and limits form one control system. Caches reuse prompt computation, results, retrieval, or tool observations only while identity, freshness, and source assumptions remain valid. Limits allocate arrival rate, accumulated quota, concurrency, and one run’s finite budget.
+
+In essence, reuse needs proof and new work needs permission from capacity. Backpressure and bounded queues protect downstream services. Idempotent retries recover uncertain operations, circuit breakers stop repeated failure, and honest fallback keeps reduced service visible.
+
+A reliable implementation can explain every shortcut and every refusal. Operators can see why an entry was reusable, why work entered the system, which budget ended a run, and which safe path handled the result.
 
 ## References
 
-- [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
-- [OpenAI rate limits](https://developers.openai.com/api/docs/guides/rate-limits)
-- [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data)
-- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
-- [OpenAI API deployment checklist](https://developers.openai.com/api/docs/guides/deployment-checklist)
-- [Redis cache-aside pattern](https://redis.io/docs/latest/develop/use-cases/cache-aside/)
-- [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/)
-- [Redis semantic cache](https://redis.io/docs/latest/develop/use-cases/semantic-cache/)
-- [OpenTelemetry documentation](https://opentelemetry.io/docs/)
+- [OpenAI API: Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+- [OpenAI API: Rate Limits](https://developers.openai.com/api/docs/guides/rate-limits)
+- [Anthropic: Prompt Caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+- [Amazon Bedrock: Prompt Caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
+- [Google Cloud: Context Caching Overview](https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview)
+- [Redis: Semantic Cache](https://redis.io/docs/latest/develop/use-cases/semantic-cache/)
+- [Redis: SET Command](https://redis.io/docs/latest/commands/set/)
+- [Redis: Key Eviction](https://redis.io/docs/latest/develop/reference/eviction/)
+- [Envoy: Local Rate Limit Filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/local_rate_limit_filter.html)
+- [RFC 6585: 429 Too Many Requests](https://www.rfc-editor.org/rfc/rfc6585.html)
+- [AWS Well-Architected: Make Mutating Operations Idempotent](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_prevent_interaction_failure_idempotent.html)
+- [AWS Well-Architected: Control and Limit Retry Calls](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_limit_retries.html)
+- [AWS Well-Architected: Fail Fast and Limit Queues](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_fail_fast.html)
+- [Stripe API: Idempotent Requests](https://docs.stripe.com/api/idempotent_requests)

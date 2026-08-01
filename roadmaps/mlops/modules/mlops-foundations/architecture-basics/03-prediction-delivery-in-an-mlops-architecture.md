@@ -1,7 +1,7 @@
 ---
 title: "Prediction Delivery in an MLOps Architecture"
-description: "Explain how a trained model connects to production inputs, execution, product handoff, release identity, and feedback evidence."
-overview: "Prediction delivery connects an approved training artifact to a real product decision. This article develops the architectural contracts for the artifact, input source, execution location, caller and output handoff, release identity, and feedback evidence, then tests those contracts with a concrete release invariant."
+description: "Learn how a production prediction travels from a request, schedule, event, or device through data, a model runtime, decision policy, product action, and feedback."
+overview: "Prediction delivery is the complete path that turns an approved model into a dependable product decision. It covers the trigger, input and feature contracts, model runtime, decision policy, product handoff, production evidence, and later outcome joins across batch, online, streaming, and edge systems."
 tags: ["MLOps", "core", "architecture", "delivery"]
 order: 3
 id: "article-mlops-mlops-foundations-batch-online-streaming-systems"
@@ -10,274 +10,457 @@ aliases:
   - child-architecture-basics-03-batch-online-streaming-systems
 ---
 
-## Prediction Delivery Connects Training To A Product Decision
-<!-- section-summary: Prediction delivery is the set of architectural contracts that carries one approved model release from training into a product workflow and returns evidence about its results. -->
+## Table of Contents
 
-**Prediction delivery** is the part of an MLOps architecture that connects an approved training artifact to a real product decision. It identifies the artifact, supplies the right production input, runs prediction in a suitable location, hands the result to a caller, and records enough evidence to trace the result back to one release. Later outcomes return through a feedback path so the team can evaluate what the release actually did.
+1. [What Prediction Delivery Means](#what-prediction-delivery-means)
+2. [One Delivery Path, Eight Contracts](#one-delivery-path-eight-contracts)
+3. [The Trigger Sets The Product Clock](#the-trigger-sets-the-product-clock)
+4. [Inputs And Features Recreate Production Reality](#inputs-and-features-recreate-production-reality)
+5. [The Runtime Executes An Approved Release](#the-runtime-executes-an-approved-release)
+6. [Decision Policy Turns A Score Into An Action](#decision-policy-turns-a-score-into-an-action)
+7. [The Product Handoff Delivers A Complete Result](#the-product-handoff-delivers-a-complete-result)
+8. [Production Evidence Records What Happened](#production-evidence-records-what-happened)
+9. [Outcomes Close The Learning Loop](#outcomes-close-the-learning-loop)
+10. [Batch Delivery](#batch-delivery)
+11. [Online Delivery](#online-delivery)
+12. [Streaming Delivery](#streaming-delivery)
+13. [Edge Delivery](#edge-delivery)
+14. [Choose The Pattern From The Decision](#choose-the-pattern-from-the-decision)
+15. [A Practical Industrial Baseline](#a-practical-industrial-baseline)
+16. [The Main Idea](#the-main-idea)
+17. [References](#references)
 
-A trained model file cannot make this connection alone. The product needs preprocessing code, a declared input and output shape, compatible runtime dependencies, and a place to execute. The product also needs a clear handoff. A web application may wait for a response, an ordering system may read a table, and an event processor may consume a prediction message. Each path creates different operational details, while the same architectural questions remain.
+## What Prediction Delivery Means
+<!-- section-summary: Prediction delivery is the complete production path from a business trigger to an action and the evidence needed to evaluate that action. -->
 
-Six connected contracts organize prediction delivery:
+At a high level, **prediction delivery** is the part of an MLOps system that carries a model's answer into the real world. Training may produce an excellent fraud model, demand forecast, or image classifier. The model creates value only after a product can supply current data, run the approved release, interpret its output, and act within the required time.
 
-| Contract | Question it answers | Failure when the answer is missing |
-|---|---|---|
-| **Training artifact** | Which complete release unit performs prediction? | Serving loads different preprocessing, dependencies, or weights from the evaluated candidate. |
-| **Input source** | Which values enter prediction, and at which valid time? | The runtime reads stale, leaked, differently encoded, or unavailable features. |
-| **Execution location** | Which process and infrastructure load and run the release? | The model misses latency, capacity, hardware, security, or availability requirements. |
-| **Caller and output handoff** | Which product asks for the prediction, and how does it receive a usable result? | Predictions finish successfully but never reach the decision that needs them. |
-| **Feedback and evidence** | Which production signals and later outcomes return to the team? | The team sees runtime health without knowing prediction quality or product effect. |
-| **Release identity** | Which immutable identifiers connect all five contracts? | An incident cannot reliably connect an output to its artifact, input, runtime, and evaluation. |
-
-The first five contracts form a path. **Release identity** travels across the entire path and lets the team join its records. This framework applies whether prediction runs in a scheduled job, a request-response service, a stream consumer, a mobile application, or a factory gateway. The Model Serving module develops those operating patterns in detail. This foundations article stays focused on the architectural handoffs that every pattern must preserve.
+You can think of prediction delivery as a supply chain for decisions. A request, schedule, event, or device observation starts the journey. Data is checked and transformed into the inputs the model expects. A runtime computes a prediction. Product rules turn that prediction into an action. The system then records what happened so the team can investigate failures and compare the prediction with the eventual outcome.
 
 ```mermaid
-flowchart LR
-    A[Approved release unit] --> B[Production input source]
-    B --> C[Prediction execution]
-    C --> D[Caller and output handoff]
-    D --> E[Product decision]
-    E --> F[Outcome and operating evidence]
-    F --> G[Evaluation and improvement]
-    R[Immutable release identity] --- A
-    R --- B
-    R --- C
-    R --- D
-    R --- F
+flowchart TD
+    A["Product request, schedule, event, or device signal"] --> B["Validate the input contract"]
+    B --> C["Retrieve or compute features"]
+    C --> D["Run an approved model release"]
+    D --> E["Apply decision policy"]
+    E --> F["Return a response or perform an action"]
+    F --> G["Record prediction and operating evidence"]
+    G --> H["Join the later real-world outcome"]
+    H --> I["Evaluate, improve, or roll back"]
 ```
 
-The diagram shows the dependency between contracts. A team can change the infrastructure inside one box, but it still needs an explicit handoff to the next box. That separation lets a small team run a model in one container today and move it to a managed platform later without changing what the product believes the prediction means.
+A model usually produces a technical value: a probability, ranking score, forecast, class, or embedding. The product needs something more concrete. A payment flow may need `approve`, `verify`, or `send_to_review`. A warehouse may need tomorrow's quantity for every item. A safety controller may need a local stop signal. Prediction delivery owns the path between those two levels.
 
-## The Training Artifact Must Be A Complete Release Unit
-<!-- section-summary: A production release unit combines the evaluated model with preprocessing, schema, runtime dependencies, and integrity information. -->
+This path also explains a common source of production surprises. A service can return `200 OK` while using stale features. A batch job can finish successfully while publishing half its expected rows. An edge model can run quickly while the fleet contains several incompatible model versions. Operational success and decision correctness are separate questions, so the architecture must preserve evidence for both.
 
-The **training artifact contract** names everything the prediction runtime needs from the learning system. A model artifact may hold weights, trees, or a serialized pipeline. A **release unit** adds the surrounding parts that make those learned parameters usable: feature order, preprocessing, postprocessing, label maps, thresholds, input and output schemas, dependency versions, and integrity metadata.
+## One Delivery Path, Eight Contracts
+<!-- section-summary: Eight boundary promises describe how a prediction moves through production and how the system proves what it delivered. -->
 
-Consider a grocery chain called **OrchardMart**. Its demand model predicts the number of strawberry crates each store should order for the next day. Training produces `demand-forecast@42`. The evaluated release includes the fitted model, categorical encoders, feature names, a prediction wrapper, a model signature, and the runtime dependency lock. If production loads only `model.pkl` while separately reimplementing the encoders, the same input row can produce a different numeric feature vector. The evaluation report then describes a system that production never ran.
+A **contract** is a clear promise at a boundary between two parts of the system. It describes what enters, what leaves, which timing rule applies, and how failure is represented. Contracts allow a data team, platform team, and product team to change their internal implementations while preserving the meaning of the prediction.
 
-The artifact boundary should answer four practical questions. First, which files must move together? Second, which input and output shapes did evaluation use? Third, which runtime can load the files? Fourth, how can the deployment process prove that bytes stayed unchanged? Teams commonly answer the last question with an immutable object path, model version, container-image digest, and cryptographic artifact digest.
+Eight contracts form the delivery path:
 
-MLflow model signatures are one current implementation of part of this contract. A signature records model inputs, outputs, and optional inference parameters. An input example can create and validate a signature during model logging, and MLflow can validate a serving input against that signature. A signature still needs release identity, runtime packaging, security review, and product handoff around it. It covers the data interface rather than the whole delivery architecture.
+1. The **trigger contract** says what starts prediction and how quickly the result is needed.
+2. The **input contract** defines request fields, entity keys, data types, units, timestamps, and validation rules.
+3. The **feature contract** defines how production features are computed or retrieved, along with freshness and fallback rules.
+4. The **release contract** identifies the evaluated model, preprocessing, dependencies, schemas, and integrity digests that move together.
+5. The **decision-policy contract** maps a score to an action through thresholds, business rules, abstention, and human review.
+6. The **handoff contract** defines how the product receives a complete result and what happens during delay or failure.
+7. The **evidence contract** defines the identifiers, logs, metrics, and traces recorded for each execution.
+8. The **outcome contract** defines how delayed ground truth joins back to the prediction and when that outcome is mature enough to evaluate.
 
-The release unit should remain immutable after approval. If an engineer changes preprocessing, dependency pins, or threshold configuration, the team has a new candidate that needs evaluation and a new identity. Keeping that boundary strict prevents a deployment system from silently changing the meaning of an approved model.
+```mermaid
+mindmap
+  root((Prediction delivery))
+    Start
+      Trigger
+      Product deadline
+    Prepare
+      Input contract
+      Feature contract
+    Decide
+      Approved release
+      Decision policy
+    Deliver
+      Product handoff
+      Failure response
+    Learn
+      Production evidence
+      Outcome join
+```
 
-## The Input Source Defines Production Reality
-<!-- section-summary: The input contract identifies entities, schemas, timestamps, freshness, defaults, and ownership for the values supplied to prediction. -->
+The framework stays stable across architectures. Batch inference expresses the handoff as a governed table or file. Online inference expresses it as a low-latency response. Streaming inference expresses it as a continuously processed event. Edge inference expresses it as a local action and delayed cloud evidence. Each pattern implements the same underlying promises.
 
-The **input source contract** describes the production values that reach the release. It includes more than column names. It needs entity keys, data types, units, event timestamps, freshness limits, missing-value behavior, and ownership. These details connect the model's training assumptions to the data that exists at prediction time.
+## The Trigger Sets The Product Clock
+<!-- section-summary: The trigger identifies why prediction starts, while the decision deadline determines which delivery pattern can satisfy the product. -->
 
-For OrchardMart, one prediction row represents a store, a product, and a forecast date. The runtime reads recent sales, current inventory, promotion plans, store opening hours, and weather forecasts. The contract identifies `store_id`, `sku_id`, and `forecast_date` as the entity key. It also says that sales events must arrive before the 02:00 cutoff and that the inventory snapshot must correspond to the same business date.
+The trigger is the event that asks the system to make predictions. More importantly, it reveals the **decision deadline**: the latest moment at which the result still has value.
 
-This boundary creates a causal requirement: the runtime may use only information available before the product decision. Training can see next-day sales after the day ends because those values form the label. Production cannot use them as features. A delivery path therefore carries a **prediction timestamp** and an **input version** alongside the feature values. These fields let the team rebuild what the runtime knew and detect a point-in-time error.
+A nightly inventory forecast begins after sales and stock snapshots close. The result may arrive several hours later and still support morning planning. A card payment needs a risk decision before checkout continues, so the budget may be a fraction of a second. A vibration sensor can emit readings continuously, while an equipment alert may need to appear within seconds. A camera inside a safety system may require a local answer even during a network outage.
 
-Different systems can satisfy the same contract. A batch job may read a versioned warehouse snapshot. An online endpoint may combine request fields with values from an online feature store. A stream consumer may read an event and enrich it with keyed state. The storage engine changes, while the contract still preserves the entity, meaning, time, and fallback.
+These scenarios produce four common triggers:
 
-Freshness and fallback belong here too. If the promotion feed misses its deadline, OrchardMart needs an explicit policy. The job might block because promotion plans strongly affect demand, or it might use a previous approved snapshot and mark the run as degraded. Quietly filling the column with zero changes the business meaning and hides the failure from the product owner.
+- A **schedule or data-ready event** starts a finite batch.
+- A **live request** starts one online prediction or a small group of predictions.
+- A **business or sensor event** enters a continuous stream.
+- A **local device event** starts inference on a phone, gateway, vehicle, or embedded controller.
 
-## Execution Location Is A Product And Operations Decision
-<!-- section-summary: The execution contract maps product latency, freshness, capacity, security, and availability requirements to a runtime location. -->
+```mermaid
+flowchart TD
+    A["What starts the prediction?"] --> B{"How long can the product wait?"}
+    B -->|"Minutes or hours"| C["Batch candidate"]
+    B -->|"Milliseconds or seconds"| D{"Is a network round trip acceptable?"}
+    D -->|"Yes"| E["Online candidate"]
+    D -->|"No"| F["Edge candidate"]
+    A --> G{"Does each event update ongoing state?"}
+    G -->|"Yes"| H["Streaming candidate"]
+```
 
-The **execution location** is the process and infrastructure that load the release and run prediction. It could be a scheduled container, a long-running API service, a stream processor, a managed inference endpoint, an edge gateway, or code inside a device. This choice follows from the product's timing and operating requirements.
+The trigger narrows the platform choices, while scale and ownership complete the decision. A daily job with billions of rows needs distributed compute. A low-volume internal tool may use an ordinary API. The useful design question is: **what must be true before the product can safely use the answer?** That question exposes deadlines, data readiness, capacity, and fallback requirements before the team selects technology.
 
-OrchardMart generates all store forecasts before planners arrive. A scheduled container close to the warehouse data can process many rows and write a versioned output table. An interactive substitution recommender would create a different requirement because a shopper waits for the answer. That product may need a long-running service close to the application and an online feature path. A camera that stops a factory conveyor may need local execution because a network round trip creates unacceptable delay.
+## Inputs And Features Recreate Production Reality
+<!-- section-summary: Input and feature contracts preserve the entities, meaning, timing, freshness, and fallback behavior that the evaluated model expects. -->
 
-Five constraints shape the location:
+An input contract describes the values supplied directly by the caller or source. A feature contract describes the derived values supplied to the model. In essence, these two contracts recreate the production situation that the model learned to handle.
 
-- **Latency and freshness** describe how soon the product needs an answer and how current the input must be.
-- **Capacity** describes request rate, batch size, concurrency, memory, CPU, accelerator, and scaling needs.
-- **Availability** describes which dependencies may fail and which fallback keeps the product safe.
-- **Security and privacy** describe where sensitive inputs may travel, which identity reads them, and whether the runtime needs network isolation.
-- **Cost and ownership** describe when compute stays allocated, who operates it, and which platform skills the team already has.
+Suppose an online fraud service receives an amount, merchant category, account identifier, and transaction time. The model may also need account age, recent transaction count, and typical spending range. The request carries the first group. A feature service or application-owned data store supplies the second. The model receives one combined feature vector.
 
-The release unit and input source constrain this choice. A large GPU artifact cannot run on a small device. An endpoint with a 50-millisecond budget cannot wait for a warehouse query. A batch job that reads a warehouse snapshot may gain little from a permanently allocated prediction server. The architecture review should connect each infrastructure choice to one of these constraints.
+The contract needs more than field names. It should state:
 
-Detailed operating concerns such as batching, autoscaling, stream offsets, retries, model loading, container images, GPU scheduling, and edge updates belong to the Model Serving module. At this stage, the important architectural result is a named runtime boundary with a compatible release, reachable inputs, and a failure policy.
+- the entity key, such as `account_id`;
+- data types and units, such as an amount in minor currency units;
+- event time and prediction time;
+- accepted ranges and categories;
+- maximum feature age;
+- missing-value behavior;
+- the source owner and schema version;
+- the fallback used during partial data loss.
 
-## The Handoff Must Reach The Product Decision
-<!-- section-summary: The output contract connects prediction execution to a caller, a result shape, a delivery guarantee, and a fallback action. -->
+```yaml
+input_schema: fraud_request_v3
+entity_key: account_id
+event_time: transaction_time
+fields:
+  amount_minor_units:
+    type: integer
+    minimum: 0
+  merchant_category:
+    type: string
+features:
+  recent_transaction_count:
+    maximum_age: 5m
+    on_missing: route_to_review
+  account_age_days:
+    maximum_age: 24h
+    on_missing: reject_request
+```
 
-The **caller** is the product component that requests or consumes a prediction. The **output handoff** is the interface that carries the result into a business action. The handoff may return an HTTP response, write rows to a table, publish events, update a search index, or store an on-device result. Prediction delivery succeeds only when the caller can use the output within its decision window.
+The `maximum_age` rule gives “fresh” a measurable meaning. The fallback gives missing data an explicit product effect. A quiet zero-fill could make an account with unavailable history look like an account with no recent transactions, so the contract sends that case to review instead.
 
-OrchardMart's demand job writes one row per store and product to a staging table. Each row includes the forecast quantity, model release, input snapshot, prediction timestamp, and run ID. The ordering service reads a stable `current` view after validation promotes the new table. The staging boundary matters because planners should keep yesterday's complete forecasts if today's job writes only half its rows.
+Time deserves special attention. Training data contains facts collected after an event has finished. Production has access only to facts available before the decision. Batch pipelines often solve this with point-in-time joins against versioned warehouse or lakehouse data. Online paths often combine request data with a low-latency store. Feast, Databricks Feature Engineering, and managed cloud feature services can coordinate offline and online feature definitions where reuse and consistency justify the added platform. A normal database or application cache is often sufficient for a small feature set owned by one service.
+
+## The Runtime Executes An Approved Release
+<!-- section-summary: The runtime loads one immutable release unit and provides the compute, dependency environment, and serving interface needed to execute it. -->
+
+The **model runtime** is the process that loads a release and calls its prediction function. It may live inside a scheduled job, managed endpoint, Kubernetes service, stream processor, mobile application, or edge gateway.
+
+A production release contains more than learned weights. It usually includes preprocessing, postprocessing, a model signature, label mappings, dependency versions, and integrity information. An MLflow model signature can declare inputs, outputs, and inference parameters. An OCI image can pin the operating environment. A registry or governed catalog can bind those pieces to an immutable model version or logged-model identity.
+
+```mermaid
+flowchart TD
+    A["Approved release record"] --> B["Model artifact"]
+    A --> C["Preprocessing and postprocessing"]
+    A --> D["Input and output signature"]
+    A --> E["Dependency or image digest"]
+    B --> F["Prediction runtime"]
+    C --> F
+    D --> F
+    E --> F
+    F --> G["Observed release ID in every result"]
+```
+
+Imagine evaluation used a categorical encoder that maps unseen values to a reserved bucket. Production reimplements that transformation and throws an error for the same value. Both systems may load identical weights, yet they execute different prediction functions. Packaging the transformation with the release, or sharing one tested implementation, keeps evaluation and production aligned.
+
+For most teams, a managed job or managed endpoint is the practical default because the platform handles compute provisioning, health checks, autoscaling, and access control. Amazon SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks Model Serving all provide managed inference paths. An ordinary Python or JVM service can be a sensible choice for a small CPU model inside an existing application. KServe fits teams that already operate Kubernetes and need standardized model-serving resources and traffic control. Triton Inference Server fits accelerator-heavy workloads that need features such as dynamic batching or concurrent model execution. Ray Serve fits Python-native inference applications that compose several model or processing stages on Ray.
+
+The release ID should appear in runtime health data and every prediction record. During an incident, this one field lets the team separate a bad model release from a platform-wide failure.
+
+## Decision Policy Turns A Score Into An Action
+<!-- section-summary: Decision policy combines the model output with thresholds, business constraints, safety rules, and fallback behavior to choose a product action. -->
+
+A model output and a product decision are different things. A fraud model may return `0.82`; the checkout system needs a concrete action. A forecast may return `37.4`; the ordering system needs a permitted order quantity. A classifier may return a label; a safety process may require human confirmation before acting.
+
+The **decision policy** is the layer that performs this translation. You can think of it as the operating rulebook around the model. It may include thresholds, legal or safety rules, account limits, confidence checks, abstention, human review, or a deterministic fallback.
+
+```python
+def choose_payment_action(score: float, feature_status: str) -> str:
+    if feature_status != "fresh":
+        return "send_to_review"
+    if score >= 0.90:
+        return "block"
+    if score >= 0.65:
+        return "request_verification"
+    return "approve"
+```
+
+The ordering of the checks is part of the policy. Feature status comes before the score because a precise number built from stale evidence gives false confidence. Two thresholds create a middle path for uncertainty. The function returns product actions instead of model probabilities.
+
+Policy should have its own version. A team may keep the same model and tighten a fraud threshold during a high-risk period. It may update an inventory constraint without retraining the forecast. Recording both `model_release_id` and `policy_version` preserves that distinction and makes outcome analysis meaningful.
+
+High-impact systems also need an **abstain path**: a safe response for cases the automated decision should avoid. Examples include sending an unfamiliar application to a reviewer, asking a user for another identity check, or continuing with the last approved control setting. Abstention is part of the designed product behavior, not an unhandled exception.
+
+## The Product Handoff Delivers A Complete Result
+<!-- section-summary: The handoff contract defines the response, table, event, or local action that the consuming product can safely use. -->
+
+The handoff is the boundary between the prediction system and the product that uses its answer. Its shape depends on the delivery pattern, yet every handoff needs a usable result, provenance, freshness, and a visible failure state.
+
+An online API may return:
 
 ```json
 {
-  "store_id": "store_044",
-  "sku_id": "strawberry_crate",
-  "forecast_date": "2026-07-16",
-  "predicted_units": 38.4,
-  "release_id": "demand-forecast-42-8fd2b7",
-  "input_snapshot": "warehouse.sales_features@2026-07-15T02:00:00Z",
-  "prediction_run_id": "run-20260715-0215",
-  "generated_at": "2026-07-15T02:23:17Z"
+  "prediction_id": "pred_7f3a",
+  "decision": "request_verification",
+  "score": 0.82,
+  "model_release_id": "fraud-model@sha256:8fd2b7",
+  "policy_version": "payment-risk-v6",
+  "degraded": false
 }
 ```
 
-The numeric prediction is only one field in the handoff. `release_id` and `input_snapshot` preserve provenance. `prediction_run_id` groups rows from one execution and helps detect partial output. `generated_at` supports freshness checks. The caller still needs the output schema, acceptable range, deadline, and fallback action.
+The product uses `decision`. The score supports explanation or review. The release and policy fields support investigation. `degraded` prevents a fallback result from looking identical to a fully informed result.
 
-Failure semantics differ by handoff. A request-response caller needs a timeout and a product fallback. A batch consumer needs completeness and freshness gates before switching to a new table. A stream consumer needs a stable event key and duplicate handling. These details change across modes, while the architectural requirement stays consistent: the product can tell whether it received a complete, current, identifiable prediction.
+Batch delivery usually writes a staging table or object set first. Validation checks row count, expected partitions, schema, uniqueness, and freshness. A catalog pointer or view then switches atomically to the complete output. Consumers keep the previous trusted version if validation fails.
 
-## Release Identity Holds The Path Together
-<!-- section-summary: Immutable release, artifact, runtime, input, and run identifiers let teams trace each product output to the system that produced it. -->
+Streaming delivery publishes a prediction event with a stable event or prediction ID. Downstream consumers use that ID to deduplicate replays. Edge delivery may apply an action locally and upload evidence later, so local storage must hold the prediction until connectivity returns.
 
-**Release identity** is the set of immutable identifiers that connects evaluation, deployment, prediction, and feedback. A friendly model name such as `demand-forecast` identifies a product capability. It cannot identify exact bytes or behavior by itself. The delivery path needs a specific model version or logged-model ID, artifact digest, serving-image digest, input schema version, and release record.
+Timeouts and fallbacks belong in the handoff contract. A recommendation page may show popular items after an inference timeout. A payment flow may send the transaction to review. A safety controller may retain the last safe setting. The correct fallback comes from the product's risk model; the inference platform cannot invent it.
 
-One useful release ID points to those immutable values rather than replacing them. OrchardMart can define `demand-forecast-42-8fd2b7` as a release record that binds model version `42`, artifact digest `sha256:8fd2b7...`, runtime image `sha256:37ac11...`, input schema `demand_features_v5`, output schema `demand_predictions_v3`, and approved evaluation `eval-20260714-0912`.
+## Production Evidence Records What Happened
+<!-- section-summary: Production evidence connects a delivered result to its trigger, data, release, policy, runtime, and failure path. -->
 
-Each prediction execution also needs a run or request identity. The release ID answers which approved system produced a result. The run ID answers which execution produced it. A trace ID can follow a live request across application, feature, and inference services. OpenTelemetry context propagation provides a standard mechanism for carrying trace context across process and network boundaries. Batch and data pipelines can use lineage events; OpenLineage defines job, run, and dataset entities for this purpose.
+Production evidence answers a basic incident question: **what exactly produced this decision?** The evidence is split across purpose-specific records: traces follow one request, metrics summarize many executions, operational logs record searchable events, and governed prediction records preserve decision details.
 
-This identity chain helps during an incident. If forecasts for frozen foods suddenly drop, the team can group bad rows by `release_id`, compare input snapshots by `prediction_run_id`, inspect the exact runtime image, and find the evaluation that approved the release. Without those joins, several teams may inspect different versions while believing they are discussing the same production behavior.
+An online request can carry an OpenTelemetry trace context through the product API, feature lookup, inference call, and policy step. Each span records the duration and result of one operation. Metrics then summarize traffic, errors, latency, saturation, fallbacks, and feature freshness across many requests.
 
-## A Delivery Gate Can Test The Release Invariant
-<!-- section-summary: A preflight gate compares the declared delivery contract with observed runtime evidence and blocks handoff when identities or schemas differ. -->
+A batch or streaming pipeline can emit lineage events. OpenLineage represents datasets, jobs, and runs with standard identities, which allows a team to connect an output table to its input snapshot and producing job. Prediction records add model-specific fields such as release ID, policy version, prediction ID, and feature status.
 
-The central delivery invariant is simple: **the release that passed evaluation must be the release that produces the product output under the declared input and output contracts**. A preflight gate can turn that sentence into a deterministic test before a batch table, endpoint route, or stream deployment receives production traffic.
-
-The following example keeps the evaluator independent from any vendor platform. `DeliveryContract` contains the identities approved by the release process. `DeliveryEvidence` contains what the runtime actually loaded and configured during its smoke test. The evaluator compares them and returns a visible state: `ready` or `blocked`.
-
-```python
-from dataclasses import dataclass, replace
-from typing import Literal
-
-
-@dataclass(frozen=True)
-class DeliveryContract:
-    release_id: str
-    model_digest: str
-    runtime_digest: str
-    input_schema: str
-    output_schema: str
-    output_target: str
-
-
-@dataclass(frozen=True)
-class DeliveryEvidence:
-    release_id: str
-    loaded_model_digest: str
-    running_image_digest: str
-    accepted_input_schema: str
-    emitted_output_schema: str
-    configured_output_target: str
-    smoke_prediction_count: int
-
-
-@dataclass(frozen=True)
-class GateDecision:
-    state: Literal["ready", "blocked"]
-    violations: tuple[str, ...]
-
-
-def evaluate_delivery(
-    contract: DeliveryContract,
-    evidence: DeliveryEvidence,
-) -> GateDecision:
-    expected_and_observed = {
-        "release_id": (contract.release_id, evidence.release_id),
-        "model_digest": (contract.model_digest, evidence.loaded_model_digest),
-        "runtime_digest": (contract.runtime_digest, evidence.running_image_digest),
-        "input_schema": (contract.input_schema, evidence.accepted_input_schema),
-        "output_schema": (contract.output_schema, evidence.emitted_output_schema),
-        "output_target": (contract.output_target, evidence.configured_output_target),
-    }
-    violations = tuple(
-        f"{name}: expected {expected}, observed {observed}"
-        for name, (expected, observed) in expected_and_observed.items()
-        if expected != observed
-    )
-    if evidence.smoke_prediction_count < 1:
-        violations += ("smoke_prediction_count: expected at least 1",)
-
-    state = "ready" if len(violations) == 0 else "blocked"
-    return GateDecision(state=state, violations=violations)
-
-
-contract = DeliveryContract(
-    release_id="demand-forecast-42-8fd2b7",
-    model_digest="sha256:8fd2b7",
-    runtime_digest="sha256:37ac11",
-    input_schema="demand_features_v5",
-    output_schema="demand_predictions_v3",
-    output_target="warehouse.demand_predictions_staging",
-)
-matching_evidence = DeliveryEvidence(
-    release_id="demand-forecast-42-8fd2b7",
-    loaded_model_digest="sha256:8fd2b7",
-    running_image_digest="sha256:37ac11",
-    accepted_input_schema="demand_features_v5",
-    emitted_output_schema="demand_predictions_v3",
-    configured_output_target="warehouse.demand_predictions_staging",
-    smoke_prediction_count=10,
-)
-
-ready = evaluate_delivery(contract, matching_evidence)
-assert ready == GateDecision(state="ready", violations=())
-
-wrong_model = replace(matching_evidence, loaded_model_digest="sha256:old991")
-blocked = evaluate_delivery(contract, wrong_model)
-assert blocked.state == "blocked"
-assert blocked.violations == (
-    "model_digest: expected sha256:8fd2b7, observed sha256:old991",
-)
+```mermaid
+flowchart TD
+    A["Product request or pipeline run"] --> B["Trace or run ID"]
+    B --> C["Input and feature version"]
+    B --> D["Model release and runtime digest"]
+    B --> E["Policy version and decision"]
+    B --> F["Latency, fallback, and error signals"]
+    C --> G["Investigable prediction record"]
+    D --> G
+    E --> G
+    F --> G
 ```
 
-The first test supplies matching state and receives `GateDecision(state="ready")`. The failure test changes one observed value: the runtime loaded an older model digest. The evaluator returns `blocked` with the exact mismatch. A deployment controller or batch orchestrator can store that decision as release evidence and stop before it changes the production handoff.
+Evidence design also needs restraint. Raw customer inputs may contain personal or regulated data. High-cardinality identifiers can overwhelm a metrics system. A common design stores aggregate measurements in Prometheus-compatible or cloud-native metrics, request timing in traces, searchable operational events in logs, and restricted prediction details in a governed table. Access controls, retention, redaction, and regional rules apply to that governed record.
 
-Recovery should preserve the last trusted output. OrchardMart keeps the existing `current` forecast view pointed at yesterday's complete table, removes the mismatched runtime from the release path, loads the artifact named by the contract, and repeats the smoke test. A team could also create a new contract if it intentionally wants the different artifact. Either path requires a fresh gate result, so the evidence matches what the product will receive.
+The goal is reproducible explanation. A team should be able to select one prediction, identify its data and release, see whether fallback occurred, and locate the relevant operating signals without copying every sensitive input into every telemetry system.
 
-This small evaluator covers identity and contract compatibility. Production gates usually add artifact integrity verification, representative input fixtures, output range checks, row-count or load checks, permissions, and a product-specific safety test. Those checks should still return explicit evidence rather than an informal statement in a deployment log.
+## Outcomes Close The Learning Loop
+<!-- section-summary: Outcome joins connect production predictions to later ground truth so teams can measure quality, coverage, and product effect by release and policy. -->
 
-## Feedback Connects Outputs To Outcomes
-<!-- section-summary: Feedback joins prediction records with later outcomes and operating signals so teams can evaluate release quality and product effect. -->
+Many predictions can be judged only after time passes. A loan application may mature into repayment history. A demand forecast can be compared with later sales. A maintenance alert can be compared with inspection findings. The **outcome contract** defines that return path.
 
-The **feedback contract** identifies what the team needs to observe after delivery. Service signals show whether the runtime answered. Data signals show whether production inputs matched the contract. Prediction signals show output volume and distribution. Outcome labels show whether predictions were useful after the real result arrives. Product signals show whether users or automated systems acted on the output.
+Three details make the join trustworthy:
 
-For OrchardMart, the demand outcome arrives after the forecast date. The team can join sold units and stockout adjustments to the prediction using `store_id`, `sku_id`, and `forecast_date`. It can then group error by `release_id` and compare releases using the same outcome policy.
+- A stable **join key** connects the prediction to the later outcome.
+- A **maturity rule** says how long to wait before treating the outcome as final enough for evaluation.
+- A **coverage measure** shows what proportion of predictions received usable outcomes.
+
+```mermaid
+flowchart TD
+    A["Prediction record"] --> B["Stable prediction or entity key"]
+    C["Later real-world outcome"] --> B
+    B --> D["Apply label maturity rule"]
+    D --> E["Measure join coverage"]
+    E --> F["Quality by model release and policy"]
+    F --> G["Investigate, roll back, or improve"]
+```
+
+A focused quality query starts from every prediction whose outcome is due. The governed view keeps those predictions after a left join, leaving `outcome_value` empty where a usable outcome has not arrived.
 
 ```sql
 SELECT
-    p.release_id,
-    COUNT(*) AS evaluated_predictions,
-    AVG(ABS(p.predicted_units - o.adjusted_units_sold)) AS mean_absolute_error,
-    AVG(CASE WHEN o.stockout_minutes > 0 THEN 1.0 ELSE 0.0 END) AS stockout_rate
-FROM warehouse.demand_predictions AS p
-JOIN warehouse.demand_outcomes AS o
-  ON p.store_id = o.store_id
- AND p.sku_id = o.sku_id
- AND p.forecast_date = o.sales_date
-WHERE o.label_matured_at <= CURRENT_TIMESTAMP
-GROUP BY p.release_id;
+  model_release_id,
+  policy_version,
+  COUNT(*) AS eligible_predictions,
+  COUNT(outcome_value) AS usable_outcomes,
+  COUNT(outcome_value) * 1.0 / NULLIF(COUNT(*), 0) AS outcome_coverage,
+  AVG(ABS(predicted_value - outcome_value))
+    FILTER (WHERE outcome_value IS NOT NULL) AS mean_absolute_error
+FROM governed_prediction_outcomes
+WHERE label_due_at <= CURRENT_TIMESTAMP
+GROUP BY model_release_id, policy_version;
 ```
 
-The query waits for mature outcomes and keeps release identity in the result. `evaluated_predictions` exposes coverage, because a quality metric from a small or biased subset can mislead. Mean absolute error measures forecast accuracy, while stockout rate connects the prediction to an operational guardrail. A real review would also break results down by store size, product category, promotion state, and forecast horizon.
+The denominator now includes every prediction eligible for evaluation, including rows whose outcome is still missing. Coverage appears beside error because a metric calculated from a small, selective group can look healthy while missing hard cases. Teams also break results down by relevant segments such as region, device type, customer group, forecast horizon, or model route.
 
-Feedback has its own failure paths. Labels may arrive late, join keys may be missing, users may override recommendations, and a product change may alter how predictions are consumed. The monitoring system should report coverage and label delay beside quality. A missing quality metric should create an explicit `insufficient_feedback` state instead of appearing as a successful release.
+Outcome data has its own failure modes. Join keys can be missing, labels can arrive late, users can override an automated recommendation, and product changes can alter which cases receive labels. Monitoring should expose those conditions directly. An `insufficient_feedback` state communicates more truth than an empty quality chart.
 
-## Delivery Modes Preserve The Same Contracts
-<!-- section-summary: Batch, online, streaming, and edge delivery use different runtimes and handoffs while preserving artifact, input, output, identity, and feedback contracts. -->
+## Batch Delivery
+<!-- section-summary: Batch delivery scores a bounded dataset and publishes a complete, versioned output after data and output gates pass. -->
 
-The delivery framework stays stable across prediction modes. The main differences concern trigger, timing, execution, handoff, and recovery.
+Batch delivery fits decisions that can wait for a scheduled or data-ready run. It is commonly used for demand forecasts, churn-risk lists, overnight document classification, portfolio scoring, and bulk data enrichment.
 
-| Mode | Trigger and execution | Product handoff | Typical recovery boundary |
-|---|---|---|---|
-| **Batch** | Schedule or dataset event starts a finite job | Versioned table, file, index, or downstream bulk update | Retry partitions or the full run; promote output after completeness checks |
-| **Online** | Live request reaches a long-running service or managed endpoint | HTTP, gRPC, or internal service response | Timeout, fallback, circuit breaking, and traffic rollback |
-| **Streaming** | Consumer processes events continuously | Prediction event, state update, alert, or table row | Resume from durable progress, handle duplicates, and replay safely |
-| **Edge or device** | Local event or user action runs an embedded runtime | Local application or controller result | Keep a previous compatible model and control fleet rollout |
+The input is a bounded snapshot. The job validates that snapshot, performs a point-in-time feature join, loads one approved release, scores the rows, applies policy, and writes a new output version. The product receives the output only after completeness and quality gates pass.
 
-This table classifies where the architectural contracts appear. It leaves the operational mechanisms to the dedicated Model Serving module. That module explains how teams choose patterns and operate batch, online, streaming, and edge inference with latency, capacity, packaging, scaling, retries, and rollback.
+```mermaid
+flowchart TD
+    A["Schedule or data-ready event"] --> B["Versioned input snapshot"]
+    B --> C["Feature transformation and validation"]
+    C --> D["Distributed or managed inference job"]
+    D --> E["Staging table or object set"]
+    E --> F{"Completeness and quality gates pass?"}
+    F -->|"Yes"| G["Promote the new output version"]
+    F -->|"No"| H["Keep the previous trusted output"]
+```
 
-At the foundations level, a design review should be able to trace one prediction through the six contracts. It should name the approved release unit, the input and its time meaning, the execution boundary, the caller and handoff, the release and run identities, and the evidence that comes back. If one link stays implicit, the product may still produce predictions, but the team will struggle to verify or recover the path.
+For example, an inventory system can score every product-location pair after daily sales closes. If one region's partition is missing, the promotion gate blocks the new table and planners continue using the previous complete forecast. That recovery rule protects the product from a technically successful yet incomplete run.
 
-## Putting The Delivery Path Together
-<!-- section-summary: Prediction delivery works when one identifiable release crosses compatible artifact, input, execution, handoff, and feedback boundaries. -->
+The industrial default is to run inference near the data. Warehouses, Spark, Databricks Jobs, SageMaker Batch Transform, Vertex AI batch prediction, and Azure Machine Learning batch endpoints all support this style. Object storage, Delta or Iceberg tables, and warehouse tables are common handoffs. Teams usually gain more from versioned inputs, idempotent writes, and atomic publication than from maintaining a permanent model server for this workload.
 
-Prediction delivery gives a trained model a controlled path into a product. The training artifact defines the complete release unit. The input contract defines production reality at a specific time. The execution contract places the release where it can meet product and operational requirements. The handoff contract connects prediction to a caller and a usable output. Feedback connects that output to runtime signals, mature outcomes, and product effects.
+## Online Delivery
+<!-- section-summary: Online delivery produces a decision during a live product request and therefore requires strict latency, availability, and fallback contracts. -->
 
-Release identity binds those contracts. It lets a gate prove that the evaluated artifact matches the loaded artifact, lets output records name the producing release and run, and lets monitoring group later outcomes by the system that made the prediction. This architectural chain stays useful as a team moves from a scheduled container to a managed endpoint or adds a streaming path, because the infrastructure can change while the contracts remain explicit.
+Online delivery fits interactive decisions such as fraud checks, search ranking, personalization, eligibility decisions, and live anomaly scoring. A caller sends a request and waits for a response, so inference sits directly inside the user's request path.
+
+The request passes through four distinct responsibilities. The product validates fields and identifies the entity. A feature path adds recent facts that the caller cannot supply. The runtime computes a score with an approved release. A policy step chooses the action the product should take. Separate timing and status evidence for each responsibility reveals where latency accumulated or a fallback started.
+
+```mermaid
+sequenceDiagram
+    participant Product
+    participant Features
+    participant Runtime
+    participant Policy
+    Product->>Features: Validated entity and request fields
+    Features-->>Product: Fresh feature values and status
+    Product->>Runtime: Versioned model input
+    Runtime-->>Product: Score and model release
+    Product->>Policy: Score, feature status, product context
+    Policy-->>Product: Action and policy version
+```
+
+Latency is a budget shared across every step. If the whole product request has 300 milliseconds, the model cannot consume all 300. Input validation, feature retrieval, network hops, policy, serialization, and response delivery need room as well. Teams track percentiles such as p95 and p99 because a fast average can hide slow experiences.
+
+A persistent managed endpoint is a common default for predictable traffic and strict latency. Serverless inference fits intermittent traffic that can tolerate cold starts. An ordinary service can host a small model close to existing application code. SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks provide managed online serving; KServe and similar platforms fit organizations that already operate Kubernetes as a product platform.
+
+The online design needs a timeout, capacity limits, a rollout method, and a product-owned fallback. Common rollouts send a small share of traffic to the new release, compare service and decision signals, then expand or roll back. The response should always reveal which release and policy produced the action.
+
+## Streaming Delivery
+<!-- section-summary: Streaming delivery evaluates a continuous event flow while preserving event time, state, recovery progress, and duplicate-safe outputs. -->
+
+Streaming delivery fits decisions driven by an ongoing flow of events: equipment telemetry, click streams, transaction events, network activity, or rapidly changing features. Its defining idea is continuous state. The current prediction may depend on recent events for the same entity.
+
+A machine-monitoring stream, for example, may combine the latest vibration reading with a five-minute rolling average and the time since the previous alert. These values belong to keyed state for that machine. **Event time** records when the reading occurred at the source. **Processing time** records when the platform handled it. Watermarks provide a rule for closing windows while allowing a defined amount of late data.
+
+```mermaid
+flowchart TD
+    A["Kafka, Kinesis, or Pub/Sub event"] --> B["Validate key and event time"]
+    B --> C["Update keyed state or streaming features"]
+    C --> D["Run approved model release"]
+    D --> E["Apply event decision policy"]
+    E --> F["Write prediction event with stable ID"]
+    F --> G["Checkpoint source position and operator state"]
+    G --> H["Downstream action or alert"]
+```
+
+Apache Flink and Spark Structured Streaming are established processing choices. Flink checkpoints combine source positions with operator state so a failed job can restore and replay. The guarantee across the complete path still depends on the source and sink: a replayable source plus a transactional or idempotent sink is required for end-to-end exactly-once effects. Otherwise, downstream systems must tolerate duplicates through a stable event or prediction ID.
+
+Kafka, Amazon Kinesis, and Google Cloud Pub/Sub are common durable event transports. Flink often fits lower-latency, stateful event applications. Spark Structured Streaming fits teams already using the Spark data platform and a micro-batch model. The design should state checkpoint storage, late-event policy, replay procedure, state compatibility during upgrades, and output deduplication.
+
+## Edge Delivery
+<!-- section-summary: Edge delivery runs prediction on or near the device and adds model compatibility, fleet rollout, local safety, and delayed evidence to the delivery contract. -->
+
+Edge delivery runs inference close to where data is created. Phones, cameras, vehicles, industrial gateways, and embedded controllers use this pattern for low latency, privacy, limited connectivity, or reduced cloud bandwidth.
+
+Consider a camera that detects a dangerous obstruction near a machine. Sending every frame to the cloud adds network delay and creates an outage dependency. A local runtime can classify the frame and trigger a safe response immediately. The cloud path can later receive sampled evidence, device health, model identity, and confirmed outcomes.
+
+```mermaid
+flowchart TD
+    A["Signed model bundle"] --> B["Compatibility and integrity check"]
+    B --> C["Staged fleet rollout"]
+    C --> D["Local device inference"]
+    D --> E["Local policy and safe action"]
+    E --> F["Buffered evidence on the device"]
+    F --> G["Upload after connectivity returns"]
+    G --> H["Fleet quality and rollout review"]
+```
+
+The release contract expands at the edge. It includes model size, supported operators, device architecture, memory and power limits, runtime version, signature verification, and a previous compatible model. Fleet rollout replaces one centralized deployment: teams begin with test devices or a small cohort, watch crash and quality signals, then expand gradually.
+
+LiteRT supports on-device inference across Android, iOS, and embedded environments. ONNX Runtime Mobile runs ONNX models on Android and iOS. Core ML is the native production path for Apple platforms and can use Apple CPU, GPU, and Neural Engine resources. The best choice follows the device ecosystem and model conversion results. Quantization and operator compatibility must be evaluated against quality, latency, memory, and power requirements before release.
+
+## Choose The Pattern From The Decision
+<!-- section-summary: Pattern selection starts with the product deadline, data location, state needs, failure consequence, connectivity, and operating ownership. -->
+
+Describe the product decision in plain language before comparing platforms. Timing, data location, state, risk, connectivity, and ownership determine the first viable architecture. Six questions reveal that starting point:
+
+1. How long can the product wait for the answer?
+2. Where does the required data live, and how fresh must it be?
+3. Does each prediction stand alone, or depend on recent state?
+4. What should the product do during delay, missing data, or runtime failure?
+5. Can the path depend on continuous network connectivity?
+6. Which team will operate the runtime, evidence, and rollback path?
+
+Use those answers to select an initial pattern, then test that pattern against capacity, security, cost, and recovery requirements.
+
+```mermaid
+flowchart TD
+    A["Start with the product decision"] --> B{"Can many decisions be prepared together?"}
+    B -->|"Yes"| C["Begin with batch"]
+    B -->|"No"| D{"Does the decision depend on a live event stream?"}
+    D -->|"Yes"| E["Begin with streaming"]
+    D -->|"No"| F{"Can the product use a network service?"}
+    F -->|"Yes"| G["Begin with online"]
+    F -->|"No"| H["Begin with edge"]
+    C --> I["Verify contracts and fallback"]
+    E --> I
+    G --> I
+    H --> I
+```
+
+Real systems often combine patterns. A recommendation system may calculate candidate items in batch and rank a small set online. A fraud platform may maintain recent behavior in a stream and call an online model during payment. An edge device may act locally and send cloud batches for monitoring. The shared contracts keep these paths understandable.
+
+Avoid choosing streaming because the source produces events, Kubernetes because the organization owns a cluster, or a feature store because features exist. Each platform adds operational responsibilities. Start with the smallest architecture that satisfies the decision deadline, data meaning, failure policy, and evidence requirements.
+
+## A Practical Industrial Baseline
+<!-- section-summary: A current production baseline favors managed execution, governed data and releases, explicit policy, standard telemetry, and more specialized platforms only after a concrete requirement appears. -->
+
+A practical production baseline starts with governed data in object storage containing Delta or Iceberg tables, a warehouse, or a lakehouse platform. Batch transformations commonly use SQL, dbt, Spark, or Polars according to scale. Online features can live in an application database or cache; a platform such as Feast or a managed feature service earns its operating cost after multiple models need shared, time-consistent features.
+
+Model releases commonly use MLflow or a managed cloud registry, with model signatures and immutable artifact or image digests. Managed training jobs and managed inference endpoints reduce the first operating burden. Databricks Model Serving, SageMaker AI, Vertex AI, and Azure Machine Learning cover managed delivery paths. A Kubernetes serving layer such as KServe belongs in organizations with platform engineering capacity and a concrete need for that control.
+
+Batch jobs should publish versioned outputs through validation and atomic promotion. Online endpoints should expose release identity, health, latency percentiles, capacity, and fallback rate. Streaming systems should use durable event transports, checkpointed state, event-time policies, and duplicate-safe sinks. Edge systems should use signed bundles, compatibility tests, staged fleet rollout, local fallback, and delayed evidence upload.
+
+OpenTelemetry is the common foundation for traces, metrics, and logs across request paths. OpenLineage provides interoperable job, run, and dataset identities for data-oriented paths. Cloud-native monitoring or Prometheus-compatible metrics can operate the service. A governed prediction table can preserve model, policy, feature, and outcome evidence under appropriate access and retention controls.
+
+These choices are defaults, not a shopping list. A small batch model may need a scheduled container, a versioned table, MLflow, and cloud monitoring. Each extra platform should solve a named scale, reuse, governance, latency, or ownership problem.
+
+## The Main Idea
+<!-- section-summary: Reliable prediction delivery preserves one understandable chain from trigger and data to release, policy, action, evidence, and outcome. -->
+
+Prediction delivery turns a model into a dependable product capability. The trigger sets the decision clock. Input and feature contracts recreate the information available at that moment. The runtime executes an approved release. Decision policy converts the model output into an action. The handoff gives the product a complete result and a safe failure path. Evidence and outcomes show what the system delivered and whether it worked.
+
+Batch, online, streaming, and edge are different implementations of this same chain. A sound architecture can follow one prediction through every boundary and answer seven practical questions: what started it, which data it used, which release ran, which policy acted, what the product received, what happened during execution, and which real-world outcome followed.
 
 ## References
 
-- [Google Cloud Architecture Center: MLOps continuous delivery and automation pipelines](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Describes production ML architecture across validation, metadata, deployment, serving, and monitoring.
-- [MLflow: Model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/) - Documents current input, output, and parameter signatures, input examples, serving examples, and signature validation.
-- [OpenLineage: Core model](https://openlineage.io/docs/) - Defines interoperable lineage identities for datasets, jobs, and runs.
-- [OpenTelemetry: Context propagation](https://opentelemetry.io/docs/concepts/context-propagation/) - Explains how trace context correlates signals across process and network boundaries.
-- [Kubeflow: KServe introduction](https://www.kubeflow.org/docs/ecosystem/kserve/introduction/) - Gives a current example of a Kubernetes inference platform that handles runtime concerns around model serving.
+- [MLflow: Model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/) - Defines model input, output, and parameter signatures.
+- [Feast: Architecture overview](https://docs.feast.dev/getting-started/architecture/overview) - Describes offline and online feature paths.
+- [Amazon SageMaker AI: Inference options](https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html) - Compares real-time, serverless, asynchronous, and batch inference.
+- [Databricks: Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving) - Documents managed real-time and batch inference paths.
+- [Vertex AI: Online predictions](https://docs.cloud.google.com/vertex-ai/docs/predictions/get-online-predictions) - Documents managed online prediction requests and endpoints.
+- [KServe: Predictive inference frameworks](https://kserve.github.io/website/docs/model-serving/predictive-inference/frameworks/overview) - Describes Kubernetes-native runtimes and serving capabilities.
+- [OpenTelemetry: Context propagation](https://opentelemetry.io/docs/concepts/context-propagation/) - Defines trace-context propagation across service boundaries.
+- [OpenLineage: Core model](https://openlineage.io/docs/) - Defines interoperable dataset, job, and run identities.
+- [Apache Flink: Stateful stream processing](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/) - Explains state, replay, checkpoints, and recovery semantics.
+- [Apache Flink: Timely stream processing](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/) - Explains event time, watermarks, windows, and late events.
+- [Apache Spark: Structured Streaming](https://spark.apache.org/docs/latest/streaming/index.html) - Documents the current DataFrame-based streaming engine.
+- [Google AI Edge: LiteRT](https://developers.google.com/edge/litert) - Documents the current Google runtime and deployment paths for on-device inference.
+- [ONNX Runtime: Mobile](https://onnxruntime.ai/docs/get-started/with-mobile.html) - Documents mobile inference on Android and iOS.
+- [Apple: Core ML](https://developer.apple.com/documentation/CoreML) - Documents on-device model integration and device compute support.

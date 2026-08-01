@@ -1,233 +1,573 @@
 ---
 title: "MLOps Failure Modes"
-description: "Introduce the recurring problems that the rest of the roadmap teaches learners to prevent."
-overview: "Production ML failures often come from broken data, weak reproducibility, unclear evaluation, packaging drift, risky releases, missing monitoring, or unclear ownership. This article names those failure modes early so the rest of the roadmap has a practical reason to exist."
+description: "Learn how broken lifecycle contracts create recurring production ML failures, and how teams investigate, contain, repair, and prevent them."
+overview: "Production ML usually fails at a handoff: exploration cannot run as a job, training data cannot be recovered, serving computes different features, evaluation misses product risk, releases lack a proven rollback, monitoring loses contact with reality, feedback is defective, ownership is unclear, or the platform grows faster than the models it serves. A lifecycle-contract framework connects each failure to its visible symptoms, evidence path, industrial repair, and prevention controls."
 tags: ["MLOps", "core", "teams"]
 order: 3
 id: "article-mlops-mlops-foundations-common-mlops-failure-modes"
 ---
 
+## Table of Contents
 
-## Why Failure Modes Matter Early
-<!-- section-summary: MLOps failure modes show why production ML needs data checks, reproducibility, evaluation, packaging, rollout control, monitoring, and clear ownership. -->
+1. [Why MLOps Failures Cluster At Handoffs](#why-mlops-failures-cluster-at-handoffs)
+2. [How To Investigate A Suspected Model Failure](#how-to-investigate-a-suspected-model-failure)
+3. [Development And Data Contracts](#development-and-data-contracts)
+4. [Evaluation And Release Contracts](#evaluation-and-release-contracts)
+5. [Production Evidence And Feedback Contracts](#production-evidence-and-feedback-contracts)
+6. [Ownership And Platform Contracts](#ownership-and-platform-contracts)
+7. [Rehearse Failure Before Production Does](#rehearse-failure-before-production-does)
+8. [The Main Idea](#the-main-idea)
+9. [References](#references)
 
-The first two articles gave us the happy path. A model has a product decision, a lifecycle, owners, a workflow, evidence, and monitoring. Now we should name the things that break that path. This helps the rest of the roadmap feel practical because every later topic prevents a failure you can picture.
+## Why MLOps Failures Cluster At Handoffs
+<!-- section-summary: Recurring MLOps failures usually appear where one lifecycle stage hands code, data, evidence, a release, or a decision to another stage. -->
 
-A **failure mode** is a common way a system can fail. In MLOps, failure modes often look strange to engineers who are used to normal web services. The API can return `200 OK`, the container can stay healthy, the dashboard can look calm, and the model can still make worse predictions because the world around the model changed.
+At a high level, an **MLOps failure mode** is a recurring way for the machine-learning system around a model to break. Some failures are loud: a training job crashes, an endpoint returns errors, or a feature table stops updating. Others are quiet: the service returns a valid score on every request while the score slowly loses contact with the real world.
 
-Let's use **QuickShip**, a same-day delivery company with an ETA model inside its customer app. The model predicts when a courier will arrive and when a package will reach the customer. A bad model can promise impossible delivery windows, overload support, mislead drivers, and hide warehouse bottlenecks. It can also create incident pain if nobody can explain why a model version shipped.
+The quiet failures make production ML unusual. A normal API health check can prove that a process is running and still say nothing about the quality of its decisions. A model may load successfully while reading stale features. An evaluation report may look excellent because the labels accidentally leaked future information. A monitoring chart may report a sudden quality drop because the outcome join broke, even though the model itself stayed stable.
 
-The main MLOps failure modes usually fall into a few groups: data problems, reproducibility problems, evaluation problems, packaging problems, release problems, monitoring problems, and ownership problems. Each group connects to a later module in the roadmap.
+These problems rarely belong to the model file alone. They appear at the boundaries between people and systems:
+
+- exploration hands code to automation;
+- data pipelines hand a dataset to training;
+- training hands feature expectations to serving;
+- evaluation hands evidence to a release decision;
+- a registry hands an approved candidate to deployment;
+- production hands predictions to monitoring;
+- the real world hands delayed outcomes back to the team;
+- an alert hands a decision to an owner;
+- a platform hands capabilities to model teams.
+
+Each handoff needs a **contract**. In plain language, a contract states what is being passed, how the receiving stage can verify it, who owns the decision, and what happens if the evidence fails.
 
 ```mermaid
-flowchart LR
-    Data["Data and label failures"] --> Run["Training and reproduction failures"]
-    Run --> Eval["Evaluation and decision failures"]
-    Eval --> Package["Packaging and contract failures"]
-    Package --> Release["Release and rollback failures"]
-    Release --> Operate["Monitoring and feedback failures"]
-    Operate --> Data
-    Owner["Ownership and incident coordination"] --- Data
-    Owner --- Eval
-    Owner --- Release
-    Owner --- Operate
+flowchart TD
+    A["Development contract<br/>Repeatable code and environment"] --> B["Data contract<br/>Recoverable inputs and splits"]
+    B --> C["Feature contract<br/>Same meaning in training and serving"]
+    C --> D["Evaluation contract<br/>Candidate proven against release policy"]
+    D --> E["Release contract<br/>Known production state and rollback"]
+    E --> F["Monitoring contract<br/>Service and model evidence"]
+    F --> G["Feedback contract<br/>Predictions joined to mature outcomes"]
+    G --> A
+    H["Decision contract<br/>Owners, authority, and governance"] --- D
+    H --- E
+    H --- F
+    I["Platform contract<br/>Useful paved path at sustainable cost"] --- A
+    I --- E
+
+    classDef build fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef prove fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef operate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef govern fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef scope fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C build
+    class D,E prove
+    class F,G operate
+    class H govern
+    class I scope
 ```
 
-Failures can travel around the loop. Broken units in a source table can produce a reproducible yet weak model. A sound candidate can fail through an incompatible serving package. A controlled release can still remain harmful when monitoring never joins predictions to later outcomes. Ownership crosses the whole loop because every technical control needs someone who can decide and act.
+This contract view changes the investigation. “The model is bad” is too broad to guide an incident. “The online feature vector no longer matches the training feature contract” points to evidence, an owner, a containment action, and a repair.
 
-![MLOps failure mode families](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/failure-mode-map.png)
+The same view also prevents tool shopping from taking over. MLflow can preserve run and model evidence. Delta Lake or Apache Iceberg can give data a recoverable version. Feast can support point-in-time feature retrieval. OpenTelemetry can carry service telemetry. These tools help only after the team has named the contract they are meant to enforce.
 
-*The failure mode map groups production ML problems into the families the rest of the roadmap will help you prevent and debug.*
+## How To Investigate A Suspected Model Failure
+<!-- section-summary: A reliable investigation validates the evidence first, identifies recent changes, separates service health from prediction quality, and contains user impact before making a model decision. -->
 
-## Broken Or Misleading Data
-<!-- section-summary: Data failures happen when training examples, labels, schemas, freshness, or feature timing no longer match the model's production decision. -->
+A production alert creates pressure to act quickly. Retraining or rolling back immediately can make the incident worse if the alert itself came from a stale monitoring job, a broken label feed, or a failed prediction-to-outcome join.
 
-The most common ML failure starts with data. A model learns from examples, so broken examples can produce a broken model without throwing a normal application error.
+The first pass checks **evidence integrity**. Confirm that monitoring jobs ran on time, expected fields still exist, prediction and label volumes are plausible, outcome joins cover the mature population, and the dashboard uses the current metric and policy versions. A quality chart built from five percent of yesterday's outcomes cannot support a release decision.
 
-For QuickShip, the training table might join order events, courier locations, warehouse scan times, pickup promises, weather, traffic, and final delivery timestamps. If one upstream field changes from minutes to seconds, the training job may still run. If delivery labels arrive later than expected, recent examples may look incomplete. If a feature uses information created after the ETA was shown to the customer, the model may look excellent during training and weak in production.
+The second pass checks the **change window**. Look for a new model version, serving image, feature pipeline, data source, threshold, routing rule, product policy, or dependency. Many apparent model incidents are system changes that happened near the same time.
 
-This last problem is **data leakage**. Data leakage means the model used information during training that would not be available at prediction time. An ETA model that uses `delivered_at` or `actual_driver_arrival_at` as an input is learning from the answer. It can score well on historical data and then fail when the product needs a live prediction.
+The third pass separates the layers of the live system:
 
-Data validation gives the team a first line of defense.
+1. **Service health** asks whether requests or batch records enter, run, and finish on time.
+2. **Input health** asks whether schemas, units, categories, freshness, and feature availability still meet the contract.
+3. **Prediction health** asks whether score distributions, confidence, abstention, and action rates changed.
+4. **Outcome quality** compares predictions with mature labels for the overall population and important segments.
+5. **Product impact** checks the action produced by the model, including overrides, review capacity, complaints, losses, and safety guardrails.
 
-```yaml
-checks:
-  required_columns:
-    - order_id
-    - eta_request_at
-    - pickup_zone
-    - courier_distance_meters
-    - warehouse_scan_status
-    - delivered_at
-  freshness:
-    max_age_minutes: 20
-  timing:
-    forbidden_post_decision_fields:
-      - delivered_at
-      - actual_driver_arrival_at
+Only the last two layers can directly confirm a loss of prediction quality. The earlier layers often explain why that loss occurred.
+
+```mermaid
+flowchart TD
+    A["Alert or product report"] --> B{"Is the evidence fresh,<br/>complete, and correctly joined?"}
+    B -- "No" --> C["Repair or quarantine<br/>the evidence pipeline"]
+    C --> D["Recompute the affected window"]
+    B -- "Yes" --> E["List recent model, data,<br/>code, config, and policy changes"]
+    E --> F{"Is user impact active?"}
+    F -- "Yes" --> G["Contain with fallback,<br/>traffic shift, or rollback"]
+    F -- "No" --> H["Continue controlled investigation"]
+    G --> I["Trace service, inputs,<br/>predictions, outcomes, and actions"]
+    H --> I
+    I --> J["Repair the broken contract"]
+    J --> K["Prove recovery and add<br/>a prevention control"]
+
+    classDef inspect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef repair fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef verify fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,E,F,H,I inspect
+    class G stop
+    class C,D,J repair
+    class K verify
 ```
 
-These checks do not make the model smart. They make the input world less surprising. The data modules later in the roadmap go deeper into labels, splits, leakage, validation, lineage, and training-serving skew because these failures are so common.
+Containment protects users while the team investigates. An online decision service may route traffic back to a proven model, disable a risky automated action, or use a conservative rules-based fallback. A batch pipeline may stop publication and preserve the previous complete output. The safest action depends on the product, which is why fallback behaviour needs approval before an incident.
 
-## Models Nobody Can Reproduce
-<!-- section-summary: Reproducibility failures happen when the team cannot connect a model version to the code, data, config, environment, and run that produced it. -->
+Recovery also needs evidence. A green deployment status proves that a change finished. It does not prove that the original failure disappeared. The team should rerun the failed contract check, compare the repaired window with a known-good baseline, confirm the user-facing signal, and watch the system through an agreed observation period.
 
-The next failure appears during review or incident response. Someone asks, "Where did model version `v18` come from?" The team finds a model file, but not the data snapshot, training commit, package versions, feature list, or evaluation report. Nobody can confidently recreate the model or compare it with the previous version.
+## Development And Data Contracts
+<!-- section-summary: Notebook-only work, unreproducible datasets, and training-serving skew arise before release because executable code, data identity, or feature meaning was never made explicit. -->
 
-This is a **reproducibility** failure. Reproducibility means the team can explain and recreate a model run well enough for review, debugging, audit, or rollback. Perfect bit-for-bit reproduction can be difficult for some training workloads, but the team still needs the ingredients that created the version.
+The first three failure modes share one theme: the training result relies on knowledge that exists only in a person's session, a mutable data location, or one implementation of a feature. The model may look valid, yet another system cannot recreate the conditions that produced it.
 
-For QuickShip, a useful run record names the ingredients.
+### 1. Notebook-Only Work Breaks The Development Contract
 
-```yaml
-model_version: eta-predictor:v18
-run_id: eta-2026-07-04-0915
-training_commit: 7d83a14
-data_snapshot: s3://quickship-ml-data/eta/2026-06-30/
-config_file: configs/eta-predictor.yml
-training_image: ghcr.io/quickship/eta-training:2026-07-04
-artifact_uri: s3://quickship-ml-models/eta-predictor/v18/model.pkl
+A notebook is a productive place to explore data, draw charts, test features, and compare models. Trouble starts after an interactive session is treated as the production execution interface.
+
+**What the team sees.** A scheduled notebook succeeds only on its author's workspace. Restarting the kernel changes the result. Cells have to run in a remembered order. A local package or manually edited CSV is missing from the automated job. An incident investigator finds the final model artifact but cannot identify the exact command that created it.
+
+**Why the system behaves this way.** A notebook can carry hidden state in memory and local files. Installed packages, credentials, and manual steps add more hidden dependencies. Automation needs every dependency to arrive through a declared interface. The development contract is broken because code and configuration were mixed together, the runtime was undeclared, and input or output locations lived only in the author's session.
+
+**Find the break in a clean environment.** Start from a fresh clone and an empty runtime. Run the notebook from top to bottom, then execute the intended production entry point. Record the Git revision, dependency lock, resolved configuration, data reference, secret references, and produced artifact. Any step that depends on memory or a person's workstation will surface during this rehearsal.
+
+**Repair the execution path.** Keep the notebook for investigation and explanation. Move stable transformations and training into importable Python modules. Give evaluation and artifact logging their own callable boundaries. Put run parameters in reviewed configuration. Lock Python dependencies with `uv.lock` or a Poetry lock file. Add a container only if system libraries or deployment portability require one.
+
+A managed training job is a good default for isolated compute and durable logs. Workflows with several recoverable tasks need an orchestrator. Airflow is common in established enterprises, Dagster is a strong greenfield choice, and Prefect offers another Python-oriented path. A managed ML pipeline may be the better fit for a team already committed to one cloud ML platform.
+
+A clean CI job can exercise the same entry point used by production:
+
+```bash
+uv sync --frozen
+uv run pytest -q
+uv run python -m risk_model.train --config configs/ci-smoke.yml
+uv run python -m risk_model.verify_artifact build/model
 ```
 
-Without this record, every incident takes longer. A regression could come from data, code, configuration, dependency versions, random seed, hardware, or a packaging mistake. Reproducibility gives the team a starting point that is much stronger than memory.
+The smoke configuration should use a tiny governed dataset and a cheap model. Its purpose is to prove imports, contracts, artifact creation, and artifact loading. Full training remains in managed compute.
 
-## Evaluation That Misses The Real Risk
-<!-- section-summary: Evaluation failures happen when a model looks good on one summary metric while harming an important segment, product guardrail, or runtime requirement. -->
+**Keep it fixed.** Require every candidate to point to its code revision and lockfile or image digest. Preserve the resolved configuration and data identity beside it. The run ID connects that evidence to the produced artifact URI.
 
-A model can pass one metric and still be a bad release. Evaluation fails when the team checks the wrong thing or checks too little.
+MLflow Tracking is a common evidence layer. Parameters and metrics explain how one execution behaved. Dataset references and code versions identify its inputs, while artifacts preserve its outputs. The CI system should reject a lockfile mismatch, a failing contract test, or an artifact that the target runtime cannot load.
 
-For the ETA model, average error can improve while one city gets worse. A candidate can look strong overall but badly underestimate arrival time during rain, apartment-building deliveries, or warehouse handoff delays. A model can score well on last month's data and perform poorly after QuickShip opens a new micro-fulfillment center because the test set missed that operation pattern.
+### 2. Unreproducible Data Breaks The Training-Input Contract
 
-Production evaluation should compare the candidate with a baseline and include guardrails. The report should show overall metrics, segment metrics, threshold behavior, calibration, latency, and product impact.
+Two runs can use the same code and still produce different models because the rows underneath `training.customer_features` changed between executions. A table name identifies a location. It does not identify one historical state by itself.
 
-| Check | Failure it can catch |
-|---|---|
-| Baseline comparison | Candidate looks good alone but worse than production |
-| Segment metrics | One city, courier type, or delivery window regresses |
-| Guardrail metrics | Lower average error creates too many late-promise messages |
-| Latency check | Model is accurate but too slow for the live ETA path |
-| Threshold review | Product messages change too aggressively |
+**What the team sees.** An old model cannot be investigated against its original examples. A rerun uses more recent corrections and produces different metrics. Train and test membership changes after a random split. An old Delta or Iceberg snapshot number exists in the run record, yet retention has already removed the required files.
 
-This is why later evaluation articles spend time on classification metrics, segment checks, approval gates, and cases where a team should hold a model back. MLOps evaluation should protect the product decision, not only produce a nice score.
+**Why the system behaves this way.** The run recorded a mutable path without its snapshot, extraction boundary, transformation revision, or split membership. Late-arriving events and corrected labels quietly changed the population. The training-input contract therefore lost the exact evidence that the model learned from.
 
-## Packaging And Serving Drift
-<!-- section-summary: Packaging failures happen when the model artifact, dependencies, input schema, feature logic, or serving environment differ from the setup used during training. -->
+**Investigate from storage toward training.** Check whether the source snapshot still exists and can be read. Then verify the extraction query or transformation revision, event-time cutoff, label-maturity rule, schema version, and stable entity membership for every split. Lineage can identify upstream jobs and datasets, although lineage alone cannot recover deleted data.
 
-The next failure happens when the model leaves the training environment. The notebook or training job can load the model successfully, but the serving container fails because a package version changed. The training code can use one feature order, while the API sends a different order. The model can expect a category value that production starts sending in a new format.
+**Repair the data identity.** The storage system should provide a durable address:
 
-This is **serving drift** or **training-serving skew** depending on the exact problem. The big idea is that the model's production inputs and runtime need to match the assumptions used during training and evaluation.
+- Delta Lake or Apache Iceberg can identify a table version or snapshot.
+- Object storage can use immutable object versions, partition manifests, and checksums.
+- A warehouse can materialize an approved training population or provide supported snapshot semantics.
+- Restricted data can keep a governed reference and digest instead of copying sensitive rows into experiment storage.
 
-For QuickShip, the serving path should validate the request before calling the model. A small schema contract can prevent many quiet errors.
+A compact manifest binds those parts:
 
 ```yaml
-input_schema: eta_request_v4
-required_fields:
-  pickup_zone: string
-  dropoff_zone: string
-  courier_distance_meters: number
-  warehouse_scan_status: string
-  active_orders_on_route: integer
-feature_order:
-  - pickup_zone
-  - dropoff_zone
-  - courier_distance_meters
-  - warehouse_scan_status
-  - active_orders_on_route
+dataset: payment_risk_training
+source:
+  table: governed.risk.payment_events
+  snapshot_id: "iceberg-638491772"
+population:
+  query_commit: "8a41c9e"
+  event_time_cutoff: "${TRAINING_CUTOFF}"
+  label_maturity_days: 30
+splits:
+  method: grouped_time_split
+  train_manifest: "s3://ml-manifests/payment/train-7bc2.parquet"
+  validation_manifest: "s3://ml-manifests/payment/validation-5e18.parquet"
 ```
 
-Packaging should also prove that the artifact loads in the serving image. This is a simple check, but it catches many release problems before production traffic sees them. Model serving articles later in the roadmap cover model artifacts, Docker images, runtime dependencies, APIs, validation, latency, and GPU inference because this boundary is where many notebook models break.
+The run resolves `TRAINING_CUTOFF` to one timestamp and stores that resolved value with the manifest. A later execution therefore cannot slide the historical boundary forward without creating a new dataset identity.
 
-## Risky Releases And Weak Rollback
-<!-- section-summary: Release failures happen when a model moves to production without staged rollout, stop rules, approval evidence, or a known rollback target. -->
+MLflow dataset tracking can store the source, digest, schema, and profile beside the run. OpenLineage provides a standard model for jobs, runs, input datasets, and output datasets across orchestration and processing systems. The underlying lakehouse, warehouse, or object store still owns retention and access control.
 
-A production model release changes customer behavior. QuickShip may promise earlier windows, delay proactive apology messages, route more orders to manual dispatch, or change how support explains late deliveries. The release needs control because the full impact may only show up after real traffic arrives.
+**Keep it fixed.** Retention must cover the organisation's investigation, rollback, and audit window. Automated checks should prove that every production candidate references an accessible snapshot and stable split manifests. A missing snapshot should block promotion because the team would have no reliable way to investigate that model later.
 
-Risky releases often skip stages. A candidate moves from offline evaluation straight to all traffic. The team has no shadow period, no canary, no traffic percentage, no stop rule, and no rollback target. If the model causes harm, the team wastes time deciding what to do while customers feel the impact.
+### 3. Training-Serving Skew Breaks The Feature Contract
 
-A controlled release plan should be boring and specific.
+**Training-serving skew** means a feature has a different value or meaning during production inference than it had during training. The input may still have the expected name and data type, which lets this failure stay quiet.
 
-```yaml
-model: eta-predictor:v18
-baseline: eta-predictor:v17
-stages:
-  - shadow: 24h
-  - canary: one city for 12h
-  - expanded_canary: five cities for 24h
-stop_rules:
-  p95_latency_ms: greater than 120
-  late_promise_rate: greater than reviewed limit
-  support_contact_rate: greater than reviewed limit
-rollback_target: eta-predictor:v17
+A fraud model might learn `transactions_last_24h` from event timestamps during training. The online service may calculate the same feature from processing time, exclude late events, or return zero after an online-store timeout. The column name matches. The model sees a different world.
+
+Four common forms help locate the problem:
+
+- **Transformation skew** uses different code, category mapping, units, or feature order.
+- **Temporal skew** lets training see information that was unavailable at the historical prediction time.
+- **Freshness skew** serves a value older than the maximum age assumed during training.
+- **Fallback skew** replaces missing online values with defaults that the training population rarely contained.
+
+```mermaid
+flowchart TD
+    A["Historical entities<br/>with prediction timestamps"] --> B["Point-in-time feature retrieval"]
+    B --> C["Training feature vector"]
+    D["Live entity request"] --> E["Online feature retrieval"]
+    E --> F["Serving feature vector"]
+    C --> G["Contract comparison<br/>name, type, value, time, freshness"]
+    F --> G
+    G --> H["Model input"]
+
+    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef transform fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef compare fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef output fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,D source
+    class B,C,E,F transform
+    class G compare
+    class H output
 ```
 
-Rollback is part of release design. The team should know which model version to return to, how to change the route, who can approve the change, and which dashboard proves the system recovered. Deployment and release articles later in the roadmap build on this exact problem.
+**What the team sees.** Offline evaluation remains stable while production errors rise. The gap concentrates around unknown categories, cold entities, one serving route, or periods of high feature-store latency. Retraining on recent data produces little improvement because the production feature path still carries the defect.
 
-![MLOps failure controls board](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/evidence-controls-board.png)
+**Find the break one prediction at a time.** Select a production `prediction_id` and reconstruct the exact feature vector used online. Recreate the vector through the historical training path at the same event time. Compare feature names, order, types, units, values, source timestamps, freshness, and defaults. Repeat this for a normal case, a failed case, a cold entity, and an unknown category.
 
-*The controls board links common failure modes to the evidence that can catch them before or during release.*
+**Repair the feature path.** Share deterministic transformation code between training and serving where the latency model allows it. Batch feature definitions often live in SQL and dbt, Spark for distributed processing, or Polars for efficient single-machine work.
 
-## Silent Model Degradation
-<!-- section-summary: Silent degradation happens when a model keeps serving responses while input data, label quality, prediction quality, or business impact slowly changes. -->
+Feast or a managed feature platform earns its place after several models need reusable features and point-in-time training retrieval. Low-latency online values provide another strong reason. Feast's point-in-time joins select the historical feature state relative to each entity timestamp, which protects training from future information.
 
-Silent degradation is one of the most important MLOps failures. The service stays up. The endpoint returns fast responses. The model output still has the right type. Yet the predictions slowly lose value.
+High-risk online features also need explicit fallback policy. A missing fraud velocity feature might route the transaction to review. Quietly replacing it with zero could make a risky transaction appear safe.
 
-For QuickShip, delivery patterns can change after a new warehouse opens, a city changes traffic rules, a weather event affects one region, or a courier app release changes GPS sampling. Labels can lag because final delivery events arrive late from a partner carrier. The model may still serve every request while its ETAs lose value.
+**Keep it fixed.** Store a model signature, feature-schema version, and feature source with the candidate. Run golden fixtures through offline and online transformation paths and compare results within an agreed tolerance. Shadow traffic can calculate both old and new feature paths before a release, giving the team real production comparisons without changing user decisions.
 
-Monitoring should cover both service health and model health.
+## Evaluation And Release Contracts
+<!-- section-summary: Weak evaluation approves the wrong candidate, while release and rollback gaps leave the team unable to identify or safely change the model state serving users. -->
 
-| Signal type | ETA model example |
-|---|---|
-| Service health | latency, errors, request volume, dependency failures |
-| Input health | missing values, schema changes, city mix, route distance ranges |
-| Output health | ETA distribution, too-early promises, very-late predictions |
-| Label health | delivery label delay, partner-carrier lag, missing final scans |
-| Product health | late-promise rate, support contacts, refund credits |
+Training creates a candidate. Evaluation decides whether that candidate is suitable for a particular product route. Release changes the route. Treating those three actions as one step allows an impressive experiment score to bypass product guardrails and operational proof.
 
-Prediction quality often arrives late because real labels take time. That delay is normal, so teams need proxy signals and delayed quality reports. Monitoring and feedback modules later in the roadmap explain drift, prediction quality, silent failure, tracing, labels, human review, and retraining.
+### 4. Weak Evaluation Breaks The Candidate Contract
 
-## Unclear Ownership During Incidents
-<!-- section-summary: Ownership failures happen when an alert fires and nobody knows who can inspect the model, change traffic, contact domain owners, or decide the next action. -->
+At a high level, evaluation asks a decision question: **is this specific candidate safe and useful enough to replace the current production behaviour for its intended population?** One average metric rarely answers that question.
 
-The final failure is human and organizational. An alert fires, but nobody knows who owns it. The platform team sees latency. The ML team sees a score distribution shift. The product team hears from customer support. The data team suspects a feature table changed. Each team has a piece, but nobody owns the incident path.
+**What the team sees.** Overall accuracy improves while a high-risk region gets worse. A ranking model raises click-through rate but reduces completed purchases. A medical outreach model looks strong because its test set includes immature labels. An accurate model takes longer than the product latency budget. A threshold chosen by the data scientist overwhelms the human review queue.
 
-Production ML incidents need named owners and runbooks. The runbook should say how to check the model version, recent data pipeline runs, serving health, feature health, score distribution, recent release history, and rollback target. It should also name the product or risk owner who can approve a business-impacting decision.
+**Why the system behaves this way.** The evaluation population, baseline, segments, metric definitions, thresholds, and guardrails were never combined into a release policy. The team optimized a statistical summary and left the operational decision implicit.
+
+**Check evaluation integrity before reading the score.** Confirm the dataset snapshot and split logic first. Then verify label maturity, leakage controls, and sample size. Compare the candidate and current model on the same exact rows.
+
+Inspect important segments and threshold behaviour next. Calibration checks whether predicted probabilities match observed frequencies. Latency and resource use test the serving budget. Product constraints test review capacity, safety limits, or other consequences of the action. A tiny segment needs uncertainty intervals or accumulated evidence; a single unstable percentage can mislead the review.
+
+**Repair the decision policy.** Store a versioned evaluation policy beside the pipeline:
 
 ```yaml
-incident_runbook: eta-predictor
-first_checks:
-  - current_model_version
-  - latest_release_event
-  - data_pipeline_freshness
-  - missing_feature_rate
-  - p95_latency
-  - eta_error_distribution
+policy_id: payment-risk-release-v7
+population: card_present_transactions
+baseline: deployed_model
+primary:
+  metric: recall_at_review_capacity
+  minimum_improvement: 0.015
+guardrails:
+  - metric: precision
+    minimum: 0.40
+  - metric: p95_inference_ms
+    maximum: 80
+segments:
+  - new_accounts
+  - cross_border
+  - high_value
+online_proof:
+  mode: shadow_then_canary
+```
+
+MLflow can attach metrics to a logged model and a named dataset, which lets reviewers compare candidates on matching evidence. Managed registries or MLflow Model Registry can hold approval tags and immutable versions. The pipeline should evaluate the policy automatically and preserve the full report, including failed guardrails.
+
+Offline proof remains limited because production contains live traffic, dependency behaviour, and product responses. Shadow evaluation compares outputs without changing decisions. A canary sends a small, controlled share of real traffic to the candidate and applies pre-agreed stop rules.
+
+**Keep it fixed.** Version metric code and policy together. Require a baseline comparison and segment checks for every candidate. Runtime and product guardrails protect the live decision path. A policy exception needs an owner and reason, plus an expiry and compensating control. After release, compare online results with the assumptions written into the evaluation report.
+
+### 5. Release And Rollback Gaps Break The Production-State Contract
+
+A registry can contain an approved model while production still serves an older artifact. A deployment can use the intended model and the wrong feature schema. A rollback can restore yesterday's model inside today's incompatible serving image. Production state therefore includes more than a model version.
+
+**What the team sees.** During an incident, three dashboards report three versions. Nobody knows which registry alias the endpoint resolved. The previous model exists, but its image was deleted or its feature contract is no longer supported. Traffic returns to the old model and continues using the new decision threshold, so the original behaviour is never restored.
+
+**Why the system behaves this way.** The model, image, feature contract, preprocessing code, policy configuration, and traffic route changed independently. The release lacked one immutable record that bound them together.
+
+**Trace desired state to observed state.** Start with the user-facing route. Resolve its current traffic weights and endpoint revision. From there, identify the container digest, immutable model version, feature-schema version, policy version, and infrastructure revision. Compare that observed state with the approved release record and audit every change inside the incident window.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Candidate
+    Candidate --> Shadow: offline policy passed
+    Shadow --> Canary: shadow evidence passed
+    Canary --> Production: stop rules stayed healthy
+    Shadow --> Rejected: evidence failed
+    Canary --> RolledBack: stop rule failed
+    Production --> RolledBack: production guardrail failed
+    RolledBack --> PreviousRelease: restore tested bundle
+    Rejected --> [*]
+    PreviousRelease --> [*]
+
+    classDef candidate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef prove fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef healthy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class Candidate candidate
+    class Shadow,Canary prove
+    class Production,PreviousRelease healthy
+    class Rejected,RolledBack stop
+```
+
+**Repair the release path.** Build an immutable release bundle that records:
+
+- model registry identity and exact version;
+- artifact checksum and serving image digest;
+- feature and request-schema versions;
+- decision-policy configuration;
+- evaluation report and approval;
+- infrastructure revision and traffic route;
+- tested rollback release.
+
+Registry aliases such as MLflow's `champion` are useful human-facing pointers. The deployment record should resolve the alias to an immutable model version so an alias change cannot silently alter a running release.
+
+Managed endpoints are a practical default because they support versioned deployments, logs, health checks, and traffic splitting without a team operating its own serving control plane. KServe, Kubernetes, and Argo Rollouts fit organisations that already run and support a Kubernetes platform. The release mechanism should promote in stages, enforce stop rules, and retain the previous healthy bundle.
+
+**Keep it fixed.** Rehearse rollback before full promotion. The test should change traffic, load the previous bundle, send representative requests, confirm feature compatibility, and verify recovery through user-facing signals. Preserve artifacts and images for the full rollback window. A written rollback target that cannot load is only a label.
+
+## Production Evidence And Feedback Contracts
+<!-- section-summary: Silent model failure and defective feedback occur because the production system returns valid responses while telemetry, input health, outcomes, or joins stop representing reality. -->
+
+Production introduces facts that offline evaluation cannot supply: real request paths, live feature availability, user behaviour, interventions, and delayed outcomes. Monitoring has to connect those facts without confusing a broken evidence pipeline with a broken model.
+
+### 6. Silent Model Failure Breaks The Monitoring Contract
+
+**Silent model failure** describes a system that continues to produce well-formed outputs while the decisions lose quality or usefulness. The endpoint may return `200 OK`, stay under its latency target, and pass schema validation throughout the decline.
+
+A demand forecast offers a simple example. A new promotion changes buying behaviour. The service still receives valid product IDs and returns numeric forecasts. Warehouse teams discover the problem through stockouts several days later. Service health remained green because the prediction process worked exactly as implemented.
+
+**What the team sees.** Score distributions move, action rates change, confidence rises unexpectedly, one segment loses quality, or business outcomes deteriorate. Sometimes no alert fires because the monitoring job is stale or the production service never logged the model and feature identities needed for analysis.
+
+**Find the failing layer.** Verify telemetry and monitoring-job freshness first. Check traffic, latency, errors, saturation, and dependency traces next. Then inspect schema, feature freshness, missing values, unknown categories, input distributions, score distributions, and action rates. Mature labels and product outcomes come last because they often arrive later.
+
+OpenTelemetry is the common instrumentation standard for traces, metrics, and logs. A **trace** follows one request through its work. A **span** records one timed operation inside that trace, such as a feature lookup or model call. OpenTelemetry generates, collects, and exports the telemetry. Prometheus and Grafana, a cloud monitoring service, or another observability backend stores and presents it.
+
+A focused span can preserve the production identities needed during investigation:
+
+```python
+with tracer.start_as_current_span("model.predict") as span:
+    span.set_attribute("ml.model.name", model_name)
+    span.set_attribute("ml.model.version", model_version)
+    span.set_attribute("ml.feature.schema", feature_schema)
+    prediction = model.predict(features)
+```
+
+Avoid raw feature values, personal data, and unbounded identifiers in telemetry attributes. A `prediction_id` belongs in a governed prediction record and may appear in sampled logs or traces under the organisation's privacy and cardinality rules.
+
+**Repair monitoring as a layered system.** Service telemetry covers request and batch execution. Data-quality jobs cover schema, freshness, missingness, and important distributions. Prediction monitoring covers score, confidence, abstention, and action rates by model route and segment. Outcome monitoring joins mature labels to predictions and calculates approved quality metrics. Product monitoring measures the consequence of the final action.
+
+An alert needs an owner and a response. High endpoint error rate may trigger traffic failover. A missing critical feature may invoke a safe product fallback. A stable service with degraded mature-label quality may pause promotion, roll back, or open a controlled investigation. Retraining only helps after evidence points to a model that no longer fits valid current data.
+
+**Keep it fixed.** Monitor the monitors: job completion, evidence freshness, row counts, schema versions, join coverage, and alert delivery. Record model, feature, policy, and route identities with each prediction. Review dashboards against real incidents so the team can remove noisy signals and fill genuine blind spots.
+
+### 7. Label And Feedback Defects Break The Outcome Contract
+
+Models learn and report quality through outcomes. Those outcomes may arrive days or months later, change after review, or never arrive for some decisions. A label pipeline can therefore create a convincing false alarm or hide a real regression.
+
+Consider a loan-default model. A prediction made today cannot receive a mature default outcome tomorrow. Early rows are right-censored: the observation window has not finished. A marketing model has a different problem because the product action influences the outcome. A customer who receives an offer cannot reveal what would have happened without the offer.
+
+**What the team sees.** Measured quality suddenly falls at the newest edge of the dashboard. Join coverage drops after an identifier format change. One model route appears much better because its labels arrive sooner. Human reviewers revise labels, but the quality table keeps the original value. A retraining job learns from interventions created by the previous model and treats them as ordinary ground truth.
+
+**Investigate the outcome evidence in a fixed order.** Check monitoring-job freshness, label schema, label volume, maturity rules, prediction-to-outcome join coverage, and policy versions. After those pass, compare segments, model routes, feature health, action rates, and recent releases. This order protects the team from rolling back a healthy model because its outcome feed broke.
+
+```mermaid
+flowchart TD
+    A["Prediction record<br/>prediction_id, model, route, policy"] --> B["Product action<br/>approve, rank, review, or defer"]
+    B --> C["Outcome arrives later<br/>with event time and source"]
+    C --> D{"Has the label reached<br/>its maturity rule?"}
+    D -- "No" --> E["Keep outside final<br/>quality metrics"]
+    D -- "Yes" --> F["Join through governed<br/>prediction_id"]
+    F --> G{"Coverage and schema<br/>checks pass?"}
+    G -- "No" --> H["Quarantine, repair,<br/>and backfill"]
+    G -- "Yes" --> I["Compute quality by<br/>model, route, and segment"]
+
+    classDef event fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef hold fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef repair fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef quality fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C event
+    class D,G gate
+    class E hold
+    class H repair
+    class F,I quality
+```
+
+A small coverage query often catches the defect before a metric calculation:
+
+```sql
+SELECT
+  p.model_version,
+  p.model_route,
+  COUNT(DISTINCT p.prediction_id) AS mature_predictions,
+  COUNT(DISTINCT o.prediction_id) AS joined_outcomes
+FROM prediction_records p
+LEFT JOIN mature_outcomes o
+  ON p.prediction_id = o.prediction_id
+WHERE p.prediction_time < :maturity_cutoff
+GROUP BY p.model_version, p.model_route;
+```
+
+The governed `mature_outcomes` table should contain one approved current outcome per prediction. Distinct counts keep accidental duplicates from inflating coverage, while grouping by model version and route exposes a broken serving path.
+
+**Repair the outcome path.** Write a governed prediction record at decision time with `prediction_id`, model and route identity, prediction timestamp, feature timestamp, policy version, output, and action. Keep sensitive source data in access-controlled systems and join through reviewed identifiers. Define label provenance, maturity, revision rules, and exclusion policy. Quarantine defective windows, repair the source or join, backfill the affected records, and recompute quality before changing the model.
+
+Intervention bias needs product and statistical review. Randomized holdouts, shadow predictions, causal methods, or carefully designed observational comparisons may be needed to estimate the effect of a model-driven action. A feedback table alone cannot recover a counterfactual outcome.
+
+**Keep it fixed.** Alert on label freshness, revision rate, maturity volume, join coverage, segment coverage, and unknown policy versions. Version label logic and quality metric code. Keep raw outcome events and derived labels separate so corrected policy can rebuild the evidence.
+
+## Ownership And Platform Contracts
+<!-- section-summary: Governance gaps leave incidents without decision authority, while platform overbuilding spends operational capacity on components that model teams do not yet need. -->
+
+The final two failure modes look organisational, yet they produce technical consequences. An alert without an empowered owner stays open. A rollback permission that nobody holds extends user impact. A custom platform with too many components creates more handoffs than the team can operate.
+
+### 8. Ownership And Governance Gaps Break The Decision Contract
+
+Production ML crosses several technical teams. Data owners protect source meaning. ML owners protect model evidence. Software owners protect the application path, while platform owners protect the runtime.
+
+Product, security, and domain-risk teams own other parts of the decision. Shared work needs shared evidence, but each decision still needs one accountable owner.
+
+**What the team sees.** The platform team owns endpoint uptime, the ML team owns model metrics, and the product team owns the action. An alert touches all three and sits unclaimed. The on-call engineer identifies a harmful release but lacks permission to move traffic. A regulated model has evaluation evidence, yet nobody can confirm who approved the intended use or exception.
+
+**Why the system behaves this way.** Asset ownership, operational response, and decision authority were treated as the same role or left implicit. Governance existed as a document review instead of an executable path through identity, approval, deployment, monitoring, and incident response.
+
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#93C5FD","primaryTextColor":"#0F172A","primaryBorderColor":"#536A9A","lineColor":"#536A9A","secondaryColor":"#FFE04F","tertiaryColor":"#C4B5FD"}}}%%
+mindmap
+  root((Production ML decision))
+    Detect
+      Service on-call
+      Data-quality owner
+      Model-quality owner
+    Contain
+      Deployment authority
+      Safe fallback
+      Break-glass access
+    Diagnose
+      Data owner
+      ML owner
+      Platform owner
+    Decide
+      Product owner
+      Domain or risk owner
+    Recover
+      Release owner
+      Evidence reviewer
+    Learn
+      Runbook update
+      Control owner
+```
+
+**Find the ownership break.** Start from the affected route or model in the catalog. Identify the named owner, pager destination, deployment authority, data owner, product decision owner, and risk approver. Compare the runbook with real IAM permissions. A team name in a model card has little value if nobody on call can perform the documented containment action.
+
+**Repair governance through the workflow.** Give every production model and critical dataset an accountable owner. Route alerts to a staffed rotation. Define who may pause automation, shift traffic, approve risk, repair data, and declare recovery. Use workload identity and least-privilege roles for normal automation. Keep a time-limited, audited break-glass path for urgent recovery.
+
+A model card or registry record should preserve intended use, excluded use, owners, training and evaluation evidence, known limits, risk tier, and approval state. A data catalog should preserve ownership, access policy, lineage, and classification. CI/CD gates should check required evidence before promotion. These controls turn governance into the normal release path.
+
+**Keep it fixed.** Run incident game days with the real pager, permissions, dashboards, fallback, and rollback target. Track time to detect, time to contain, and missing authority. Ownership reviews should follow organisational changes so retired teams and stale groups do not remain attached to critical assets.
+
+### 9. Platform Overbuilding Breaks The Delivery Contract
+
+An ML platform should shorten the path from reviewed code and governed data to a safe production release. It has failed its delivery contract if model teams spend more time understanding the platform than delivering and operating models.
+
+**What the team sees.** A platform group builds custom Kubernetes operators, a feature store, registry, workflow engine, metadata service, and monitoring portal before one model has completed the full lifecycle. Several teams adopt different overlapping tools. Upgrades consume the platform roadmap, while users still copy model files manually or wait weeks for a deployment.
+
+**Why the system behaves this way.** The architecture was designed around imagined scale instead of observed constraints. Platform components were selected individually, without counting the integration work, on-call load, upgrade burden, security surface, and cognitive cost created by the full stack.
+
+**Investigate actual demand.** Start with the models in production and the way each one serves predictions. Record how often they train and how quickly they must answer. Data size and accelerator demand reveal the real compute pressure.
+
+Add compliance boundaries and the skills already available inside the team. Then trace one model from commit to recovery. Waiting time reveals bottlenecks, manual handoffs reveal missing automation, and failure rate reveals fragile boundaries. A component deserves investment after this evidence identifies a shared constraint.
+
+```mermaid
+flowchart TD
+    A["Observed model-team problem"] --> B{"Can an existing managed<br/>service or simple tool solve it?"}
+    B -- "Yes" --> C["Adopt the smallest<br/>supported path"]
+    B -- "No" --> D{"Is the need shared,<br/>repeated, and measurable?"}
+    D -- "No" --> E["Solve inside the model<br/>project and reassess later"]
+    D -- "Yes" --> F["Build one thin platform<br/>capability with an owner"]
+    C --> G["Measure adoption, lead time,<br/>reliability, and operating cost"]
+    E --> G
+    F --> G
+    G --> H{"Did the capability improve<br/>the target outcome?"}
+    H -- "Yes" --> I["Standardize the paved path"]
+    H -- "No" --> J["Simplify or retire it"]
+
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef good fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,D,H question
+    class C,E,F,G action
+    class I good
+    class J stop
+```
+
+**Repair with a thin industrial path.** A practical starting point uses Git and CI for reviewed changes, plus Python with `uv` for a locked application environment. Add a container where packaging needs one. Keep training data in governed object or table storage and use a managed training job. MLflow or managed tracking preserves run evidence; a managed registry preserves candidate identity. Managed batch or online serving reduces control-plane work. OpenTelemetry with cloud monitoring covers service telemetry, while Terraform gives infrastructure a reviewable definition.
+
+Add an orchestrator after the workflow needs coordination across real tasks and owners. Airflow is a common enterprise baseline, Dagster is a strong greenfield choice, and Prefect provides another Python-oriented option.
+
+A feature store earns its cost after several models need shared definitions and point-in-time history. Reliable online retrieval provides another reason to add one.
+
+Kubernetes and KServe fit a team that already owns a Kubernetes platform. Ray Serve supports distributed Python inference. Triton targets optimized multi-framework serving, while vLLM targets high-throughput language-model inference. Those systems belong after a specific need for scale, hardware control, model type, or portability exceeds the managed path.
+
+Every platform addition needs an owner, service objective, upgrade plan, and security model. Cost limits and exit criteria give the team a way to simplify a capability that fails to earn its operating burden.
+
+**Keep it fixed.** Measure model-team lead time, deployment frequency, recovery time, platform reliability, adoption, and operating cost. Retire overlapping paths. Provide one documented paved road with supported escape hatches. Platform scope should follow repeated production evidence.
+
+## Rehearse Failure Before Production Does
+<!-- section-summary: Failure drills prove that evidence, authority, fallback, rollback, and recovery work together under realistic production conditions. -->
+
+A **failure drill** is a controlled exercise that introduces one known defect and asks the team to detect, contain, repair, and verify it. Real users stay outside the exercise. The team still uses the actual monitoring path, release mechanism, permissions, fallback, and recovery evidence. That combination exposes gaps that a document review cannot reveal.
+
+A useful drill changes one contract at a time. Introduce a stale feature timestamp into a staging route and confirm that the feature check stops the decision or invokes the approved fallback. Break an outcome join and confirm that join-coverage monitoring blocks the quality report. Point a canary at an incompatible feature schema and confirm that contract tests prevent promotion. Remove access to a rollback artifact and confirm that the readiness check catches the missing dependency before release.
+
+The drill record can stay compact:
+
+```yaml
+drill: rollback-after-feature-contract-failure
+scope: staging-traffic-route
+injection: candidate expects feature-schema-v9; route provides v8
+expected:
+  detect_within_minutes: 5
+  user_action: keep baseline route
+  promotion: blocked
+  evidence: contract-test and route telemetry
 owners:
-  ml_oncall: logistics-ml-team
-  platform_oncall: ml-platform
-  product_owner: delivery-experience
-  data_owner: logistics-data-platform
+  contain: serving-oncall
+  repair: feature-platform
+  decide: risk-product-owner
+proof:
+  - baseline responses remain valid
+  - candidate receives no production traffic
+  - corrected candidate passes the same contract check
 ```
 
-Clear ownership turns a confusing model incident into a coordinated response. The team can roll back first when customer impact is active, then investigate data, evaluation, or serving issues with the right people in the room.
+Record the time to detect, contain, diagnose, recover, and prove recovery. Capture missing data, noisy alerts, stale documentation, inaccessible artifacts, and permission gaps. Assign each gap to a named owner and rerun the failed part after the repair.
 
-## Putting It All Together
-<!-- section-summary: The rest of the roadmap teaches concrete controls for the failure modes introduced here. -->
+Drills should also test ordinary operational failures. A batch job can receive an empty partition, duplicated input, or partial publication. An online service can lose its feature dependency or exhaust GPU memory. A feedback pipeline can receive delayed and revised labels. These exercises give the team safe evidence about which controls work before users depend on them.
 
-The same pattern repeats across MLOps. Data problems need validation, lineage, and leakage checks. Reproducibility problems need run tracking, versioned assets, and registries. Evaluation problems need baseline comparisons, segment checks, and guardrails. Packaging problems need artifact contracts and runtime tests. Release problems need staged rollout and rollback. Monitoring problems need model-specific signals. Ownership problems need clear roles, runbooks, and approval paths.
+## The Main Idea
+<!-- section-summary: Reliable MLOps comes from explicit lifecycle contracts that preserve evidence, support containment, guide repair, and prove recovery. -->
 
-These failure modes are the reason the roadmap has so many modules. Each module teaches one slice of prevention and response. A strong MLOps workflow makes failures easier to catch, explain, stop, and learn from.
+Production ML failures feel confusing if every alert is reduced to “the model is wrong.” The lifecycle-contract framework gives each recurring failure a clearer shape.
 
-![MLOps coordinated incident response loop](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/incident-response-loop.png)
+Notebook-only work breaks the execution contract. Mutable datasets break reproducibility. Training-serving skew breaks feature meaning. Weak evaluation breaks candidate approval. Release gaps break production-state control. Silent failure breaks monitoring. Label defects break feedback. Ownership gaps break decision authority. Platform overbuilding breaks delivery.
 
-*The response loop summarizes how owners move from alert to triage, rollback, investigation, fixes, and learning.*
-
-## What's Next
-<!-- section-summary: The next module starts the data path with examples, labels, features, targets, safe splits, leakage, and annotation quality. -->
-
-This finishes MLOps Foundations. The next module moves into Data for ML Systems. It explains training examples, labels, features, targets, safe train-validation-test splits, leakage, data validation, annotation quality, repeatable datasets, lineage, and feature management.
+Every strong response follows the same discipline: validate the evidence, locate the broken handoff, contain user impact, repair the system through a supported industrial path, prove recovery at the user-facing boundary, and add a control that catches the same failure earlier.
 
 ## References
 
-- [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Describes common ML pipeline controls such as data validation, model validation, metadata management, and monitoring.
-- [AWS SageMaker AI: Model Monitor](https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor.html) - Documents monitoring for data quality, model quality, bias drift, and feature attribution drift.
-- [Microsoft Learn: MLOps maturity model](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/mlops-maturity-model) - Describes operational maturity around reproducibility, CI/CD, monitoring, and feedback.
-- [TensorFlow Data Validation Guide](https://www.tensorflow.org/tfx/data_validation/get_started) - Shows schema-based validation and statistics checks for ML datasets.
+- [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Covers data and model validation, pipeline automation, metadata, continuous delivery, online validation, and production monitoring.
+- [Google for Developers: Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml/) - Gives production guidance on testing infrastructure, training-serving consistency, feature behaviour, and monitoring.
+- [MLflow: Tracking](https://mlflow.org/docs/latest/tracking) - Documents runs, experiments, logged models, metrics, parameters, artifacts, and dataset-aware model evidence.
+- [MLflow: Dataset Tracking](https://mlflow.org/docs/latest/dataset/) - Documents dataset source, digest, schema, profile, and lineage metadata attached to ML work.
+- [MLflow: Model Registry Workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Documents registered model versions, aliases, tags, and model retrieval.
+- [Feast: Point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins) - Explains historical feature retrieval relative to each entity timestamp.
+- [OpenTelemetry: What is OpenTelemetry?](https://opentelemetry.io/docs/what-is-opentelemetry/) - Defines the vendor-neutral framework for generating, collecting, and exporting traces, metrics, and logs.
+- [OpenLineage: Object Model](https://openlineage.io/docs/spec/object-model) - Defines standard dataset, job, run, and lineage-event concepts for data pipelines.

@@ -1,185 +1,366 @@
 ---
 title: "When Not to Ship"
-description: "Learn how to stop a model release when evidence shows product, segment, approval, or rollback risk."
-overview: "A no-ship decision keeps production authority away from a candidate when intended use, evidence validity, behavior, operational control, or accountable approval remains unresolved."
+description: "Reject, defer, or narrow a model release when its intended use exceeds the evidence, operating controls, or accountable authority."
+overview: "A no-ship decision denies the requested production authority while preserving the exact blocker, safe work that may continue, responsible owner, evidence needed for reconsideration, and a fresh path through review."
 tags: ["MLOps", "production", "approval"]
 order: 3
 id: "article-mlops-model-evaluation-when-not-to-ship-a-model"
 ---
 
-## Keep a Model Out of Production When Its Use Exceeds Its Evidence
-<!-- section-summary: A no-ship decision protects users when the intended use, evidence, behaviour, operations, or ownership cannot support the proposed release. -->
+## Table of Contents
 
-You should **keep a model out of production** when its evidence and controls cannot support the exact use being proposed. A better average metric cannot repair leaked evaluation data, a serious regression for an important group, a missing fallback, an untested rollback, or an unresolved domain risk.
+1. [A No-Ship Decision Keeps Authority Behind the Evidence](#a-no-ship-decision-keeps-authority-behind-the-evidence)
+2. [Choose Reject, Defer, Shadow, or Restricted Release Deliberately](#choose-reject-defer-shadow-or-restricted-release-deliberately)
+3. [Block a Release With an Unclear or Expanding Use](#block-a-release-with-an-unclear-or-expanding-use)
+4. [Block a Release Built on Invalid Evidence](#block-a-release-built-on-invalid-evidence)
+5. [Block Unacceptable Behaviour and Unresolved Harm](#block-unacceptable-behaviour-and-unresolved-harm)
+6. [Block a Release That Operators Cannot Control](#block-a-release-that-operators-cannot-control)
+7. [Block a Release Without Accountable Authority](#block-a-release-without-accountable-authority)
+8. [Turn the Block Into Enforceable Repair Work](#turn-the-block-into-enforceable-repair-work)
+9. [Return a New Candidate to the Full Review](#return-a-new-candidate-to-the-full-review)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
-A no-ship review tests five independent conditions:
+## A No-Ship Decision Keeps Authority Behind the Evidence
+<!-- section-summary: A no-ship decision denies production influence if the proposed use exceeds the release's evidence, behaviour, controls, or accountable approval. -->
 
-1. **Defined use:** The decision, population, automation level, and release scope are explicit.
-2. **Valid evidence:** The data, labels, time boundaries, code, and artifact identity represent that use.
-3. **Acceptable behaviour:** Metrics, uncertainty, segments, robustness, and human workload stay inside reviewed limits.
-4. **Operational control:** Operators can identify, monitor, contain, fall back, and recover the exact release.
-5. **Accountable authority:** The owners of remaining product, domain, privacy, security, and operational risk support the proposed scope.
+Imagine a model that prioritizes patient messages for nurse review. The candidate improves the overall ranking score. The same evaluation shows that it misses too many urgent messages in one language, and the rollback drill cannot prove which version handles new requests after recovery.
 
-These conditions act as separate gates. Teams should avoid combining them into one weighted readiness score. Excellent latency cannot compensate for labels copied from the future. A strong overall metric cannot cancel a high-consequence segment failure. An approval meeting cannot create a rollback path that engineering has never tested.
+The team has useful evidence and a serious boundary. It keeps the candidate out of queue-ordering traffic. Offline work may continue, and an isolated shadow can collect current runtime evidence without changing the order seen by nurses. The release record names the segment failure, broken recovery proof, responsible owners, and tests required from a new candidate.
+
+That is a complete no-ship outcome. The team makes a precise decision, preserves safe learning, and keeps production authority with the current system.
+
+At a high level, **a model should stay out of the requested production scope if its intended use, evidence, behaviour, operating controls, or accountable approval cannot support that scope**. These are independent conditions:
+
+1. **Defined use:** the decision, population, automation level, and release scope are stable.
+2. **Valid evidence:** the data, labels, comparison, and release identity represent that use.
+3. **Acceptable behaviour:** quality, uncertainty, segments, robustness, and workload stay inside reviewed limits.
+4. **Operational control:** operators can identify, observe, contain, fall back, and recover the exact release.
+5. **Accountable authority:** the owners of the remaining product, domain, data, security, privacy, and operational risk accept the proposed scope.
+
+Each condition protects a different failure boundary. Better latency cannot repair evaluation leakage. A higher average score cannot cancel a severe regression for an important group. Review approval cannot create a rollback path that the platform has never tested.
 
 ```mermaid
 flowchart TD
-    U["Defined intended use and scope"] --> V{"Evidence valid for that use?"}
-    V -- "No" --> B["Block and rebuild evidence"]
-    V -- "Yes" --> Q{"Behaviour acceptable across risks and segments?"}
-    Q -- "No" --> N["Block or propose a separately reviewed narrower scope"]
-    Q -- "Yes" --> O{"Operational control proven?"}
-    O -- "No" --> F["Fix and drill controls"]
-    O -- "Yes" --> A{"Accountable owners approve residual risk?"}
-    A -- "No" --> H["Hold production authority"]
-    A -- "Yes" --> R["Authorize the evidence-backed scope"]
+    U["Defined use and requested scope"] --> E{"Evidence valid<br/>for that use?"}
+    E -- "No" --> B1["Block and rebuild evidence"]
+    E -- "Yes" --> Q{"Behaviour and uncertainty<br/>inside limits?"}
+    Q -- "No" --> B2["Reject or narrow the proposal"]
+    Q -- "Yes" --> O{"Operating controls<br/>proven?"}
+    O -- "No" --> B3["Defer and repair controls"]
+    O -- "Yes" --> A{"Required owners<br/>approve residual risk?"}
+    A -- "No" --> B4["Hold production authority"]
+    A -- "Yes" --> R["Authorize the supported scope"]
+
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef block fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class E,Q,O,A question
+    class B1,B2,B3,B4 block
+    class R release
 ```
 
-The outcome can still be precise. Offline research, non-decisioning shadow traffic, a restricted canary, and full production carry different authority. A candidate may continue collecting shadow evidence while remaining blocked from changing user decisions.
+The flow preserves the reason for the block. Invalid evidence returns to the evaluation protocol. Unacceptable behaviour returns to data, modelling, product policy, or scope. Missing controls return to platform work. Missing authority returns to the owner of that risk.
 
 ![Five independent release conditions that can each hold a model out of production](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/five-reasons-to-hold.png)
 
-*Defined use, valid evidence, acceptable behaviour, operational control, and accountable authority are independent production conditions.*
+*Defined use, valid evidence, acceptable behaviour, operating control, and accountable authority each have the power to hold production influence.*
 
-## Stop When the Intended Use Is Ambiguous or Expands
-<!-- section-summary: Evaluation can support only the population, decision, automation level, and environment that reviewers actually assessed. -->
+## Choose Reject, Defer, Shadow, or Restricted Release Deliberately
+<!-- section-summary: Different evidence failures lead to different release outcomes, and each outcome grants a distinct level of authority. -->
 
-**Intended use** describes what the system will do, whose cases it will process, which environment it will run in, and how people or software will use its result. A message-priority model that orders a nurse queue has a different intended use from a model that closes messages automatically. Evidence for the first use cannot authorize the second.
+“Do not ship” can describe several decisions. Keeping them separate helps the team choose the right repair and prevents a limited approval from quietly widening.
 
-Scope drift often happens in small steps. A pilot expands to another country with a new language. A recommendation score starts controlling eligibility. A human reviewer loses time to inspect every decision and begins accepting outputs automatically. Each change alters the potential harm, data distribution, or control structure.
+**Reject** closes the current candidate for the requested use. The model may depend on a prohibited feature, repeatedly fail a safety-critical segment, or offer too little value to justify its cost. Further work creates a new candidate and a new decision.
 
-The review should stop when the proposal lacks a stable answer to these questions:
+**Defer** pauses the decision because material evidence is missing or still changing. Labels may need another maturity window. A privacy review may be incomplete. A load-test environment may have failed before producing a trustworthy result. The team preserves the proposal and returns after the unknown is resolved.
 
-- Which population and traffic route will receive the result?
-- Which action can the result trigger?
-- Which human can inspect, override, or appeal the action?
-- Which data and features are allowed for this purpose?
-- Which release stage is requested, and what exposure does it create?
+**Shadow-only authority** allows the candidate to receive isolated copies of real inputs while the production result remains authoritative. This can answer questions about current schemas, feature coverage, runtime, and prediction divergence. It gives the candidate no permission to change the user or workflow outcome.
 
-A narrower proposal can be valid when routing and policy can enforce it. A model with adequate English-language evidence and weak Spanish-language evidence may support an English-only shadow study. A canary for that scope requires a reliable language boundary, separate monitoring, product approval, and safe handling for excluded traffic. Reviewers should treat the narrower use as its own decision rather than inventing it during a meeting.
+**Restricted release** authorizes an enforceable subset. Evidence may support one language, region, product route, or low-risk decision while another remains blocked. The router, policy, monitoring, and fallback must preserve that boundary.
 
-## Stop When the Evidence Cannot Represent Production
-<!-- section-summary: Invalid labels, leakage, stale samples, missing coverage, or ambiguous artifact identity make later metric results unsuitable for release. -->
-
-Evidence validity asks whether the evaluation measures the proposed production system. The review checks label definition and maturity, prediction-time feature availability, dataset selection, time boundaries, row coverage, baseline reconstruction, metric code, and release identity.
-
-**Data leakage** occurs when evaluation uses information that would not exist at prediction time or allows training information into the test set. A support-priority model may accidentally use the final resolution category, which staff add hours after the first prediction. The offline result then describes a system production cannot run.
-
-Stale or selective samples create another problem. A model evaluated before a pricing change, policy change, or product migration may face different traffic at release time. A candidate path that drops validation failures can appear more accurate because difficult requests vanish. Reports should show the denominator at every stage: eligible, attempted, completed, failed, and joined to mature labels.
-
-Artifact identity must connect the report to the proposed runtime. A label such as `latest` or `best` can move after review. The decision should pin the model digest or registry version, serving image, feature definitions, thresholds, preprocessing, and policy configuration. Any change that can alter decisions requires new evidence or a declared compatibility rule.
-
-When evidence is invalid, the team should rebuild the protocol and rerun both the production baseline and candidate. Threshold tuning and extra charts cannot rescue a comparison whose rows, labels, or identities are wrong.
-
-## Stop When Important Behaviour Is Unacceptable
-<!-- section-summary: A candidate must meet the chosen operating point and protect important groups, conditions, edge cases, and human workflows. -->
-
-Model quality depends on an **operating point**, the threshold or policy that turns scores into actions. A fraud model can raise recall by sending more legitimate purchases to review. A triage model can detect more urgent cases while overwhelming staff with false alarms. The review has to evaluate the complete outcome at the proposed operating point.
-
-Overall metrics provide a summary, and segment analysis shows who or what carries the errors. Teams should choose segments from known harms, product routes, domain conditions, incident history, and policy obligations. Each result needs a denominator and uncertainty. An important sparse group may require targeted data collection or a limited release rather than a broad safety claim.
-
-Some reasons to block on behaviour include:
-
-- a practical improvement margin has not been met;
-- an uncertainty interval still includes a harmful regression;
-- a protected segment or critical operating condition crosses its limit;
-- robustness tests expose unsafe schema, missing-data, or stress behaviour;
-- calibration fails where scores drive resource or risk decisions;
-- the candidate increases human workload beyond available capacity;
-- error review finds a repeated high-consequence failure that the aggregate metric hides.
-
-CareBridge provides a focused example. Its model prioritises patient portal messages for nurse review. Candidate version 14 improves the main ranking metric, while urgent-message recall for Spanish-language messages falls to `0.74` against a reviewed `0.92` requirement. Error review finds valid urgent messages about breathing problems and medication reactions. The candidate should remain outside queue-ordering traffic. The team can continue offline work and isolated shadow analysis while it improves data coverage, labels, routing, or model design.
-
-This example also shows why threshold changes need review. Lowering the threshold may recover urgent messages and send far more routine messages to nurses. Queue capacity and delayed review then create another patient risk. The operating point joins model behaviour to the real workflow.
-
-## Stop When the Release Cannot Be Observed or Recovered
-<!-- section-summary: Production authority requires complete identity, user-impact signals, containment, fallback, and a recovery path that works against actual serving state. -->
-
-Offline evidence says how a model behaved on recorded data. Operational control says whether the team can keep that behaviour inside a safe boundary after deployment. A release should remain blocked until operators can identify the exact version on prediction events, see service and user-impact signals, limit exposure, invoke a fallback, and restore a known release.
-
-Service dashboards need latency, errors, saturation, and resource use. Model operations also need feature quality, prediction distributions, decision rates, segment outcomes, mature labels, and workload impact. Early signals such as missing features can detect a broken pipeline quickly. Delayed outcome labels confirm whether the product quality actually changed.
-
-A rollback drill should change the system that handles requests. Moving a registry alias may leave processes with a candidate already loaded in memory. The drill sends identifiable traffic, performs the documented recovery action, and verifies that new events report the retained release. If the old model depends on an incompatible feature schema or container, the rollback unit must include those pieces too.
-
-Containment can be smaller than full rollback. Teams may route affected traffic to the prior model, disable one feature, move to a rules-based fallback, require human review, or pause automated action. The chosen control should match the failure boundary and preserve evidence for investigation.
-
-CareBridge's shadow logs provide another blocker: 18 percent of events lack `model_version`, and the rollback drill moves an alias without changing the loaded model. Operators cannot attribute failures reliably or prove that containment worked. These controls require repair even if a later candidate resolves the segment problem.
-
-## Stop When Nobody Can Accept the Remaining Risk
-<!-- section-summary: Different owners judge different residual risks, and every required authority must support the exact release scope. -->
-
-Metrics and tests reduce uncertainty, while every release still carries **residual risk**, the risk left after the planned controls. Named owners decide whether that remainder is acceptable for the intended use. ML engineering owns the evaluation method. Data owners confirm feature and label validity. Domain and product owners judge workflow consequences. Platform and operations own capacity, monitoring, containment, and recovery. Privacy, security, and governance owners judge the controls in their areas.
-
-The decision should follow authority rather than a majority vote. Five approvals cannot cancel the objection of the owner responsible for an unresolved safety control. A reviewer should state the exact finding, the affected scope, and the evidence required for reconsideration. This keeps disagreement technical and traceable.
-
-An exception is a separate, time-limited risk decision. It needs a narrow scope, accountable owner, compensating controls, expiry, and monitoring. Some failures should remain ineligible for exception, such as ambiguous artifact identity, an invalid evaluation protocol, or a missing recovery path for high-impact traffic. Policy should define those boundaries before release pressure appears.
-
-## Turn a No-Ship Decision Into Enforceable Work
-<!-- section-summary: A useful block records the exact subject, denied authority, evidence, owners, repair work, and conditions for another review. -->
-
-A no-ship record should remain attached to the exact release it evaluated. It names the artifact and configuration, proposed scope, failed conditions, evidence links, owners, and allowed work. A later retraining run creates a new candidate and decision. Editing the old record into a pass would erase why that artifact never received traffic.
-
-The record can allow offline evaluation and non-decisioning shadow work while denying canary and production authority:
-
-```yaml
-decision_id: CB-NS-2026-0714-14
-release_id: carebridge-urgent-message-14
-artifact_sha256: 2c99...
-state: blocked
-allowed_authority: [offline_evaluation, isolated_shadow]
-blocked_authority: [canary, production]
-findings:
-  - id: spanish_urgent_recall
-    observed: 0.74
-    required: 0.92
-    owner: clinical-data
-  - id: prediction_identity_coverage
-    observed: 0.82
-    required: 1.00
-    owner: platform-operations
-  - id: rollback_loaded_version
-    observed: failed
-    required: passed
-    owner: platform-operations
+```mermaid
+stateDiagram-v2
+    [*] --> Proposed
+    Proposed --> Rejected: known unacceptable candidate
+    Proposed --> Deferred: material evidence is unknown
+    Proposed --> ShadowOnly: offline evidence supports runtime learning
+    Proposed --> Restricted: evidence supports enforceable subset
+    Proposed --> BroadRelease: full scope supported
+    Deferred --> Proposed: evidence completed
+    ShadowOnly --> Proposed: runtime evidence collected
+    Restricted --> Proposed: expansion requested
+    Rejected --> [*]
+    BroadRelease --> [*]
 ```
 
-Release automation requests a specific authority and submits the release ID and digest. Missing decisions, mismatched identities, expired exceptions, or authorities absent from the allowed list should fail closed. Tests should attempt every authority and verify that isolated shadow work passes while canary and production fail.
+These outcomes grant different levels of authority. Shadow traffic can be the correct destination for a promising candidate with incomplete runtime evidence. Rejection can be the correct destination for a well-measured candidate whose harm exceeds the limit. Restricted release works only if the boundary is real.
+
+Consider a multilingual support classifier with strong English evidence and sparse evidence for two other languages. An English-only shadow may be reasonable if language routing is reliable and copied predictions create no side effects. An English-only automated release needs stronger product and operating evidence because its predictions now change a queue. A broad release remains unsupported.
+
+The decision should always state the requested authority and the granted authority. This prevents “approved for shadow” from being read later as “approved.”
+
+## Block a Release With an Unclear or Expanding Use
+<!-- section-summary: Evaluation can authorize only the decision, population, automation level, data use, and environment that reviewers actually assessed. -->
+
+**Intended use** describes what the model's output will influence. It includes the population, product action, level of automation, human oversight, environment, and data permitted for that purpose.
+
+A message-priority score used to order a human review queue has one intended use. Using the same score to close low-priority messages creates another. The second use gives the model more authority, changes the harm of a mistake, and may need different metrics, appeal paths, and domain review.
+
+Scope can expand gradually:
+
+- a pilot moves into a country with another language and policy;
+- a recommendation score starts controlling eligibility;
+- a reviewer loses time to inspect every output and begins accepting it automatically;
+- a batch report turns into an API called during live decisions;
+- a feature approved for fraud prevention appears in a marketing model.
+
+Each change alters the question that the evidence must answer. A previous report can remain informative, although it cannot authorize an untested action.
+
+### Ask what will happen to one real case
+
+A practical scope review follows one case through the proposed system:
+
+1. Which person, account, item, or event enters the model?
+2. Which data is read at prediction time?
+3. Which score or output is produced?
+4. Which policy turns that output into an action?
+5. Who can inspect, override, or appeal the action?
+6. Which route receives the release, and which route remains on the current system?
+
+This walkthrough exposes ambiguity quickly. “Decision support” sounds limited until the team learns that staff are expected to accept the top-ranked action without review. “Internal analytics” sounds low risk until the report starts controlling customer eligibility.
+
+A narrower proposal can return to review if the platform can enforce it. For example, evidence may support English-language cases under human review. The release policy must identify that language reliably, route other cases to a safe path, monitor both populations, and prevent the approved route from gaining automatic authority. If any of those controls are missing, the narrow proposal still exceeds its evidence.
+
+## Block a Release Built on Invalid Evidence
+<!-- section-summary: Leakage, immature labels, stale samples, missing coverage, unfair baselines, and ambiguous release identity invalidate the comparison before metric quality matters. -->
+
+Evidence is valid if it measures the production decision being proposed. A polished report can still describe the wrong system.
+
+**Data leakage** occurs if training or evaluation uses information unavailable at prediction time, or if information crosses between training and test groups. A support-priority model might use the final resolution category, which staff add hours after the first prediction. The model can score extremely well offline because the feature reveals part of the answer. Production cannot reproduce that result.
+
+Immature labels create a quieter error. Suppose the target is “missed payment within thirty days.” Cases evaluated after one week include many apparent negatives that still have time to become positive. A candidate can look unusually accurate even though the label window has not closed.
+
+Coverage can also distort the comparison. If the candidate drops invalid or difficult requests before scoring, it receives credit only for cases it completed. The report should preserve the denominator from eligible traffic through attempted predictions, successful outputs, fallbacks, errors, and mature-label joins.
+
+### Identity determines which system the evidence describes
+
+The decision should pin the model artifact, serving image, feature definitions, schema, preprocessing, threshold, and policy. A movable name such as `latest` or `candidate` can point elsewhere after review. If the deployed combination differs from the evaluated combination, the evidence describes another release.
+
+Modern MLflow Registry guidance uses model versions, tags, and aliases because fixed model stages are deprecated. A tag can record a no-ship finding, and an alias can help people locate a candidate. The decision and deployment should still pin the exact version or digest.
+
+### Repair the failing comparison directly
+
+Extra plots and threshold tuning cannot rescue leaked features or incorrect labels. The team repairs the failing boundary:
+
+- remove the unavailable feature and rebuild historical examples at their true prediction times;
+- wait for label maturity or redefine the target explicitly;
+- reconstruct both production and candidate paths under the same policy;
+- restore failed and fallback cases to the denominator;
+- pin the complete release identity and rerun the evaluation.
+
+Verification uses a fresh report from the corrected protocol. It should include the earlier failure as a test: the prohibited feature is absent, labels meet the maturity rule, coverage reconciles to eligible traffic, and the report points to the proposed release.
+
+## Block Unacceptable Behaviour and Unresolved Harm
+<!-- section-summary: A candidate remains outside production influence if practical gains, uncertainty, segments, robustness, calibration, or workflow effects cross reviewed limits. -->
+
+Valid evidence can deliver an unacceptable answer. Imagine a fraud candidate that catches more fraud overall and wrongly blocks many more legitimate payments from one region. The evaluation is fair, and the result still crosses a product harm limit. A release decision must judge the consequence as well as the validity of the measurement.
+
+The operating point matters because thresholds and policies turn scores into actions. A fraud model can raise recall by sending many more legitimate purchases to review. A triage model can find more urgent cases and overwhelm staff with false alarms. A ranking model can raise average relevance while removing all useful results for a small query class.
+
+The team should block or narrow a release if:
+
+- the improvement fails to reach the practical margin;
+- the uncertainty interval still contains a harmful regression;
+- a critical segment or operating condition crosses its limit;
+- robustness tests expose unsafe missing-data, schema, stress, or adversarial behaviour;
+- calibration fails where a probability controls resources or risk;
+- human workload exceeds available capacity;
+- error review reveals a repeated high-consequence failure hidden by the average.
+
+### Separate known harm from missing knowledge
+
+Known harm and uncertainty need different responses. If urgent-message recall is credibly below its required floor, the candidate has failed that condition. If the segment contains twelve mature labels, the result may be too uncertain to support broad authority.
+
+The second case still blocks the broad release. Its repair is evidence collection. Treating the small sample as a pass would grant authority without proof. The team might run isolated shadow traffic, improve label coverage, extend the observation window, or keep the segment on the current path.
+
+Consider an automated review queue that can process 2,000 alerts each day. A new threshold raises recall and produces 7,000 alerts. The metric gain is real, while the delivered system leaves thousands of cases unread. The proposed operating point fails the workflow constraint.
+
+The team may raise the threshold and accept lower recall, or it may fund more review capacity. A safe routing rule could reserve human attention for the highest-risk cases. Rejection is appropriate if none of those changes produce a useful system. Every option needs a new comparison at the policy that production will actually use.
+
+### Inspect the consequence, then choose the repair
+
+A segment regression may come from weak data coverage, label error, the model, the threshold, or a product route. The owner should inspect representative errors and upstream evidence before choosing a remedy.
+
+Adding more training data is appropriate if the missing pattern is real and labels can be improved. A routed model may help if populations have distinct mechanisms and enough evidence. A conservative fallback may protect a rare high-consequence case. A narrower release may work if traffic boundaries are reliable. The next test should show that the chosen change repaired the observed harm without breaking workload, latency, or another segment.
+
+## Block a Release That Operators Cannot Control
+<!-- section-summary: Production authority requires observable release identity, enforceable containment, a safe fallback, and a recovery path proven against the data plane. -->
+
+Offline evidence describes recorded predictions. Production adds live dependencies and a running process that may keep the model in memory. A team can issue a successful rollback command and still leave the candidate serving requests. Operations must control and verify what happens in the data path.
+
+A release should remain blocked until operators can answer:
+
+- Which model, image, feature, and policy version produced this decision?
+- Which traffic and population received the candidate?
+- Which service and model-quality signals show harm?
+- Which control limits exposure or selects the fallback?
+- Which retained release can take traffic back?
+- Which evidence proves recovery in the running system?
+
+Suppose a rollback drill changes a registry alias from the candidate to the production version. New prediction events still report the candidate because each worker loaded it during startup. The control-plane command succeeded, while the data plane continued serving the blocked version. The team needs a recovery action that restarts or reroutes the actual workers and verification based on new events.
+
+### Containment should match the failure boundary
+
+Full rollback is one option. A feature incident may call for disabling the feature and using a reviewed default. A failure limited to one route may send that route to the retained release. A high-risk action may return to human review. A broken batch output may remain unpublished while the prior complete dataset stays available.
+
+The response needs an owner, trigger, action, and proof. “Roll back if needed” leaves every important detail unresolved.
+
+Service monitoring shows whether requests arrive, finish on time, fail, or approach a resource limit. Dependency signals reveal whether the problem sits outside the model process. ML monitoring adds feature health and the rates of predictions and product decisions. Mature labels and segment outcomes later show whether prediction quality changed. Workload signals reveal pressure transferred to people.
+
+Prometheus with Grafana can provide service metrics and alerts. OpenTelemetry can connect a request across dependencies, and cloud-native monitoring can cover managed endpoints. The release policy still defines which signal requires a stop and which action follows.
+
+Managed endpoints can reduce the amount of custom control code. SageMaker AI deployment guardrails can use canary traffic shifting and CloudWatch alarms to return traffic to the previous fleet. Azure Machine Learning supports blue-green deployments behind one endpoint with explicit traffic allocation. Kubernetes platforms can use Argo Rollouts analysis to pause or abort a canary. The team must test the chosen path with the exact release and dependencies.
+
+## Block a Release Without Accountable Authority
+<!-- section-summary: Named owners accept residual risk within their decision rights, and a missing required approval keeps the requested production authority closed. -->
+
+Every evaluated model retains **residual risk**, the risk left after planned controls. Someone with real authority must decide whether that remainder is acceptable for the proposed use.
+
+Responsibility usually spans several owners. ML engineering owns the evaluation method. Data owners confirm the feature and label evidence. Product and domain owners judge workflow and user consequences. Platform and operations own capacity, monitoring, containment, and recovery. Security, privacy, legal, and responsible-AI reviewers judge the controls in their areas.
+
+Decision rights follow responsibility. Five approvals cannot repair a missing decision from the owner of a safety-critical workflow. A schedule owner cannot accept privacy risk on behalf of the privacy owner. Each reviewer should state the finding, affected scope, and evidence required for reconsideration.
+
+NIST's AI Risk Management Framework connects these responsibilities through Govern, Map, Measure, and Manage. Governance defines roles and authority. Mapping clarifies the use and possible harm. Measurement produces the evidence. Management selects, monitors, and revises the response. A no-ship decision is one legitimate risk response.
+
+Disagreement should produce a precise record. One reviewer may support an English-language shadow while another blocks any storage of raw shadow inputs. The resulting proposal can use approved summaries, strict retention, and no user-facing action if those controls answer both concerns. If they do not, the shadow remains blocked.
+
+## Turn the Block Into Enforceable Repair Work
+<!-- section-summary: A useful no-ship record binds exact findings and denied authority to owners, allowed work, corrective action, and evidence required for re-entry. -->
+
+A no-ship decision should stay attached to the exact release it evaluated. Editing the old record into a pass would erase why that artifact lacked authority. Retraining, changing a threshold, repairing telemetry, or altering the scope creates a new proposal with new evidence.
+
+The record should explain:
+
+- which release and requested scope were reviewed;
+- which conditions failed or remained unknown;
+- which authorities are denied;
+- which safe activities may continue;
+- who owns each repair;
+- what evidence is required for another review.
+
+The following YAML represents a candidate that failed one segment floor and a rollback drill. Offline work and isolated shadow remain allowed. The release controller should visibly deny canary and production requests for this model digest.
+
+```yaml
+decision_id: priority-router-18-no-ship
+state: blocked
+subject:
+  model_version: "18"
+  model_sha256: "c31a..."
+requested_authority: broad_production
+allowed_authority:
+  - offline_evaluation
+  - isolated_shadow
+denied_authority:
+  - canary
+  - production
+findings:
+  - id: urgent_language_recall
+    state: failed
+    owner: model-and-label-team
+    required_evidence: rerun_segment_protocol
+  - id: rollback_serving_identity
+    state: failed
+    owner: platform-operations
+    required_evidence: passed_data_plane_drill
+```
+
+This record does two useful things. It keeps unsafe authority closed, and it preserves a safe route for collecting evidence. The deployment system checks the requested action against `allowed_authority` and the pinned digest. A request using another digest also needs its own decision.
+
+### Map every finding to a production-depth repair
+
+“Improve recall” is too vague. The owner should inspect the failed cases and label process, decide whether the problem belongs to data, modelling, threshold, or routing, and record the chosen change. A revised candidate reruns overall, segment, robustness, workload, and operating tests so a local repair does not create another regression.
+
+“Fix rollback” is equally incomplete. Platform operations should identify the data-plane control, retain a known release, automate the action, send identifiable traffic, activate recovery, and prove from new events that the retained identity is serving. The fallback should remain available during the next canary.
+
+The same pattern applies to evidence repairs. A broken outcome join needs a concrete key or time-window correction, a backfill under governed access, reconciliation against expected label volume, and a report showing join coverage by segment. The next evaluation should fail closed if coverage drops again.
+
+### Keep release pressure from changing the rule
+
+Weeks of sunk effort provide no evidence about a failed condition. A deadline changes the schedule and leaves the risk unchanged. One attractive metric answers only the question that metric measured.
+
+A small canary reduces exposure and still needs identity, monitoring, and recovery. Human review protects users only if reviewers have enough time and information to act. They also need authority plus a working escalation path.
+
+External adoption is also weak local evidence. A technique used by another organization may be practical. The local decision still depends on local data, workflows, users, policies, and controls.
+
+The block should remain material and testable. Vague discomfort can create endless review. A strong finding identifies the possible harm, evidence, denied scope, owner, and next test.
 
 ![No-ship record connects exact release findings and owners to allowed and blocked authority](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-scoped-authority.png)
 
-*A no-ship decision can preserve offline learning and isolated shadow work while denying canary and production authority for the exact release.*
+*A no-ship record can preserve offline and isolated-shadow work while denying every authority that changes production decisions.*
 
-Each finding needs a route back to review. The clinical-data team can improve language coverage and label quality. The model team can compare multilingual modelling, a routed architecture, or another operating point. Platform operations can make release identity mandatory and repair rollback. The next candidate then repeats the same evaluation protocol, including the earlier failure cases.
+## Return a New Candidate to the Full Review
+<!-- section-summary: Re-entry uses a new release identity and fresh evidence, repeats every gate, and proves the original failure plus adjacent risks are controlled. -->
 
-This repair loop keeps a block productive. The team preserves the decision history, fixes the actual failure boundary, and returns with a new subject and fresh evidence.
+Repairing the named blocker earns another review. Approval still depends on the complete evidence because the candidate may have changed other metrics, segments, dependencies, or costs.
 
-## Recognize Weak Reasons for Shipping Anyway
-<!-- section-summary: Schedule pressure, sunk cost, one improved metric, or a planned future fix cannot substitute for a release condition that still fails. -->
+The re-entry packet should contain:
 
-Release meetings often happen after a team has spent weeks training, tuning, and integrating a candidate. That investment can create pressure to reinterpret a blocker as a minor concern. The review should keep the decision tied to evidence rather than effort already spent.
+1. a new immutable release identity;
+2. the original findings and their owners;
+3. evidence that directly repeats the failed tests;
+4. the complete comparison and operating packet;
+5. the new requested authority and scope.
 
-Several arguments deserve explicit challenge. “The overall score improved” says nothing about whether the test was valid or important segments remain safe. “The first canary is small” reduces exposure, while it still requires identity, monitoring, and working containment. “We can fix it after launch” asks users to carry a risk that the team already understands. “A human remains involved” provides protection only when that person has enough information, time, authority, and a tested escalation path.
+Suppose additional multilingual data repairs the urgent-message segment. The model now meets its recall floor. That change may also increase false urgent alerts and nurse workload. The review repeats the operating-point and capacity checks. One repaired score cannot close the surrounding release decision.
 
-Another weak argument uses a competitor or industry trend as release evidence. External adoption can show that a technique is practical, while the local decision still depends on local data, workflow, users, and controls. A vendor benchmark cannot prove that the model meets the product's operating point.
+If the rollback path was repaired, operators repeat the drill against the new release. They verify the candidate identity before the action, activate recovery, and verify the retained production identity afterwards. A screenshot of the control-plane command provides weak proof; new request or batch events show what the system actually served.
 
-The review should also avoid indefinite perfectionism. Every release carries uncertainty, and a blocker should identify a material failure condition rather than a vague discomfort. A strong block states the affected harm, evidence, enforceable scope, owner, and next test. This standard helps teams stop unsafe releases without turning review into an open-ended search for certainty.
+```mermaid
+flowchart TD
+    B["Blocked release<br/>exact findings preserved"] --> W["Owned repair work"]
+    W --> N["New release identity"]
+    N --> T["Repeat failed tests<br/>and full protocol"]
+    T --> D{"Evidence supports<br/>requested scope?"}
+    D -- "No" --> B2["Reject, defer,<br/>or narrow again"]
+    D -- "Yes" --> A["New scoped approval"]
+    A --> V["Verify running identity,<br/>traffic, and outcomes"]
 
-## A Clear Block Protects Users and Future Releases
-<!-- section-summary: No-ship decisions keep production authority aligned with valid evidence and give the next candidate a repeatable path back to review. -->
+    classDef blocked fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef work fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef approved fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class B,B2 blocked
+    class W,D work
+    class N,T,V evidence
+    class A approved
+```
 
-A model should remain out of production when its intended use is unclear, its evidence cannot represent production, an important behaviour is unacceptable, operators cannot control the release, or accountable owners cannot approve the residual risk. These conditions protect different parts of the system and should remain visible rather than collapsing into one readiness number.
+Provider tools can reflect the outcome without owning the whole decision. An MLflow model-version tag can record `release_decision=blocked`, while the full report stays in governed evidence storage. SageMaker AI can set a model package to `Rejected`. CI/CD or a policy service then denies canary and production for the exact subject. Registry status improves discovery; the decision record preserves scope, findings, owners, and re-entry conditions.
+
+After approval, production monitoring keeps the original failure visible. The repaired language segment gets its own label-volume, join-coverage, quality, and workload view. Teams add the rollback drill to the repeatable release suite. A later regression can revoke authority and restore the retained release.
 
 ![Clear no-ship decision preserves evidence, assigns repair work, creates a new candidate, and reruns the full review](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/clear-block-next-safe-test.png)
 
-*A useful block identifies the failed boundary and the next safe test, then sends a new candidate through every release condition again.*
+*The path back to release creates a new candidate, repeats the failed evidence and adjacent checks, and grants authority through a new decision.*
 
-A strong no-ship decision states which authority is denied, preserves the exact evidence, assigns repair work, and identifies the next test. The model team can continue learning without exposing users to a decision that the current evidence cannot support.
+## The Main Idea
+<!-- section-summary: A no-ship decision protects users by denying unsupported authority and helps the team progress through precise findings, owners, safe work, and repeatable re-entry tests. -->
+
+A candidate stays out of production if the proposed use is unclear, the evidence cannot represent that use, important behaviour is unacceptable, operators cannot control the release, or required owners cannot accept the residual risk.
+
+The outcome should be precise. Rejection closes the current candidate. Deferral waits for material evidence. Shadow-only authority permits isolated runtime learning. Restricted release grants an enforceable subset. None of these outcomes quietly grants broader production influence.
+
+A strong block pins the release identity, states the denied authority, preserves the evidence, assigns production-depth repair work, and names the tests required for reconsideration. A new candidate then returns through the complete review and proves both the original fix and the surrounding system.
 
 ## References
 
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
-- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [MLflow model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [scikit-learn model evaluation](https://scikit-learn.org/stable/modules/model_evaluation.html)
-- [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
+- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [MLflow: Model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
+- [Amazon SageMaker AI: Update model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
+- [Amazon SageMaker AI: Canary traffic shifting](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails-blue-green-canary.html)
+- [Azure Machine Learning: Progressive rollout of MLflow models to online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-mlflow-models-online-progressive?view=azureml-api-2)
+- [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
+- [Prometheus: Alerting practices](https://prometheus.io/docs/practices/alerting/)
+- [Google SRE Workbook: Canarying releases](https://sre.google/workbook/canarying-releases/)
+- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)

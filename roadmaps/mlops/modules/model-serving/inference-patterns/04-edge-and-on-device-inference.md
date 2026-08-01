@@ -7,6 +7,20 @@ order: 4
 id: "article-mlops-model-serving-edge-on-device-inference"
 ---
 
+## Table of Contents
+
+1. [The Release Unit Is Larger Than The Model](#the-release-unit-is-larger-than-the-model)
+2. [Choose Edge For A Product Constraint](#choose-edge-for-a-product-constraint)
+3. [Export Creates A Runtime Contract](#export-creates-a-runtime-contract)
+4. [Qualification Happens On A Device Matrix](#qualification-happens-on-a-device-matrix)
+5. [Optimization Trades Resources Against Behaviour](#optimization-trades-resources-against-behaviour)
+6. [Distribution Is A Supply-Chain Decision](#distribution-is-a-supply-chain-decision)
+7. [A Fleet Always Contains Version Skew](#a-fleet-always-contains-version-skew)
+8. [Telemetry Must Respect The Reason For Going Local](#telemetry-must-respect-the-reason-for-going-local)
+9. [Rollback Means Selecting A Trusted Compatible Bundle](#rollback-means-selecting-a-trusted-compatible-bundle)
+10. [Operate The Lifecycle, Not A File](#operate-the-lifecycle-not-a-file)
+11. [References](#references)
+
 Most serving systems send an input to infrastructure operated by the model team. **Edge inference** moves prediction near the data source, such as a factory gateway or store computer. **On-device inference** is the narrower case where prediction runs inside a phone, vehicle, camera, wearable, or sensor.
 
 The benefits can be decisive: the feature works without a network round trip, private inputs can remain local, radio bandwidth falls, and latency can be more predictable. The cost is a new operating problem. A server fleet can be upgraded centrally; a device fleet contains different processors, operating systems, accelerators, memory limits, power states, and update histories.

@@ -1,218 +1,347 @@
 ---
 title: "Approval Gates Before Deployment"
-description: "Connect model evidence, operational readiness, accountable reviewers, and an enforceable release decision."
-overview: "An approval gate binds one exact model release to evidence, automated checks, accountable risk owners, operational controls, enforceable scope, expiry, and a recorded decision."
+description: "Turn model evidence into scoped production authority through exact identity, automated checks, accountable review, enforcement, and expiry."
+overview: "An approval gate binds one exact ML release to required evidence, repeatable checks, accountable decision owners, enforceable scope, live verification, and a recorded lifecycle."
 tags: ["MLOps", "production", "approval"]
 order: 2
 id: "article-mlops-model-evaluation-approval-gates-before-deployment"
 ---
 
-## What an Approval Gate Does
+## Table of Contents
 
-<!-- section-summary: An approval gate prevents a model release from advancing until required evidence and accountable owners support the proposed production use. -->
+1. [An Approval Gate Turns Evidence Into Production Authority](#an-approval-gate-turns-evidence-into-production-authority)
+2. [Identify the Exact Proposal Before Review](#identify-the-exact-proposal-before-review)
+3. [Choose Evidence That Fits the Intended Use](#choose-evidence-that-fits-the-intended-use)
+4. [Automate the Checks With Objective Answers](#automate-the-checks-with-objective-answers)
+5. [Give Human Reviewers Clear Decision Authority](#give-human-reviewers-clear-decision-authority)
+6. [Keep Passed, Failed, Unknown, and Deferred Separate](#keep-passed-failed-unknown-and-deferred-separate)
+7. [Make Exceptions Narrow and Temporary](#make-exceptions-narrow-and-temporary)
+8. [Enforce the Decision at the Deployment Boundary](#enforce-the-decision-at-the-deployment-boundary)
+9. [Keep Approval Current Through Verification, Expiry, and Audit](#keep-approval-current-through-verification-expiry-and-audit)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
-An **approval gate** is a release control that keeps a model from advancing until required evidence passes and the responsible people accept the remaining risk. The gate applies to one exact candidate, configuration, and release scope. It should influence the deployment system rather than existing only as a meeting note.
+## An Approval Gate Turns Evidence Into Production Authority
+<!-- section-summary: An approval gate decides whether one exact release may influence a declared production population and makes the deployment path enforce that decision. -->
 
-The gate has six connected layers:
+Imagine a model that prioritizes incoming support messages. A new version finds more urgent messages on the approved evaluation set. The team proposes a five-percent canary for English-language web tickets. It brings the exact model and serving-image identities, the candidate comparison, segment results, a load test, monitoring queries, and a successful rollback drill.
 
-| Layer | Main question | Failure when omitted |
-|---|---|---|
-| **Identity** | Which model, data, code, policy, image, and release scope are under review? | Approval attaches to a moving alias or different runtime |
-| **Evidence** | Does the candidate pass the intended-use, metric, uncertainty, segment, robustness, and compatibility requirements? | A headline score receives authority beyond what it proves |
-| **Automation** | Which objective conditions can the pipeline verify reproducibly? | Reviewers spend time on missing files or inconsistent calculations |
-| **Accountability** | Which owners judge product, domain, data, platform, privacy, and operational risk? | One team accepts risk that belongs to another owner |
-| **Operational control** | Can the release be observed, limited, stopped, and rolled back? | A canary sends traffic without a usable stop path |
-| **Enforcement and expiry** | How does the deployment system apply the approved scope, and when must evidence be refreshed? | Meeting notes drift away from production state |
+The release process checks that every piece of evidence refers to the same candidate. ML, product, and operations reviewers examine the risks they own. They approve only the proposed canary, keep other traffic on the current release, and record the stop conditions. The deployment job reads that decision. A request for full traffic or a different model digest stops before deployment.
 
-Automation and human judgement serve different purposes. Exact schema, metric, digest, and smoke-test rules belong in automation. Residual user harm, uncertain segment evidence, operational capacity, and domain acceptability require accountable people. A gate fails when either side is missing: manual review cannot repair an invalid artifact, and a green pipeline cannot accept social or product risk on behalf of an owner.
+That is a small, complete approval gate: it receives an identified proposal and evidence, applies automated and human decisions, produces a scoped authority, and controls what the delivery system may do.
+
+At a high level, **an approval gate is the control that turns model evidence into permission for a particular production use**. It answers four plain questions:
+
+1. Which exact release is being considered?
+2. Which evidence must support this use?
+3. Who has authority to accept the remaining risk?
+4. Which deployment action is allowed, for how long, and under which stop conditions?
+
+The gate covers a lifecycle rather than one meeting. A proposal first collects checks and review. Approval can then authorize an active deployment. Production evidence may support expansion, while stale assumptions cause expiry and harmful evidence causes revocation. Each state should have a precise operational meaning.
 
 ```mermaid
-flowchart LR
-    I["Pinned release identity"] --> E["Evidence bundle"]
+flowchart TD
+    P["Exact release proposal"] --> E["Required evidence"]
     E --> A["Automated checks"]
-    A --> H["Accountable human review"]
-    H --> D["Scoped decision record"]
-    D --> P["Deployment policy enforcement"]
-    P --> M["Canary monitoring and stop authority"]
-    M --> R["Expand, expire, or revoke"]
+    A --> H["Accountable review"]
+    H --> D["Scoped decision"]
+    D --> F["Deployment enforcement"]
+    F --> V["Live verification"]
+    V --> X["Expand, expire, revoke,<br/>or reassess"]
+
+    A -. "failed or unknown" .-> Q["Defer or reject"]
+    H -. "risk unsupported" .-> Q
+    V -. "stop condition" .-> R["Revoke and recover"]
+
+    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef operation fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class P,E,A evidence
+    class H,D decision
+    class F,V,X operation
+    class Q,R hold
 ```
 
-The diagram shows why an approval gate is a control path rather than a single meeting. Evidence has to refer to an immutable release identity. Automation checks repeatable rules before reviewers judge remaining risk. The resulting decision grants a defined scope, and the deployment system enforces that scope. Monitoring keeps the decision under review after traffic starts.
+Automation and human judgement have different jobs. Software can compare the request schema with the model contract. It can also verify identities and calculate declared metrics. People judge the consequence of a segment regression or an uncertain workflow effect. A reliable gate needs both.
 
 ![Seven-stage approval control path from release identity through live monitoring](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-control-path.png)
 
-*Approval connects exact release identity, evidence, accountable review, enforceable scope, and live monitoring through one control path.*
+*Approval connects exact identity and evidence to a decision that the deployment system can enforce and production monitoring can revisit.*
 
-CityCart illustrates the framework with version 43 of a delivery-time model proposed for a ten-percent canary. The candidate has passed offline evaluation, and the gate now connects that evidence to serving compatibility, monitoring, rollback, product scope, and named ownership.
+## Identify the Exact Proposal Before Review
+<!-- section-summary: The proposal pins every release component that can change predictions, runtime behaviour, or the population receiving the result. -->
 
-## A Gate Follows the Release Through a Lifecycle
+A reviewer can approve only a stable subject. A model name such as `priority_model_latest` can move to a different version after the meeting. A container tag such as `main` can point to another build. A threshold can change how many messages reach the urgent queue even if the model weights stay fixed.
 
-<!-- section-summary: Approval moves through proposed, checked, reviewed, active, expired, and revoked states as evidence and production conditions change. -->
+The **release identity** therefore covers the complete decision path. It should pin:
 
-The gate lifecycle starts when a team proposes an exact release and intended scope. The proposal remains **pending** while required evidence is collected. Automated checks can move individual requirements to passed, failed, or unknown. Human reviewers then decide whether the remaining risk supports a specific authority such as shadow testing or a limited canary.
+- the model version and artifact digest;
+- the serving image or environment digest;
+- feature definitions and the input contract;
+- preprocessing and post-processing code;
+- thresholds, routing rules, and fallback policy;
+- the evaluation report and its data and code references.
 
-An approved decision enters **active** state only when deployment matches its subject and scope. The gate should confirm the model digest, serving image, configuration, traffic percentage, population filter, and monitoring plan. If any of those values differ, the release returns to review because the approval describes another system.
+These parts answer different identity questions. The model digest identifies the trained artifact. The image digest identifies the runtime around it. Feature and schema versions describe the data arriving at the model. Policy versions describe how scores turn into product actions. The evidence reference shows what reviewers actually assessed.
 
-Active approval can later expire or be revoked. Expiry handles evidence that ages naturally. Recent-traffic evaluation, capacity tests, privacy assessments, and supplier reviews can lose relevance as data and dependencies change. Revocation handles an incident, newly discovered vulnerability, invalid label source, or another event that makes the prior decision unsafe.
+The proposal also describes intended use. It names the population, decision, automation level, environment, delivery pattern, and requested authority. Approval for a batch report reviewed by an analyst carries a different risk from approval for immediate automated action, even if both load the same model.
 
-This lifecycle separates three ideas that teams often mix together:
+### Registration, approval, and deployment are different states
 
-- **Registration** records that a model version exists and links it to lineage.
-- **Approval** grants a declared production authority based on reviewed evidence.
-- **Deployment** applies that authority to a real environment and traffic route.
+A registry records that a model version exists. Approval grants a defined authority. Deployment places a release into a real environment and route.
 
-A model can remain registered after a denial or revocation because its history still matters. An approved model can remain undeployed because a capacity window has not opened. A deployed version can lose approval during an incident and require containment. Keeping these states separate gives operators and auditors an accurate account of what happened.
+Keeping these states separate prevents several common mistakes. A rejected model can remain registered because its history and evidence still matter. An approved canary can wait undeployed until capacity is available. A deployed release can lose authority after an incident and require rollback even though its registry record remains intact.
 
-## The Candidate Arrives With Its Evidence
+Modern MLflow Model Registry workflows use immutable model versions plus tags and aliases; fixed model stages are deprecated. Tags can describe review state, and aliases can help people find a candidate or current model. An alias remains a movable reference. The approval subject and deployment input should use the exact version or digest.
 
-<!-- section-summary: Reviewers need the pinned model artifact, evaluation protocol, candidate-baseline results, segment evidence, and proposed release scope. -->
+Managed registries expose similar concepts with different names. A SageMaker AI model package starts in `PendingManualApproval`. Review can move it to `Approved` or `Rejected`, and configured projects can react to that change through CI/CD. The status remains one part of the control. The surrounding decision still defines the scope and evidence, while named owners accept the operating conditions.
 
-CityCart’s release record identifies model version 43, its artifact digest, training run, dataset snapshot, feature definitions, evaluation code, serving image, and proposed canary. Reviewers can trace every chart back to the same artifact.
+## Choose Evidence That Fits the Intended Use
+<!-- section-summary: Evidence requirements follow the proposed decision, population, harm, and operating environment instead of using one universal model checklist. -->
 
-The main report compares version 43 with production version 42 on the same time-based holdout. It includes median absolute error, tail error, calibrated interval coverage, latency, and performance for rain, city, rural, restaurant, and courier segments. The team also opens examples from the largest regressions.
+An approval gate should ask for evidence that can answer the proposed production question. A low-risk weekly demand forecast reviewed by a planner needs a different packet from an automated clinical prioritization system. A universal checklist either blocks small changes with irrelevant work or gives high-impact changes too little scrutiny.
 
-This identity prevents a common failure: approving one model while the deployment later loads another. If the artifact, feature contract, threshold, or serving image changes after review, CityCart creates a new release decision.
+The intended use tells the team what to require:
 
-The proposed scope is equally specific. Approval for a ten-percent online canary grants authority only to that canary; immediate full traffic and batch planning require their own evidence. Evidence and controls are tied to the decision the model will influence.
+- A decision with delayed labels needs a maturity rule and enough time for outcomes to settle.
+- A system serving several languages needs evidence for the languages included in the release scope.
+- A model that controls a human queue needs workload and capacity analysis.
+- An online endpoint needs a contract test and a representative load test. Dependency behaviour, monitoring, and rollback complete its operating evidence.
+- A batch pipeline needs to prove that it found the complete input and published the complete output. Deadline and rerun tests show that operators can deliver and recover the batch.
 
-Identity also includes mutable policy. A threshold, feature default, prompt, post-processing rule, or fallback can change product behaviour without changing model weights. The gate must either pin those values or define the allowed range. Otherwise, the deployment can satisfy the approved model version while running a decision system that reviewers never saw.
+The candidate comparison supplies the central quality evidence. The production baseline and shared protocol establish what was compared. Effect size and uncertainty explain the change. Segment and robustness results show where that claim may narrow, and recorded limitations show what remains unknown. The gate also receives the exact requested scope so reviewers can tell whether the evidence reaches that far.
 
-## Automated Gates Protect Objective Boundaries
+### Organize requirements by the failure they protect
 
-<!-- section-summary: CI verifies reproducible metrics, schema compatibility, artifact integrity, and required evidence before people spend time on judgement. -->
+Requirements make more sense to beginners and reviewers if each one protects a visible failure boundary:
 
-Before the meeting, automation reruns the release checks. Version 43 must beat or match the approved error boundaries, keep interval coverage inside its reviewed range, and avoid blocking segment regressions. The model signature must match the serving request, and the feature pipeline must supply every required field with the correct type and freshness.
+| Evidence area | Question it answers | Example failure |
+|---|---|---|
+| Intended use | What decision and population may change? | A ranking model starts closing cases automatically |
+| Data and labels | Did the evaluation represent prediction-time reality? | A feature includes information created after the decision |
+| Behaviour | Are overall, segment, robustness, and workload outcomes acceptable? | Higher recall overwhelms the review queue |
+| Release identity | Does the report describe the artifact entering production? | The endpoint loads a newer container than the reviewed one |
+| Operations | Can the exact release serve, identify itself, and recover? | A registry update leaves old workers handling requests |
+| Governance | Are privacy, security, domain, and policy controls satisfied? | Sensitive data enters telemetry without approved retention |
 
-The pipeline verifies the artifact digest and serving-image digest, then runs a small load test and prediction fixture. It also confirms that evaluation reports, model card updates, and lineage links exist. A missing report fails the gate instead of becoming a promise to upload evidence later.
+This organization also clarifies missing evidence. If labels have not matured, the model-quality requirement is unknown. A passing load test says nothing about that missing outcome. Evidence from another category cannot cancel the gap.
 
-Automation works well for exact rules. It can compare a metric with a threshold, validate a schema, and check that the rollback target exists. It cannot decide whether a rural-delivery regression is acceptable for the product or whether the monitoring plan gives operations enough protection. Those questions need accountable reviewers.
+## Automate the Checks With Objective Answers
+<!-- section-summary: CI and managed pipelines repeat objective checks against the pinned proposal and preserve each result as evidence for review. -->
 
-The pipeline should expose three states rather than hiding every failure behind one red badge. A **failed** check has evidence that violates a rule. An **unknown** check lacks trustworthy evidence, perhaps because a label window has not matured or a report is missing. A **passed** check ran against the pinned release and met its rule. Unknown evidence blocks the affected release scope because absence of measurement cannot be converted into a pass.
+People should spend review time on judgement rather than discovering that a file is missing or a schema is incompatible. CI or a managed ML pipeline can repeat the objective part of the gate each time a candidate is proposed.
 
-Exceptions need the same discipline. A temporary waiver records the failed rule, business reason, compensating control, owner, expiry, and narrower scope. For example, a low-volume canary may proceed with a manual review guard while a non-critical dashboard is repaired. A waiver should never bypass missing artifact identity, an invalid evaluation protocol, or a rollback path required to protect users.
+Typical automated checks include:
 
-The automated result should preserve each check as data. This example makes `unknown` a real state instead of quietly dropping a missing result:
+- resolve the exact model, image, data, code, and policy identities;
+- reproduce required metrics and compare them with declared limits;
+- verify segment floors and minimum sample requirements;
+- validate input and output contracts;
+- run smoke, integration, load, and fallback tests;
+- confirm that dashboards, alerts, and the rollback target exist;
+- produce a machine-readable result with links to the evidence.
 
-```json
-{
-  "release_id": "delivery-eta-43-city-canary",
-  "model_sha256": "7d6a...",
-  "image_digest": "sha256:ac31...",
-  "checks": [
-    {"id": "overall_mae", "state": "passed", "value": 5.91, "limit": 6.10},
-    {"id": "rural_evening_mae", "state": "failed", "value": 8.42, "limit": 7.80},
-    {"id": "rollback_drill", "state": "passed", "evidence": "drill/RB-882"},
-    {"id": "label_maturity", "state": "unknown", "reason": "7-day labels reach maturity on 2026-07-19"}
-  ]
-}
+The sequence matters. Identity and protocol checks run before performance checks because a metric has little value if it belongs to another artifact or invalid dataset. Contract and recovery tests run before traffic because production cannot safely discover those failures for the first time.
+
+Suppose a payment-risk candidate requires thirty days for its outcome label to mature. The pipeline can calculate service metrics immediately, while the quality check has no trustworthy answer after one week. The output should record that quality result as `unknown`. Omitting the check would make the packet appear more complete than it is.
+
+### Keep checks reproducible and independently visible
+
+Each result should record the check ID, policy version, state, observed value, required limit, evidence URI, and subject identity. Reviewers can then see which rule failed and rerun the same check.
+
+A single green badge loses this detail. It can also hide a gate implementation that silently skipped a test after a dependency error. The pipeline should distinguish a test that ran and passed from a test that never produced valid evidence.
+
+MLflow evaluation can generate standard classic-ML metrics and artifacts. After evaluation, `mlflow.validate_evaluation_results()` can apply metric thresholds. Product outcomes and segment rules still come from the application. Workload, release identity, and operating tests also need separate checks. Weights & Biases and cloud-native tracking platforms can preserve equivalent evidence. The tool records results; the release policy decides what those results authorize.
+
+## Give Human Reviewers Clear Decision Authority
+<!-- section-summary: Reviewers judge the residual risk in areas they genuinely own, and their decision applies to the exact release scope under review. -->
+
+Automated checks can show that urgent-message recall fell by three percentage points for one language. They cannot decide whether that loss is acceptable for the support workflow. The decision belongs to people who understand the consequence and hold authority for that risk.
+
+Different reviewers usually own different questions:
+
+- ML or data science owns the evaluation method, uncertainty, and modelling limitations.
+- Data owners confirm feature meaning, label validity, and permitted use.
+- Product or domain owners judge the effect on users and workflows.
+- Platform and operations own capacity, observability, containment, and recovery.
+- Security, privacy, legal, or responsible-AI reviewers own the controls in their areas.
+
+These are decision rights rather than a voting panel. Three approvals cannot overrule the operations owner if rollback is broken. A product owner cannot certify that a label pipeline is valid without the data owner. Each required reviewer should state `approve`, `reject`, or `request narrower scope` for the area they own.
+
+Consider a triage model that improves overall prioritization and loses recall for a high-consequence symptom group. The domain reviewer can block automated use for that group. A limited release may remain possible if routing can reliably identify the supported population, excluded cases follow a safe path, and monitoring proves the boundary. If the system cannot enforce that separation, a narrower sentence in the meeting notes provides no protection.
+
+NIST's AI Risk Management Framework organizes work through Govern, Map, Measure, and Manage. An approval gate puts those ideas into a delivery decision: governance establishes roles, mapping defines the use and harm, measurement produces evidence, and management chooses and monitors the response.
+
+## Keep Passed, Failed, Unknown, and Deferred Separate
+<!-- section-summary: Clear evidence states prevent a missing or inconclusive result from silently granting the authority requested by a release. -->
+
+Suppose a pipeline cannot read the mature-label table because its service identity lost permission. The quality rule did not pass, and the evidence never proved that it failed. Treating that execution as either result would hide the real problem: the gate has no trustworthy answer.
+
+A robust gate therefore uses more than pass and fail:
+
+- **Passed** means the check ran against the pinned proposal and met its rule.
+- **Failed** means trustworthy evidence violated the rule.
+- **Unknown** means trustworthy evidence is missing or inconclusive.
+- **Deferred** is a release outcome: the requested authority waits while the team resolves a material unknown.
+
+Unknown deserves its own state because it leads to different work. A failed segment floor may require new data, a model change, or a smaller scope. An unknown label result may require time for maturity or repair of an outcome join. Calling both “failed” hides the repair. Calling unknown “passed” creates unsupported production authority.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Proposed
+    Proposed --> Checked: required checks run
+    Checked --> Review: evidence is complete enough
+    Checked --> Deferred: material evidence is unknown
+    Checked --> Rejected: objective boundary fails
+    Review --> Approved: owners accept scoped risk
+    Review --> Deferred: more evidence or narrower scope
+    Review --> Rejected: risk remains unacceptable
+    Approved --> Active: deployment matches decision
+    Active --> Revoked: stop condition or new risk
+    Active --> Expired: approval window ends
+    Deferred --> Proposed: repaired proposal
+    Revoked --> Proposed: new evidence and decision
+    Expired --> Proposed: evidence refreshed
 ```
 
-A gate evaluator reads this document together with the requested scope. General traffic fails because one segment check failed and one required result is unknown. A city-only shadow request may proceed if its policy excludes rural traffic, requires no mature outcome labels, and the router can enforce the scope. The evaluator emits the rule IDs that granted or denied authority so reviewers can challenge the decision.
+The release response should state which work remains allowed. A candidate with credible offline quality and unknown runtime behaviour may receive isolated shadow authority. It still lacks permission to influence decisions. A model with an invalid evaluation protocol should return to offline work because later runtime evidence cannot repair the comparison.
 
-Test the evaluator with tampering and missing-evidence cases. Changing `model_sha256` after approval must fail. Removing `label_maturity` must produce `unknown`, not `passed`. Replacing the ten-percent scope with full traffic must fail because the decision granted less authority. These tests protect the mechanism that connects evidence to deployment.
+Some progressive-delivery tools represent uncertainty explicitly. Argo Rollouts analysis runs can succeed, fail, or remain inconclusive. An inconclusive analysis can pause the rollout for human judgement. The ML gate should preserve the same distinction for delayed labels, missing segments, or a monitoring query that returned no trustworthy data.
 
 ![Release gate treats failed, unknown, mismatched, expired, and over-broad evidence as denial conditions](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/unknown-is-not-passed.png)
 
-*The gate evaluates evidence against the requested authority; missing or uncertain proof cannot silently grant a broader release.*
+*A production request proceeds only if the evidence state, subject identity, scope, and time window all support it.*
 
-## Reviewers Own Different Risks
+## Make Exceptions Narrow and Temporary
+<!-- section-summary: An exception accepts one identified residual risk for a limited scope, period, and owner while adding compensating controls and a clear exit. -->
 
-<!-- section-summary: Product, ML, data, platform, and operations reviewers evaluate the parts of the release for which they hold real responsibility. -->
+Release pressure sometimes meets a real constraint. A non-critical dashboard may be unavailable during a low-volume canary. A supplier assessment may need renewal while an existing integration continues under extra monitoring. An **exception** is the explicit decision to accept that residual risk under tighter conditions.
 
-The ML reviewer explains the evaluation and uncertainty. The data reviewer confirms the feature and label windows. Platform engineering verifies that the serving image can load the artifact and that the canary route is isolated. Operations checks dashboards, alerts, and rollback. Product decides whether the user impact and remaining segment risk fit the proposed canary.
+An exception should record:
 
-Version 43 slightly worsens ETA error for rural evening deliveries. The overall metric still improves, and the affected slice has enough examples for the difference to be credible. Product and operations discuss the consequence: these customers already experience longer journeys, so another five-minute miss could create support contacts and missed delivery promises.
+- the exact failed or missing requirement;
+- why the requested work cannot wait;
+- the owner accepting the residual risk;
+- the smallest traffic and population scope;
+- a compensating control;
+- an expiry or earlier stop condition;
+- the evidence required to close the exception.
 
-The team does not hide this result inside an average. It narrows the canary to cities while the model team investigates the rural feature coverage. The routing system can enforce this scope, and monitoring can report the excluded and included traffic separately.
+For example, a small non-decisioning shadow run might proceed while a quality dashboard is repaired. Raw outputs remain isolated, no user action changes, and an operator reviews error logs. The exception expires after the evidence-collection window or as soon as the dashboard is restored.
 
-This is a legitimate approval outcome because the release changed to match the evidence. If CityCart could not enforce the boundary, the candidate would remain blocked.
+Some boundaries should remain ineligible for exception. A high-impact release with ambiguous artifact identity gives reviewers no stable subject. A leaked evaluation protocol provides no valid quality evidence. A missing recovery path leaves operators unable to contain known harm. Policy owners should declare these non-waivable conditions before schedule pressure appears.
 
-Reviewer disagreement is information about unresolved risk. The gate should name who has final authority for each category instead of taking a majority vote. Product owns whether the proposed behaviour helps the workflow. A domain owner judges domain harm. Platform and operations own whether the release can run and recover. Privacy and governance owners judge data use and required controls. One owner can request a narrower scope, while another may still block it if that scope cannot be enforced.
+Exceptions should remain separate from ordinary approval. Otherwise, a temporary risk decision can slowly turn into the default production path. Expiry, alerts, and an owner make the temporary nature operationally visible.
 
-## Serving and Monitoring Must Be Ready Before Traffic
+## Enforce the Decision at the Deployment Boundary
+<!-- section-summary: The delivery system compares the requested action with the active decision and fails closed on mismatched identity, scope, state, or expiry. -->
 
-<!-- section-summary: The release needs compatible input contracts, model identity in telemetry, user-impact alerts, a safe fallback, and a tested rollback. -->
+A meeting record has little effect if the deployment pipeline can ignore it. The **enforcement point** is the place where a production-changing request is allowed or denied. It may be a managed ML deployment pipeline, a CI/CD job, a GitOps admission step, or an internal release service.
 
-CityCart deploys the candidate to staging using the same request schema and feature service used in production. A prediction event includes request ID, model version, feature-set version, route assignment, ETA, interval, latency, and later delivery outcome. This identity lets the team measure candidate quality after labels mature.
+The input is a requested action: deploy this exact release to this environment, population, and traffic percentage. The enforcement point retrieves the active decision and checks subject identity, granted authority, scope, conditions, and expiry. The visible result is an allow or deny response with rule IDs. A denial stops before traffic changes.
 
-The canary dashboard separates service health from model behaviour. It shows latency and errors, and it also shows ETA residuals once deliveries complete, interval coverage, support contacts, cancellations, and important segments. Early alerts use proxy signals such as missing features and prediction distribution; mature quality alerts use actual arrival outcomes.
-
-The application has a fallback if the model service is unavailable. It can use the production model or a conservative rules-based estimate according to the incident policy. The interface does not invent an ETA from a failed response.
-
-Operations also runs rollback before approval. The drill moves canary traffic back to version 42 and confirms that new prediction events show the old model. A registry alias change is insufficient if the running service has already loaded version 43, so the test checks actual serving state.
-
-## The Meeting Produces an Enforceable Decision
-
-<!-- section-summary: The final decision records the approved scope, conditions, owners, stop signals, and exact candidate, then updates the release system. -->
-
-CityCart approves version 43 for a ten-percent city-only canary. The decision names the model and image digests, traffic scope, monitoring window, stop signals, rollback target, and on-call owners. Rural traffic remains on version 42.
-
-The deployment pipeline reads this decision before promotion. It cannot send version 43 to broader traffic because the approved scope is encoded in the release configuration. If the model team creates version 44, it needs another review.
-
-Enforcement should fail closed for production influence. If the decision record is missing, expired, refers to another digest, or grants only shadow authority, the promotion job stops. This keeps release authority in the same system that applies traffic rather than relying on a reviewer to notice drift after deployment.
-
-During the canary, a segment alert or user-impact signal can stop the release without waiting for another committee meeting. Operations has authority to return traffic to version 42. Product and ML review the evidence before any later expansion.
-
-Approval also has an expiry. If CityCart waits months while data, features, or serving dependencies change, the old decision no longer describes the environment. The team reruns the evidence rather than treating approval as permanent.
-
-The decision record should support a small state machine: `blocked`, `approved_shadow`, `approved_canary`, `approved_limited_scope`, `approved_full`, `expired`, and `revoked`. Promotion moves only to the state that reviewers granted. A later traffic increase is another decision because label volume, queue capacity, tail latency, and user exposure all change with scale. Revocation gives operations a durable way to stop authority after an incident even when the artifact remains registered.
-
-CityCart stores the result as a signed, immutable decision. The `p95_latency_ms` condition refers to 95th-percentile latency: 95 percent of requests complete in that time or less.
+The following compact decision record describes one active canary. It assumes all referenced evidence has already been reviewed. A deployment request can use it to verify the model and image digests, English web-ticket route, five-percent cap, stop policy, and rollback target.
 
 ```yaml
-decision_id: DEC-2026-0714-43
-release_id: delivery-eta-43-city-canary
-state: approved_limited_scope
+decision_id: support-priority-candidate-17-canary
+state: active
 subject:
-  model_sha256: 8b6d...
-  image: ghcr.io/citycart/delivery-eta@sha256:bd71...
-  policy_sha256: 199a...
-evidence:
-  evaluation_uri: s3://ml-evidence/delivery-eta/43/report.json
-  evaluation_sha256: 3f82...
-scope:
-  geography_type: city
-  traffic_percent_max: 10
-stop_conditions:
-  - metric: p95_latency_ms
-    operator: ">"
-    value: 75
-    window: 10m
-  - metric: prediction_error_rate
-    operator: ">"
-    value: 0.005
-    window: 10m
-  - metric: mature_mae_minutes
-    operator: ">"
-    value: 6.10
-    minimum_mature_labels: 5000
-rollback_release: delivery-eta-42-prod
-approvals:
-  ml: {owner: ml-release, approved_at: 2026-07-14T09:18:00Z}
-  product: {owner: delivery-product, approved_at: 2026-07-14T09:24:00Z}
-  operations: {owner: serving-oncall, approved_at: 2026-07-14T09:31:00Z}
-expires_at: 2026-07-21T09:31:00Z
-signature_bundle: s3://ml-decisions/DEC-2026-0714-43.sigstore.json
+  model_version: "17"
+  model_sha256: "4b1f..."
+  image_digest: "sha256:91cd..."
+  policy_sha256: "128a..."
+authority:
+  kind: canary
+  population: english_web_tickets
+  traffic_percent_max: 5
+stop_policy: support-priority-canary-v3
+rollback_release: support-priority-production-16
+expires_after: 7d
 ```
 
-The deployment job verifies the signature, release ID, subject and evidence digests, current time, requested traffic, and geography selector. Each stop condition now states its comparison direction and evidence window; the mature-label gate cannot fire from an unstable handful of outcomes. The job records the decision ID in the deployment and prediction events. When latency breaches the stop condition, operations can revoke `DEC-2026-0714-43`; the controller returns city traffic to version 42 and verifies new events report the rollback release.
+This record grants a capability, not a description. It authorizes one action inside fixed boundaries. A full-traffic request, another population, or a different digest must receive a denial.
+
+### Use policy as code if several pipelines share the rule
+
+A small team can implement the checks in a reviewed deployment script with tests. As platforms grow, Open Policy Agent (OPA) offers a common policy decision point. The deployment pipeline remains the enforcement point: it supplies structured input, asks OPA for a decision, and obeys the result.
+
+The next rule assumes a trusted release service has already checked the decision's expiry and set its state. The input contains the active decision plus the release action requested by the deployment job. Matching canary authority, model digest, population, and traffic cap return `true`; a broader or mismatched request returns `false`.
+
+```rego
+package ml.release
+
+import rego.v1
+
+default allow := false
+
+allow if {
+    input.decision.state == "active"
+    input.request.authority == input.decision.authority.kind
+    input.request.model_sha256 == input.decision.subject.model_sha256
+    input.request.population == input.decision.authority.population
+    input.request.traffic_percent <= input.decision.authority.traffic_percent_max
+}
+```
+
+OPA separates policy decision from policy enforcement. It does not deploy a model, verify a dashboard, or operate rollback. The CI/CD or serving platform performs those actions and records the result.
+
+Provider-native status can participate in the same path. A SageMaker AI model package can remain `PendingManualApproval` until review and move to `Approved` before configured CI/CD deploys it. MLflow tags can expose review state to automation. Those flags are useful discovery and trigger mechanisms. A full gate still verifies the exact subject, scope, expiry, and live deployment.
 
 ![Approval lifecycle from proposal and checks through active authority, expiry, revocation, and reassessment](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-lifecycle.png)
 
-*Registration records that a model exists, approval grants scoped authority, and deployment applies that authority until it expires, changes, or is revoked.*
+*Registration records an artifact, approval grants scoped authority, deployment applies it, and verification keeps that authority tied to the running release.*
 
-## What the Gate Added
+## Keep Approval Current Through Verification, Expiry, and Audit
+<!-- section-summary: Active approval remains valid only while deployment identity, traffic scope, evidence assumptions, monitoring, and accountable ownership continue to hold. -->
 
-<!-- section-summary: The gate connected model quality to product scope, serving compatibility, observability, recovery, and named ownership. -->
+The deployment job should verify the result it created. It checks that the endpoint or batch job is running the approved model, image, feature, and policy versions. It confirms the traffic percentage and population route. Prediction events should carry the decision ID and safe release identity so monitoring can separate candidate and control.
 
-Version 43 arrived with a good overall result, while the approval process found a meaningful rural regression. CityCart narrowed the canary to a scope it could enforce and monitor. It verified the serving contract, prediction identity, fallback, and rollback before users received traffic.
+The first production checks use immediate evidence: schema failures, feature coverage, latency, error rate, saturation, fallback use, decision rates, and route leakage. Outcome quality arrives according to the label-maturity policy. A stop condition should name the metric, direction, window, minimum evidence, and recovery action.
 
-That is the purpose of an approval gate. It turns evaluation into a controlled release decision and makes sure the exact system entering production has evidence, operational support, and accountable owners.
+If a stop condition fires, operations needs authority to revoke the decision and restore the retained release without waiting for another review meeting. Verification follows the data path: send a new request or inspect a new batch output, then confirm that the production identity has returned. The incident record preserves why authority was revoked.
+
+### Expiry forces stale evidence back into review
+
+Some evidence ages quickly. Recent-traffic comparisons lose relevance after a major product change. Capacity tests can become stale after a serving-image update. Privacy assessments can depend on a supplier or data use that later changes.
+
+An approval therefore needs an expiry rule. It might be a fixed duration, the arrival of enough mature labels, a model or policy change, a dependency change, or the end of a canary stage. Expiry removes authority; it does not delete the model or its history.
+
+Expansion also requires a new decision. Raising traffic changes capacity, label volume, queue pressure, cost, and exposure. The team can reuse valid evidence while adding the proof required by the larger scope.
+
+### Audit records connect intent to production state
+
+The audit trail should preserve:
+
+- the proposal and exact subject identity;
+- evidence and policy versions;
+- each automated result, including unknowns and errors;
+- reviewer identity, role, decision, and rationale;
+- exceptions, compensating controls, and expiry;
+- the enforced deployment request and result;
+- activation, verification, expansion, revocation, rollback, and expiry events.
+
+Access controls should prevent the release writer from silently changing the approval record or policy. Retention should match incident, governance, and legal needs. Sensitive evaluation rows remain in governed data storage; the decision can reference them without copying private payloads into a broad release log.
+
+The resulting lifecycle is inspectable from both directions. A production prediction can lead back to the decision that authorized its release. A decision can lead forward to the deployment, traffic, monitoring, and eventual expiry or revocation that followed.
+
+## The Main Idea
+<!-- section-summary: A reliable approval gate binds one exact ML release to evidence, accountable authority, enforceable scope, live verification, and a recorded lifecycle. -->
+
+An approval gate gives evidence operational force. It identifies the complete release and intended use, asks for evidence that fits the risk, repeats objective checks, and gives residual decisions to the people who own them.
+
+Passed, failed, and unknown evidence remain distinct. A defer outcome creates time or work for missing proof. Exceptions stay narrow and temporary. The deployment boundary enforces the granted scope, and production verification confirms that the approved system is the one receiving traffic.
+
+Approval remains a living control. It can expand after new evidence, expire as assumptions age, or be revoked after a stop condition. The audit trail connects every state to the people, evidence, policy, and production action that created it.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
-- [MLflow model signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [Google SRE: Canarying releases](https://sre.google/workbook/canarying-releases/)
+- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
+- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [Amazon SageMaker AI: Update model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
+- [Amazon SageMaker AI: Canary traffic shifting](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails-blue-green-canary.html)
+- [Azure Machine Learning: Progressive rollout of MLflow models to online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-deploy-mlflow-models-online-progressive?view=azureml-api-2)
+- [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
+- [Open Policy Agent: CI/CD policy enforcement](https://www.openpolicyagent.org/docs/cicd)
+- [Open Policy Agent: Deployment patterns](https://www.openpolicyagent.org/docs/deploy)
+- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)

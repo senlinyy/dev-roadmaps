@@ -7,6 +7,20 @@ order: 4
 id: "article-mlops-model-serving-inference-optimization-accuracy-gates"
 ---
 
+## Table of Contents
+
+1. [Optimization Starts With A Constraint And A Bottleneck](#optimization-starts-with-a-constraint-and-a-bottleneck)
+2. [Profile The End-To-End Request Path](#profile-the-end-to-end-request-path)
+3. [Optimization Layers Solve Different Problems](#optimization-layers-solve-different-problems)
+4. [Export Is A Compatibility And Numerical Change](#export-is-a-compatibility-and-numerical-change)
+5. [Execution Providers Need Fallback Evidence](#execution-providers-need-fallback-evidence)
+6. [Quantization Trades Numerical Range For Efficiency](#quantization-trades-numerical-range-for-efficiency)
+7. [Benchmark A Matrix Under Representative Load](#benchmark-a-matrix-under-representative-load)
+8. [Quality Gates Operate At Three Levels](#quality-gates-operate-at-three-levels)
+9. [Progressive Release Preserves The Baseline](#progressive-release-preserves-the-baseline)
+10. [Optimization Is A Controlled Experiment On The Runtime](#optimization-is-a-controlled-experiment-on-the-runtime)
+11. [References](#references)
+
 ## Optimization Starts With A Constraint And A Bottleneck
 <!-- section-summary: Inference optimization improves a measured latency, throughput, memory, or cost constraint while preserving required quality. -->
 

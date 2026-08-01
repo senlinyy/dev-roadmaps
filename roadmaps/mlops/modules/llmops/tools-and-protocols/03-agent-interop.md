@@ -7,209 +7,334 @@ order: 3
 id: "article-mlops-llmops-agent-interop"
 ---
 
-Agents can collaborate without sharing the same model, framework, tools, or memory. What they need is a contract for transferring work. That contract must preserve the goal, evidence, state, authority, and outcome across the boundary.
+## Table of Contents
 
-**Agent interoperability** is the ability of independently implemented agent systems to discover capabilities and exchange tasks, messages, status, and artifacts without exposing their internal reasoning or implementation. Inside one application, a framework handoff or graph may be enough. Across teams, vendors, or trust domains, a network protocol such as Agent2Agent (A2A) can replace a collection of one-off adapters.
+1. [See a Complete Remote Handoff First](#see-a-complete-remote-handoff-first)
+2. [Choose the Boundary Before the Protocol](#choose-the-boundary-before-the-protocol)
+3. [Build Interoperability Around Four Stages](#build-interoperability-around-four-stages)
+4. [Discover Capabilities, Then Establish Trust](#discover-capabilities-then-establish-trust)
+5. [Messages, Tasks, and Artifacts Describe Different Parts of the Work](#messages-tasks-and-artifacts-describe-different-parts-of-the-work)
+6. [Use the Task Lifecycle to Coordinate Long-Running Work](#use-the-task-lifecycle-to-coordinate-long-running-work)
+7. [Carry the Business Meaning in a Handoff Packet](#carry-the-business-meaning-in-a-handoff-packet)
+8. [Separate Service Identity From Delegated Authority](#separate-service-identity-from-delegated-authority)
+9. [Preserve Trace and Audit Continuity](#preserve-trace-and-audit-continuity)
+10. [Plan for Change, Failure, and Recovery](#plan-for-change-failure-and-recovery)
+11. [Evaluate the Complete Collaboration](#evaluate-the-complete-collaboration)
+12. [References](#references)
 
-## Choose The Boundary Before The Protocol
-<!-- section-summary: Local orchestration, service APIs, MCP, and A2A solve different boundaries; the smallest boundary that preserves ownership is usually the clearest. -->
+At a high level, **agent interoperability** is the ability of one agent system to give meaningful work to another agent system. The two systems may use different models, frameworks, memory stores, and tools. They can still collaborate if they agree on how to describe the work, exchange evidence, report progress, return results, and prove who was allowed to do what.
 
-Use BrightDesk, a SaaS support company. A Research Agent investigates a reported CSV duplication issue. A Ticket Agent drafts an engineering ticket. A Review Agent checks customer-data policy before creation.
+This matters once an agent crosses an ownership boundary. Calling a helper inside one application is ordinary software orchestration. Asking a separately deployed agent, perhaps owned by another team or vendor, to accept a task creates a distributed-system boundary. The caller no longer controls the remote runtime. The remote team can change how the agent reasons and which tools it uses. It can also change retry behaviour and stored state independently, so the interaction needs a dependable contract.
 
-If all three run inside one application, share one release cadence, and use the same state store, ordinary orchestration is enough. The coordinator can call specialists as tools or transfer active control through a framework handoff. A wire protocol adds little.
+Agent2Agent, usually shortened to **A2A**, is an open protocol for this remote-agent boundary. It gives independently implemented agents a shared language for capability discovery, messages, durable tasks, progress updates, and artifacts. A2A supplies the communication model. Product teams still define the business meaning, security policy, acceptance criteria, and recovery rules around it.
 
-If Ticket Agent is operated by another team as an independent service, a typed service API may fit when the operation is stable: `draft_ticket(evidence_packet)`. A2A fits when the remote system is intentionally agent-like: it advertises several skills, may ask for more input, performs long-running work, produces multiple artifacts, and can evolve independently.
+## See a Complete Remote Handoff First
 
-```mermaid
-flowchart TB
-    Q{"Where is the collaborator?"}
-    Q -->|Same process and trust domain| L["Framework handoff, graph, or agent-as-tool"]
-    Q -->|Separate service, stable business operation| S["Typed service API or queue contract"]
-    Q -->|Independent agent with dynamic tasks| A["A2A protocol"]
-    Q -->|Host needs tools, resources, or prompts| M["MCP"]
-    L --> B["Business handoff contract"]
-    S --> B
-    A --> B
-    M --> T["Tool or context contract"]
-```
+<!-- section-summary: A complete remote handoff moves from trusted discovery to an accepted task, clarification, a validated artifact, and a locally controlled action. -->
 
-A2A and MCP are complementary. MCP connects a host to capabilities such as tools and resources. A2A connects a client agent to another agent that owns how work is performed. A remote A2A agent may use MCP internally; the caller does not need to see that tool topology.
+Consider a procurement workflow that must review a supplier before onboarding can continue. A local coordinator has the supplier questionnaire, security evidence, and the organization's risk policy. A separate compliance agent specializes in reviewing these packages. The compliance service has its own deployment, models, tools, and operating team.
 
-The protocol choice does not define who may create a ticket, which customer data may cross the boundary, or what evidence makes the ticket acceptable. Those remain business and security contracts.
+The coordinator first discovers what the compliance agent claims to support. It checks the service identity, chooses a compatible interface, and confirms that policy permits the evidence to leave the local system. It then sends a structured request containing the review objective, evidence references, constraints, and the expected report format.
 
-## Interop Has A Control Plane And A Work Plane
-<!-- section-summary: Capability discovery and negotiation establish how agents can interact; messages, tasks, status, and artifacts carry the actual work. -->
+The remote agent accepts the work as a durable task. During its review, it discovers that the supplier's operating jurisdiction is missing. Instead of guessing, it changes the task state to `input required` and explains which fact it needs. The coordinator retrieves that fact from an approved source and resumes the same task. The compliance agent eventually returns a structured risk report as an artifact.
 
-Think about the boundary in two planes.
-
-The **control plane** answers: Which agent is this? What capabilities and interaction modes does it advertise? Which protocol and interface versions does it support? How is it authenticated? What policy allows this caller to use it?
-
-The **work plane** answers: What task is being attempted? Which messages and artifacts belong to it? Is it running, waiting for input, completed, failed, rejected, or cancelled? How does the caller resume, stream, or retrieve it?
-
-A2A 1.0 supplies a common model for these concerns. An Agent Card advertises an agent and its capabilities. Messages carry content between participants. A task represents work whose lifecycle may outlive one request. Artifacts are task outputs. The protocol supports multiple bindings and version negotiation so independently released agents can interoperate.
+The coordinator validates the report schema, checks that every high-risk conclusion cites evidence, and confirms that the task reached a successful terminal state. A human reviewer then decides whether onboarding may continue. The remote agent prepared a recommendation; the system that owns the procurement policy kept control of the final action.
 
 ```mermaid
 sequenceDiagram
-    participant C as Client agent
-    participant D as Discovery and identity
-    participant R as Remote agent
-    C->>D: Resolve trusted Agent Card
-    D-->>C: Capabilities, interfaces, security, version
-    C->>R: Authenticated message with task context
-    R-->>C: Task accepted and current status
-    R-->>C: Status or artifact updates
-    alt More information required
-        R-->>C: Input required
-        C->>R: Additional approved evidence
-    end
-    R-->>C: Completed, failed, rejected, or cancelled
+    participant C as Local coordinator
+    participant D as Trusted discovery
+    participant R as Remote compliance agent
+    participant H as Human reviewer
+    C->>D: Find capability and compatible interface
+    D-->>C: Verified service details
+    C->>R: Send objective, evidence, and constraints
+    R-->>C: Task accepted
+    R-->>C: Input required: operating jurisdiction
+    C->>R: Send approved missing evidence
+    R-->>C: Completed task with risk-report artifact
+    C->>C: Validate schema, citations, and status
+    C->>H: Present recommendation for decision
 ```
 
-Discovery information is not automatically trustworthy because it is formatted as an Agent Card. Fetch it from an authenticated location, validate allowed domains and certificates, bind it to service identity, and apply local allowlists. Capabilities are claims that still need authorization and evaluation.
+This interaction contains the whole subject in miniature. Discovery answers who can do the work. The handoff packet explains what the work means. The task records its lifecycle. Messages carry questions and answers. The artifact contains the deliverable. Identity and authorization control access. Validation and human review protect the final decision.
 
-## Discovery Supplies Candidates, While Policy Selects a Collaborator
+## Choose the Boundary Before the Protocol
 
-<!-- section-summary: Agent Cards advertise capabilities and interfaces, while the calling organization decides trust, eligibility, fit, and allowed delegation. -->
+<!-- section-summary: Local orchestration, workflow engines, typed APIs, MCP, and A2A address different collaboration boundaries. -->
 
-An **Agent Card** is discovery metadata. It can describe the provider, supported interfaces, capabilities, skills, security schemes, and other connection details. This lets a client learn how to communicate without hard-coding every field for every agent. It should be read as a service claim that the caller verifies, rather than a recommendation to delegate work.
+Teams sometimes reach for an agent protocol as soon as two agents appear in an architecture diagram. The better starting question is simpler: **who owns each component, and what kind of interaction crosses the boundary?**
 
-A collaborator-selection policy can use four gates:
+### Inside one ownership boundary
 
-1. **Trust:** Is the card resolved from an approved location, associated with the expected provider, fresh enough, and valid under the organization’s signature or service-identity policy?
-2. **Compatibility:** Does the client support one advertised protocol binding, version, extension set, content type, streaming mode, and authentication scheme?
-3. **Capability:** Does an advertised skill match the task and required artifact, and has evaluation shown that the agent performs that capability reliably?
-4. **Authority:** May this caller share the required evidence and ask this remote service to perform the proposed work?
+For two agents inside one application, an in-process handoff, graph, or agent-as-tool pattern usually gives the developer enough control. The same team owns the state, deployment, observability, and failure policy. Frameworks such as LangGraph can make branching, pausing, and durable state explicit inside that application.
 
-These gates lead to a selected **agent interface**, which is the concrete endpoint and protocol binding used for the task. A service may advertise JSON-RPC, HTTP with JSON, or gRPC interfaces. The client chooses one it supports and records the choice. Switching bindings should preserve the protocol’s business semantics, while transport-specific performance and failure behaviour may still differ.
+A workflow engine addresses a different problem. Temporal, Airflow, Dagster, and managed workflow services help an application persist steps, schedule work, retry failures, and resume after interruption. They coordinate work that the application already understands. A workflow engine may call remote agents, yet it does not define a standard language through which unrelated agents advertise capabilities or exchange task artifacts.
+
+### Across a service boundary
+
+A typed API or queue contract fits a stable business operation. If another service exposes `calculate_shipping_quote(request)` and always returns the same response shape, agent discovery and a conversational task lifecycle add little value. Ordinary service contracts give tests a fixed request, response, and error model.
+
+**Model Context Protocol (MCP)** connects an AI host to tools, resources, and prompts. An agent can use an MCP server to query a catalog, read a document, or invoke an approved action. The host remains responsible for the larger task and decides how those capabilities are used.
+
+**A2A** fits an independent agent that accepts ownership of a goal. The remote agent may plan several steps, ask for clarification, work asynchronously, and return one or more artifacts. Its internal tools can remain private. In fact, an A2A agent may use MCP servers inside its own runtime.
+
+```mermaid
+flowchart TD
+    A{"What crosses the boundary?"}
+    A -->|"Helper inside one agent application"| B["Framework handoff or graph"]
+    A -->|"Durable execution of known steps"| C["Workflow engine"]
+    A -->|"Stable request and response operation"| D["Typed API or queue"]
+    A -->|"Tool, resource, or prompt access"| E["MCP"]
+    A -->|"Goal owned by an independent agent"| F["A2A"]
+```
+
+The procurement example needs A2A only if the compliance reviewer is truly an independent agent service. If compliance is a fixed policy function, a typed API is clearer. If it is a local specialist inside the coordinator, a framework handoff is enough. Choosing the smallest suitable boundary reduces protocol, security, and operational work.
+
+## Build Interoperability Around Four Stages
+
+<!-- section-summary: A reliable agent boundary establishes trust, transfers meaningful work, observes execution, and validates the returned outcome. -->
+
+A larger operating framework gives every protocol feature a clear purpose. Without one, teams can implement discovery and message exchange yet still lose the goal, send excessive authority, or accept an unusable result. A dependable interaction therefore follows four stages from collaborator selection to outcome validation.
+
+### Establish and transfer
+
+**Establish** identifies a suitable collaborator. The caller discovers the service, verifies its identity, checks protocol compatibility, evaluates the advertised capability, and confirms that local policy permits the connection.
+
+**Transfer** gives the remote agent enough information and authority to own the task. The request needs an objective, evidence, constraints, expected deliverables, and a bounded authorization scope. A vague prompt such as “review this supplier” leaves too much business meaning implicit.
+
+### Observe and validate
+
+**Observe** follows the work through a durable identity. The caller can see whether the task is submitted, running, blocked on input, completed, or failed. It can reconnect after a network interruption without starting the work again.
+
+**Validate** decides whether the result is safe to accept. The caller checks task status, artifact schema, evidence coverage, policy compliance, and approval requirements. Completion means that the remote agent finished its work; acceptance means that the receiving system trusts and can use the result.
 
 ```mermaid
 flowchart LR
-    A[Trusted Agent Card source] --> B[Verify provider and freshness]
-    B --> C[Choose compatible interface and version]
-    C --> D[Match evaluated skill to task]
-    D --> E[Authorize data and delegation scope]
-    E --> F[Create or continue remote task]
-    F --> G[Validate artifacts and outcome]
-    G -. measured evidence .-> D
+    A["Establish<br/>identity, capability, compatibility"] --> B["Transfer<br/>objective, evidence, constraints"]
+    B --> C["Observe<br/>state, questions, progress"]
+    C --> D["Validate<br/>artifact, policy, acceptance"]
+    D -. "evaluation evidence" .-> A
 ```
 
-Cache Agent Cards according to their current protocol guidance and local risk policy. Cache entries need an origin, retrieval time, version or digest, and expiry. A changed card can remove an interface, alter authentication, or revise a skill description. High-impact integrations should review and test those changes before a new card affects routing.
+These stages also reveal ownership. The remote service owns how it performs the accepted task. The caller owns collaborator selection, evidence disclosure, result validation, and any local side effect. Both sides own a clear failure and support contract.
 
-An extended or authenticated Agent Card may expose capabilities intended only for authorized clients. That is useful for private workflows, but it also means discovery itself can reveal sensitive operational information. Fetch it with the appropriate identity, retain it under the right access controls, and disclose only the small skill description needed for coordinator selection.
+## Discover Capabilities, Then Establish Trust
 
-Capability evaluation belongs beside discovery. If the remote service advertises `draft_engineering_ticket`, maintain contract cases for evidence preservation, forbidden customer data, artifact schema, clarification, timeout, and cancellation. A valid signed card proves who published the claim; it cannot prove that the implementation currently meets the claim. Production outcome and compatibility evidence close that gap.
+<!-- section-summary: An A2A Agent Card advertises how to reach an agent and what it claims to do; local policy decides whether the caller may rely on that claim. -->
 
-## A Task Is A Durable Conversation About Work
-<!-- section-summary: A remote task gives long-running work a stable identity and state, while messages exchange information and artifacts carry outputs. -->
+An **Agent Card** is the A2A discovery document. You can think of it as a machine-readable service profile. It describes the agent, the organization providing it, the skills it advertises, its security schemes, and the interfaces through which clients can communicate.
 
-A synchronous tool call usually returns one result or error. Agent work may take minutes, wait for a reviewer, stream intermediate artifacts, or require clarification. A task makes that lifecycle explicit.
+### What the card describes
 
-The application should map remote states into its own durable state rather than letting a UI infer progress from text. At minimum, distinguish queued or submitted, working, input required, completed, failed, rejected, and cancelled according to the current binding and business needs. Terminal states should not silently return to working under the same identity.
+A public service can publish a card at `/.well-known/agent-card.json`. Enterprises can also use a curated registry or direct private configuration. A registry is often a better fit for internal services because platform teams can approve entries, attach ownership information, and remove an integration centrally.
 
-Messages are conversation units, not necessarily completed work. An agent can respond with a direct message for a simple interaction or create/update a task for longer work. Artifacts are named outputs such as a ticket draft, evidence bundle, report, or generated file. Keep artifacts addressable and versioned so the caller can validate and store them without scraping prose.
+In A2A 1.0, a card can advertise several supported interfaces. Each interface identifies an endpoint, a protocol binding, and a protocol version. Current standard bindings include JSON-RPC, HTTP with JSON, and gRPC. A client selects a combination it supports. The business meaning of a task should remain consistent across bindings even though streaming, performance, and transport failures differ.
 
-The remote task ID and local workflow ID need a durable mapping. Also retain caller request ID, trace context, user or service subject, agent identity/version, and protocol version. If a network call times out after the remote agent accepted work, query or reconcile by that identity before submitting again.
+### What the caller must verify
 
-## The Business Handoff Packet Remains Essential
-<!-- section-summary: The protocol transports work, while a typed business packet defines the objective, evidence, constraints, permissions, and acceptance criteria the receiving agent needs. -->
+Reading a card completes only the first half of discovery. The caller still needs to answer:
 
-The Research Agent should not hand Ticket Agent a paragraph and hope it infers the important parts. BrightDesk defines one application-level packet:
+- Did the card come from an approved origin and the expected service identity?
+- Is at least one advertised interface compatible with the client?
+- Does an advertised skill match the required input and artifact?
+- Has the service passed the organization's reliability and safety evaluations?
+- May this caller disclose the required evidence and request this capability?
+
+A signed Agent Card can help detect tampering and bind the document to its publisher. It still represents a capability claim. For example, a signed statement that an agent produces evidence-backed risk reports proves who made the statement. Contract tests and production outcome data show whether the service fulfils it.
+
+Card updates deserve the same care as API changes. Cache them with normal HTTP controls such as expiry and `ETag`, retain the origin and digest, and re-run compatibility checks after high-impact changes. An authenticated extended card can reveal private capabilities to approved callers, which keeps sensitive skills out of public discovery.
+
+## Messages, Tasks, and Artifacts Describe Different Parts of the Work
+
+<!-- section-summary: Messages carry communication, Parts hold typed content, Tasks give work a durable identity, and Artifacts represent deliverables. -->
+
+A2A uses several objects because a conversation and a piece of work are not the same thing. Understanding their roles prevents a common design mistake: placing every question, status update, and result inside one unstructured text field.
+
+### Messages and Parts carry communication
+
+A **Message** is one turn of communication from the client or remote agent. The first message might request the supplier review. A later message can provide the missing jurisdiction. A remote message can explain why a task was rejected.
+
+Each message contains one or more **Parts**. A Part holds a specific kind of content, such as text, structured JSON data, raw bytes, or a URL, together with useful metadata such as a media type or filename. In the review request, one text Part can explain the objective while a structured-data Part carries the policy constraints. Evidence can travel as governed references instead of copied documents.
+
+### Tasks and Artifacts carry durable work
+
+A **Task** represents durable work. The server creates its identity and records its status, history, and artifacts. A `contextId` can group related tasks and messages into one broader interaction. If a completed report later needs a new regional assessment, the client creates a new task in the same context and refers to the earlier artifact. Terminal tasks stay terminal, preserving an unambiguous history of what finished and what came next.
+
+An **Artifact** is a concrete output produced by the task. The compliance agent's report should be an artifact with its own identity, content type, and schema version. A short conversational acknowledgement can remain a message. Giving deliverables stable artifact identities lets the caller validate, store, compare, and audit them without extracting data from prose.
+
+A2A `SendMessage` can return a direct message for a simple stateless exchange or a task for stateful work. That flexibility is useful, but clients should define which response shapes they accept for each capability. A production review workflow should not silently accept a friendly text response where a validated report artifact is required.
+
+## Use the Task Lifecycle to Coordinate Long-Running Work
+
+<!-- section-summary: Explicit task states let callers distinguish active work, missing input, successful completion, rejection, failure, and cancellation. -->
+
+Agent work often lasts longer than one HTTP request. It may wait for a human, call slow tools, or need information that the initial request omitted. A durable task lets the caller disconnect and return without losing the identity of the work.
+
+### State transitions guide the caller
+
+A typical task moves from `submitted` to `working`. The remote agent can enter `input required` if it needs more information or `auth required` if a fresh authorization step is necessary. Successful work reaches `completed`. Invalid or disallowed work can be `rejected`; execution problems can lead to `failed`; accepted cancellation can lead to `canceled`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Submitted
+    Submitted --> Working
+    Submitted --> Rejected
+    Submitted --> Canceled
+    Working --> InputRequired
+    InputRequired --> Working
+    Working --> AuthRequired
+    AuthRequired --> Working
+    Working --> Completed
+    Working --> Failed
+    Working --> Canceled
+```
+
+The state names matter because they lead to different actions. `Input required` invites the caller to inspect the request, authorize the missing evidence, and continue the same task. `Rejected` indicates that the service refused the work, perhaps because the capability or policy did not allow it. `Failed` means execution began but could not finish. Treating all three as generic errors would produce poor retries and confusing user messages.
+
+### Update delivery can change without changing the task
+
+A2A offers several ways to receive updates. **Polling** with `GetTask` is suitable for short or low-volume background work. The client asks for current state at a controlled interval. **Streaming** uses server-sent events for interactive progress and artifacts, and a client can subscribe again after a connection breaks. **Push notifications** suit long-running server-to-server work where the caller may be offline, provided the webhook endpoint authenticates the sender and protects against replay.
+
+Choose one primary delivery mode per use case and keep reconciliation available. A lost stream must not imply a lost task. The client stores the task ID, reconnects or calls `GetTask`, and continues from durable server state.
+
+Cancellation also needs precise expectations. A cancellation request asks the remote agent to stop future work. It cannot reverse an email, database change, or external approval that already happened. High-impact side effects therefore need their own idempotency keys, status records, and compensation procedures.
+
+## Carry the Business Meaning in a Handoff Packet
+
+<!-- section-summary: A2A transports the interaction, while an application-level packet defines the objective, evidence, constraints, acceptance criteria, and continuity data. -->
+
+The protocol can tell the remote agent that a message belongs to a task, yet it cannot know what an acceptable supplier review looks like for your organization. That meaning belongs in a versioned **business handoff packet**.
+
+### The packet answers five practical questions
+
+The packet should answer five practical questions. What outcome is requested? Which evidence may the receiver use? Which rules and limits apply? What must the artifact contain? How can both systems correlate this task with the surrounding workflow?
 
 ```json
 {
-  "handoff_version": "support-to-engineering-3",
-  "task": {
-    "objective": "Draft an engineering ticket for duplicated CSV export rows",
-    "acceptance": ["reproduction conditions", "observed impact", "evidence links", "owner suggestion"]
-  },
+  "handoff_version": "supplier-review.v2",
+  "objective": "Assess the supplied onboarding evidence and produce a risk report",
   "evidence": [
-    {"id": "deploy-2026-0715", "kind": "release-note", "trust": "internal-reviewed"},
-    {"id": "trace-88c1", "kind": "support-trace", "trust": "customer-reported"}
+    {
+      "reference": "governed://supplier-questionnaire/current",
+      "kind": "questionnaire",
+      "provenance": "supplier-submitted"
+    },
+    {
+      "reference": "governed://security-scan/approved-result",
+      "kind": "security-scan",
+      "provenance": "internal-tool"
+    }
   ],
   "constraints": {
-    "customer_pii": "exclude",
-    "allowed_actions": ["draft_ticket"],
-    "requires_human_approval": true
+    "allowed_action": "draft_recommendation",
+    "prohibited_data": ["personal_contact_details"],
+    "policy_version": "supplier-risk.v4"
+  },
+  "acceptance": {
+    "artifact_schema": "supplier-risk-report.v3",
+    "required_sections": ["findings", "evidence_links", "recommended_controls"]
   },
   "continuity": {
-    "local_run_id": "support-run-10421",
-    "traceparent": "00-...",
-    "deadline": "2026-07-16T16:00:00Z"
+    "workflow_id": "workflow-8f31",
+    "request_id": "request-2c19"
   }
 }
 ```
 
-This packet is not an A2A replacement. It can be one structured part inside an A2A message or the payload of an internal API. It defines BrightDesk's semantics while the protocol defines transport and task interaction.
+### Read the example from evidence to acceptance
 
-Include references rather than copying every transcript and log. The receiving agent retrieves only evidence it is authorized to read. Label provenance and trust: customer claims, model inferences, reviewed runbooks, and authoritative deployment records should not appear equivalent.
+The example uses references to governed evidence. This gives the receiving agent a narrow retrieval path and avoids copying sensitive documents into messages, traces, and task history. Provenance distinguishes a supplier's own claim from a finding produced by an approved internal scanner.
 
-Acceptance criteria tell the receiver what “done” means. Constraints name forbidden data and allowed actions. Continuity links traces and deadlines. Versioning lets the receiver reject or adapt an unsupported packet instead of silently misreading a new field.
+Constraints define the authority boundary. The remote agent may draft a recommendation, while the local procurement system retains the onboarding decision. The policy version tells investigators which rules shaped the result. Acceptance criteria turn “produce a good report” into something the caller can validate mechanically and review meaningfully.
 
-## Identity And Delegation Cross The Boundary
-<!-- section-summary: Authentication proves the calling service, authorization limits the requested capability, and delegation preserves which user or workflow authority the agent may exercise. -->
+The handoff packet can be a structured Part inside an A2A message. The same packet could also travel through a typed API or queue, which is why it deserves its own schema and version. Protocol conformance confirms that the systems can communicate. Packet validation confirms that they understand the same business request.
 
-Agent-to-agent calls often contain two identities: the service agent and the user or workflow on whose behalf it acts. Do not replace both with one broad API key.
+## Separate Service Identity From Delegated Authority
 
-Authenticate the service through a supported transport mechanism such as mutually authenticated TLS, OAuth, or workload identity. Authorize capability and resource scope. If user delegation is required, transmit a bounded assertion or token exchange that identifies subject, audience, permissions, purpose, and expiry. The remote agent must not treat user text that says “I am an administrator” as authority.
+<!-- section-summary: The remote service must know which system is calling, whose authority it represents, and exactly which capability and data that authority permits. -->
 
-Separate permission to ask for a draft from permission to create the real ticket. BrightDesk lets remote Ticket Agent produce an artifact; a local reviewed tool performs the external side effect after human approval. This keeps high-impact authority near the system that owns the policy.
+Cross-agent calls often involve two identities. The first is the calling service, such as the procurement coordinator. The second is the user or workflow authority behind the request, such as a reviewer who is permitted to assess one supplier.
 
-Avoid sending provider credentials, internal tool tokens, or the caller's complete permission set. Each agent obtains its own credentials for its tools. The handoff grants the minimum capability needed for the task and expires when the task or approval window ends.
+### Service identity proves who connected
 
-## Preserve Audit And Trace Continuity
-<!-- section-summary: Cross-agent evidence links local and remote spans, messages, artifacts, approvals, and side effects without assuming one vendor owns the complete trace. -->
+Authentication proves the caller's service identity. A2A declares supported security schemes in the Agent Card, while credentials travel through the HTTP transport. Depending on the environment, this may use OAuth, OpenID Connect, mutually authenticated TLS, or cloud workload identity. Business text inside a message never serves as proof of identity.
 
-A trace header can correlate services, but audit evidence needs application identities too. Record local workflow and step, remote agent and version, protocol/interface version, task and message IDs, packet digest, artifact identities, authorization decision, approval, final status, and external side effects.
+### Delegation limits what the caller may request
 
-Do not require a vendor to expose chain-of-thought or private internal memory. Interoperability needs observable inputs, decisions, state transitions, artifacts, and outcomes—not hidden reasoning. The remote agent can retain its internal trace and return a correlation ID under an agreed support and retention policy.
+Delegation answers a different question: what may this service do on behalf of a person or workflow? A safe delegated credential has a narrow audience, short lifetime, explicit scopes, and a clear subject. The compliance agent might receive permission to read two evidence objects and create one draft report. It should not receive the coordinator's broad cloud credentials or the reviewer's complete permission set.
 
-Sensitive content should not be duplicated into every trace system. Store digests, classifications, and controlled evidence links. Preserve enough metadata to answer who sent what task, which agent accepted it, what artifact came back, who approved it, and which system committed the effect.
+Imagine that the remote agent asks for access to an additional financial record. The coordinator checks whether that record is relevant, whether policy allows disclosure to this service, and whether the current delegated token covers it. If approval is missing, the task remains blocked or is rejected. Automatically forwarding the caller's credentials would bypass all three controls.
 
-## Version The Boundary In Layers
-<!-- section-summary: Protocol, binding, Agent Card, capability, business packet, and artifact schemas can evolve independently and need explicit compatibility policy. -->
+Keep final side effects close to the system that owns the policy. The remote compliance agent can recommend “approve with controls.” A local workflow validates the artifact and asks an authorized human or tightly scoped tool to record the decision. This design contains the impact of a compromised or mistaken remote agent.
 
-An interop boundary has several versions:
+## Preserve Trace and Audit Continuity
 
-| Layer | Example change |
-| --- | --- |
-| A2A protocol | semantic model or negotiation rule changes |
-| Transport binding | JSON/HTTP, JSON-RPC, gRPC, or another supported interface |
-| Agent Card and skill | capability or authentication changes |
-| Business handoff packet | new evidence or constraint field |
-| Artifact schema | ticket draft adds a structured risk section |
-| Agent implementation | prompt, model, tools, or workflow changes |
+<!-- section-summary: Trace context connects technical execution across services, while durable application records explain the task, authority, artifacts, approvals, and effects. -->
 
-Negotiate protocol and binding through the current specification. Version business schemas separately. Prefer additive compatible fields, explicit enums, and rejection of unknown critical requirements. Run contract tests between supported client and server versions and keep a compatibility window during staggered releases.
+Distributed tracing and audit records solve related but different problems. A trace helps an engineer follow one request through services and locate latency or failures. An audit record explains the business event: who requested the work, which evidence was shared, what the remote agent returned, and who approved the resulting action.
 
-An agent version update can change behaviour without changing the wire schema. Treat it as a model-system release: run interop evals, shadow or canary traffic, monitor outcomes, and preserve a rollback target.
+### Trace the technical path
 
-## Failure Recovery Follows Ownership
-<!-- section-summary: Timeouts, duplicate submission, input waits, cancellation, partial artifacts, and remote failures need reconciliation based on durable task identity. -->
+W3C Trace Context provides the `traceparent` header used by OpenTelemetry and many observability platforms. Propagating it across the A2A call lets local and remote spans appear in one distributed trace when both sides support that arrangement. The trace ID alone is insufficient for recovery because traces can be sampled or retained for a limited period.
 
-Failures happen before acceptance, after acceptance but before the response, during work, while waiting for input, or after an artifact is produced but before a local side effect. Each point has a different safe action.
+### Record the business event
 
-If submission fails before a task identity exists, a bounded retry may be safe. If the outcome is unknown, query by request or task identity before resubmitting. If input is required, validate that the requested data is allowed and still relevant. Cancellation is a request whose outcome must be observed; it cannot undo a side effect already committed. Partial artifacts need explicit completeness markers and should not be mistaken for final output.
+Store durable application identifiers beside telemetry: the local workflow ID, client request ID, remote task and context IDs, selected agent and interface, handoff-packet digest, artifact IDs and schema versions, authorization decision, final task status, approvals, and external side effects. These records let an operator reconstruct the collaboration even after detailed traces expire.
 
-Set deadlines and retry budgets across the whole chain so each agent does not multiply attempts independently. Use circuit breakers and queues to prevent one unavailable collaborator from exhausting the coordinator. Define a human or local fallback for critical work.
+For example, an engineer investigating a delayed review can use the trace to find a slow document-retrieval span. A governance reviewer examining the same case needs the policy version, evidence references, artifact digest, and human approval record. One shared correlation map connects those two investigations.
 
-Test duplicate messages, reordered status events, expired delegated credentials, unsupported versions, malformed artifacts, lost streaming connections, task cancellation races, and a remote agent that completes after the local deadline.
+Interoperability never requires the remote service to reveal private chain-of-thought or internal memory. Useful operational evidence starts with observable inputs and state transitions. It then connects approved tool or policy decisions to the returned artifacts and final outcome. Sensitive payloads can remain in governed stores while traces retain classifications, digests, and access-controlled references.
 
-## Evaluate The Boundary, Not Just Each Agent
-<!-- section-summary: Interop evals measure capability selection, information preservation, policy enforcement, lifecycle correctness, artifact quality, and end-to-end task outcome. -->
+## Plan for Change, Failure, and Recovery
 
-An individually strong Research Agent and Ticket Agent can still fail together. Evaluate whether the coordinator chooses the correct collaborator, whether the packet preserves required evidence, whether the receiver asks for missing information, whether forbidden data stays excluded, and whether retries create duplicate effects.
+<!-- section-summary: Several independently changing layers and several uncertain failure points require explicit compatibility, reconciliation, idempotency, and rollback policies. -->
 
-Include compatibility matrices, long-running and input-required paths, policy denials, expired authentication, network failures, and adversarial remote content. Measure task completion, artifact validity, evidence coverage, approval correctness, latency, cost, and audit completeness. Conformance tooling can test protocol behaviour; product evals still test BrightDesk's meaning.
+An agent boundary changes at several layers. The A2A protocol and chosen binding may evolve. The Agent Card can advertise new interfaces or authentication. A skill description can change. The business packet and artifact schemas have their own versions. The remote agent's model, prompts, tools, and workflow can change even if every wire schema stays identical.
 
-The durable design is boundary-first. Keep local orchestration local when possible. Use a typed API for stable operations. Use A2A when independent agents need discovery and a shared task model. In every case, carry a versioned business handoff, least authority, durable identity, trace continuity, and a tested failure policy.
+### Version each layer deliberately
+
+Manage those layers separately. Negotiate protocol and interface through the Agent Card. Give business packets and artifacts explicit schema versions. Add optional fields for compatible evolution, reject unknown critical requirements, and run contract tests across every supported client-server pair.
+
+A behavioural agent release needs its own release path. Run task-level evaluations first, then use canary traffic and outcome monitoring. Keep the previous implementation available as a rollback target until the new behaviour is proven.
+
+### Recover from uncertain state
+
+Failure handling begins by asking who owns the durable truth:
+
+- If submission fails before the server creates a task, the caller can retry within a bounded budget.
+- If the network fails after possible acceptance, the caller reconciles through the request or task identity before submitting again.
+- If the task needs input, the caller validates and authorizes that evidence before resuming it.
+- If a stream disconnects, the caller reconnects or polls the existing task.
+- If an artifact fails validation, the caller keeps the external side effect blocked and requests correction through a new task or message allowed by the capability.
+- If the remote service is unavailable, the workflow uses an approved queue, alternate service, or human route.
+
+Retry budgets must cover the complete chain. Five coordinator retries multiplied by five remote retries can create long delays and duplicate work. Idempotency keys protect external actions; deadlines limit stale work; circuit breakers protect an unhealthy dependency; reconciliation jobs find tasks whose local and remote state disagree.
+
+Test the uncomfortable paths before production: duplicate submissions, reordered status updates, expired credentials, unsupported versions, malformed artifacts, cancellation races, and a remote task that completes after the local deadline. These are normal distributed-system conditions, even if every model response is excellent.
+
+## Evaluate the Complete Collaboration
+
+<!-- section-summary: Interop evaluation measures collaborator selection, information preservation, policy enforcement, lifecycle correctness, artifact quality, and the final business outcome. -->
+
+Two capable agents can still collaborate poorly. The coordinator may select the wrong skill, omit essential evidence, disclose restricted data, misread `input required` as failure, or accept a malformed artifact. Agent-level benchmarks will miss these boundary errors.
+
+Build evaluation cases around the four-stage framework. Establishment tests cover trusted discovery, interface compatibility, and correct skill selection. Transfer tests verify that required evidence and constraints survive the handoff. Observation tests exercise long-running work, clarification, reconnect, cancellation, and terminal states. Validation tests check artifact schemas, evidence links, policy decisions, approval gates, and duplicate prevention.
+
+The supplier review provides a useful end-to-end case. Remove the jurisdiction and confirm that the remote agent requests it. Replace the approved scanner result with an untrusted reference and confirm that policy blocks disclosure. Return a report with a missing evidence link and confirm that the coordinator rejects the artifact. Replay the completion event and confirm that onboarding is recorded only once.
+
+Measure protocol conformance and product outcomes separately. Conformance tests show whether messages, tasks, updates, and bindings follow A2A. Product evaluations measure completion rate, artifact validity, evidence coverage, policy violations, human correction rate, latency, cost, and audit completeness.
+
+The main design lesson is boundary ownership. Use local orchestration for collaborators inside one agent system, workflow engines for durable known processes, typed APIs for stable operations, MCP for tool and context access, and A2A for independent agents that own a task. Around every remote-agent call, keep a versioned business packet, bounded authority, durable task identity, traceable evidence, and tested recovery paths.
 
 ## References
 
-- [A2A Protocol 1.0 documentation](https://a2a-protocol.org/v1.0.0/)
 - [A2A Protocol specification](https://a2a-protocol.org/latest/specification/)
+- [A2A key concepts](https://a2a-protocol.org/latest/topics/key-concepts/)
+- [A2A agent discovery](https://a2a-protocol.org/latest/topics/agent-discovery/)
 - [A2A task lifecycle](https://a2a-protocol.org/latest/topics/life-of-a-task/)
+- [A2A streaming and asynchronous operations](https://a2a-protocol.org/latest/topics/streaming-and-async/)
+- [A2A enterprise security guidance](https://a2a-protocol.org/latest/topics/enterprise-ready/)
+- [A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/)
 - [Model Context Protocol specification](https://modelcontextprotocol.io/specification/latest)
-- [OpenAI Agents SDK handoffs](https://openai.github.io/openai-agents-python/handoffs/)
-- [OpenAI Agents SDK orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
-- [LangChain multi-agent patterns](https://docs.langchain.com/oss/python/langchain/multi-agent)
-- [OpenTelemetry trace context](https://www.w3.org/TR/trace-context/)
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/)

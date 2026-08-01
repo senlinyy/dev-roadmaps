@@ -1,463 +1,508 @@
 ---
 title: "Online vs Offline Features"
-description: "Explain feature timing, freshness, and consistency for different serving styles."
-overview: "The previous article defined the feature lifecycle. This article owns the two-path problem: historical retrieval for training, low-latency reads for serving, point-in-time correctness, materialization, parity checks, and skew response."
+description: "Learn how one feature definition supports historical training and low-latency prediction through separate delivery paths."
+overview: "Offline and online feature paths solve different retrieval problems for the same model inputs. This tutorial explains historical reconstruction, low-latency serving, point-in-time correctness, materialization, freshness, synchronization, fallback, ownership, and end-to-end verification."
 tags: ["MLOps", "production", "features"]
 order: 2
 id: "article-mlops-data-for-ml-systems-online-vs-offline-features"
 ---
 
-## Two Paths For The Same Feature
-<!-- section-summary: Online and offline features answer the same model question at different times, so the team needs one meaning and two delivery paths. -->
+## Table of Contents
 
-**Offline features** are feature values built from historical data for training, evaluation, backfills, batch scoring, and audits. **Online features** are feature values available during a live prediction request, usually from a low-latency store, cache, stream processor, or request payload. The short answer is this: offline features help you learn from the past, and online features help your model make a decision right now.
+1. [What Problem Are We Solving?](#what-problem-are-we-solving)
+2. [One Feature Contract, Two Delivery Paths](#one-feature-contract-two-delivery-paths)
+3. [The Offline Path Reconstructs Past Decisions](#the-offline-path-reconstructs-past-decisions)
+4. [The Online Path Serves Current Decisions](#the-online-path-serves-current-decisions)
+5. [Point-In-Time Correctness Protects Training](#point-in-time-correctness-protects-training)
+6. [Materialization Connects The Two Paths](#materialization-connects-the-two-paths)
+7. [Freshness Is Part Of The Feature Value](#freshness-is-part-of-the-feature-value)
+8. [Synchronization Requires More Than Matching Names](#synchronization-requires-more-than-matching-names)
+9. [Request-Time Features Join The Online Vector](#request-time-features-join-the-online-vector)
+10. [Common Failure Modes And Safe Containment](#common-failure-modes-and-safe-containment)
+11. [Verify Historical And Live Retrieval Together](#verify-historical-and-live-retrieval-together)
+12. [Where Industrial Feature Stacks Fit](#where-industrial-feature-stacks-fit)
+13. [Operational Ownership](#operational-ownership)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-Five concerns organize the two-path design. **Feature meaning** defines the entity, calculation, and valid time. **Historical correctness** reconstructs what was knowable for every old prediction moment. **Serving freshness** delivers a current value within the latency budget. **Materialization** moves computed values between systems without changing their meaning. **Parity and recovery** detect divergence and choose a safe fallback. Storage products and feature-store frameworks implement parts of this design; they do not replace it.
+## What Problem Are We Solving?
+<!-- section-summary: Offline and online feature paths give the same model input two delivery methods suited to historical learning and live decisions. -->
 
-The concerns pull in different directions. Offline computation favors large scans and exact historical joins. Online serving favors precomputation, bounded payloads, and fast reads. Reusing a feature name does not guarantee parity if event-time logic, defaults, or update cadence differ. The team therefore needs one semantic contract and explicit delivery policies for both paths.
+Suppose a payment-risk model uses `failed_attempts_10m`, the number of failed payment attempts for one account during the previous ten minutes.
 
-```mermaid
-flowchart LR
-    Definition["Shared feature definition and time semantics"] --> Offline["Offline historical computation"]
-    Definition --> Materialize["Streaming or batch materialization"]
-    Offline --> Training["Point-in-time training and evaluation"]
-    Materialize --> Online["Low-latency online store or service"]
-    Online --> Serving["Live prediction"]
-    Training --> Compare["Parity samples"]
-    Serving --> Compare
-    Compare --> Response["Repair, fallback, or version change"]
-```
+During training, the team has millions of old payment decisions. For each decision, it needs the count that was available at that historical moment. Reading today's count would give every old row future information.
 
-One definition feeds two delivery paths. Offline retrieval reconstructs past values, while materialization prepares recent values for serving. Parity checks compare matching entities and timestamps across the paths. A mismatch triggers an owned response before it quietly changes model behaviour.
+During production, the service receives one payment request and needs the newest count in a few milliseconds. Running a large warehouse query for each request would make checkout slow and fragile.
 
-A food delivery ETA model makes the timing problem concrete. The product is called BentoNow. A customer opens the app, chooses a restaurant, and asks for an estimated delivery time before placing the order. The model needs the restaurant's recent prep speed, nearby courier availability, current distance, order volume, and maybe weather. The same ideas show up in fraud scoring, marketplace ranking, ad ranking, rideshare dispatch, and support routing. The exact columns change, while the timing problem stays the same.
+This is the actual online-versus-offline decision. The model needs one feature meaning through two retrieval paths:
 
-During training, you have a warehouse table with millions of old orders. For each old order, you need the restaurant prep feature as it was known before that order was created. You also need the courier supply feature as it was known at that time. That is the offline path. During live serving, the API has one current order candidate and needs the latest feature values in a few milliseconds. That is the online path.
+- The **offline path** reconstructs historical feature values for training, evaluation, batch inference, backfills, and investigations.
+- The **online path** retrieves recent feature values for synchronous prediction under a strict latency budget.
 
-The important lesson is that online and offline describe **where and when the model receives feature values**. They do not describe two separate meanings. If `restaurant_avg_prep_minutes_30m` means one thing in training and a slightly different thing during serving, the model learns from one reality and serves in another. That gap is called **training-serving skew**, and it can make a good offline model behave strangely in production.
+An offline store usually keeps history and supports large scans. An online store usually keeps the latest value, or a small recent window, under each entity key. The online path may use Redis, DynamoDB, Cassandra, Bigtable, a managed feature store, or another low-latency database.
 
-![Online and offline delivery paths sharing one feature contract and the same feature names](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/online-offline-delivery-paths.png)
+Many ML systems need only the offline path. Batch forecasts, periodic customer scores, and models whose inputs arrive entirely inside the request may never need a separate online store. The second path earns its cost when live predictions depend on shared features that are too expensive or too slow to calculate during the request.
 
-*Online and offline paths can use different storage and timing, but the feature contract keeps the meaning and names aligned.*
+## One Feature Contract, Two Delivery Paths
+<!-- section-summary: A shared contract fixes feature meaning while each delivery path receives its own time, latency, freshness, and fallback policy. -->
 
-## The Feature Timing Map
-<!-- section-summary: The feature timing map names each feature, its owner, where it is computed, where it is stored, and how fresh it must be. -->
+The two paths begin with one semantic contract. In practical terms, the contract is the shared agreement that gives a feature the same meaning in training and production. It defines the feature independently of the storage product used to deliver it.
 
-Before writing SQL or adding a feature store, the team should write down what each feature means. This sounds small, yet it saves a lot of debugging later. A model feature is an input column used by the model, and a production feature also needs an owner, an entity key, an event time, a freshness target, and a fallback plan.
-
-For BentoNow, the ETA model uses both slow historical signals and fast request-time signals. Restaurant prep time changes throughout the day, courier supply changes minute by minute, and the straight-line distance from courier to restaurant comes from the current dispatch request. Those signals belong together in one model, yet they arrive through different systems.
-
-| Feature | Entity key | Offline source | Online source | Freshness target | Owner |
-|---|---|---|---|---|---|
-| `restaurant_avg_prep_minutes_30m` | `restaurant_id` | Warehouse order events | Redis or feature online store | Under 5 minutes | Delivery data team |
-| `restaurant_late_order_rate_7d` | `restaurant_id` | Warehouse order outcomes | Daily materialized value | Under 24 hours | Delivery data team |
-| `zone_open_couriers_5m` | `zone_id` | Courier status history | Stream processor output | Under 60 seconds | Dispatch platform |
-| `route_distance_meters` | `order_id` | Batch route snapshots for replay | Request payload | Request time | ETA service |
-| `is_heavy_rain` | `zone_id` | Weather history table | Weather API cache | Under 10 minutes | Platform data |
-
-This table tells you which features need an online store and which can stay offline. `restaurant_late_order_rate_7d` changes slowly enough for a daily materialization job. `zone_open_couriers_5m` needs recent courier status, so it needs a streaming or frequent update path. `route_distance_meters` may come straight from the request because it depends on the current order candidate.
-
-The table also forces a decision about **entity keys**. An entity key is the identifier used to fetch a feature value, like `restaurant_id` or `zone_id`. If training uses `store_id` and serving uses `restaurant_uuid`, you need a reliable mapping. If a feature has no stable key, the online path will struggle because the serving service has no clear lookup value.
-
-## Offline Features
-<!-- section-summary: Offline features build correct historical examples for training, evaluation, batch scoring, and audits. -->
-
-An offline feature pipeline usually runs in a warehouse, lakehouse, or batch compute system. It can scan large tables, join labels, recompute old windows, and support backfills. Backfill means recomputing historical feature values for older time ranges, often after a bug fix or a new feature definition.
-
-For BentoNow, the offline data lives in tables like these:
-
-| Table | Grain | Important fields |
-|---|---|---|
-| `orders` | One row per order | `order_id`, `restaurant_id`, `zone_id`, `created_at`, `delivered_at` |
-| `restaurant_events` | One row per restaurant event | `restaurant_id`, `event_timestamp`, `prep_minutes`, `cancelled` |
-| `courier_status_events` | One row per courier status change | `courier_id`, `zone_id`, `event_timestamp`, `status` |
-| `weather_snapshots` | One row per zone per sample | `zone_id`, `event_timestamp`, `rain_mm_hour` |
-
-The offline job can compute windows over these tables. The model label might be `actual_delivery_minutes`, calculated after the order finishes. The features must come from data available before the order was created. That time boundary matters because the model should train on the same evidence it would have had during live prediction.
-
-Here is a simplified SQL query for one offline feature. It calculates the average restaurant prep time from the 30 minutes before each order.
-
-```sql
-WITH training_orders AS (
-  SELECT
-    order_id,
-    restaurant_id,
-    zone_id,
-    created_at,
-    TIMESTAMP_DIFF(delivered_at, created_at, MINUTE) AS actual_delivery_minutes
-  FROM analytics.orders
-  WHERE created_at >= TIMESTAMP '2026-06-01 00:00:00 UTC'
-    AND created_at < TIMESTAMP '2026-07-01 00:00:00 UTC'
-    AND delivered_at IS NOT NULL
-),
-restaurant_prep AS (
-  SELECT
-    o.order_id,
-    AVG(e.prep_minutes) AS restaurant_avg_prep_minutes_30m
-  FROM training_orders o
-  LEFT JOIN analytics.restaurant_events e
-    ON e.restaurant_id = o.restaurant_id
-   AND e.event_timestamp < o.created_at
-   AND e.event_timestamp >= TIMESTAMP_SUB(o.created_at, INTERVAL 30 MINUTE)
-  GROUP BY o.order_id
-)
-SELECT
-  o.order_id,
-  o.restaurant_id,
-  o.zone_id,
-  o.created_at AS event_timestamp,
-  o.actual_delivery_minutes,
-  COALESCE(p.restaurant_avg_prep_minutes_30m, 18.0) AS restaurant_avg_prep_minutes_30m
-FROM training_orders o
-LEFT JOIN restaurant_prep p
-  USING (order_id);
-```
-
-The important part is the time filter on `restaurant_events`. The join uses events before `created_at` and inside the 30 minute window. If the query accidentally includes prep events after the order was created, the model sees future information during training. Offline metrics may look great, and the live model will miss that future information during real requests.
-
-Offline jobs also give you room for audits. If the ETA model failed badly on July 2, you can rebuild the feature vector for the bad orders and inspect the values. A live cache usually cannot answer that question because it keeps only the latest value for each entity.
-
-## Online Features
-<!-- section-summary: Online features give the serving service fresh feature values fast enough for live prediction. -->
-
-Online features sit on the request path. When a customer opens the checkout screen, the ETA service may have 50 milliseconds for all feature retrieval and model inference before the product starts to feel slow. The online path therefore cares about latency, availability, freshness, and fallback behavior.
-
-An **online store** usually stores the latest feature value for each entity key. Feast's documentation describes online stores as low-latency stores, and its online store keeps the current feature values for entity keys rather than full history. Amazon SageMaker Feature Store uses a similar split: an online store for real-time inference and an offline store for historical training and batch inference.
-
-Here is a small serving contract for the BentoNow ETA service:
+For `failed_attempts_10m`, the contract identifies the account as the entity and payment attempts as the source. It also defines the ten-minute window and the rules for event time and availability time. Data type, default behaviour, owner, and version complete the shared meaning. The online delivery policy adds maximum age, read latency, and fallback.
 
 ```yaml
-eta_feature_contract:
-  model_name: delivery_eta_minutes
-  model_version: eta-2026-07-05
-  p95_feature_read_ms: 15
-  fail_open_features:
-    restaurant_late_order_rate_7d: 0.08
-  fail_closed_features:
-    zone_open_couriers_5m: route_to_rules_eta
-  max_feature_age:
-    restaurant_avg_prep_minutes_30m: 300
-    zone_open_couriers_5m: 60
-    is_heavy_rain: 600
-  log_fields:
-    - request_id
-    - model_version
-    - feature_vector_hash
-    - feature_age_seconds
-    - fallback_used
+feature:
+  name: failed_attempts_10m
+  version: v3
+  entity_key: account_id
+  data_type: int64
+  definition: "Failed payment attempts in the ten minutes before decision_time."
+  source: payment_attempt_events
+  event_time: attempted_at
+  available_time: ingested_at
+  owner: payments-risk-data
+
+offline:
+  point_in_time_key: decision_time
+  maximum_lookback: 10m
+
+online:
+  maximum_age: 90s
+  read_budget_p95: 8ms
+  missing_policy: route_to_rules
+  stale_policy: route_to_rules
 ```
 
-The contract tells the serving team what "fresh enough" means. Some missing features can use a safe default, such as a historical late-order rate. Other features need a stronger fallback. If `zone_open_couriers_5m` is stale, the ETA model may give a dangerously optimistic estimate, so the service routes to a rules-based ETA path until the feature recovers.
+`maximum_lookback` describes which events contribute to the calculation. `maximum_age` describes how old the materialized result may be during a live decision. They solve different timing questions.
 
-The online read usually happens in application code. In Feast, a Python service can call `get_online_features` with feature references or a feature service. This example reads the latest restaurant and zone features for one request.
+```mermaid
+flowchart TD
+    A["Shared feature contract<br/>entity, logic, time, schema, owner"] --> B["Offline computation<br/>historical feature values"]
+    A --> C["Batch or streaming computation<br/>recent feature values"]
+    B --> D["Point-in-time retrieval<br/>for training and batch scoring"]
+    C --> E["Materialization or direct push<br/>to an online store"]
+    E --> F["Low-latency lookup<br/>for live prediction"]
+    D --> G["Training dataset and<br/>offline verification"]
+    F --> H["Prediction log with value,<br/>age, version, and fallback"]
+    G --> I["Compare matching entities<br/>and decision times"]
+    H --> I
 
-```python
-from feast import FeatureStore
-
-store = FeatureStore(repo_path="/srv/eta_feature_repo")
-
-features = store.get_online_features(
-    features=[
-        "restaurant_delivery_stats:restaurant_avg_prep_minutes_30m",
-        "restaurant_delivery_stats:restaurant_late_order_rate_7d",
-        "zone_dispatch_stats:zone_open_couriers_5m",
-        "zone_weather_stats:is_heavy_rain",
-    ],
-    entity_rows=[
-        {
-            "restaurant_id": 8471,
-            "zone_id": 42,
-        }
-    ],
-).to_dict()
-
-feature_vector = {
-    "restaurant_avg_prep_minutes_30m": features["restaurant_avg_prep_minutes_30m"][0],
-    "restaurant_late_order_rate_7d": features["restaurant_late_order_rate_7d"][0],
-    "zone_open_couriers_5m": features["zone_open_couriers_5m"][0],
-    "is_heavy_rain": features["is_heavy_rain"][0],
-    "route_distance_meters": 3200,
-}
+    classDef contract fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef offline fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef online fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A contract
+    class B,D,G offline
+    class C,E,F,H online
+    class I evidence
 ```
 
-The request includes `restaurant_id` and `zone_id` because those keys identify the latest values in the online store. The route distance stays outside the feature store in this example because the routing service computes it for the current order candidate. A real service would also validate types, feature ages, nulls, and fallback flags before calling the model.
+The contract keeps meaning stable. Delivery configuration lets the offline path favor historical correctness and the online path favor bounded latency and recent data.
 
-## Point-In-Time Training Data
-<!-- section-summary: Point-in-time joins protect training data from future information and make offline examples resemble live requests. -->
+## The Offline Path Reconstructs Past Decisions
+<!-- section-summary: Offline retrieval builds historically correct feature values from durable event history for training, evaluation, batch work, and audits. -->
 
-Point-in-time correctness means each training row receives feature values available at that row's event time. This concept matters because labels arrive later. For an ETA model, the label `actual_delivery_minutes` is known after delivery, while the prediction happened before delivery. Training can include the label because that is the target. Training should keep future feature values away from the input columns.
+The offline path answers a historical question: “What value should this feature have had at each old decision time?” You can think of it as a replay system. It rebuilds the information available for every old decision instead of returning today's state.
 
-Feature retrieval tools exist partly because point-in-time joins are easy to get wrong by hand. Feast uses event timestamps during historical retrieval so it can join the right historical values onto entity rows. The entity dataframe contains the entity key and the event timestamp, and the feature store retrieves feature values as of that timestamp.
+It commonly runs in a warehouse, lakehouse, or distributed batch engine. Typical foundations include BigQuery, Snowflake, and Databricks. Spark and object storage with Delta Lake or Apache Iceberg support another common design. These systems can scan long histories, join many entities, recompute feature windows, and write versioned training datasets.
 
-Here is the shape of an entity dataframe for BentoNow training:
+Offline feature data usually keeps several records per entity. One account can have a new feature value every minute. History is essential because a training row from last month needs the value from that moment, while a row from yesterday needs a later value.
 
-```python
-from datetime import datetime
-import pandas as pd
-from feast import FeatureStore
+The offline path supports more than model training:
 
-entity_df = pd.DataFrame.from_dict(
-    {
-        "restaurant_id": [8471, 9912, 8471],
-        "zone_id": [42, 17, 42],
-        "event_timestamp": [
-            datetime(2026, 6, 11, 18, 3, 0),
-            datetime(2026, 6, 11, 18, 8, 0),
-            datetime(2026, 6, 11, 18, 14, 0),
-        ],
-        "actual_delivery_minutes": [38, 31, 44],
-    }
-)
+- Evaluation needs the same historically correct inputs as training.
+- Batch scoring retrieves current or as-of features for many entities at once.
+- Backfills rebuild older windows after source or logic repairs.
+- Investigations reconstruct the vector used around a bad decision.
 
-store = FeatureStore(repo_path="/srv/eta_feature_repo")
+### A small historical scenario
 
-training_df = store.get_historical_features(
-    entity_df=entity_df,
-    features=[
-        "restaurant_delivery_stats:restaurant_avg_prep_minutes_30m",
-        "restaurant_delivery_stats:restaurant_late_order_rate_7d",
-        "zone_dispatch_stats:zone_open_couriers_5m",
-        "zone_weather_stats:is_heavy_rain",
-    ],
-).to_df()
+Imagine a churn model with `support_tickets_30d`. A customer opened two tickets before a renewal decision and three more after it. The training row should contain `2`. A query that joins the latest aggregate gives the row `5` and leaks future behaviour into training.
+
+The offline store therefore needs event timestamps and durable history. It may also need an **available time**, sometimes called created or ingestion time, to show whether the feature system had received the event by the decision.
+
+### What the offline path must guarantee
+
+A trustworthy offline retrieval records the feature version, source snapshot, entity key, decision time, feature event time, and availability time. It should reproduce the same logical values during a rerun and keep late-arriving data under an explicit policy.
+
+Verification starts with tiny time-boundary fixtures. Place one event before the decision, one exactly at the boundary, one after it, and one that happened earlier but arrived later. The contract decides which records qualify, and the test asserts the resulting feature value.
+
+## The Online Path Serves Current Decisions
+<!-- section-summary: Online retrieval returns recent feature values by entity key within the latency and availability budget of a live prediction. -->
+
+The online path answers a current question: “Which approved feature value can the service use for this request right now?”
+
+An online store organizes values around fast entity-key lookup. A risk service sends an `account_id`; the store returns the latest approved values for that account. The database may retain only one record per key or a short time window, depending on the product and retrieval pattern.
+
+Low latency matters because feature retrieval shares the request budget with the rest of the service. Authentication, input validation, request-time computation, model inference, policy logic, and network overhead all consume part of that budget. A model endpoint with a 100-millisecond objective cannot spend 90 milliseconds waiting for features.
+
+Teams therefore monitor percentiles such as p50, p95, and p99. An average can hide a small group of requests suffering severe delay. They also bound the number of network round trips. Fetching a feature vector in one batched request is usually safer than making a separate call for every feature.
+
+### Latest value still needs context
+
+The online result should contain more than the number:
+
+```text
+entity_key
+feature_name
+feature_value
+feature_version
+event_time
+materialized_at
+source_watermark
 ```
 
-The `event_timestamp` column is the anchor. The feature references tell the feature store which values to join. The label column passes through so the training code can train a supervised model after the feature join finishes. If you later compare offline and online values, use the same feature names and entity keys so the comparison is straightforward.
+These fields let the serving service calculate age and confirm the expected version. A successful key-value read proves availability. It gives no assurance that the value is fresh or that materialization reached the latest source data.
 
-The same idea applies without Feast. A warehouse-only team can still write point-in-time SQL, keep feature definitions in version control, and log the exact query version used for a training dataset. The tool helps, yet the rule stays the same: use the feature value that would have existed at prediction time.
+### Serving policy
 
-![Point-in-time join selecting the latest valid feature row before prediction time and blocking a future row](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/point-in-time-join.png)
+Every online feature needs a response for four outcomes. A fresh value continues to inference. A stale or missing value may use a governed default, a recent cached value, or a backup source. A failed read may choose a simpler model, route to deterministic rules, or decline the decision.
 
-*A point-in-time join chooses the latest valid feature value before prediction time and blocks future rows that would leak information into training.*
+The response depends on consequence. A recommendation model may tolerate a default popularity score. A fraud or safety decision may need a conservative rules path after a critical feature expires.
 
-## Serving With The Same Feature Names
-<!-- section-summary: Shared feature names, schemas, owners, and freshness rules help the model see the same meaning in training and serving. -->
+## Point-In-Time Correctness Protects Training
+<!-- section-summary: Point-in-time joins select feature values known by each historical decision and block future or late-arriving information. -->
 
-The next production problem is naming. If training data uses `restaurant_avg_prep_minutes_30m` and serving code sends `avg_prep`, people have to remember that those columns are intended to match. That memory will fail during a refactor, a model upgrade, or an incident. Shared names and schemas remove guesswork. A feature's **TTL**, or time to live, states how long a stored value remains valid enough to serve before it should expire or trigger a fallback.
+**Point-in-time correctness** means every training row receives feature values that the production system could have used at that row's decision time.
 
-A simple feature definition can live in a feature repository. This example uses Feast-style objects and a local file source for readability. In production, the source might point to BigQuery, Snowflake, Redshift, Spark, or another supported store. The important part for the learner is the structure: entity, timestamped source, schema, TTL, and feature service.
+This requires two boundaries:
 
-```python
-from datetime import timedelta
+- **Event time** records when the real-world fact happened.
+- **Available time** records when the feature system could use that fact.
 
-from feast import Entity, FeatureService, FeatureView, Field, FileSource, Project
-from feast.types import Bool, Float32, Int64
+Suppose a bank account changed address before a payment, but the change reached the feature pipeline several hours after the decision. The event time is early enough; the available time is too late. Historical training should exclude that update because production lacked it.
 
-project = Project(
-    name="bentonow_eta",
-    description="Delivery ETA features for training and serving",
-)
+```mermaid
+flowchart TD
+    A["Historical decision at T"] --> B["Candidate feature records<br/>for the same entity"]
+    B --> C{"Event time<br/>at or before T?"}
+    C -->|"No"| D["Future event<br/>exclude"]
+    C -->|"Yes"| E{"Available to the<br/>system by T?"}
+    E -->|"No"| F["Late-arriving event<br/>exclude"]
+    E -->|"Yes"| G["Keep newest eligible<br/>feature record"]
+    G --> H["Apply lookback and<br/>freshness policy"]
+    H --> I["Attach value and<br/>provenance to training row"]
 
-restaurant = Entity(name="restaurant", join_keys=["restaurant_id"])
-zone = Entity(name="zone", join_keys=["zone_id"])
-
-restaurant_source = FileSource(
-    name="restaurant_delivery_stats_source",
-    path="data/restaurant_delivery_stats.parquet",
-    timestamp_field="event_timestamp",
-    created_timestamp_column="created_at",
-)
-
-zone_source = FileSource(
-    name="zone_dispatch_stats_source",
-    path="data/zone_dispatch_stats.parquet",
-    timestamp_field="event_timestamp",
-    created_timestamp_column="created_at",
-)
-
-restaurant_delivery_stats = FeatureView(
-    name="restaurant_delivery_stats",
-    entities=[restaurant],
-    ttl=timedelta(hours=24),
-    schema=[
-        Field(name="restaurant_avg_prep_minutes_30m", dtype=Float32),
-        Field(name="restaurant_late_order_rate_7d", dtype=Float32),
-    ],
-    online=True,
-    source=restaurant_source,
-    tags={"owner": "delivery-data"},
-)
-
-zone_dispatch_stats = FeatureView(
-    name="zone_dispatch_stats",
-    entities=[zone],
-    ttl=timedelta(minutes=10),
-    schema=[
-        Field(name="zone_open_couriers_5m", dtype=Int64),
-        Field(name="is_heavy_rain", dtype=Bool),
-    ],
-    online=True,
-    source=zone_source,
-    tags={"owner": "dispatch-platform"},
-)
-
-eta_model_v1 = FeatureService(
-    name="delivery_eta_minutes_v1",
-    features=[restaurant_delivery_stats, zone_dispatch_stats],
-)
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef candidate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef excluded fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef accepted fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,C,E decision
+    class B candidate
+    class D,F excluded
+    class G,H,I accepted
 ```
 
-The `FeatureService` groups the features used by one model version. That grouping helps when the model moves from training to serving because the same group can guide historical retrieval and online retrieval. It also gives reviewers a list of dependencies to inspect before release.
-
-Operationally, the team applies definitions and loads feature values into the online store:
-
-```bash
-feast apply
-CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
-feast materialize-incremental "$CURRENT_TIME"
-```
-
-`feast apply` registers the entity, feature view, and feature service definitions. The materialization command moves recent feature values into the online store so serving can fetch them quickly. In a larger system, a scheduler such as Airflow, Dagster, or a managed workflow service would run materialization on a defined cadence, and a streaming path might push high-frequency features.
-
-## Consistency Checks And Monitoring
-<!-- section-summary: Teams compare logged online features with offline recomputation to catch skew, stale features, missing values, and bad defaults. -->
-
-Once the model serves traffic, the team needs evidence that online and offline paths still agree. The best raw material is a prediction log. The serving service should log the request ID, model version, entity keys, feature names, feature values or safe summaries, feature ages, fallback flags, prediction, and final business outcome when it arrives.
-
-Here is a prediction log schema that supports comparison without forcing the team to store sensitive raw payloads forever:
+A focused SQL pattern ranks only eligible values:
 
 ```sql
-CREATE TABLE ml_observability.eta_prediction_logs (
-  request_id STRING,
-  order_id STRING,
-  restaurant_id INT64,
-  zone_id INT64,
-  model_version STRING,
-  predicted_eta_minutes FLOAT64,
-  feature_vector_hash STRING,
-  feature_values_json STRING,
-  feature_age_seconds_json STRING,
-  fallback_used BOOL,
-  requested_at TIMESTAMP,
-  created_at TIMESTAMP
-);
-```
-
-The comparison job samples prediction logs, recomputes point-in-time offline features for those same entity keys and timestamps, and checks whether the values match within a tolerance. Some features should match exactly, such as a daily categorical flag. Others need numeric tolerance because streaming windows and batch windows can close at slightly different times.
-
-```sql
-WITH sampled_requests AS (
+WITH eligible_features AS (
   SELECT
-    request_id,
-    restaurant_id,
-    zone_id,
-    requested_at,
-    JSON_VALUE(feature_values_json, '$.restaurant_avg_prep_minutes_30m') AS online_prep_30m
-  FROM ml_observability.eta_prediction_logs
-  WHERE requested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
-    AND model_version = 'eta-2026-07-05'
-    AND RAND() < 0.01
-),
-offline_recomputed AS (
-  SELECT
-    s.request_id,
-    AVG(e.prep_minutes) AS offline_prep_30m
-  FROM sampled_requests s
-  LEFT JOIN analytics.restaurant_events e
-    ON e.restaurant_id = s.restaurant_id
-   AND e.event_timestamp < s.requested_at
-   AND e.event_timestamp >= TIMESTAMP_SUB(s.requested_at, INTERVAL 30 MINUTE)
-  GROUP BY s.request_id
+    d.decision_id,
+    d.account_id,
+    d.decision_time,
+    f.failed_attempts_10m,
+    f.feature_event_time,
+    f.feature_available_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY d.decision_id
+      ORDER BY
+        f.feature_event_time DESC,
+        f.feature_available_at DESC,
+        f.feature_record_id DESC
+    ) AS feature_rank
+  FROM historical_decisions d
+  LEFT JOIN account_risk_features f
+    ON f.account_id = d.account_id
+   AND f.feature_event_time <= d.decision_time
+   AND f.feature_available_at <= d.decision_time
 )
-SELECT
-  COUNT(*) AS sampled_rows,
-  AVG(ABS(CAST(s.online_prep_30m AS FLOAT64) - o.offline_prep_30m)) AS mean_abs_diff,
-  AVG(
-    CASE
-      WHEN ABS(CAST(s.online_prep_30m AS FLOAT64) - o.offline_prep_30m) > 2.0 THEN 1
-      ELSE 0
-    END
-  ) AS mismatch_rate
-FROM sampled_requests s
-JOIN offline_recomputed o
-  USING (request_id);
+SELECT *
+FROM eligible_features
+WHERE feature_rank = 1;
 ```
 
-A healthy comparison job should have a known tolerance and an owner. For BentoNow, a mismatch rate over 1 percent for `restaurant_avg_prep_minutes_30m` pages the delivery data team during business hours. A stale `zone_open_couriers_5m` feature pages the dispatch platform immediately because it affects live ETA quality quickly.
+The final record ID makes selection deterministic where timestamps tie. A bounded feature can add a lookback predicate so very old values produce an explicit missing state.
 
-Teams should monitor these checks:
+Feast historical retrieval and Databricks time-series feature tables support point-in-time joins. A warehouse team can implement the same rule in reviewed SQL. The important evidence is the time boundary and selected source record, not the library name.
 
-| Check | Example threshold | Owner response |
-|---|---|---|
-| Online read latency | p95 under 15 ms | Scale online store or cache hot keys |
-| Feature freshness | `zone_open_couriers_5m` under 60 seconds | Inspect stream consumer lag |
-| Missing feature rate | Under 0.5 percent per feature | Check materialization and entity keys |
-| Offline-online mismatch | Under 1 percent for sampled requests | Compare feature definitions and windows |
-| Fallback rate | Under 2 percent per hour | Inspect upstream source health |
+## Materialization Connects The Two Paths
+<!-- section-summary: Materialization publishes computed feature values into low-latency storage while preserving entity, version, and event-time identity. -->
 
-These checks connect engineering systems to model behavior. A model metric drop may come from the model itself, a source table change, a stale materialization job, an online store incident, or a serving code mapping bug. Feature monitoring narrows the search.
+**Materialization** is the process of moving approved feature values into the storage used for online retrieval. It connects a historically durable source with the low-latency serving path.
 
-## Incident Runbook
-<!-- section-summary: A feature incident runbook tells the team how to detect, contain, diagnose, repair, and learn from online-offline feature failures. -->
+There are two common patterns.
 
-Feature incidents are common because they involve several systems. A restaurant events table may change schema, a stream processor may lag, a materialization job may skip a partition, or a serving service may send the wrong entity key. A beginner should know what real teams do after an alert fires.
+In a **batch materialization**, a scheduled job reads new or changed feature rows from the offline source and upserts them into the online store. Daily aggregates may run every day. Rapidly changing features may run every few minutes.
 
-Here is a practical runbook for BentoNow's ETA feature path:
+In a **streaming publication**, a stream processor computes feature updates and writes them to the online path as events arrive. It should also preserve a historical copy for training and replay. Feast push sources can send values to online and offline destinations. SageMaker Feature Store can ingest records into online and offline storage through batch or streaming APIs.
 
-| Step | Action | Owner | Evidence |
-|---|---|---|---|
-| Detect | Alert fires on freshness, mismatch, missing rate, or fallback rate | On-call MLOps engineer | Dashboard link and alert payload |
-| Contain | Route high-risk requests to rules ETA when required features are stale | ETA service owner | Feature flag change and traffic graph |
-| Diagnose | Check latest materialization job, stream lag, online store latency, and schema changes | Data platform owner | Job logs, stream offsets, query history |
-| Repair | Rerun materialization, roll back feature definition, restore stream consumer, or patch mapping | Owning team | Command output and validation query |
-| Verify | Re-run online read probes and offline-online comparison sample | MLOps engineer | Freshness and mismatch report |
-| Follow up | Add a test, alert, or contract check that would have caught the failure earlier | Incident lead | Post-incident action item |
+```mermaid
+flowchart TD
+    A["Raw events"] --> B["Feature computation<br/>with event time and version"]
+    B --> C["Durable historical feature log<br/>or offline table"]
+    C --> D["Batch materialization<br/>from source watermark"]
+    B --> E["Streaming publication<br/>for low-latency freshness"]
+    D --> F["Online store<br/>latest approved value by key"]
+    E --> F
+    F --> G["Serving lookup"]
+    C --> H["Historical retrieval"]
+    G --> I["Reconciliation by entity,<br/>version, and event time"]
+    H --> I
 
-The containment step deserves special attention. If the model needs a fresh courier supply feature and that feature is stale, the service should already know what to do. The team should avoid debating fallback behavior during the outage. A feature contract should say whether the model can use a default, reuse a cached value, call a backup path, or skip ML for that request.
-
-Here is a small feature health probe the serving team can run from a scheduled job:
-
-```python
-from datetime import datetime, timezone
-from feast import FeatureStore
-
-store = FeatureStore(repo_path="/srv/eta_feature_repo")
-
-probe = store.get_online_features(
-    features=[
-        "zone_dispatch_stats:zone_open_couriers_5m",
-        "restaurant_delivery_stats:restaurant_avg_prep_minutes_30m",
-    ],
-    entity_rows=[
-        {
-            "zone_id": 42,
-            "restaurant_id": 8471,
-        }
-    ],
-).to_dict()
-
-checked_at = datetime.now(timezone.utc).isoformat()
-
-print(
-    {
-        "checked_at": checked_at,
-        "zone_open_couriers_5m": probe["zone_open_couriers_5m"][0],
-        "restaurant_avg_prep_minutes_30m": probe["restaurant_avg_prep_minutes_30m"][0],
-    }
-)
+    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef bridge fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef online fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C,H source
+    class D,E bridge
+    class F,G online
+    class I evidence
 ```
 
-This probe proves that the online store can return expected feature names for known entities. It should sit next to dashboard checks for freshness and read latency because a successful read with stale data is still a serving risk.
+### Safe materialization semantics
 
-![Freshness and parity runbook connecting prediction logs, offline recomputation, mismatch rate, freshness age, fallback rate, alert owner, contain, repair, and verify](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/freshness-parity-runbook.png)
+The logical feature identity binds the entity to an approved feature definition and version. The physical lookup key often remains the entity key inside a versioned feature table, feature group, or namespace. Some stores encode more information in the physical key, so the exact layout depends on the implementation. Each record also needs an event timestamp. The writer should reject or ignore an older update arriving after a newer one. Amazon SageMaker Feature Store keeps the record with the latest event time in its online store. Historical records remain available offline.
 
-*Feature monitoring should connect evidence to action: logs feed recomputation, dashboards show freshness and parity, and the runbook names who contains, repairs, and verifies the issue.*
+Retries must be idempotent. Publishing the same record twice should leave one visible latest value. A materialization run records its source watermark, successful end time, written-row count, rejected-old-row count, and destination identity.
 
-## Putting It Together
-<!-- section-summary: Offline features give historical correctness, online features give live freshness, and comparison checks keep the two paths aligned. -->
+Backfills need special care. Rebuilding historical values should update the offline history without replacing a newer online value. If a corrected historical record also changes the current feature, publish that current correction through a reviewed path with a new source watermark.
 
-Online and offline features are two delivery paths for model inputs. Offline features build training datasets, support evaluation, power batch scoring, and help audits. Online features serve live requests with low latency and freshness expectations. A production model can use both paths safely when the team keeps one shared feature meaning across both.
+## Freshness Is Part Of The Feature Value
+<!-- section-summary: Freshness combines source delay, computation delay, publication delay, and serving age into one decision policy. -->
 
-For BentoNow, the ETA model trains on historical restaurant, courier, route, and weather signals. During live serving, the ETA service reads the latest restaurant and zone features, adds request-time route distance, validates freshness, and calls the model. Prediction logs then let the team compare online values with offline recomputation.
+A feature value can have the correct type and meaning yet still be too old for the current decision. That is the role of **freshness**: it tells the serving system whether a value is recent enough to trust for a specific use. Freshness belongs to the feature contract because different decisions tolerate different delays.
 
-The daily discipline is practical: define features with entity keys and timestamps, build point-in-time training data, materialize online values on a known cadence, log served feature values safely, monitor freshness and mismatch rates, and keep a runbook for failures. That is the difference between a model that only works in a notebook and a feature path the product can depend on.
+For a slowly changing customer tier, yesterday's value may be acceptable. For available inventory or failed payment attempts, a value several minutes old may misrepresent the current situation.
+
+Freshness has several contributing delays:
+
+- **Source delay** measures how late raw events reach the platform.
+- **Computation delay** measures how long feature logic takes to produce a value.
+- **Materialization delay** measures how long the value waits before reaching the online store.
+- **Read age** measures the gap between the request time and the feature's event or availability time.
+
+```mermaid
+flowchart TD
+    A["Real-world event"] --> B["Source receives event"]
+    B --> C["Feature computation finishes"]
+    C --> D["Online publication commits"]
+    D --> E["Prediction request reads value"]
+    A --> F["Source delay"]
+    B --> G["Computation delay"]
+    C --> H["Materialization delay"]
+    D --> I["Time waiting in online store"]
+    E --> J["Serving policy compares<br/>feature age with maximum age"]
+
+    classDef event fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef delay fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef decision fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C,D,E event
+    class F,G,H,I delay
+    class J decision
+```
+
+The feature contract turns those delays into an operational objective. If `failed_attempts_10m` has a maximum age of 90 seconds, the serving service compares request time with the approved timestamp and invokes the stale-value policy after that limit.
+
+Record TTL and feature freshness are separate controls. TTL tells a store when it may remove a record. Freshness tells the application whether the value is still suitable for a decision. A record can remain physically present after its business usefulness has expired.
+
+The request log should capture feature age, source watermark, and fallback outcome. Dashboards then show p50, p95, and p99 age by feature, model route, region, and materialization version.
+
+## Synchronization Requires More Than Matching Names
+<!-- section-summary: Offline and online paths stay synchronized through shared logic, versions, keys, timestamps, defaults, and evidence. -->
+
+Two columns with the same name can still carry different values for valid operational reasons or because one path has drifted.
+
+The paths need agreement across several dimensions:
+
+- entity keys and key normalization;
+- feature definition and version;
+- source events and filters;
+- aggregation windows and boundary inclusion;
+- event-time and available-time rules;
+- types, units, null semantics, and defaults;
+- publication watermark and freshness policy.
+
+Suppose offline SQL defines a ten-minute window as `(T - 10m, T]`, while a stream processor uses `[T - 10m, T)`. Events exactly on a boundary create different values. A shared feature name cannot reveal that difference.
+
+### Synchronization strategies
+
+The strongest pattern uses one computation to produce versioned values for both durable history and online serving. This works well for streaming features because both paths receive the same result.
+
+Batch features often use the offline table as the source of truth and materialize from it. The online record carries the source row's event time and feature version, which allows reconciliation.
+
+Some systems maintain separate SQL and streaming implementations. Those teams need a golden fixture suite that runs against both engines, plus replay tests over representative event windows.
+
+### Parity evidence
+
+The serving path logs the actual vector or a governed reference to it, including version and timestamps. A comparison job takes sampled prediction requests, reconstructs offline features as of each request time, and compares values under feature-specific tolerances.
+
+Exact categorical values should match. Floating-point aggregates may need a small tolerance if approved execution engines produce minor numerical differences. The report groups mismatches by cause. Freshness and missing-entity groups point to delivery problems. Version, boundary-rule, and default groups point to contract differences. A tolerance group isolates approved numerical variation.
+
+This comparison detects path divergence. It also exposes the operational reason, which gives the owning team a concrete repair.
+
+## Request-Time Features Join The Online Vector
+<!-- section-summary: Request-time features come directly from the live request or a synchronous dependency and join stored features before inference. -->
+
+Some information exists only for the current decision. A route distance depends on the proposed origin and destination. A cart total depends on the items in the current checkout. A query embedding depends on the text the user just submitted.
+
+These are **request-time features**. They usually arrive in the request payload or come from a synchronous service. They join online-store values before model inference.
+
+```mermaid
+flowchart TD
+    A["Prediction request"] --> B["Validate request-time inputs"]
+    A --> C["Extract entity keys"]
+    C --> D["Fetch stored online features"]
+    D --> E["Check version, age,<br/>missing values, and read status"]
+    B --> F["Apply shared request-time<br/>transformations"]
+    E --> G["Assemble model vector"]
+    F --> G
+    G --> H["Validate final schema"]
+    H --> I["Run inference and log<br/>values, ages, and fallbacks"]
+
+    classDef request fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef work fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef serve fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A request
+    class B,C,D,E,F,G,H work
+    class I serve
+```
+
+The transformation from raw request field to model input needs the same versioned logic in offline replay. If production calculates `cart_value_log = log1p(cart_total)` but training used the raw total, the stored features can be perfectly synchronized while the final vectors still differ.
+
+Request-time dependencies also consume latency and need fallbacks. A route service timeout may trigger a cached estimate, a simpler model, or a deterministic response. The prediction log records which path produced each value.
+
+## Common Failure Modes And Safe Containment
+<!-- section-summary: Feature-path incidents need containment based on freshness, key correctness, publication state, online availability, and model consequence. -->
+
+Online and offline feature paths cross several systems, so failure can enter at different boundaries. In essence, diagnosis means finding the first boundary where the expected value stopped moving correctly. The serving team should contain unsafe decisions first. Investigators then trace the entity key and feature version back through the path. Timestamps and watermarks reveal the point where data stopped advancing.
+
+A **stalled materialization job** leaves the online store readable but stale. The service checks feature age and follows the stale policy while the data owner restores the job.
+
+A **stream consumer lag** affects rapidly changing features. Containment may route high-risk requests to rules or a simpler model. Restarting the consumer alone is insufficient; the owner verifies offsets, watermarks, and online age after catch-up.
+
+An **entity-key mismatch** produces missing values for valid entities. Investigation compares request keys, offline keys, normalization rules, and lookup miss rate by client version or region.
+
+An **out-of-order update** can replace a recent value with an older one if the writer ignores event time. Repair restores the latest valid record and hardens the write condition.
+
+A **partial feature-group update** can mix values from different publication moments. Critical vectors may require a shared snapshot or publication version so the serving service accepts only a coherent group.
+
+An **online-store latency spike or outage** threatens the request objective. The service uses its pre-approved fallback and the platform owner checks hot keys, throttling, capacity, network health, and recent schema changes.
+
+An **offline backfill collision** may replay old values into the online store. Materialization policy should prevent historical corrections from overwriting a newer event-time record.
+
+```mermaid
+flowchart TD
+    A["Feature alert or bad decision"] --> B{"Can the online store<br/>return the expected key?"}
+    B -->|"No"| C["Check entity mapping,<br/>availability, and latency"]
+    B -->|"Yes"| D{"Is the feature version<br/>and publication coherent?"}
+    D -->|"No"| E["Contain with fallback;<br/>restore approved version"]
+    D -->|"Yes"| F{"Is the value fresh<br/>for this decision?"}
+    F -->|"No"| G["Inspect source lag,<br/>compute, and materialization"]
+    F -->|"Yes"| H{"Does offline replay<br/>match the logged value?"}
+    H -->|"No"| I["Compare time rules,<br/>defaults, and transformations"]
+    H -->|"Yes"| J["Continue with model,<br/>policy, or outcome review"]
+
+    classDef alert fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef healthy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A alert
+    class B,D,F,H gate
+    class C,E,G,I action
+    class J healthy
+```
+
+Containment policy belongs in the feature contract and serving configuration. The incident is a poor time to invent a default for a safety-critical value.
+
+## Verify Historical And Live Retrieval Together
+<!-- section-summary: End-to-end verification proves historical correctness, online freshness, synchronization, fallback, and recovery before feature release. -->
+
+Feature verification covers the definition, both delivery paths, and the bridge between them. Use an end-to-end rehearsal of the whole feature journey. Construct a known historical value, publish it, read it through serving, and prove the final model vector. This catches problems that an isolated SQL test or online-store health check cannot see.
+
+Start with a versioned fixture of events and historical decisions. Assert the offline value for time boundaries, late-arriving data, missing history, duplicate timestamps, and lookback expiry.
+
+Run materialization into an isolated online namespace. Check the written entity keys, feature version, event time, source watermark, row counts, and rejection of older updates. Retry the same materialization and confirm that the visible values remain unchanged.
+
+Read online features through the same client used by serving. Measure p50, p95, and p99 latency. Verify fresh, missing, stale, wrong-version, and read-error outcomes against the serving policy.
+
+Replay several historical requests through the final vector assembly path. Reconstruct stored features offline, inject the original request-time data, and compare the full vector field by field.
+
+Finally, exercise recovery. Pause materialization or route the client to an unavailable online namespace. Confirm the approved fallback, alert, logs, and restoration checks.
+
+```mermaid
+flowchart TD
+    A["Versioned event and<br/>decision fixtures"] --> B["Verify point-in-time<br/>offline retrieval"]
+    B --> C["Materialize into isolated<br/>online namespace"]
+    C --> D["Verify keys, versions,<br/>watermarks, and idempotency"]
+    D --> E["Run serving reads and<br/>freshness policies"]
+    E --> F["Replay complete vectors<br/>with request-time inputs"]
+    F --> G["Inject stale, missing,<br/>and unavailable states"]
+    G --> H["Verify fallback, alert,<br/>repair, and restoration"]
+
+    classDef fixture fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef verify fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef recovery fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A fixture
+    class B,C,D,E,F,G verify
+    class H recovery
+```
+
+A feature is ready after this path proves the expected values and the expected failure response. A successful online read by itself covers only one small part of the system.
+
+## Where Industrial Feature Stacks Fit
+<!-- section-summary: Industrial feature stacks combine historical storage, transformation, low-latency serving, orchestration, and optional feature-management platforms. -->
+
+The architecture can begin with ordinary data infrastructure. A feature platform packages recurring responsibilities, but the underlying jobs remain familiar: preserve history, calculate features, publish recent values, retrieve them quickly, and record evidence. The right stack depends on how many models share features and how much platform work the team can operate.
+
+A common baseline uses a warehouse or lakehouse for historical feature values. dbt or Spark performs batch transformations. Kafka with Flink or Spark Structured Streaming handles fast updates, while Redis or DynamoDB provides low-latency lookup. Airflow, Dagster, or a managed workflow service schedules materialization and backfills. This design works well where a small number of models can share clear contracts without a dedicated feature platform.
+
+**Feast** adds an open-source feature registry and retrieval layer over chosen offline and online stores. Its historical retrieval supports point-in-time joins. Materialization loads feature values into the online store, which normally keeps the latest value for each entity key. Push sources can publish fresh values to online and offline destinations. The team still owns feature computation pipelines, storage, orchestration, and operations.
+
+**Amazon SageMaker Feature Store** provides managed feature groups with online, offline, or combined storage. The online store keeps the latest record for low-latency inference, while the offline store preserves historical records in Amazon S3 for training and batch work. Records can enter through streaming or batch ingestion.
+
+**Databricks Feature Engineering in Unity Catalog** provides governed feature tables, lineage, discovery, and point-in-time joins. Its recommended managed serving path is Databricks Online Feature Store, powered by Lakebase Autoscaling. A Unity Catalog feature table remains the durable offline source, and `publish_table` synchronizes its values into the low-latency store.
+
+Databricks supports three synchronization modes. `TRIGGERED`, the default, runs incremental updates through an API call or schedule. `CONTINUOUS` keeps a streaming pipeline running for fast updates. `SNAPSHOT` performs a full point-in-time copy and suits bulk replacement. Teams that need a separately operated store can still publish to a supported third-party destination such as DynamoDB.
+
+The current Online Feature Store and legacy Databricks online tables are different products. Legacy online tables are no longer supported. New feature-serving designs should use the Lakebase-backed Online Feature Store, or a supported third-party store where its operational tradeoffs are intentional.
+
+Cloud-managed and commercial feature platforms can reduce platform engineering. They still need a contract for identity and time so both paths select the same logical value. Freshness and materialization rules control how that value reaches production. Fallback and ownership rules govern failures. A product selection cannot decide how old an inventory count may be or whether a missing risk feature should block a transaction.
+
+## Operational Ownership
+<!-- section-summary: Clear owners connect source health, feature meaning, materialization, online reliability, serving fallback, and model use. -->
+
+The two-path design crosses team boundaries. Clear ownership answers two practical questions during an incident: who can repair the broken boundary, and who can decide whether predictions remain safe? Ownership should match the failure boundary.
+
+The source owner maintains event schema, availability, and correction policy. The feature owner maintains the definition, entity keys, time rules, tests, version, and freshness target. The platform owner maintains offline storage, materialization, online capacity, access, and observability. The serving owner maintains lookup integration, request-time transformations, latency budget, fallback, and prediction logging. The model owner confirms that training and serving reference the approved feature version.
+
+Operational objectives follow those responsibilities. Useful signals include source watermark delay, materialization success and lag, online read latency, missing-key rate, feature age, version mismatch, fallback rate, and offline-online comparison results.
+
+An alert should identify the feature, model route, affected segment, latest source watermark, current age, fallback status, and owning team. That context lets the first responder contain the decision path before tracing the deeper cause.
+
+## The Main Idea
+<!-- section-summary: One feature meaning needs a historically correct path for learning and a fresh low-latency path for live decisions. -->
+
+Offline and online features are two delivery paths for the same model input. The separation exists because learning from history and serving a live request place very different demands on storage and computation.
+
+The offline path preserves history and reconstructs what was knowable for each past decision. The online path delivers recent values under the live request's latency and availability budget. Materialization or streaming publication connects them.
+
+Reliable operation depends on shared semantics and observable delivery. Entity keys, feature versions, event and availability time, window boundaries, defaults, freshness, request-time transformations, and fallbacks must agree. Point-in-time tests prove historical reconstruction. Online probes prove latency and freshness. Vector replay compares the actual serving input with the value reconstructed from history. Failure injection confirms that stale, missing, or unavailable features follow the approved safety path.
+
+Start with an offline path for every model that learns from historical data. Add an online path only for live decisions that need shared, precomputed features under a tight latency budget. That choice keeps the design proportional to the production problem.
 
 ## References
 
-- [Feast documentation: Introduction](https://docs.feast.dev/) - Defines Feast as a feature store with offline and online stores, point-in-time feature sets, and low-latency serving.
-- [Feast documentation: Offline store](https://docs.feast.dev/getting-started/components/offline-store) - Explains offline stores for historical time-series feature values and materialization into online stores.
-- [Feast documentation: Online store](https://docs.feast.dev/getting-started/components/online-store) - Explains low-latency online stores and latest-value serving by entity key.
-- [Feast documentation: Feature retrieval](https://docs.feast.dev/getting-started/concepts/feature-retrieval) - Documents event timestamps, entity dataframes, `get_historical_features`, feature services, and online retrieval.
-- [Feast documentation: Load data into the online store](https://docs.feast.dev/how-to-guides/feast-snowflake-gcp-aws/load-data-into-the-online-store) - Shows materialization commands for loading feature values into an online store.
-- [Feast documentation: Read features from the online store](https://docs.feast.dev/how-to-guides/feast-snowflake-gcp-aws/read-features-from-the-online-store) - Shows `get_online_features` for low-latency model serving.
-- [Amazon SageMaker AI Feature Store documentation](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store.html) - Documents online and offline feature storage patterns, real-time inference, and offline model training support.
+- [Feast documentation: Online store](https://docs.feast.dev/getting-started/components/online-store)
+- [Feast documentation: Point-in-time joins](https://docs.feast.dev/getting-started/concepts/point-in-time-joins)
+- [Feast documentation: Quickstart workflow and materialization](https://docs.feast.dev/getting-started)
+- [Feast documentation: Push sources](https://docs.feast.dev/reference/data-sources/push)
+- [Amazon SageMaker AI documentation: Feature Store](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store.html)
+- [Amazon SageMaker AI documentation: Feature Store concepts](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-concepts.html)
+- [Amazon SageMaker AI documentation: Online store](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-storage-configurations-online-store.html)
+- [Amazon SageMaker AI documentation: Record TTL](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store-time-to-live.html)
+- [Databricks documentation: Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store/)
+- [Databricks documentation: Point-in-time feature joins](https://docs.databricks.com/aws/en/machine-learning/feature-store/time-series)
+- [Databricks documentation: Online Feature Stores](https://docs.databricks.com/aws/en/machine-learning/feature-store/online-feature-store)
+- [Databricks documentation: Migrate from legacy and third-party online tables](https://docs.databricks.com/aws/en/machine-learning/feature-store/migrate-from-online-tables)
+- [Databricks documentation: Publish features to a third-party online store](https://docs.databricks.com/aws/en/machine-learning/feature-store/publish-features)

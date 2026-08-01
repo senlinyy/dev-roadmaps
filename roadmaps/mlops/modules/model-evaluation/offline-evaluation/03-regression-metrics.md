@@ -1,346 +1,396 @@
 ---
 title: "Regression Metrics"
-description: "Evaluate regression models with MAE, RMSE, MAPE, residuals, prediction intervals, segment checks, and release gates."
-overview: "Regression metrics measure how far numeric predictions miss. A supporting example follows a delivery ETA team as they compare MAE, RMSE, MAPE, residual tables, tail-error gates, segment reports, and Evidently regression checks."
+description: "Evaluate numeric predictions through residuals, unit-based errors, squared errors, relative errors, quantile loss, segments, and product-aligned release gates."
+overview: "Regression metrics describe how far numeric predictions miss, which direction they miss, how much large errors matter, and where the error concentrates across target ranges and production segments."
 tags: ["MLOps", "core", "metrics"]
 order: 3
 id: "article-mlops-model-evaluation-regression-metrics"
 ---
 
+## Table of Contents
 
-## Regression Metrics Measure Numeric Error
-<!-- section-summary: Regression metrics compare numeric predictions with numeric labels and explain the size, direction, and concentration of error. -->
+1. [Regression Predicts a Number](#regression-predicts-a-number)
+2. [Residuals Preserve the Size and Direction of Error](#residuals-preserve-the-size-and-direction-of-error)
+3. [MAE and Median Absolute Error Describe Typical Misses](#mae-and-median-absolute-error-describe-typical-misses)
+4. [MSE and RMSE Give Large Misses More Influence](#mse-and-rmse-give-large-misses-more-influence)
+5. [R-Squared and Explained Variance Need Context](#r-squared-and-explained-variance-need-context)
+6. [Percentage Error Can Distort Small Targets](#percentage-error-can-distort-small-targets)
+7. [Quantile Loss Represents Asymmetric Costs](#quantile-loss-represents-asymmetric-costs)
+8. [Residual Distributions and Segments Reveal Concentrated Harm](#residual-distributions-and-segments-reveal-concentrated-harm)
+9. [Build Product-Aligned Regression Gates](#build-product-aligned-regression-gates)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
-A **regression model** predicts a number. The number might be delivery minutes, demand units, claim cost, machine temperature, customer lifetime value, or house price. Regression metrics measure how far those predicted numbers are from the true numbers.
+## Regression Predicts a Number
+<!-- section-summary: Regression models predict numeric quantities, and evaluation connects the distance between each prediction and outcome to the consequence experienced by the product. -->
 
-The title answer is straightforward: **regression metrics help you measure numeric error in the same units as the product, then decide whether the average error, large misses, percent misses, bias, and segment behavior are acceptable for release**. A single overall score rarely tells the full story.
+A **regression model** predicts a number. The output might be delivery time in minutes, electricity demand in megawatts, a house price in pounds, or the number of units a warehouse will need tomorrow.
 
-The previous article covered classification, where the model chooses a class and the team counts false positives and false negatives. Regression has a different shape. A prediction can miss by 1 minute, 10 minutes, or 60 minutes. The size and direction of the miss matter.
+The prediction and the observed outcome live on a numeric scale. A forecast of 42 minutes can miss an actual delivery time of 45 minutes by three minutes. A demand forecast of 42 units can miss the actual demand of 45 units by three units. The arithmetic looks the same, yet the operational consequences differ.
 
-A supporting example follows a delivery ETA model. You will compare MAE, RMSE, MAPE, residuals, tail errors, segment reports, Evidently regression checks, and a release gate that product and operations teams can understand.
+At a high level, **regression evaluation measures the distance between predictions and observed outcomes, then decides how different distances should count**. The first decision is the target and its unit. The second is the direction and cost of error. The third is the aggregation rule that combines thousands of individual misses into release evidence.
 
-## A Supporting Example: Delivery ETA Review
-<!-- section-summary: A supporting example uses a delivery ETA model where average error, late-order tails, and segment misses all affect customers. -->
+You can think of the metric choice through five questions:
 
-Imagine **QuickBite**, a food delivery company. The app shows customers an estimated arrival time before checkout and keeps updating the ETA during delivery. The current model is `eta-minutes:v31`. A candidate model, `eta-minutes:v32`, adds restaurant prep-delay signals, courier supply features, and weather alerts.
+1. **Target:** Which numeric quantity and prediction horizon does the product consume?
+2. **Unit:** Should reviewers read the error in minutes, pounds, megawatts, units, or a relative scale?
+3. **Consequence:** Do ordinary misses, rare large misses, underprediction, or overprediction create the main cost?
+4. **Aggregation:** Should every row contribute linearly, should large errors receive extra weight, or should the median describe a typical row?
+5. **Evidence:** Which residual plots, target ranges, segments, baselines, and uncertainty checks limit the release claim?
 
-The evaluation dataset is `eta_holdout_2026_06_weekends`. It has 210,000 completed deliveries from weekend dinner windows. The label is `actual_minutes_to_door`, measured from order confirmation to doorstep delivery. The prediction is `predicted_minutes_to_door`.
-
-The table has these fields:
-
-| Field | Example | Why it matters |
-|---|---|---|
-| `order_id` | `ord_981377` | Trace one prediction to app logs |
-| `market` | `austin` | Checks local traffic and supply behavior |
-| `restaurant_type` | `pizza` | Prep-time patterns differ by cuisine |
-| `weather_bucket` | `heavy_rain` | Weather creates delay tails |
-| `distance_miles` | `4.8` | Distance affects baseline difficulty |
-| `predicted_minutes_to_door` | `38.2` | Model output |
-| `actual_minutes_to_door` | `46.0` | Ground truth |
-
-QuickBite cares about more than average error. A customer gets annoyed when a promised 25-minute order takes 50 minutes. A courier operations lead cares when the model repeatedly underestimates rainy Friday nights. A finance analyst cares if a changed ETA hurts conversion. The regression report needs numbers that match these concerns.
-
-## MAE, RMSE, And Business Units
-<!-- section-summary: MAE gives average miss in product units, while RMSE gives larger misses more weight. -->
-
-**Mean absolute error**, or **MAE**, is the average absolute miss. If the ETA says 38 minutes and the order arrives in 46 minutes, the absolute error is 8 minutes. MAE keeps the unit readable: minutes.
-
-**Root mean squared error**, or **RMSE**, also returns minutes, but it gives large misses more weight. A handful of 40-minute misses can move RMSE a lot. That makes RMSE useful when large misses are especially painful.
-
-QuickBite compares production and candidate:
-
-| Metric | Production `v31` | Candidate `v32` | Direction |
-|---|---:|---:|---|
-| MAE | 6.8 minutes | 6.1 minutes | Candidate improves average miss |
-| RMSE | 10.9 minutes | 10.4 minutes | Candidate improves large misses slightly |
-| p90 absolute error | 15.7 minutes | 14.9 minutes | Candidate improves tail somewhat |
-| 95th-percentile (p95) absolute error | 22.8 minutes | 23.6 minutes | Candidate worsens worst common tail |
-
-![QuickBite ETA error metrics](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/eta-error-metrics.png)
-*The ETA panel keeps the metrics in product units: the customer feels the eight-minute miss, while MAE, RMSE, and p95 summarize the pattern across many orders.*
-
-This is already a useful lesson. The candidate improves MAE and RMSE, yet p95 error gets worse. If QuickBite only looked at MAE, the candidate would look ready. The p95 gate tells the team that some late orders may be getting worse.
-
-Here is a small scikit-learn metric script:
-
-```python
-from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
-
-y_true = eval_df["actual_minutes_to_door"]
-y_pred = eval_df["predicted_minutes_to_door"]
-abs_error = (y_true - y_pred).abs()
-
-metrics = {
-    "mae_minutes": mean_absolute_error(y_true, y_pred),
-    "rmse_minutes": root_mean_squared_error(y_true, y_pred),
-    "p90_abs_error_minutes": abs_error.quantile(0.90),
-    "p95_abs_error_minutes": abs_error.quantile(0.95),
-    "r2": r2_score(y_true, y_pred),
-}
+```mermaid
+flowchart TD
+    T["Numeric target<br/>quantity, unit, horizon"] --> P["Prediction and observed outcome"] --> E["Residual and absolute error"] --> C["Product consequence<br/>ordinary, large, under, or over"] --> M["Metric family"] --> S["Distribution and segment checks"] --> G["Candidate-versus-production gate"]
+    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class T,P context
+    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E,C,M mechanism
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class S,G decision
 ```
 
-The code logs both average and tail metrics. **R-squared**, written as R², compares the model's squared error with a baseline that always predicts the evaluation set's mean target. A score of `1.0` means perfect predictions, `0.0` means the model performs like that mean baseline on this dataset, and a negative score means it performs worse. R² can change when the target distribution changes and it does not express error in minutes, so QuickBite keeps MAE and tail error as the product-facing gates.
+Units come before formulas. A model trained on standardized targets may report a small training loss that has no product meaning. The release evaluation should transform predictions back to the product scale. A log-price model should be inverse-transformed before reviewers read errors in currency. A multi-horizon demand model should report each horizon because an error tomorrow and an error twelve weeks ahead support different decisions.
 
-## Add Prediction Intervals And Coverage Checks
-<!-- section-summary: Prediction intervals show a plausible range for each prediction, and coverage checks reveal whether those ranges work for the full population and important segments. -->
+The label policy also needs a precise meaning. Delivery time might start at checkout, dispatch, or pickup. Energy demand might mean gross load or load after local generation. Two teams can calculate identical MAE code over targets that describe different events. A trustworthy report pins the target definition and unit beside every result. It also records the horizon and eligible population. Label maturity and any target transformation complete the comparison contract.
 
-A point prediction gives one number, such as `31 minutes`. A **prediction interval** gives a lower and upper bound for a future outcome, such as `24 to 43 minutes`. The range represents uncertainty from the model and the data. It differs from a confidence interval for an average metric: a confidence interval describes uncertainty in an estimate such as MAE, while a prediction interval describes uncertainty around an individual delivery.
+## Residuals Preserve the Size and Direction of Error
+<!-- section-summary: A residual records the signed gap between an observed value and its prediction, while absolute and squared errors transform that gap for different metric families. -->
 
-QuickBite trains quantile models for the 10th and 90th percentiles, then checks **empirical coverage**. Coverage is the fraction of actual delivery times that fall inside the interval. An 80% interval should cover close to 80% of comparable future orders. The team also checks interval width because a range from 1 to 180 minutes can achieve high coverage without helping a customer.
+Every aggregate regression metric starts from row-level error. The most informative first object is the **residual**. It preserves the gap for one prediction before an average hides its direction or size.
+
+### Keep the sign convention explicit
+
+The calculations below use one explicit convention:
+
+`residual = observed outcome - prediction`
+
+A positive residual means the model predicted too low. A negative residual means it predicted too high. Some tools use the opposite sign, so the report should state the convention.
+
+Suppose an order arrives in 50 minutes after a prediction of 42 minutes. Its residual is `50 - 42 = +8 minutes`. The positive sign says the model underestimated the time. A second order arrives in 34 minutes after the same 42-minute prediction. Its residual is `34 - 42 = -8 minutes`, which says the model overestimated.
+
+Both rows have an **absolute error** of eight minutes:
+
+`absolute error = |observed outcome - prediction|`
+
+Absolute error removes direction and preserves distance. **Squared error** also removes direction, then squares the distance:
+
+`squared error = (observed outcome - prediction)²`
+
+The two eight-minute misses each have squared error `64 minutes²`. Squaring makes a 40-minute miss contribute 25 times as much as an eight-minute miss because `40² / 8² = 25`.
+
+```mermaid
+flowchart TD
+    O["Observed outcome"] --> R["Residual<br/>observed minus prediction"]
+    P["Prediction"] --> R
+    R --> D["Signed residual<br/>direction and bias"]
+    R --> A["Absolute error<br/>distance in target units"]
+    R --> Q["Squared error<br/>large misses amplified"]
+    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class O,P input
+    classDef base fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class R base
+    classDef transform fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class D,A,Q transform
+```
+
+Signed residuals reveal systematic bias. If the average residual is `+4 megawatts`, the energy forecast usually runs four megawatts below observed load. Positive and negative residuals can cancel, so a mean residual near zero never proves that the predictions are close. A model that alternates between `+50` and `-50` has zero mean residual and severe error.
+
+The raw residual distribution should remain in the report. Useful summaries include the mean and median signed residual, median absolute error, MAE, upper quantiles of absolute error, and the largest reviewed errors. A histogram or empirical distribution shows whether the aggregate comes from many moderate misses or a small heavy tail.
+
+### Investigate extreme residuals
+
+Individual residuals also expose data problems. A 20,000-minute delivery error may represent a real operational failure, a timestamp bug, or a cancelled order that violates the label policy. The team should investigate the row before excluding it. Removing genuine hard cases narrows the evaluation population and overstates expected production quality.
+
+## MAE and Median Absolute Error Describe Typical Misses
+<!-- section-summary: MAE averages absolute errors in product units, while median absolute error describes the middle miss and resists the influence of a small number of extreme values. -->
+
+**Mean absolute error (MAE)** adds the absolute errors and divides by the number of examples. It answers how far a prediction misses on average in the same unit as the target.
+
+`MAE = mean(|observed - predicted|)`
+
+If a delivery model has MAE of six minutes, its absolute miss is six minutes on average over the evaluation rows. The metric keeps the target unit, which makes it easy to connect to product tolerance.
+
+MAE gives each extra unit of error the same incremental weight. A miss growing from two to three minutes adds one unit of loss. A miss growing from forty to forty-one minutes also adds one unit. This linear treatment fits products where cost grows roughly with distance.
+
+**Median absolute error (MedAE)** sorts the absolute errors and takes the middle value.
+
+`MedAE = median(|observed - predicted|)`
+
+MedAE describes the typical middle case and is robust to outliers. Consider five absolute errors: `2, 3, 3, 4, 38`. The median absolute error is three. MAE is ten because the 38-unit miss still contributes to the average.
+
+```mermaid
+flowchart TD
+    E["Absolute-error family"] --> M["MAE<br/>average distance, linear weight"]
+    E --> D["Median absolute error<br/>middle distance, outlier resistant"]
+    M --> C["Read together"]
+    D --> C
+    C --> G["Add signed bias, upper quantiles,<br/>segments, and support"]
+    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E source
+    classDef metric fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class M,D metric
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class C,G evidence
+```
+
+The difference between MAE and MedAE is evidence. Similar values suggest a relatively compact distribution. A much larger MAE suggests that large errors pull the average upward. The team then inspects p90 or p95 absolute error, a histogram, and the responsible examples.
+
+Median absolute error should not be confused with median signed residual. The first describes the middle distance from the outcome. The second describes the middle direction of error. A model can have median residual near zero and large median absolute error.
+
+MAE also connects to the statistical target. Minimizing expected absolute error estimates the conditional median of the outcome. That is sensible for a central delivery estimate or a typical property price. A product that needs the expected demand for total inventory may prefer a mean-targeting loss such as squared error.
+
+Neither MAE nor MedAE should stand alone as a release gate. MAE can hide a dangerous tail. MedAE can remain excellent while a substantial minority receives severe errors. The primary metric should travel with bias, tail, coverage, and segment guardrails.
+
+## MSE and RMSE Give Large Misses More Influence
+<!-- section-summary: MSE squares every residual and RMSE returns the square root to the target unit, so both react strongly to large errors. -->
+
+**Mean squared error (MSE)** averages squared residuals. Squaring changes the influence of every row, so the metric gives large misses far more weight than small misses.
+
+`MSE = mean((observed - predicted)²)`
+
+Squaring increases the influence of large errors. For the five absolute errors `2, 3, 3, 4, 38`, MSE is `296.4`. Its unit is squared, such as minutes squared, which is hard to explain to a product owner.
+
+**Root mean squared error (RMSE)** takes the square root of MSE.
+
+`RMSE = √MSE`
+
+The same example has RMSE about `17.2`, back in the original unit. RMSE remains much larger than MAE of ten because the 38-unit miss receives extra weight.
+
+```mermaid
+flowchart TD
+    E1["Error = 4"] --> A1["Absolute contribution = 4"]
+    E1 --> S1["Squared contribution = 16"]
+    E2["Error = 40"] --> A2["Absolute contribution = 40"]
+    E2 --> S2["Squared contribution = 1,600"]
+    A1 --> MAE["MAE grows linearly"]
+    A2 --> MAE
+    S1 --> RMSE["MSE and RMSE amplify large misses"]
+    S2 --> RMSE
+    classDef error fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E1,E2 error
+    classDef transform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class A1,A2,S1,S2 transform
+    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class MAE,RMSE result
+```
+
+RMSE deserves attention in systems where one very large miss creates disproportionate cost. Underestimating a peak electricity load can trigger expensive emergency purchases. A severe arrival-time error may cause a customer to miss a connection. A large demand miss can create a stockout across an entire region.
+
+Outlier sensitivity carries a trade-off. A data-entry error can dominate RMSE and produce a false model comparison. A genuine rare event can dominate RMSE and reveal exactly the risk the product needs to control. The evaluation pipeline should validate data integrity, retain a traceable exclusion policy, and publish metrics before and after any approved correction.
+
+Squared error targets the conditional mean. This makes MSE or RMSE aligned with forecasts used for expected totals. MAE targets the conditional median. On a skewed demand distribution, the mean can sit above the median. Two models may therefore optimize different numeric quantities even though both produce one number.
+
+The report should explain that target choice. Selecting RMSE solely because it punishes outliers can distort a product that cares linearly about every unit. Selecting MAE solely because its unit is familiar can understate catastrophic tails. Product cost determines the loss shape.
+
+## R-Squared and Explained Variance Need Context
+<!-- section-summary: R-squared and explained variance compare error with target variation, producing scale-free scores that still need unit-based errors, baselines, and bias checks. -->
+
+**R-squared (R²)** compares the model's squared error with a constant baseline that predicts the mean observed target on the evaluation set.
+
+`R² = 1 - model squared error / mean-baseline squared error`
+
+An R² of `1.0` represents perfect predictions. A score of `0.0` matches the mean baseline. A negative score is possible and means the model performs worse than that baseline on the evaluated data.
+
+```mermaid
+flowchart TD
+    Y["Observed target variation"] --> B["Mean-target baseline error"]
+    P["Model predictions"] --> E["Model squared error"]
+    B --> R["R² compares model error<br/>with baseline error"]
+    E --> R
+    R --> U["Keep MAE, RMSE, bias,<br/>and segment errors beside it"]
+    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class Y,P input
+    classDef comparison fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class B,E,R comparison
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class U evidence
+```
+
+R² has no target unit. That makes it convenient for a statistical comparison and weak for explaining product impact. An R² of `0.90` cannot tell a dispatcher whether the average ETA miss is three minutes or thirty minutes.
+
+The score also depends on target variation. A model may receive high R² on a nationwide price dataset with a wide price range and lower R² within one narrow neighborhood, even with similar currency error. Compare candidate and production on the same rows and preserve MAE or RMSE in the product unit.
+
+Constant targets need special care. R² is mathematically non-finite if every observed target is the same. Scikit-learn uses `force_finite=True` by default and replaces those cases with `1.0` for perfect predictions or `0.0` otherwise. A segment containing one constant target can therefore produce a convenient score that hides the underlying edge case. Report support, target variance, and unit-based error for each segment.
+
+**Explained variance** compares the variance of residuals with the variance of the target. Its best value is `1.0`. It ignores systematic offsets in the predictions. A model that adds ten units to every prediction can preserve explained variance while creating a serious bias.
+
+Scikit-learn notes that R² and explained variance are identical if residuals have zero mean. R² usually provides the stronger default because it accounts for systematic offset. Mean residual remains visible because neither scale-free summary replaces a bias check.
+
+## Percentage Error Can Distort Small Targets
+<!-- section-summary: MAPE scales each absolute error by the observed value, which helps compare target sizes and creates unstable or misleading results near zero. -->
+
+**Mean absolute percentage error (MAPE)** divides each absolute error by the magnitude of its observed target, then averages the ratios.
+
+`MAPE = mean(|observed - predicted| / |observed|)`
+
+A five-unit error against an observed value of 100 contributes five percent. The same five-unit error against an observed value of ten contributes fifty percent. This relative scale can help compare demand across large and small stores.
+
+The denominator creates the main problem. An observed value of zero makes the ordinary ratio undefined. A value close to zero creates an enormous contribution. Scikit-learn divides by a very small positive number and returns a large finite value in the zero case. One zero-demand row can dominate the report.
+
+```mermaid
+flowchart TD
+    E["Same absolute error = 5 units"] --> L["Observed target = 100<br/>relative error = 5%"]
+    E --> S["Observed target = 10<br/>relative error = 50%"]
+    E --> Z["Observed target = 0<br/>ordinary percentage undefined"]
+    L --> C["MAPE weights rows by target size"]
+    S --> C
+    Z --> G["Zero and near-zero policy required"]
+    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E source
+    classDef case fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class L,S,C case
+    classDef warning fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827; class Z,G warning
+```
+
+The library returns a relative value. A result of `0.18` represents 18 percent, so reports that display a percent multiply it by 100. Failing to record this convention can create a hundredfold reporting error.
+
+MAPE also shifts influence toward low-target rows. A store selling one item and missing by one receives 100 percent error. A store selling one thousand items and missing by one hundred receives ten percent. That weighting may fit equal store-level service. It may conflict with inventory cost, where the second miss loses far more units.
+
+Negative targets make percentage meaning harder to defend. Price changes, profit, and energy export can cross zero. The absolute denominator keeps the calculation finite away from zero, yet “percentage error” may no longer match the product's interpretation.
+
+Teams can use unit-based MAE by target band, scale errors by a meaningful capacity or business baseline, or calculate an aggregate ratio such as total absolute error divided by total actual volume for non-negative targets. Every alternative changes the weighting. The report should state the denominator, zero policy, aggregation level, and segments.
+
+## Quantile Loss Represents Asymmetric Costs
+<!-- section-summary: Pinball loss evaluates a chosen conditional quantile and assigns different penalties to underprediction and overprediction. -->
+
+Many products experience underprediction and overprediction differently. Underforecasting demand can cause a stockout. Overforecasting can create holding cost and waste. An ETA that is too optimistic frustrates a waiting customer, while a slightly conservative ETA may be acceptable.
+
+A single symmetric point metric gives equal loss to equal-sized misses in both directions. **Quantile regression** targets a chosen percentile of the outcome distribution. **Pinball loss**, also called quantile loss, evaluates that target with asymmetric weights.
+
+For residual `e = observed - predicted`:
+
+- underprediction has `e > 0` and receives loss `alpha × e`;
+- overprediction has `e < 0` and receives loss `(1 - alpha) × |e|`.
+
+At `alpha = 0.90`, an equal-sized underprediction receives nine times the loss of an overprediction. The metric is minimized by a model that estimates the conditional 90th percentile.
+
+```mermaid
+flowchart TD
+    C["Choose product consequence"] --> M["Median forecast<br/>balanced under and over"] --> A["alpha = 0.50"]
+    C --> H["High-demand or late-time forecast<br/>underprediction costs more"] --> Q["alpha above 0.50"]
+    C --> L["Low-demand bound<br/>overprediction costs more"] --> D["alpha below 0.50"]
+    A --> P["Evaluate with matching pinball loss"]
+    Q --> P
+    D --> P
+    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class C context
+    classDef target fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class M,H,L,A,Q,D target
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class P evidence
+```
+
+`alpha = 0.50` treats both directions equally and targets the conditional median, the same central target associated with absolute-error optimization. A 90th-percentile model needs `mean_pinball_loss(..., alpha=0.90)`. Evaluating it with ordinary MAE asks whether it predicts the median well, which is a different question.
+
+Quantiles can also form an interval. A 10th- and 90th-percentile pair describes a central 80 percent range. Coverage and interval width then need evaluation across the full population and important segments. A very wide interval can achieve high coverage and offer little operational value.
+
+The chosen quantile should trace to a product decision. A warehouse may stock to a high demand quantile because the cost of running out exceeds holding cost. A conservative capacity planner may use the upper load quantile. A price estimate shown as the most typical transaction may stay near the median.
+
+## Residual Distributions and Segments Reveal Concentrated Harm
+<!-- section-summary: Residual plots, target bands, time slices, and product segments expose bias, heavy tails, changing variance, and failures hidden by one aggregate metric. -->
+
+An aggregate metric compresses many rows into one number. The compression can hide systematic bias, heavy tails, and failures concentrated in one part of production.
+
+Residual analysis opens that summary again. The team reads the distribution, error direction, target range, and product segments together. The expected result is a map of where the candidate improves, where it regresses, and which examples explain the difference.
+
+Several shapes deserve explicit review:
+
+- **Bias:** residuals sit mainly above or below zero.
+- **Heavy tails:** most predictions are close, while a small group has severe misses.
+- **Changing variance:** error spread grows with the target, horizon, or forecast value.
+- **Multimodality:** several operating regimes produce distinct error clusters.
+- **Segment concentration:** one region, device, supplier, route, or time window carries most of the harm.
+
+```mermaid
+flowchart TD
+    R["Row-level residuals"] --> D["Distribution<br/>median, MAE, RMSE, p90, p95"] --> F["Find tails and outliers"] --> E["Release evidence and failed examples"]
+    R --> V["Direction<br/>mean and median residual"]
+    R --> T["Target and prediction bands"]
+    R --> S["Predefined product segments"]
+    V --> B["Find systematic bias"]
+    T --> H["Find changing error scale"]
+    S --> G["Find concentrated regressions"]
+    B --> E
+    H --> E
+    G --> E
+    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class R input
+    classDef analysis fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class D,V,T,S,F,B,H,G analysis
+    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class E result
+```
+
+Plot residuals against predictions, observed targets, and time. A widening fan shape suggests that large targets carry larger error variance. A wave pattern over time may reveal seasonality. A cluster of positive residuals during peak hours indicates systematic underprediction.
+
+Segments should follow the intended use and known failure modes. Delivery-time evaluation may slice by route length, weather, city, and hour. Demand evaluation may slice by store size, category, promotion, and stockout history. Price evaluation may slice by geography, property type, and price band.
+
+Aggregation changes conclusions. Suppose 90,000 common cases improve from MAE `5.0` to `4.5`, while 10,000 high-impact cases worsen from `8.0` to `11.0`. Overall MAE improves from `5.3` to `5.15`. The high-impact segment still adds three units of error per case. A single average rewards the larger easy group.
+
+Every segment row should include support, candidate and production values, coverage, target range, and uncertainty. Sparse rows narrow the claim. Missing predictions or labels create a coverage failure; dropping them from the denominator can make the metric look better.
+
+Segment searches also need discipline. Predefine important slices from product boundaries, domain risk, and incident history. Exploratory slices can reveal hypotheses. Confirm a newly discovered problem with appropriate fresh evidence before granting or denying broad authority.
+
+## Build Product-Aligned Regression Gates
+<!-- section-summary: A regression release gate compares candidate and production on identical rows, combines one primary product metric with bias, tail, segment, and coverage guardrails, and records the supported scope. -->
+
+A regression gate starts from the product cost of error. Delivery-time promises may use MAE as the primary metric, with underprediction bias and p95 absolute error as guardrails. Energy planning may use RMSE or high-quantile pinball loss because peak misses carry disproportionate cost. Property estimates may use median absolute error, MAE by price band, and a relative metric with an explicit denominator policy.
+
+The candidate and production paths need the same eligible rows, labels, target transformation, horizon, and sample weights. A candidate evaluated only on rows where it returned a prediction can gain an unfair advantage. Join coverage and null-prediction rate belong in the gate.
+
+The focused example below expects one scored table containing the observed demand, production point forecast, candidate point forecast, and a candidate 90th-percentile forecast. It rejects small targets before calculating MAPE, preserves signed residual summaries, and reports several scikit-learn metrics. The visible result is a pair of comparable dictionaries over the same rows.
 
 ```python
 import numpy as np
+from sklearn import metrics
 
-lower = lower_quantile_model.predict(eval_features)
-upper = upper_quantile_model.predict(eval_features)
-actual = eval_df["actual_minutes_to_door"].to_numpy()
+required = [
+    "actual_units", "production_units",
+    "candidate_units", "candidate_q90_units",
+]
+frame = eval_df[required].dropna()
+if len(frame) != len(eval_df):
+    raise ValueError("missing labels or predictions")
 
-inside = (actual >= lower) & (actual <= upper)
-interval_report = {
-    "nominal_coverage": 0.80,
-    "empirical_coverage": float(inside.mean()),
-    "mean_width_minutes": float(np.mean(upper - lower)),
-    "crossed_interval_rate": float(np.mean(lower > upper)),
+y_true = frame["actual_units"].to_numpy()
+if np.any(np.abs(y_true) < 10):
+    raise ValueError("MAPE policy excludes targets below 10 units")
+
+def summarize(prediction):
+    residual = y_true - prediction
+    absolute = np.abs(residual)
+    return {
+        "mean_residual": float(np.mean(residual)),
+        "median_residual": float(np.median(residual)),
+        "p95_absolute_error": float(np.quantile(absolute, 0.95)),
+        "mae": metrics.mean_absolute_error(y_true, prediction),
+        "median_absolute_error": metrics.median_absolute_error(y_true, prediction),
+        "rmse": metrics.root_mean_squared_error(y_true, prediction),
+        "r2": metrics.r2_score(y_true, prediction),
+        "explained_variance": metrics.explained_variance_score(y_true, prediction),
+        "mape_percent": 100 * metrics.mean_absolute_percentage_error(y_true, prediction),
+    }
+
+report = {
+    "production": summarize(frame["production_units"].to_numpy()),
+    "candidate": summarize(frame["candidate_units"].to_numpy()),
+    "candidate_q90_pinball": metrics.mean_pinball_loss(
+        y_true, frame["candidate_q90_units"], alpha=0.90
+    ),
 }
+print(report)
 ```
 
-The release gate rejects crossed intervals immediately. It requires overall coverage between `0.78` and `0.84`, then applies segment floors of `0.75` for heavy rain, long-distance orders, and each launch city. This tolerance accounts for sampling noise while still detecting an uncertainty model that is too narrow. The dashboard plots coverage and mean width together. A sudden width increase can signal unfamiliar traffic even when point-error metrics remain stable.
+The input contract makes the comparison fair. `residual = actual - prediction` keeps positive values aligned with underforecasting. MAE, MedAE, RMSE, and residual quantiles stay in demand units. MAPE is labelled as a percent after multiplying scikit-learn's relative output by 100. The 90th-percentile forecast receives a matching pinball loss.
 
-Intervals also change the product contract. QuickBite can show customers a delivery window, route unusually wide intervals to an operational review, or use the upper bound when staffing dispatch capacity. The product team validates the wording with users because an interval has value only when the interface explains it clearly.
+The same job should repeat the metrics for predefined target bands and product segments. It should save residual distributions, the largest reviewed errors, coverage counts, model and dataset identities, library versions, and the gate configuration. MLflow can store these artifacts beside the candidate run; the metric meaning should remain readable without the tracking interface.
 
-## Percentage Error And Bias
-<!-- section-summary: Percentage error helps compare different scales, and bias shows whether predictions usually run high or low. -->
+A practical gate might require:
 
-**Percentage error** compares the miss with the actual value. If a 10-minute pickup estimate misses by 5 minutes, that is a 50% miss. If a 90-minute catering order misses by 5 minutes, that is a much smaller product problem. Percentage metrics help when the target value has very different sizes.
+- candidate MAE to improve over production by a meaningful margin;
+- p95 absolute error and underprediction bias to remain inside product limits;
+- no required segment to exceed its MAE, RMSE, or quantile-loss floor;
+- prediction and label coverage to meet the declared minimum;
+- the largest errors to pass data-integrity review;
+- the supported release population to match the evaluated population.
 
-For delivery ETAs, percentage error can be noisy for very short orders. A two-minute difference on a four-minute pickup creates a huge percentage. QuickBite therefore reports MAPE only for deliveries above 15 minutes and keeps MAE as the primary metric.
+The candidate-versus-production difference comes from a finite sample. Report the paired change and an interval that respects the sampling unit, such as store-day or route-day. The interval shows whether the observed improvement is precise enough for the release claim. It should stay beside the practical margin; a tiny precise gain may still lack product value.
 
-The team also checks **bias**, which is the average signed error. Signed error uses `prediction - actual`. A negative value means the model usually promises earlier delivery than reality. That is dangerous because customers experience it as lateness.
+The gate output should state the approved scope. A candidate may improve common demand while failing promoted items. The deployment can retain production for promotions and authorize the candidate elsewhere. Monitoring then uses the same residual sign, target bands, segments, and label policy as the release report.
 
-| Slice | MAE | MAPE for orders over 15 min | Mean signed error |
-|---|---:|---:|---:|
-| All deliveries | 6.1 min | 18.4% | -1.7 min |
-| Clear weather | 5.4 min | 16.0% | -0.8 min |
-| Heavy rain | 9.8 min | 26.5% | -5.9 min |
-| Distance over 5 miles | 10.7 min | 21.2% | -4.6 min |
+## The Main Idea
+<!-- section-summary: Regression metrics translate numeric misses into evidence by preserving units, direction, error-cost shape, residual distribution, and population scope. -->
 
-This table points to the real issue. The candidate underestimates rainy and long-distance orders. The app may show customers a confident ETA that the operation cannot meet. The fix may involve features, training data, or a product rule that widens ETA ranges during heavy rain.
+Regression predicts a number. Each prediction creates a residual whose sign shows direction and whose magnitude shows distance from the observed outcome.
 
-## Residuals, Tails, And Segments
-<!-- section-summary: Residual analysis shows where errors concentrate and which groups need release gates. -->
+MAE expresses average distance in the target unit. Median absolute error describes the middle miss and resists extreme rows. MSE and RMSE give large errors more influence. R² and explained variance compare error with target variation, while unit-based metrics and bias preserve product meaning. MAPE introduces a relative scale and needs an explicit policy for zero and small targets. Pinball loss represents asymmetric costs through a chosen quantile.
 
-A **residual** is `actual - predicted`. Positive residuals mean the real delivery took longer than predicted. Negative residuals mean the delivery arrived earlier than predicted. Residuals help reviewers see patterns that one metric hides.
-
-QuickBite creates a segment report:
-
-| Segment | Orders | MAE | p95 absolute error | Mean residual | Gate |
-|---|---:|---:|---:|---:|---|
-| All orders | 210,000 | 6.1 | 23.6 | 1.7 | Review |
-| Austin | 41,000 | 5.8 | 21.4 | 1.1 | Pass |
-| Boston | 35,000 | 6.6 | 26.9 | 2.5 | Review |
-| Heavy rain | 12,800 | 9.8 | 37.2 | 5.9 | Block |
-| Pizza | 28,500 | 7.5 | 29.4 | 3.8 | Review |
-| Distance over 5 miles | 19,300 | 10.7 | 41.0 | 4.6 | Block |
-
-![QuickBite residual segment gates](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/residual-segment-gates.png)
-*Residuals show where the ETA model under-promises delivery time, and the segment gates highlight the heavy-rain and long-distance slices that block full rollout.*
-
-The candidate cannot ship to all traffic because heavy rain and long-distance orders fail the p95 gate. The team can still consider a scoped rollout to clear-weather markets, yet the model needs a mitigation before full release.
-
-The segment report should include enough support to avoid overreacting to tiny slices. A segment with 23 examples can start an investigation, but it should not carry the same release weight as a segment with 12,800 orders.
-
-Warehouse SQL can generate the same report for every candidate:
-
-```sql
-SELECT
-  segment_name,
-  COUNT(*) AS orders,
-  AVG(ABS(actual_minutes_to_door - predicted_minutes_to_door)) AS mae_minutes,
-  APPROX_QUANTILES(ABS(actual_minutes_to_door - predicted_minutes_to_door), 100)[OFFSET(95)] AS p95_abs_error_minutes,
-  AVG(actual_minutes_to_door - predicted_minutes_to_door) AS mean_residual_minutes
-FROM ml_eval.eta_predictions
-WHERE model_version = 'eta-minutes:v32'
-  AND eval_dataset = 'eta_holdout_2026_06_weekends'
-GROUP BY segment_name
-ORDER BY p95_abs_error_minutes DESC;
-```
-
-This query is useful because operations managers often trust warehouse reports more than notebook screenshots. It also lets dashboards track evaluation results across model versions.
-
-## Build The Evaluation Job
-<!-- section-summary: A regression evaluation job should log metrics, residual artifacts, segment tables, and comparison reports in a repeatable way. -->
-
-Regression evaluation should run as a job, not as an untracked notebook. The job loads the holdout dataset, scores the candidate, computes metrics, writes segment artifacts, and stores the report beside the model run.
-
-MLflow can log model evaluation metrics, and Evidently can produce regression quality reports with plots such as actual versus predicted and error distributions. Evidently 0.7 requires an explicit `Dataset` and `DataDefinition` for this prediction-quality workflow. QuickBite maps the observed delivery time as the target and the model's ETA as the prediction, then adds fixed pass or fail conditions for MAE and RMSE.
-
-```python
-import json
-from importlib.metadata import version
-
-import mlflow
-from evidently import DataDefinition, Dataset, Regression, Report
-from evidently.metrics import MAE, RMSE
-from evidently.presets import RegressionPreset
-from evidently.tests import lte
-
-feature_frame = eval_df[feature_columns + ["actual_minutes_to_door"]]
-definition = DataDefinition(
-    regression=[Regression(
-        target="actual_minutes_to_door",
-        prediction="predicted_minutes_to_door",
-    )],
-    categorical_columns=["market", "restaurant_type", "weather_bucket"],
-    numerical_columns=[
-        "distance_miles",
-        "actual_minutes_to_door",
-        "predicted_minutes_to_door",
-    ],
-)
-current_dataset = Dataset.from_pandas(
-    eval_df,
-    data_definition=definition,
-)
-reference_dataset = Dataset.from_pandas(
-    prod_eval_df,
-    data_definition=definition,
-)
-
-with mlflow.start_run(run_name="eta-minutes-v32-evaluation"):
-    result = mlflow.models.evaluate(
-        model="models:/quickbite-eta-minutes/32",
-        data=feature_frame,
-        targets="actual_minutes_to_door",
-        model_type="regressor",
-    )
-    mlflow.log_dict(result.metrics, "metrics/mlflow_regression_metrics.json")
-
-    report = Report([
-        RegressionPreset(),
-        MAE(mean_tests=[lte(6.3)]),
-        RMSE(tests=[lte(10.8)]),
-    ])
-    snapshot = report.run(
-        current_data=current_dataset,
-        reference_data=reference_dataset,
-    )
-    payload = json.loads(snapshot.json())
-    failures = [
-        test["name"]
-        for test in payload["tests"]
-        if test["status"] in {"FAIL", "ERROR"}
-    ]
-    if version("evidently") != "0.7.21":
-        raise RuntimeError("evaluation image must pin evidently==0.7.21")
-    mlflow.log_dict(
-        payload,
-        "metrics/evidently_regression_snapshot.json",
-    )
-    if failures:
-        raise RuntimeError(f"Evidently regression gate failed: {failures}")
-    print({
-        "evidently": version("evidently"),
-        "tests": [(test["name"], test["status"]) for test in payload["tests"]],
-    })
-
-    segment_table.to_csv("segment_metrics.csv", index=False)
-    mlflow.log_artifact("segment_metrics.csv", artifact_path="evaluation")
-```
-
-`Regression` tells Evidently exactly which two columns form the error. `MAE` returns a mean and standard deviation, so its current API accepts the release condition through `mean_tests`. `RMSE` returns one value and accepts `tests`. The smoke fixture for the pinned evaluation image prints:
-
-```console
-{'evidently': '0.7.21', 'tests': [('Mean Absolute Error: Less or Equal 6.300', 'SUCCESS'), ('RMSE: Less or Equal 10.800', 'SUCCESS')]}
-```
-
-The job fails before promotion if either test reports `FAIL` or `ERROR`. Increasing one fixture prediction from `48` to `108` minutes makes both tests fail, which proves that a large tail miss reaches the gate. Removing `actual_minutes_to_door` makes report execution fail, which proves that missing labels cannot produce a green regression report. As with classification, the job stores the failed report in a failure-artifact location before returning a non-zero exit code.
-
-The evaluation output still needs an executable decision. Current MLflow separates classic evaluation from threshold validation, while QuickBite's tail and segment requirements remain custom product rules:
-
-```python
-from mlflow.models import MetricThreshold
-
-mlflow.validate_evaluation_results(
-    candidate_result=result,
-    validation_thresholds={
-        "mean_absolute_error": MetricThreshold(threshold=6.3, greater_is_better=False),
-        "root_mean_squared_error": MetricThreshold(threshold=10.8, greater_is_better=False),
-    },
-)
-
-failed_segments = segment_table.query(
-    "mae_minutes > mae_limit or p95_abs_error_minutes > p95_limit"
-)
-assert failed_segments.empty, failed_segments[
-    ["segment", "mae_minutes", "p95_abs_error_minutes"]
-].to_dict(orient="records")
-```
-
-The Evidently and MLflow headline thresholds should agree within the versioned evaluation tolerance because they evaluate the same scored rows. A difference points to stale predictions, a column-mapping error, or inconsistent preprocessing. The overall thresholds pass for version 32, while heavy rain and long-distance traffic fail the custom gate. The job emits those observed values, the limits, example order IDs, and the approved scope. A missing segment row also fails because the matrix of required segments is checked before the query runs.
-
-Unit tests use ten hand-calculated deliveries to prove MAE and p95 direction, then increase one tail error and expect the segment gate to fail. An integration test points the job at a dataset without `weather_bucket` and expects an evidence error instead of silently omitting heavy-rain traffic.
-
-The job should fail when required columns are missing, when the holdout dataset version is missing, or when the candidate produces null predictions. A bad evaluation job should block the model before reviewers waste time reading unreliable numbers.
-
-## Write Release Gates For Numeric Models
-<!-- section-summary: Regression release gates should combine average error, tail error, bias, segment floors, and rollback actions. -->
-
-A regression model release gate should describe what level of error the product accepts. The gate should include average error, large misses, bias, segment checks, and any scope limits for rollout.
-
-QuickBite writes this gate:
-
-```yaml
-regression_release_gate:
-  model: eta-minutes
-  candidate: v32
-  baseline: v31
-  evaluation_dataset: eta_holdout_2026_06_weekends
-  primary:
-    mae_minutes:
-      max: 6.3
-      must_improve_over_baseline: true
-  guardrails:
-    rmse_minutes:
-      max: 10.8
-    p95_abs_error_minutes:
-      max: 23.0
-    mean_residual_minutes:
-      min: -1.0
-      max: 2.0
-  segments:
-    - name: heavy_rain
-      mae_minutes_max: 8.5
-      p95_abs_error_minutes_max: 30.0
-    - name: distance_over_5_miles
-      mae_minutes_max: 9.0
-      p95_abs_error_minutes_max: 32.0
-  release_decision:
-    if_failed: hold_full_rollout
-    allowed_scope: clear_weather_orders_under_5_miles
-    rollback_alias: eta-minutes@production
-```
-
-![QuickBite regression evaluation release packet](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/regression-release-packet.png)
-*The release packet connects the holdout data, MLflow metrics, Evidently report, segment table, and gate decision into one repeatable review artifact.*
-
-This gate says the candidate can help some traffic while still failing full release. That is a practical MLOps decision. The release owner can ship a scoped route, collect fresh labels, and keep production protected for risky segments.
-
-## Putting It Together
-<!-- section-summary: Regression evaluation works when the team reads average error, large misses, bias, and segment behavior in product units. -->
-
-Regression metrics measure how far numeric predictions miss. MAE gives an average miss in familiar units. RMSE gives larger misses more weight. Percentage error helps when target sizes vary. Residuals show direction. Tail metrics and segment reports show where the worst product pain lives.
-
-For QuickBite, the candidate improves average ETA error, yet heavy-rain and long-distance orders fail the release gate. The right decision is a scoped rollout or another training cycle, not a blind full release. The metric report helps because it tells the team which customers benefit and which customers still need protection.
+A production decision uses the full distribution. It compares candidate and production on the same rows, examines bias and tails, repeats the metrics across target bands and product segments, and encodes practical limits with coverage and uncertainty. The result explains who benefits, where error grows, and which traffic the evidence supports.
 
 ## References
 
-- [scikit-learn: Regression metrics](https://scikit-learn.org/stable/modules/model_evaluation.html#regression-metrics) - Official guide to regression scoring functions.
-- [scikit-learn: mean_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_error.html) - Official API reference for MAE.
-- [scikit-learn: root_mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.root_mean_squared_error.html) - Official API reference for RMSE, added in scikit-learn 1.4.
-- [scikit-learn: mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_squared_error.html) - Official API reference for MSE.
-- [scikit-learn: r2_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html) - Official definition and interpretation of R², including negative scores.
-- [scikit-learn: Gradient Boosting quantile regression](https://scikit-learn.org/stable/auto_examples/ensemble/plot_gradient_boosting_quantile.html) - Official example for prediction intervals from quantile regression.
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/) - Official guide to classic evaluation and current threshold validation.
-- [Evidently Data Definition](https://docs.evidentlyai.com/docs/library/data_definition) - Current `Dataset`, `DataDefinition`, and `Regression` column-role mapping.
-- [Evidently Tests](https://docs.evidentlyai.com/docs/library/tests) - Current custom test conditions, including the `mean_tests` form used by multi-output metrics.
-- [Evidently Regression Preset](https://docs.evidentlyai.com/metrics/preset_regression) - Official Evidently documentation for regression metrics, plots, and tests.
+- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official regression metric definitions and guidance connecting the predicted functional to its scoring rule.
+- [scikit-learn: mean_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_error.html) - Official API reference for MAE and multi-output aggregation.
+- [scikit-learn: median_absolute_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.median_absolute_error.html) - Official definition of the outlier-resistant median absolute error.
+- [scikit-learn: root_mean_squared_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.root_mean_squared_error.html) - Official API reference for RMSE in the target unit.
+- [scikit-learn: r2_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html) - Official interpretation of R², negative scores, constant-target behavior, and `force_finite`.
+- [scikit-learn: explained_variance_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.explained_variance_score.html) - Official explanation of systematic-offset limitations and the relationship to R².
+- [scikit-learn: mean_absolute_percentage_error](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_percentage_error.html) - Official MAPE scaling and zero or near-zero target behavior.
+- [scikit-learn: mean_pinball_loss](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_pinball_loss.html) - Official pinball-loss API and quantile interpretation.

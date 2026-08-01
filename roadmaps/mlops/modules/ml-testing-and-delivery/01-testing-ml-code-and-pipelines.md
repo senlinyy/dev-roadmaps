@@ -11,6 +11,23 @@ aliases:
   - child-ci-cd-for-ml-01-testing-ml-code-and-pipelines
 ---
 
+## Table of Contents
+
+1. [Why ML Pipeline Tests Need More Than Unit Tests](#why-ml-pipeline-tests-need-more-than-unit-tests)
+2. [Test The Transform Before The Model](#test-the-transform-before-the-model)
+3. [Validate Data Contracts](#validate-data-contracts)
+4. [Add A Training Smoke Test](#add-a-training-smoke-test)
+5. [Test Pipeline Behavior](#test-pipeline-behavior)
+6. [Mock Services At The Boundary](#mock-services-at-the-boundary)
+7. [Gate Candidate Models With Evaluation Tests](#gate-candidate-models-with-evaluation-tests)
+8. [Test Model Behavior, Not Only One Metric](#test-model-behavior-not-only-one-metric)
+9. [Run The Right Tests In CI](#run-the-right-tests-in-ci)
+10. [Save Test Reports As Artifacts](#save-test-reports-as-artifacts)
+11. [Build Useful Test Fixtures](#build-useful-test-fixtures)
+12. [Common Mistakes](#common-mistakes)
+13. [Review Changes Through The Test Layers](#review-changes-through-the-test-layers)
+14. [References](#references)
+
 ## Why ML Pipeline Tests Need More Than Unit Tests
 <!-- section-summary: ML pipeline tests cover code, data contracts, training behavior, evaluation gates, orchestration, and release evidence. -->
 

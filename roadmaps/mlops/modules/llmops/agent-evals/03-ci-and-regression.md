@@ -7,485 +7,474 @@ order: 3
 id: "article-mlops-llmops-ci-and-regression"
 ---
 
-## Why CI Regression Evals Exist
+## Table of Contents
 
-<!-- section-summary: CI regression evals run the same agent tests on every important change so prompt, model, tool, retrieval, and grader updates do not quietly break known behavior. -->
+1. [An Agent Regression Is a Lost Behaviour](#an-agent-regression-is-a-lost-behaviour)
+2. [Regression Evidence Comes From Several Suite Layers](#regression-evidence-comes-from-several-suite-layers)
+3. [Deterministic and Stochastic Checks Need Different Rules](#deterministic-and-stochastic-checks-need-different-rules)
+4. [Version the Entire Evaluation Bundle](#version-the-entire-evaluation-bundle)
+5. [Baselines Compare Like With Like](#baselines-compare-like-with-like)
+6. [Repeated Trials Measure Uncertainty](#repeated-trials-measure-uncertainty)
+7. [Release Gates Separate Blockers From Quality Budgets](#release-gates-separate-blockers-from-quality-budgets)
+8. [Trace Diffing Explains What Changed](#trace-diffing-explains-what-changed)
+9. [Flake Triage Protects Trust in the Gate](#flake-triage-protects-trust-in-the-gate)
+10. [CI Tiers Balance Speed, Cost, and Coverage](#ci-tiers-balance-speed-cost-and-coverage)
+11. [A Focused CI Job Runs the Gate](#a-focused-ci-job-runs-the-gate)
+12. [Release Reports Preserve the Decision](#release-reports-preserve-the-decision)
+13. [Production Failures Grow the Regression Suite](#production-failures-grow-the-regression-suite)
+14. [References](#references)
 
-**CI and regression evals** are the bridge between agent experimentation and production discipline. CI means the eval suite runs automatically in your development workflow, usually on pull requests and before deployment. Regression means the suite checks whether behavior that used to work still works after a change. For an LLM agent, that change might be a prompt edit, model upgrade, retrieval index update, tool schema change, planner change, or grader change.
+## An Agent Regression Is a Lost Behaviour
 
-In this article, you are working on **Atlas Research**, an internal coding and research agent used by the platform team at Cedar Metrics. Engineers ask Atlas Research to search internal repositories, summarize design docs, inspect test failures, draft migration plans, and propose code snippets. The agent can call tools such as `repo_search`, `read_file`, `run_tests`, `query_rfc_index`, and `summarize_trace`. It can open pull-request context, although it cannot merge code or change production systems.
+<!-- section-summary: An agent regression occurs after a change causes previously accepted behaviour to fail, even if the final response still sounds convincing. -->
 
-This kind of agent needs CI evals because failures can look subtle. The agent may still sound confident while citing a file that no longer exists. It may skip tests after a prompt change. It may use a broad repository search and miss the exact package that owns the bug. It may pass easy research questions and fail the known incident playbook question that senior engineers care about. Manual spot checks catch some of this, and a regression suite catches it every time.
+At a high level, an **agent regression** means that a behaviour which previously met its requirements now fails after a change. The change could affect a prompt, model, tool schema, retrieval system, orchestrator, safety policy, or grader. The lost behaviour might be answer quality, correct tool use, approval handling, recovery from an error, or respect for a cost limit.
 
-OpenAI's current agent evaluation guidance points to traces, graders, datasets, and eval runs for improving agent quality. Its evaluation best-practices guidance also emphasizes task-specific evals, logging, automation, human feedback, and continuous evaluation. For CI, those ideas turn into a practical rule: every meaningful agent change should produce a report that compares the new agent run against a trusted baseline and makes the release decision visible.
+This idea comes from ordinary software testing, with one important addition. An agent produces both an answer and a path through a changing environment. A useful regression suite therefore checks the outcome and the path. It reruns stable cases against a candidate version, compares the evidence with an accepted baseline, and turns the differences into a release decision.
 
 ```mermaid
-flowchart LR
-    A[Prompt, model, tool, retrieval, or policy change] --> B[Versioned eval bundle]
-    B --> C[Candidate and baseline runs]
-    C --> D[Deterministic, model, and outcome graders]
-    D --> E[Slice, severity, latency, and cost report]
-    E --> F{Release gates pass?}
-    F -->|no| G[Block and diagnose]
-    F -->|yes| H[Staged deployment]
-    H --> I[Production outcomes]
-    I -. confirmed failures .-> B
+flowchart TD
+    A["Prompt, model, tool, retrieval,<br/>or orchestration change"] --> B["Run versioned cases"]
+    B --> C["Collect outcomes and traces"]
+    C --> D["Compare candidate with baseline"]
+    D --> E{"Release evidence"}
+    E -->|Pass| F["Continue to staged rollout"]
+    E -->|Fail| G["Diagnose and repair"]
 ```
 
-CI owns the repeatable evidence up to the gate. Staged deployment and production monitoring own the remaining uncertainty from live traffic, integrations, and delayed outcomes.
+### Why final-answer snapshots miss important failures
 
-## What You Put Under Version Control
+A text snapshot compares the new response with a stored response. That technique works for exact strings and tightly controlled templates. Agent responses often have many valid phrasings, so a harmless wording change can fail the snapshot. A more serious process failure can also pass if the final paragraph still sounds plausible.
 
-<!-- section-summary: A CI-ready eval setup versions the dataset, runner, graders, thresholds, prompts, tools, and baseline reports so every score can be explained later. -->
+Consider an agent that must check a refund policy and request approval before issuing a credit. A final-answer check may accept “The refund was approved.” The trace could reveal that the agent read an expired policy, skipped approval, received an error from the payment tool, and reported success anyway. The words alone hide the safety and state failures.
 
-Before writing a workflow file, decide which eval artifacts live in the repo. The goal is reproducibility. When a pull request changes the coding-agent prompt, reviewers should see exactly which dataset ran, which graders scored it, which baseline was used, and which thresholds controlled the gate.
+A useful agent regression case can examine several kinds of evidence:
 
-For Atlas Research, the repo keeps the eval cases in JSONL, the grader code in Python, and the threshold config in YAML. Baseline reports live under a versioned folder and are updated only through an approved "baseline refresh" pull request. That separation is important. A normal prompt change should compare against the current baseline. A baseline refresh should explain why the expected behavior changed.
+- the final outcome in the authoritative system;
+- required and forbidden tool calls;
+- tool arguments and returned status;
+- ordering rules such as approval before a write;
+- recovery after timeouts or rejected arguments;
+- latency, token use, and estimated cost;
+- trace completeness and grader confidence.
+
+The suite does not demand one identical trajectory for every run. It protects the properties that define acceptable behaviour. If two search strategies both use current sources and produce a grounded answer, both paths may pass. If either path performs an unauthorized write, the case fails.
+
+## Regression Evidence Comes From Several Suite Layers
+
+<!-- section-summary: Layered suites place fast deterministic checks close to development and reserve slower live evaluation for broader system evidence. -->
+
+One eval suite rarely provides every kind of evidence at a practical speed. In essence, a **layered suite** gives each question to the cheapest environment capable of answering it reliably. Fast contract checks catch basic breakage during development. Full agent cases test decisions and trajectories. Live integration checks confirm that external providers and deployed services still behave as expected.
+
+The layers form a progression from controlled evidence to realistic evidence. Higher layers usually cost more and vary more. Lower layers run frequently and point to a narrow defect. A release decision combines them without pretending that one score represents the whole system.
+
+```mermaid
+flowchart TD
+    A["Tool and schema contracts<br/>fast, deterministic"] --> B["Agent behaviour cases<br/>controlled tools and traces"]
+    B --> C["Outcome and integration cases<br/>real service boundaries"]
+    C --> D["Live-provider smoke suite<br/>small and current"]
+    D --> E["Staged rollout and online evals<br/>production traffic evidence"]
+```
+
+### Contract and component suites
+
+The first layer checks ordinary software properties. Tool schemas parse. Required fields are present. Permission rules reject unauthorized calls. A state reducer produces the expected next state. Retrieval filters preserve tenant boundaries. These tests can use fixtures, stubs, and sandbox records. They should run on every relevant pull request because the result is stable and the defect is usually local.
+
+For example, a tool contract test can submit a refund request without an `approval_id` and assert that validation rejects it. No model call is needed. Another test can confirm that an orchestrator routes `tool_timeout` into a bounded recovery state. These checks protect agent infrastructure before stochastic reasoning enters the run.
+
+### Behaviour and trajectory suites
+
+The next layer runs the agent against versioned tasks. It checks semantic outcomes plus important events in the trace. A customer-support case may accept several polite answers while requiring a current policy lookup and forbidding a payment write. A coding-agent case may allow different exploration paths while requiring tests before a completion claim.
+
+[OpenAI agent evals](https://developers.openai.com/api/docs/guides/agent-evals) connect datasets, eval runs, graders, and trace grading for this purpose. [LangSmith evaluation](https://docs.langchain.com/langsmith/evaluation-concepts) organizes offline experiments around datasets and examples. [MLflow GenAI evaluation](https://mlflow.org/docs/latest/genai/eval-monitor/) records traces, scorers, datasets, and comparison results. Each platform uses different names around the edges, yet the core objects are similar: case, run, evidence, grader, and result.
+
+### Integration, live-provider, and production suites
+
+Integration cases exercise real boundaries such as a vector store, identity service, or tool sandbox. A small live-provider suite also catches model endpoint changes, authentication problems, quota failures, and tool-calling incompatibilities. Its cases should be few, high value, and isolated from irreversible effects.
+
+Production online evaluation serves a different purpose. It observes real traffic, delayed outcomes, and previously unseen inputs after release. Canary analysis and monitoring can stop a rollout, while the merge-time suite protects known behaviour earlier. A production failure should eventually enter an offline regression dataset after privacy review and expert labeling.
+
+## Deterministic and Stochastic Checks Need Different Rules
+
+<!-- section-summary: Exact contracts can use binary assertions, while variable model behaviour requires repeated trials and statistical summaries. -->
+
+Agent systems mix deterministic software with stochastic model behaviour. **Deterministic checks** should return the same answer for the same controlled input. **Stochastic checks** can vary because model sampling, provider infrastructure, retrieval order, and external tools introduce uncertainty. Treating both groups as a single average score creates confusing gates.
+
+The practical rule is simple: use exact assertions for exact requirements, then use repeated evidence for variable behaviour.
+A required approval, forbidden tool, schema field, effect ledger, or maximum retry count is a contract.
+Semantic helpfulness, path efficiency, and recovery quality often need a rubric or model judge.
+
+```mermaid
+flowchart TD
+    A["Evaluation requirement"] --> B{"Can one run prove it?"}
+    B -->|Yes| C["Deterministic assertion"]
+    B -->|No| D["Repeated trials"]
+    C --> E["Pass or blocker"]
+    D --> F["Rate, distribution,<br/>and uncertainty"]
+    E --> G["Release gate"]
+    F --> G
+```
+
+### Deterministic checks protect invariants
+
+An **invariant** is a rule that must hold across every acceptable path. Examples include “the account ID never changes,” “approval precedes the write,” and “a failed tool result cannot be reported as success.” The evaluator reads structured trace fields or authoritative state to prove these rules.
+
+Suppose a scheduling agent may call either `find_slots` or `find_team_slots`. Both choices can be valid. The invariant requires a successful calendar write before the response says that a meeting was booked. A deterministic grader can inspect the tool result and calendar sandbox. One violation is meaningful; averaging it with several successful trials would weaken the contract.
+
+### Stochastic checks describe rates and distributions
+
+A semantic answer grader may pass four runs and fail one. That result carries more information than either “passed” or “failed.” The report should retain trial outcomes, grader reasons, and the uncertainty around the observed pass rate. Latency and cost also form distributions, so teams often compare medians and tail values such as p95.
+
+Model-based graders need versioning and calibration. Their prompts, models, rubrics, and output parsing all affect results. Human-reviewed examples should verify that the judge recognizes acceptable variation and catches important failures. A grader change creates a new measurement system, which is why baseline comparison needs special handling.
+
+## Version the Entire Evaluation Bundle
+
+<!-- section-summary: Reproducible regression evidence records the cases, environment, agent, graders, runner, and thresholds as one versioned bundle. -->
+
+A score can only be interpreted alongside the conditions that produced it. The **evaluation bundle** is the full set of inputs and rules for one run. It includes the dataset, environment fixtures, agent configuration, model settings, prompt, tool contracts, retrieval snapshot, graders, runner, and gate policy.
+
+Think of the bundle as a build manifest for behavioural evidence. If a result changes, the manifest helps reviewers identify which parts changed. If a provider model uses an alias that can move, record the resolved model identifier where the provider exposes one. If retrieval depends on a mutable index, capture a snapshot or immutable corpus version.
 
 ```yaml
-suite: atlas-research-ci
-owner: llm-platform
-agent: atlas-research
-dataset_version: "2026.07.05"
-baseline: "baselines/atlas-research/2026-07-01-main.json"
+suite: agent-release
+dataset: datasets/release-v12.jsonl
+environment: fixtures/support-sandbox-v7
+agent:
+  revision: "${GIT_SHA}"
+  prompt: prompts/support-agent-v19.md
+  tools: contracts/support-tools-v8.json
+  retrieval_snapshot: policies-v31
+model:
+  name: "${MODEL_NAME}"
+  temperature: 0
+graders:
+  revision: graders-v14
+  judge_model: "${JUDGE_MODEL}"
 runner:
-  repetitions_per_item: 3
-  max_concurrency: 6
-  timeout_seconds_per_item: 90
-gates:
-  blockers_allowed: 0
-  overall_min_pass_rate: 0.90
-  severe_slice_min_pass_rate: 0.98
-  max_quality_score_drop: 0.025
-  max_cost_increase_ratio: 1.20
-  max_mean_cost_usd_when_baseline_zero: 0.01
-slices:
-  repo_grounding:
-    min_pass_rate: 0.94
-  code_change_plan:
-    min_pass_rate: 0.90
-  research_citations:
-    min_pass_rate: 0.92
-  incident_playbooks:
-    min_pass_rate: 0.98
+  revision: eval-runner-v6
+  trials_per_case: 5
+gate_policy: policies/release-gate-v9.yaml
 ```
 
-The config says how many repetitions to run, which baseline to compare against, and which gates control release. Repetitions matter because agents can choose slightly different paths across runs. The severe slice has a stricter threshold because incident playbook guidance and internal security instructions carry more risk than ordinary code-search questions.
+The manifest deliberately points to separately versioned artifacts. The CI job should resolve those references, calculate content hashes, and write the resolved values into the report. A Git commit alone cannot identify a hosted dataset, mutable model alias, or remote grader configuration.
 
-The dataset item should also be versioned. Here is one regression case that came from a real internal failure. Atlas Research once answered a migration question from an old README and missed the newer RFC that changed the deployment path. The eval case now forces the agent to search the RFC index and cite the correct source.
+### Version changes by ownership
 
-```json
-{
-  "id": "atlas_rfc_grounding_0048",
-  "suite": "atlas-research-ci",
-  "split": "regression",
-  "input": {
-    "task": "Explain how the billing-events service should publish replay-safe events after the July 2026 migration.",
-    "repo_context": {
-      "repositories": ["billing-platform", "eventing-core"],
-      "branch": "main"
-    },
-    "available_tools": [
-      "repo_search",
-      "read_file",
-      "query_rfc_index"
-    ]
-  },
-  "expected": {
-    "required_sources": [
-      "RFC-0427-replay-safe-billing-events",
-      "billing-platform/services/billing-events/README.md"
-    ],
-    "forbidden_sources": [
-      "RFC-0311-legacy-event-publisher"
-    ],
-    "must_include": [
-      "idempotency key",
-      "event schema version",
-      "dead-letter replay process"
-    ],
-    "must_call_tools": [
-      "query_rfc_index",
-      "repo_search",
-      "read_file"
-    ],
-    "severity": "high"
-  },
-  "metadata": {
-    "source": "production_failure",
-    "added_by": "platform-oncall",
-    "reviewed_by": "eventing-tech-lead",
-    "created_at": "2026-07-03"
-  }
-}
+Different owners review different parts of the bundle. Domain experts approve expected outcomes and severity. Platform engineers own runner and environment reproducibility. Security teams own permission and data-handling rules. Model engineers own prompts, model settings, and semantic graders. The release report should show which bundle fields changed so the right reviewer can focus on the relevant evidence.
+
+OpenAI Datasets support shared test data and grader iteration. LangSmith datasets keep examples for offline experiments. MLflow evaluation datasets can record structured inputs and expectations. Teams can use one of these services as the system of record, while still exporting immutable identifiers and hashes into CI artifacts.
+
+## Baselines Compare Like With Like
+
+<!-- section-summary: A baseline represents accepted behaviour under a compatible evaluation bundle, allowing candidate deltas to support a fair release decision. -->
+
+A **baseline** is the accepted result from a known agent version. It answers a practical question: did this candidate preserve or improve behaviour under comparable conditions? The baseline usually comes from the current production version or the most recently approved release candidate.
+
+Fair comparison requires the candidate and baseline to share the measurement system.
+They need the same dataset cases, environment, grader versions, runner logic, and trial policy.
+If the grader or environment changes, rerun the accepted agent with the new bundle.
+Comparing an old score from grader version 6 with a candidate score from grader version 7 mixes behaviour change with measurement change.
+
+```mermaid
+flowchart TD
+    A["Evaluation bundle unchanged"] --> B["Reuse compatible baseline result"]
+    C["Dataset, environment, grader,<br/>or runner changed"] --> D["Rerun accepted agent"]
+    B --> E["Run candidate"]
+    D --> E
+    E --> F["Absolute gates and paired deltas"]
 ```
 
-An **idempotency key** names one intended event publication so a retry can replay the recorded result instead of publishing the event twice. A **dead-letter queue** holds messages that repeatedly fail processing so operators can inspect and replay them after the cause is fixed. Those are domain requirements inside the fixture, while the fixture itself tests more than the final paragraph: it checks whether the agent used the RFC index, searched the repo, read the live README, avoided the legacy RFC, and included the operational details that matter for replay-safe events. A CI runner can grade those pieces with trace assertions and answer rubrics.
+### Absolute requirements and relative deltas answer different questions
 
-![Atlas Research versioned eval artifacts](/content-assets/articles/article-mlops-llmops-ci-and-regression/atlas-versioned-eval-artifacts.png)
+An absolute gate asks whether the candidate is safe and useful enough. Examples include zero unauthorized writes, at least 95% pass rate on a critical policy slice, and p95 latency below the service objective. A relative gate asks whether the candidate regressed compared with the baseline, such as a pass-rate drop greater than two percentage points.
 
-*Atlas Research keeps cases, graders, thresholds, prompts, tool schemas, baselines, pull-request runs, and report artifacts visible to reviewers.*
+Both are useful. A weak baseline should never authorize another weak release merely because the delta is small. An unusually strong baseline should not cause a harmless sampling fluctuation to block every candidate. The gate policy can combine a hard floor, an allowed delta, and uncertainty evidence.
 
-## Build a Regression Baseline
+For example, suppose the accepted agent passes 96% of billing-policy trials and the candidate passes 91%. The candidate may remain above a broad 90% floor, yet the five-point drop signals a regression. A separate security slice with one unauthorized action should fail immediately, regardless of the overall average.
 
-<!-- section-summary: A baseline records the accepted behavior of the current production agent so future changes can be compared with score deltas and failure reasons. -->
+### Baseline promotion is a reviewed release action
 
-A **regression baseline** is the accepted report from a known-good version of the agent. It gives CI something concrete to compare against. Without a baseline, every eval run is just a score. With a baseline, you can see which cases improved, which cases regressed, and whether cost or latency moved outside the team's limits.
+Promote a new baseline after the candidate passes and is accepted for release. Store the resolved bundle, raw case results, trace references, summary metrics, and approval record. Updating the baseline to silence a failing pull request erases the evidence. If expected behaviour genuinely changed, update the affected cases and explain the product or policy decision in review.
 
-For Atlas Research, the baseline comes from the current production prompt, production tool schemas, current retrieval index, and current grader version. The team stores the baseline report with metadata. That metadata prevents confusion later when someone asks whether a score changed because the prompt changed or because the grader changed.
+## Repeated Trials Measure Uncertainty
 
-```json
-{
-  "suite": "atlas-research-ci",
-  "baseline_id": "atlas-research-main-2026-07-01",
-  "agent_version": "atlas-research@2026.07.01",
-  "prompt_version": "research-agent-prompt@18",
-  "tool_schema_version": "coding-tools@12",
-  "retrieval_index_version": "rfc-index@2026.07.01",
-  "grader_version": "agent-regression-graders@7",
-  "dataset_version": "2026.07.05",
-  "summary": {
-    "items": 180,
-    "overall_pass_rate": 0.933,
-    "blockers": 0,
-    "quality_score": 0.871,
-    "median_latency_ms": 18400,
-    "mean_cost_usd": 0.083
-  },
-  "slices": {
-    "repo_grounding": { "pass_rate": 0.948, "items": 58 },
-    "code_change_plan": { "pass_rate": 0.914, "items": 43 },
-    "research_citations": { "pass_rate": 0.927, "items": 52 },
-    "incident_playbooks": { "pass_rate": 0.982, "items": 27 }
-  }
-}
+<!-- section-summary: Repeated trials estimate how reliably a variable agent meets its requirements and show whether an observed score difference is credible. -->
+
+One successful agent run proves that success is possible. It says little about reliability. **Repeated trials** run the same case several times under controlled conditions and record the proportion of acceptable outcomes. This exposes intermittent tool choices, fragile recovery paths, and semantic answers that only sometimes meet the rubric.
+
+Uncertainty matters most near a gate. A candidate that passes 18 of 20 trials has an observed 90% pass rate, yet the sample is small. The true reliability could be meaningfully higher or lower. A confidence interval or bootstrap interval communicates that uncertainty. More trials narrow the interval, with a corresponding increase in cost and runtime.
+
+```mermaid
+flowchart TD
+    A["Same case and fixtures"] --> B["Baseline trials"]
+    A --> C["Candidate trials"]
+    B --> D["Pass rate and distributions"]
+    C --> D
+    D --> E["Paired delta and uncertainty"]
+    E --> F{"Clear decision?"}
+    F -->|Yes| G["Apply gate"]
+    F -->|No| H["Run more trials or review"]
 ```
 
-The baseline should be refreshed intentionally. If the company retires an old deployment tool, some eval items should change. If a grader is too strict and human review proves it is wrong, the grader should change. If the model provider releases a new model and the team promotes it, the baseline should change after review. The baseline refresh pull request should include the reason, new report, old report, and a human approval from the owner of the affected slice.
+### Pair trials under comparable conditions
 
-Avoid refreshing baselines casually. If every failing prompt change updates the baseline in the same pull request, the regression suite loses its purpose. A normal change compares against the baseline. A baseline change explains why accepted behavior changed.
+Paired comparison reduces noise by running baseline and candidate against the same case, fixture version, tool responses, and evaluation policy. A fixed random seed can help with local components, although hosted models may still vary. Limit concurrency if rate limits or shared resources change tool behavior.
 
-![Atlas Research baseline comparison](/content-assets/articles/article-mlops-llmops-ci-and-regression/atlas-baseline-comparison.png)
+A **paired bootstrap** repeatedly resamples the case-level baseline and candidate differences to estimate a confidence interval for the overall delta. A simpler team may report Wilson intervals for pass rates and require a minimum sample size. The statistical method matters less than making uncertainty visible and applying it consistently.
 
-*The baseline comparison turns a current pull-request run into deltas for pass rate, quality, cost, latency, repo grounding, and incident-playbook slices.*
+### Critical events keep their blocker semantics
 
-## Run Evals in GitHub Actions
+Repeated trials never turn a safety violation into a small average penalty. If one run sends a write before approval, the case records a blocker occurrence. The report can also show its frequency, such as one violation in ten trials. Release policy can then require zero occurrences and a minimum number of clean trials for critical workflows.
 
-<!-- section-summary: The CI workflow installs the eval runner, executes the suite, compares against the baseline, and uploads a report artifact that reviewers can inspect. -->
+Trial counts should follow risk and cost. Fast deterministic checks need one run. Critical stochastic cases deserve more repetitions. Broad low-risk suites may use fewer trials on pull requests and more during scheduled or pre-release runs.
 
-GitHub Actions workflows are YAML files under `.github/workflows`. A workflow can run on pull requests, pushes, schedules, or manual triggers. GitHub's official docs describe workflows as configurable automated processes made of jobs and steps, and its artifact docs describe uploading files from a workflow run for debugging and review.
+## Release Gates Separate Blockers From Quality Budgets
 
-Here is a practical workflow for Atlas Research. It runs when agent prompts, tools, graders, datasets, or the workflow itself change. It uses current major versions from the official GitHub actions repositories checked during this audit: `actions/checkout@v6`, `actions/setup-python@v6`, and `actions/upload-artifact@v7`. The v7 artifact action uses the Node.js 24 action runtime, so self-hosted runners need a compatible runner release. Production repositories can pin the full commit SHA as an additional supply-chain control instead of accepting a moving major tag.
+<!-- section-summary: A release gate evaluates hard behavioural contracts separately from bounded changes in quality, latency, token use, and cost. -->
+
+A **release gate** converts eval evidence into an automated pass or fail. Strong gates separate hard blockers from quality and resource budgets. This distinction stops a high average score from hiding a severe failure, while still allowing teams to manage normal variation in softer metrics.
+
+Blockers represent unacceptable events: an unauthorized effect, sensitive-data disclosure, missing required approval, false success claim, incomplete trace for a critical case, or failure of a mandatory tool contract. Budgets cover bounded tradeoffs such as semantic quality, task completion rate, latency, token use, tool-call count, and estimated cost.
+
+### Slice gates protect important groups
+
+Overall averages can hide a concentrated regression.
+A support agent might improve on common account questions while losing accuracy on cancellation policy.
+A **slice** groups cases by a meaningful property such as locale, workflow, risk level, tool, customer segment, or input length.
+Each critical slice needs its own minimum sample size and threshold.
+
+The gate below shows the important logic without tying it to a specific evaluation platform:
+
+```python
+def release_allowed(report, policy):
+    if report.blocker_occurrences > 0:
+        return False
+    if report.trace_completeness < policy.min_trace_completeness:
+        return False
+    if report.critical_slice_lower_bound < policy.min_critical_quality:
+        return False
+    if report.quality_delta_lower_bound < -policy.max_quality_drop:
+        return False
+    if report.p95_latency_ms > policy.max_p95_latency_ms:
+        return False
+    if report.mean_cost_usd > policy.max_mean_cost_usd:
+        return False
+    return True
+```
+
+The `lower_bound` fields use the conservative end of an uncertainty interval. This policy requires uncertainty evidence alongside the point estimate. Teams with few trials can send borderline results to manual review or schedule more runs.
+
+### Cost and latency are part of agent behaviour
+
+An agent can preserve answer quality while doubling tool calls or repeatedly retrying a slow service. That change affects user experience and infrastructure spend. Record end-to-end latency plus useful components such as model time, tool time, and queue time. Report token usage, tool calls, and provider cost using the resolved pricing policy.
+
+Use separate limits for sudden regressions and absolute service objectives. A 20% latency increase may matter even below the maximum. A small percentage increase may also violate the absolute objective if the baseline was already close to the limit. For highly variable latency, compare p50 and p95 alongside timeout frequency.
+
+## Trace Diffing Explains What Changed
+
+<!-- section-summary: Trace diffing compares meaningful agent events and points reviewers to the earliest behavioural divergence between baseline and candidate. -->
+
+A failed score tells the team that behaviour changed. A **trace diff** helps explain how. It compares normalized baseline and candidate trajectories, then highlights meaningful differences in tool selection, arguments, state transitions, handoffs, guardrails, retries, and outcomes.
+
+Raw traces contain values that change every run, including timestamps, span identifiers, request identifiers, and token-level details. A useful diff removes those fields, redacts sensitive payloads, and maps platform-specific records into a stable event schema. The comparison should preserve event order and causal parent relationships where they affect the task.
+
+```mermaid
+flowchart TD
+    A["Baseline trace"] --> C["Normalize and redact"]
+    B["Candidate trace"] --> C
+    C --> D["Align semantic events"]
+    D --> E["Find first meaningful divergence"]
+    E --> F["Tool, argument, state,<br/>recovery, or outcome difference"]
+```
+
+Suppose the baseline path is `search_policy → read_policy → request_approval`, while the candidate path is `search_policy → issue_credit`. The first meaningful divergence occurs after search. The candidate skipped evidence reading and approval. A reviewer can inspect the prompt or planner decision around that event without reading every model token.
+
+Another trace may contain the same tool names with different arguments. The baseline searches `policy_status=current`; the candidate omits the status filter and reads an archived policy. The diff should show the argument change, retrieved document version, and downstream claim. Matching only tool names would miss the regression.
+
+### Alignment must allow valid path variation
+
+Exact sequence comparison is often too strict. One run may perform two independent reads in a different order. Another may retry a transient read once. Normalize equivalent events and use partial-order rules for dependencies such as “approval precedes write.” Reserve exact sequence assertions for protocols that truly require them.
+
+OpenAI trace grading can evaluate end-to-end agent traces. LangSmith and MLflow expose trace records and experiment comparisons that support investigation. Teams often add a small normalization layer so release reports retain a stable diff format across SDK or observability changes.
+
+## Flake Triage Protects Trust in the Gate
+
+<!-- section-summary: Flake triage distinguishes expected model variation from unstable infrastructure, incomplete evidence, weak graders, and genuine intermittent defects. -->
+
+A **flaky eval** changes result across equivalent runs without an intentional product change. Flakes waste review time and eventually teach developers to ignore CI. Triage should identify the source of variation and assign an owner. Automatic retries that continue until the suite turns green hide useful evidence.
+
+Five common sources deserve separate treatment. Model variability changes a semantic decision. Tool or environment nondeterminism changes the available evidence. Trace instrumentation drops events. A grader applies the rubric inconsistently. The agent contains a genuine intermittent defect such as a race, unbounded retry, or fragile planner branch.
+
+```mermaid
+flowchart TD
+    A["Case changes result"] --> B{"Evidence complete?"}
+    B -->|No| C["Repair tracing or runner"]
+    B -->|Yes| D{"Tool state changed?"}
+    D -->|Yes| E["Stabilize fixture or integration"]
+    D -->|No| F{"Graders agree with review?"}
+    F -->|No| G["Calibrate grader"]
+    F -->|Yes| H["Model variation or agent defect"]
+    H --> I["Repeat, classify severity, assign owner"]
+```
+
+### Reruns gather evidence; they do not erase the first result
+
+A bounded rerun policy can help classify a failure. Keep the original result and mark every rerun. If the case passes four times and fails once, report five trials with one failure. For a semantic low-risk case, the release policy may evaluate the estimated pass rate. For an authorization case, the single violation remains a blocker.
+
+Quarantine is appropriate only for a known low-risk test defect with an owner and expiry condition. The quarantined case should continue running so the team sees whether it recovers. A flaky critical case needs repair or an explicit risk decision because removing it would create a blind spot.
+
+Caching can speed local evaluation. LangSmith's pytest integration supports cached LLM calls, for example. Cached responses are useful for deterministic runner and grader development. A live-provider compatibility tier should bypass that cache so it can detect provider-side changes.
+
+## CI Tiers Balance Speed, Cost, and Coverage
+
+<!-- section-summary: CI tiers run small high-signal suites near each change and move broader repeated evaluation to later release stages. -->
+
+Running every case with many trials on every commit can be slow and expensive. **CI tiers** match suite depth to the development stage. The earliest tiers provide rapid feedback. Later tiers add breadth, repeated trials, live integrations, and production evidence.
+
+Each tier should have a clear purpose. A pull-request gate protects known critical behaviour. A scheduled suite measures broader quality and detects provider drift. A pre-release suite exercises realistic integration boundaries. Production monitoring checks live traffic and delayed outcomes.
+
+```mermaid
+flowchart TD
+    A["Local development<br/>contracts and focused cases"] --> B["Pull request<br/>critical regression subset"]
+    B --> C["Main branch<br/>broader offline suite"]
+    C --> D["Scheduled run<br/>repeated and live-provider checks"]
+    D --> E["Pre-release<br/>integration and load evidence"]
+    E --> F["Staged production<br/>canary and online evals"]
+```
+
+### Local and pull-request tiers
+
+Local tests should finish quickly and avoid irreversible external actions. They cover schema validation, policy invariants, grader unit tests, and a few targeted cases for the code under change. Pull requests add the frozen critical set and known regressions. Path filters can skip unrelated work, while a manual trigger supports investigation.
+
+The pull-request report should finish within the team's normal review cycle. Expensive cases can use fewer trials here if blocker checks remain strong. Any reduced coverage must be visible in the report.
+
+### Main, scheduled, and release tiers
+
+The main-branch suite can run a broader dataset after merge. Scheduled evaluation can use more trials, judge calibration checks, and the small live-provider suite. Pre-release jobs exercise deployed candidate endpoints, identity, retrieval, tool sandboxes, and representative load.
+
+Equivalent tiers work in GitHub Actions, GitLab CI, Jenkins, Buildkite, or managed cloud pipelines. The product choice affects workflow syntax. The release logic stays the same: resolve a bundle, run cases, grade evidence, compare a compatible baseline, apply gates, and publish the report.
+
+## A Focused CI Job Runs the Gate
+
+<!-- section-summary: A practical CI job installs a locked runner, executes the selected tier, preserves the report, and returns a failing exit code for a blocked release. -->
+
+The CI workflow should stay small because the evaluation runner owns the domain logic. The workflow selects the tier, supplies approved secrets, executes the runner, uploads its report, and preserves the exit code. Dataset handling, trial execution, grading, statistics, and gate policy belong in tested application code.
+
+The following GitHub Actions job illustrates that boundary. It uses current major releases from the official `actions` repositories. Production teams may pin full commit SHAs for stronger supply-chain control. The job grants read-only repository permission and keeps provider credentials in GitHub secrets or an identity-federated secret manager.
 
 ```yaml
-name: atlas-research-agent-evals
+name: agent-regression
 
 on:
   pull_request:
-    paths:
-      - "agents/atlas-research/**"
-      - "evals/atlas-research/**"
-      - ".github/workflows/atlas-research-agent-evals.yml"
+    paths: ["agent/**", "evals/**", ".github/workflows/agent-regression.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  regression-evals:
+  critical-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: "pip"
-          cache-dependency-path: "evals/atlas-research/requirements.lock"
-
-      - name: Verify the reviewed dependency lock
-        working-directory: evals/atlas-research
-        run: sha256sum --check requirements.lock.sha256
-
-      - name: Install eval dependencies
-        run: python -m pip install --require-hashes -r evals/atlas-research/requirements.lock
-
-      - name: Run regression suite
+          cache-dependency-path: "evals/requirements.lock"
+      - run: pip install --require-hashes -r evals/requirements.lock
+      - name: Run release gate
         env:
-          ATLAS_AGENT_ENV: ci
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
-        run: |
-          python evals/atlas-research/run_suite.py \
-            --config evals/atlas-research/ci-suite.yml \
-            --output reports/atlas-research/current.json \
-            --jsonl reports/atlas-research/items.jsonl
-
-      - name: Compare with baseline
-        run: |
-          python evals/atlas-research/compare_regression.py \
-            --config evals/atlas-research/ci-suite.yml \
-            --current reports/atlas-research/current.json \
-            --baseline baselines/atlas-research/2026-07-01-main.json \
-            --output reports/atlas-research/regression-summary.json
-
-      - name: Upload eval report
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: python -m evals.run --tier pull-request --report reports/eval.json
+      - name: Preserve evaluation report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: atlas-research-eval-report
-          path: reports/atlas-research/
-          if-no-files-found: error
-          retention-days: 14
+          name: agent-regression-report
+          path: reports/
 ```
 
-The workflow separates running the suite from comparing the report. That makes debugging easier. If the runner fails because a tool schema changed, you inspect `current.json` and `items.jsonl`. If the runner succeeds and the comparison fails, you inspect `regression-summary.json`. The artifact upload runs with `if: always()` so reviewers still get evidence after a failing gate. `requirements.lock` is both the pip input and the cache key input; `requirements.lock.sha256` is a small reviewed file containing a line such as `7dc6...  requirements.lock`. The checksum step detects a lockfile change that was not accompanied by an intentional checksum review, while `pip --require-hashes` verifies the downloaded distributions named inside the lock.
+The runner should return a nonzero exit code after a gate fails. It should still write the report before exiting so reviewers can see the cases, grader reasons, trace links, and metric deltas. `if: always()` preserves that report after a failed run.
 
-Do not put provider keys or tracing keys in the dataset. Keep them in CI secrets or workload identity. Also keep traces privacy-aware. Internal coding agents can expose private repo names, incident details, customer IDs in logs, or security-sensitive instructions. The OpenAI Agents SDK tracing docs call out sensitive data capture controls, and the same habit applies to any tracing backend.
+### Platform integrations can publish richer evidence
 
-## Gate Releases Without Freezing Development
+[LangSmith's pytest integration](https://docs.langchain.com/langsmith/pytest) can turn decorated tests into dataset examples and experiment results with pass/fail feedback. [MLflow regression testing](https://mlflow.org/docs/latest/genai/eval-monitor/regression-testing/) provides `@mlflow.test`, `mlflow.genai.evaluate()`, and `result.passed` for pytest-based gates. OpenAI Datasets and eval runs can host shared cases and grader results. A team can use these services inside the runner while keeping the CI exit code and report schema portable.
 
-<!-- section-summary: Release gates should block severe regressions while allowing reviewed improvements, known flakes, and intentional baseline updates through the right process. -->
+The same pattern maps to GitLab CI or Jenkins: use a locked environment, narrow credentials, bounded timeout, artifact upload, and the runner's exit code. Cloud-hosted eval jobs can also report status back to the source-control check if they preserve the same release evidence.
 
-A release gate is the rule that decides whether a change can ship. For LLM agents, a single average score is too blunt. You need blocker rules, slice thresholds, score deltas, and cost or latency limits. The goal is to catch real regressions while keeping useful iteration moving.
+## Release Reports Preserve the Decision
 
-Here is a compact comparison script. It reads the current report, the baseline, and the thresholds. It fails the CI step when a blocker appears, a pass-rate threshold is missed, or the quality score drops too far. In a production version, you would add richer report formatting and links to trace dashboards.
+<!-- section-summary: A release report records what ran, how it differed from the baseline, why the gate decided, and where reviewers can inspect evidence. -->
 
-```python
-import argparse
-import json
-import sys
-from pathlib import Path
+A CI badge gives one bit of information. A **release report** preserves the evidence behind that bit. It allows a reviewer to answer which bundle ran, which baseline was compatible, which cases failed, whether failures clustered in a slice, how uncertain the metrics are, and which resource budgets changed.
 
-import yaml
-
-
-def load_json(path: str) -> dict:
-    return json.loads(Path(path).read_text())
-
-
-def load_yaml(path: str) -> dict:
-    return yaml.safe_load(Path(path).read_text())
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--current", required=True)
-    parser.add_argument("--baseline", required=True)
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
-
-    config = load_yaml(args.config)
-    current = load_json(args.current)
-    baseline = load_json(args.baseline)
-    gates = config["gates"]
-    failures: list[str] = []
-
-    current_summary = current["summary"]
-    baseline_summary = baseline["summary"]
-
-    if current_summary["blockers"] > gates["blockers_allowed"]:
-        failures.append(
-            f"blockers: {current_summary['blockers']} > {gates['blockers_allowed']}"
-        )
-
-    if current_summary["overall_pass_rate"] < gates["overall_min_pass_rate"]:
-        failures.append(
-            "overall pass rate: "
-            f"{current_summary['overall_pass_rate']:.3f} < "
-            f"{gates['overall_min_pass_rate']:.3f}"
-        )
-
-    quality_drop = baseline_summary["quality_score"] - current_summary["quality_score"]
-    if quality_drop > gates["max_quality_score_drop"]:
-        failures.append(
-            f"quality score drop: {quality_drop:.3f} > "
-            f"{gates['max_quality_score_drop']:.3f}"
-        )
-
-    baseline_cost = baseline_summary["mean_cost_usd"]
-    current_cost = current_summary["mean_cost_usd"]
-    if baseline_cost <= 0:
-        if current_cost > gates.get("max_mean_cost_usd_when_baseline_zero", 0):
-            failures.append(
-                "mean cost: baseline is zero and current cost exceeds "
-                "max_mean_cost_usd_when_baseline_zero"
-            )
-    else:
-        cost_ratio = current_cost / baseline_cost
-        if cost_ratio > gates["max_cost_increase_ratio"]:
-            failures.append(
-                f"mean cost ratio: {cost_ratio:.2f} > "
-                f"{gates['max_cost_increase_ratio']:.2f}"
-            )
-
-    for slice_name, slice_config in config["slices"].items():
-        pass_rate = current["slices"][slice_name]["pass_rate"]
-        if pass_rate < slice_config["min_pass_rate"]:
-            failures.append(
-                f"{slice_name} pass rate: {pass_rate:.3f} < "
-                f"{slice_config['min_pass_rate']:.3f}"
-            )
-
-    report = {
-        "decision": "fail" if failures else "pass",
-        "failures": failures,
-        "current": current_summary,
-        "baseline": baseline_summary,
-    }
-    Path(args.output).write_text(json.dumps(report, indent=2) + "\n")
-
-    if failures:
-        print("Regression gate failed")
-        for failure in failures:
-            print(f"- {failure}")
-        return 1
-
-    print("Regression gate passed")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-```
-
-The script keeps policy out of code as much as possible. Thresholds live in YAML where owners can review them. The code only applies the thresholds. This makes release decisions easier to audit. If the incident-playbook threshold changes from 0.98 to 0.95, the diff is visible and reviewers can challenge it.
-
-Some teams use soft gates for early projects. A soft gate posts a report without blocking merge. That can be useful while the dataset and graders are still being calibrated. For production agents, severe slices should eventually block release. The exact timeline should be written down so the suite does not stay advisory forever.
-
-## Read the Report Artifact
-
-<!-- section-summary: A good CI artifact explains the release decision, score deltas, failing items, trace links, grader reasons, and follow-up owners. -->
-
-The report artifact is the object reviewers actually use. It should answer five questions quickly: did the gate pass, what changed from the baseline, which items failed, where is the trace evidence, and who owns the next step. A report that only says "pass rate 88 percent" leaves reviewers with detective work.
-
-Here is a useful JSON artifact for Atlas Research:
+The report should be machine-readable for automation and readable through a summary page or pull-request comment. Keep sensitive prompts, tool payloads, and customer data in access-controlled trace storage. The CI artifact can contain redacted summaries plus stable references.
 
 ```json
 {
-  "suite": "atlas-research-ci",
-  "decision": "fail",
-  "current_run_id": "evalrun_2026_07_05_1142",
-  "baseline_id": "atlas-research-main-2026-07-01",
-  "agent_version": "atlas-research@pr-2187",
-  "dataset_version": "2026.07.05",
-  "summary": {
-    "overall_pass_rate": {
-      "current": 0.889,
-      "baseline": 0.933,
-      "delta": -0.044
-    },
-    "quality_score": {
-      "current": 0.842,
-      "baseline": 0.871,
-      "delta": -0.029
-    },
-    "blockers": 1,
-    "mean_cost_usd": {
-      "current": 0.091,
-      "baseline": 0.083,
-      "ratio": 1.10
-    }
-  },
-  "failed_gates": [
-    "overall pass rate below 0.900",
-    "quality score drop above 0.025",
-    "blockers above 0"
-  ],
-  "top_regressions": [
-    {
-      "item_id": "atlas_rfc_grounding_0048",
-      "slice": "repo_grounding",
-      "severity": "high",
-      "baseline_status": "pass",
-      "current_status": "fail",
-      "reasons": [
-        "missing required source RFC-0427-replay-safe-billing-events",
-        "used forbidden source RFC-0311-legacy-event-publisher"
-      ],
-      "trace_url": "https://traces.example.com/trace/trace_atlas_8842",
-      "owner": "eventing-tech-lead"
-    },
-    {
-      "item_id": "atlas_test_plan_0019",
-      "slice": "code_change_plan",
-      "severity": "medium",
-      "baseline_status": "pass",
-      "current_status": "fail",
-      "reasons": [
-        "answer recommended code change without test command"
-      ],
-      "trace_url": "https://traces.example.com/trace/trace_atlas_8849",
-      "owner": "llm-platform"
-    }
-  ],
-  "next_steps": [
-    "Inspect trace_atlas_8842 retrieval spans",
-    "Check whether the new prompt demotes RFC index search",
-    "Rerun the suite after prompt fix"
-  ]
+  "decision": "blocked",
+  "suite": "agent-release",
+  "candidate_revision": "git-sha",
+  "baseline_revision": "accepted-release",
+  "bundle_digest": "sha256:...",
+  "blockers": [{"case": "approval-17", "reason": "write_before_approval"}],
+  "quality": {"candidate": 0.93, "baseline": 0.95, "delta": -0.02},
+  "critical_slice": {"lower_bound": 0.89, "required": 0.94},
+  "p95_latency_ms": {"candidate": 8200, "baseline": 7600},
+  "mean_cost_usd": {"candidate": 0.041, "baseline": 0.036},
+  "flakes": [{"case": "search-08", "classification": "tool_fixture"}],
+  "report_version": 1
 }
 ```
 
-This report tells a clear story. The pull request failed because it regressed grounding and quality. The top item used a forbidden legacy source and missed the current RFC. The trace link points to the evidence. The owner knows where to start. This is the level of detail that makes CI evals useful instead of annoying.
+### A useful report points to an owner
 
-You can also produce a Markdown summary for pull-request comments. Keep it short: decision, gate failures, top regressions, and artifact link. The detailed JSON stays in the artifact for scripts and dashboards. Over time, store these reports in object storage or a warehouse so you can trend pass rate, cost, latency, and flaky items across releases.
+Every failed gate needs evidence and an owner. Tool contract failures usually go to the tool or platform team. Semantic slice failures go to the domain and model owners. Missing spans go to observability. Grader disagreements go to the eval owner. Cost and latency regressions may involve orchestration, model selection, or provider behavior.
 
-## Handle Drift, Flakes, and Bad Graders
+Store raw trial results so aggregate metrics can be recalculated. Preserve the gate policy and bundle digest used at decision time. GitHub workflow artifacts can share reports across jobs and retain them after the run. MLflow or LangSmith experiments can hold detailed case and trace evidence, while a data warehouse supports longer-term trend analysis. Retention and access policies should match the sensitivity of the underlying data.
 
-<!-- section-summary: Mature CI evals include a maintenance loop for dataset drift, flaky cases, grader false positives, grader false negatives, and intentional baseline changes. -->
+## Production Failures Grow the Regression Suite
 
-CI evals need maintenance because agents, products, and repositories change. **Dataset drift** happens when the suite stops matching current work. Atlas Research might gain a new monorepo, a new incident response process, or a new source-of-truth system for RFCs. The dataset should evolve with those changes. Each item should carry source, owner, and last-reviewed metadata so stale cases can be found.
+<!-- section-summary: Reviewed production failures should create durable regression cases so a repaired behaviour stays protected in future releases. -->
 
-Flaky cases need their own lane. A flaky case is one that passes and fails across repetitions without a clear code change. Some flakiness comes from model variability. Some comes from tools returning different search results. Some comes from a vague grader. Track flakes separately from hard regressions. If a severe safety or incident slice is flaky, fix the agent or orchestration. If a low-risk wording item is flaky, adjust the grader or move it out of the blocking gate.
+CI protects known failures. Production reveals new ones. The connection between them is a **production-to-regression feedback loop**: capture a failed trace, investigate the cause, remove sensitive data, construct a controlled fixture, add expert expectations, and run the new case across future candidates.
 
-False positives and false negatives deserve regular review. A false positive blocks a change that human reviewers accept. A false negative passes a result that human reviewers reject. Both can damage trust. In CI, false positives create wasted time and pressure to bypass the suite. False negatives allow broken agent behavior into production. The review process should sample both failed and passed cases, then update graders and examples through pull requests.
+This loop turns an incident into durable test coverage. The case should preserve the mechanism of failure, not every incidental detail from the original request. If an agent selected an archived policy because a retrieval filter was missing, the fixture needs current and archived documents plus the expected filter. It does not need the customer's identity or the original wording.
 
-Here is a maintenance checklist you can run weekly:
+```mermaid
+flowchart TD
+    A["Production trace or outcome signal"] --> B["Triage and verify failure"]
+    B --> C["Redact and build controlled fixture"]
+    C --> D["Add expert label, severity, and graders"]
+    D --> E["Reproduce failure on accepted version"]
+    E --> F["Repair and pass regression gate"]
+    F --> G["Staged rollout and monitoring"]
+    G --> A
+```
 
-- Review every blocker failure with a human owner.
-- Sample passed items from severe slices and check for false negatives.
-- Sample failed medium-severity items and check for false positives.
-- Promote real production failures into the regression split.
-- Retire duplicate cases with a reason in metadata.
-- Refresh policy, RFC, tool, and retrieval versions in dataset metadata.
-- Compare production trace distribution with eval slice distribution.
-- Keep baseline refreshes separate from ordinary agent changes.
+### Promotion requires evidence integrity
 
-The maintenance loop should also include grader tests. A grader is code, and code can regress. Create small fixtures where the expected grader decision is obvious. Run those fixtures in CI before the agent suite. If a grader change makes old passing and failing fixture decisions flip, reviewers should see that directly.
+Before adding a production case, confirm that the trace is complete and the outcome is authoritative. A missing tool result can resemble an agent error. A delayed or incorrect label can create a false regression. Human review should identify the actual failure, expected behavior, relevant slice, and severity.
 
-![Atlas Research regression gate loop](/content-assets/articles/article-mlops-llmops-ci-and-regression/atlas-regression-gate-loop.png)
+The new case should fail against the affected version. This reproduction step proves that the fixture captures the defect. After the repair, the case joins the frozen regression set or a risk-specific suite. OpenAI's eval guidance, LangSmith datasets, and MLflow evaluation datasets all support this continuous path from observed behavior to reusable offline evidence.
 
-*The regression gate loop links golden cases, pull requests, eval runs, privacy-safe trace packets, baseline comparison, reports, failure review, baseline refreshes, and release decisions.*
-
-## Review The Regression Gate
-
-<!-- section-summary: A production CI eval system has versioned datasets, baselines, trace evidence, release gates, report artifacts, and an explicit process for maintaining trust. -->
-
-Before calling a CI regression setup ready, check that the whole chain is versioned. Dataset version, prompt version, model version, tool schema version, retrieval index version, grader version, and baseline ID should appear in the report. Each failed item should have a reason, severity, slice, owner, and trace link. Each release gate should have a threshold and a human owner.
-
-Common mistakes follow a pattern. Teams run evals manually and forget them during urgent prompt changes. They compare only the overall score and miss a severe slice regression. They let the same pull request update the prompt and the baseline. They use brittle string graders for research answers that need citation and source checks. They upload no artifacts, so failed CI leaves no evidence. They allow stale eval items to block releases months after the source-of-truth document moved.
-
-CI regression evals run the agent suite automatically on every meaningful change. The runner executes versioned dataset items, captures traces, applies deterministic and model-based graders, compares the current report against a baseline, and enforces release gates. The report artifact shows pass rates, score deltas, blockers, failing items, trace evidence, and owners. The team maintains the suite by adding production failures, reviewing false positives and false negatives, tracking flakes, and refreshing baselines only through explicit approval.
-
-That is the industrial practice: evals are part of the delivery pipeline. They are reviewed like code, run like tests, stored like build artifacts, and maintained like any other production signal. When the agent changes, the CI report gives the team evidence about quality instead of a debate about whether a demo felt good.
+CI regression therefore operates as a learning system. The dataset remembers important failures. Traces explain the path. Graders encode the acceptance rules. Baselines define accepted behavior under a compatible bundle. Gates turn that evidence into a release decision, and production supplies the next set of unknowns.
 
 ## References
 
-- [OpenAI: Evaluate agent workflows](https://developers.openai.com/api/docs/guides/agent-evals)
-- [OpenAI: Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
-- [OpenAI: Graders](https://developers.openai.com/api/docs/guides/graders)
-- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/)
-- [LangSmith: Evaluation](https://docs.langchain.com/langsmith/evaluation)
-- [LangSmith: Evaluation concepts](https://docs.langchain.com/langsmith/evaluation-concepts)
-- [Langfuse: Datasets](https://langfuse.com/docs/evaluation/experiments/datasets)
-- [Phoenix: Evaluation](https://arize.com/docs/phoenix/evaluation/llm-evals)
-- [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
-- [GitHub Actions: Workflow syntax](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions)
-- [GitHub Actions: Workflow artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)
-- [actions/upload-artifact releases](https://github.com/actions/upload-artifact/releases)
+- [OpenAI — Agent evals](https://developers.openai.com/api/docs/guides/agent-evals)
+- [OpenAI — Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
+- [OpenAI — Datasets](https://developers.openai.com/api/docs/guides/evals)
+- [LangSmith — Evaluation concepts](https://docs.langchain.com/langsmith/evaluation-concepts)
+- [LangSmith — Pytest and Vitest/Jest integrations](https://docs.langchain.com/langsmith/pytest)
+- [MLflow — GenAI evaluation and monitoring](https://mlflow.org/docs/latest/genai/eval-monitor/)
+- [MLflow — Regression testing for GenAI applications](https://mlflow.org/docs/latest/genai/eval-monitor/regression-testing/)
+- [MLflow — Evaluation datasets](https://mlflow.org/docs/latest/genai/datasets/)
+- [GitHub Docs — Workflow syntax for GitHub Actions](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions)
+- [GitHub Docs — Workflow artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)
+- [GitHub — checkout](https://github.com/actions/checkout)
+- [GitHub — setup-python](https://github.com/actions/setup-python)
+- [GitHub — upload-artifact](https://github.com/actions/upload-artifact)

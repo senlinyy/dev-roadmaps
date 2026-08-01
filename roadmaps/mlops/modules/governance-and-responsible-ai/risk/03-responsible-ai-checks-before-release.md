@@ -7,6 +7,20 @@ order: 3
 id: "article-mlops-governance-and-responsible-ai-responsible-ai-checks-before-release"
 ---
 
+## Table of Contents
+
+1. [Responsible AI Has to Change a Release Decision](#responsible-ai-has-to-change-a-release-decision)
+2. [Map Checks to the Layers That Can Create Harm](#map-checks-to-the-layers-that-can-create-harm)
+3. [Define the Use Before Measuring the Model](#define-the-use-before-measuring-the-model)
+4. [Past Hiring Decisions Are a Difficult Label](#past-hiring-decisions-are-a-difficult-label)
+5. [The Threshold Changes People’s Experience](#the-threshold-changes-peoples-experience)
+6. [Fairness Needs a Product Interpretation](#fairness-needs-a-product-interpretation)
+7. [Explanations Should Support Review, Not Justify the Score](#explanations-should-support-review-not-justify-the-score)
+8. [Accountability Lives in the Release Record](#accountability-lives-in-the-release-record)
+9. [Monitoring Continues the Same Questions](#monitoring-continues-the-same-questions)
+10. [What the Release Meeting Decides](#what-the-release-meeting-decides)
+11. [References](#references)
+
 ## Responsible AI Has to Change a Release Decision
 
 <!-- section-summary: Responsible AI checks turn concerns about fairness, transparency, privacy, safety, and accountability into evidence that can approve, narrow, or stop a release. -->

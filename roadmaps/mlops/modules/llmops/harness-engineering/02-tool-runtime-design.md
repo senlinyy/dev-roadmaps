@@ -1,272 +1,365 @@
 ---
-title: "Orchestration and Durable Agent Runs"
-description: "Design control flow, state, tool execution, recovery, human interruption, and observability for reliable agent runs."
-overview: "Agent orchestration owns the lifecycle around model decisions. This article explains orchestration patterns, when a basic loop is enough, and how durable runtimes make long-running or high-impact work recoverable."
+title: "Tool Runtime Design"
+description: "Design the path that discovers, validates, authorizes, executes, observes, and recovers every agent tool call."
+overview: "A production tool runtime treats each model tool call as a proposal. It supplies trusted identity, enforces policy, controls external effects, and returns a result that the orchestrator can act on."
 tags: ["MLOps","LLMOps","advanced","harness"]
 order: 2
 id: "article-mlops-llmops-tool-runtime-design"
 aliases: ["tool-runtime-design"]
 ---
 
-## Where Orchestration Fits in an Agent Harness
-<!-- section-summary: Orchestration coordinates the model, context, memory, tools, policy, persistence, and feedback systems that make up an agent harness. -->
+## Table of Contents
 
-An **agent harness** is the engineered system around a language model. The model can interpret a request and choose an action, while the harness supplies the environment in which that choice can lead to reliable work. It assembles context, exposes tools, stores state, applies permissions, records evidence, and gives the agent feedback about what happened.
+1. [Tool Calls Need a Runtime Between the Model and the Service](#tool-calls-need-a-runtime-between-the-model-and-the-service)
+2. [Follow One Complete Tool Call](#follow-one-complete-tool-call)
+3. [Build the Runtime Around Ten Responsibilities](#build-the-runtime-around-ten-responsibilities)
+4. [Discovery and Eligibility Limit the Choice](#discovery-and-eligibility-limit-the-choice)
+5. [Validation and Trusted Context Create a Safe Request](#validation-and-trusted-context-create-a-safe-request)
+6. [Authorization and Adapters Protect the Domain Boundary](#authorization-and-adapters-protect-the-domain-boundary)
+7. [Timeouts, Retries, and Idempotency Control Failure](#timeouts-retries-and-idempotency-control-failure)
+8. [Result Semantics Drive State Transitions](#result-semantics-drive-state-transitions)
+9. [Observability and Recovery Close the Execution Path](#observability-and-recovery-close-the-execution-path)
+10. [Choose an Industrial Runtime Shape](#choose-an-industrial-runtime-shape)
+11. [References](#references)
 
-**Orchestration** is the control layer inside that harness. It decides which component runs next, which state crosses from one step to another, when a tool may execute, when a person must review an action, and when the run has actually finished. A model response is one event in that lifecycle. The orchestrator turns a sequence of events into a managed run.
+## Tool Calls Need a Runtime Between the Model and the Service
+<!-- section-summary: A tool runtime turns a model proposal into a controlled operation by supplying trusted identity, policy, execution rules, and a durable result. -->
 
-```mermaid
-flowchart LR
-    U["User or system request"] --> O["Orchestrator"]
-    O --> C["Context assembly"]
-    C --> M["Model decision"]
-    M --> O
-    O --> T["Tool runtime"]
-    O --> H["Human review"]
-    O <--> S["Run state and checkpoints"]
-    O <--> R["Memory and retrieval"]
-    T --> E["External systems"]
-    E --> T
-    O --> V["Trace, metrics, and eval evidence"]
-    O --> F["Verified outcome"]
+At a high level, **a tool runtime is the application layer that decides whether a model-requested action may run, performs the approved operation, and reports exactly what happened**. The model sees a useful capability such as “look up an order.” The runtime connects that capability to the real order service under the correct identity and policy.
+
+Suppose a user asks, “Where is my order?” The model can recognise that an order-status tool would help. It can also extract an order number from the conversation. Those are useful language tasks. The model still cannot prove which account is signed in, decide whether that account owns the order, or establish that the order service returned a genuine record.
+
+The runtime supplies those missing guarantees. It reads the authenticated user from the application session. It checks whether the order belongs to that user. It calls the order service with a workload credential that the model never sees. It then returns a small, structured result such as `in_transit` with the time of the latest shipping event.
+
+This boundary matters for read-only tools. Write tools raise the stakes because they can change money or customer state. A description may guide the model toward the right action. Application code must still enforce the real rules.
+
+The surrounding orchestrator still owns the run. It asks the model for a decision and consumes the tool outcome. The tool runtime owns the narrower execution contract between those two moments.
+
+## Follow One Complete Tool Call
+<!-- section-summary: One complete call moves through eligibility, proposal, validation, trusted context, authorization, execution, result handling, and state update. -->
+
+Before dividing the runtime into components, it helps to watch one small call from start to finish. A tool definition shows what the model may request, although it does not show where identity, authorization, or service evidence comes from. The complete path makes those owners visible before their technical names appear.
+
+A signed-in user with identity `usr_17` asks for order `ord_482`. The application decides that this session may use the read-only `orders.get_status` tool. The model sees the tool name, its purpose, and an argument schema containing `order_id`. It proposes `{"order_id": "ord_482"}`.
+
+The runtime validates the proposal against the schema. It adds a unique call ID and reads `usr_17` from trusted session context. An authorization check confirms that `usr_17` may view `ord_482`. The order adapter then calls the owning service with a service credential and returns a restricted view:
+
+```json
+{
+  "order_id": "ord_482",
+  "status": "in_transit",
+  "latest_event_at": "2026-07-29T14:20:00Z"
+}
 ```
 
-The arrows matter more than the boxes. Context flows into a model call, and the model returns a proposed action. The orchestrator evaluates that proposal against the current state and policy. A tool runtime then performs approved work against an external system. Checkpoints preserve progress, while traces preserve an explanation of the path. Memory can inform a decision, yet it never replaces the operational state that says which effects already happened.
+The runtime records a successful outcome and updates run state with the call ID. The model receives the safe result and can explain it to the user. If the authorization check fails, the order service is never called. If the dependency times out, the runtime reports a typed failure instead of inventing an order status.
 
-This broader view also explains why harness engineering involves more than wrapping a model in a loop. OpenAI's account of building with Codex describes the engineering work as designing environments, supplying tools and abstractions, organizing accessible context, and building feedback loops that let agents validate their own work. Orchestration connects those capabilities during a run. An excellent model inside a poorly specified environment still lacks the state and feedback required for dependable execution.
-
-## Why a Normal Agent Loop Eventually Runs Out of Answers
-<!-- section-summary: A basic model-tool loop works for short, restartable tasks, while durable work needs explicit answers for recovery, side effects, approvals, and concurrent paths. -->
-
-The smallest useful agent runner has a simple rhythm. It sends context to the model, receives either a final answer or a tool request, executes the requested tool, appends the result, and repeats. Libraries and agent SDKs provide this loop because it covers a large and valuable class of tasks.
-
-That design fits a short research assistant, a support-answer helper, or a coding task that can restart safely. One process can hold the state, tool calls mainly read information, and a turn limit can stop a broken loop. Adding a graph or workflow engine to this shape would introduce extra concepts without solving an actual reliability problem.
-
-The limits appear when the task crosses a durable boundary. Consider an agent that investigates a disputed order and may issue a refund. During a single run, several events can occur:
-
-- the process can restart after the model proposes a refund;
-- a reviewer can take several hours to approve the proposal;
-- the payment service can commit the refund while its response gets lost;
-- two branches can inspect the order and shipping evidence at the same time;
-- a user can cancel while a tool is already running;
-- a newer proposal can invalidate an earlier approval.
-
-Conversation messages contain useful evidence, though they cannot settle these operational questions on their own. A sentence saying "the refund was sent" cannot prove what the payment service committed. A tool result stored only in process memory disappears with that process. A reviewer response needs to refer to one exact proposal, and a retry needs to preserve the identity of one intended external effect.
-
-The orchestrator therefore owns six connected responsibilities:
-
-| Responsibility | Question it answers | Failure when it stays implicit |
-|---|---|---|
-| **Control flow** | Which step may run next? | Hidden branches and accidental transitions |
-| **Run state** | What facts determine the next step? | Decisions based on stale conversation text |
-| **Effect control** | Which external action may execute? | Unauthorized or duplicate writes |
-| **Durability** | Where can another worker continue? | Full restarts and lost approvals |
-| **Limits and interruption** | When must the run pause or stop? | Unbounded loops, cost, and resource use |
-| **Observability** | How can a team reconstruct the run? | Failures that cannot be debugged or evaluated |
-
-These responsibilities provide the framework for the rest of the article. A framework such as LangGraph supplies primitives for some of them. A durable workflow engine supplies a different set of primitives. Application code still defines the business states, permissions, completion conditions, and recovery rules.
-
-## Control Flow: Put Each Decision in the Right Place
-<!-- section-summary: Deterministic rules, model judgement, tool execution, and human authority belong to different parts of the control flow. -->
-
-An agent run usually mixes four kinds of decisions. **Deterministic code** handles rules with an exact answer, such as schema validation, retry limits, and refund thresholds. The **model** handles judgement under uncertainty, such as interpreting a customer's explanation or choosing which source to inspect. The **tool runtime** controls execution against databases and services. A **person** supplies authority or judgement for actions whose risk exceeds the automated policy.
-
-This separation is a reliability boundary. If the refund limit is £250, application code can compare the proposed amount with that limit every time. Asking the model to remember and apply the rule creates variation where the product needs consistency. The model still provides value by interpreting the request and drafting a reason supported by evidence.
-
-A useful production design often has a fixed outer workflow and a bounded agent loop inside it. The outer workflow owns authentication, mandatory evidence, approval, publication, and final verification. The inner loop explores approved sources until it has enough evidence or reaches a limit. The system gains adaptable reasoning while retaining an inspectable business path.
-
-```mermaid
-flowchart TD
-    A["Receive refund case"] --> B["Agent gathers evidence and proposes action"]
-    B --> C["Code validates fields and policy"]
-    C -->|"Invalid, attempts remain"| D["Agent revises proposal"]
-    D --> C
-    C -->|"Invalid, limit reached"| X["Reject with reasons"]
-    C -->|"Valid and low value"| E["Tool runtime executes refund"]
-    C -->|"Valid and high value"| W["Checkpoint and wait for reviewer"]
-    W -->|"Matching approval"| E
-    W -->|"Rejected, expired, or changed"| X
-    E --> G["Verify committed refund"]
-    G --> Z["Complete run"]
-```
-
-The graph gives each transition an owner. The model proposes and revises. Code validates. A reviewer authorizes one high-value proposal. The payment service owns the committed transaction. The orchestrator coordinates these decisions and refuses paths that the application never declared.
-
-## Run State: Record Facts That Control Execution
-<!-- section-summary: Structured run state records operational facts, while context and memory provide selected information for reasoning. -->
-
-Three terms often get mixed together: **state**, **context**, and **memory**. Run state contains the operational facts that control execution. Context is the information assembled for one model call. Memory stores information that may help later runs or later turns. They can share data, yet they serve different purposes.
-
-For the refund run, state may contain the case ID, current step, proposal hash, validation result, approval ID, effect status, attempt count, deadline, and component versions. The orchestrator reads these fields to choose a transition. The model may receive the customer's request, the evidence summary, and the latest validation errors as context. A preference such as the customer's communication language may live in longer-term memory.
-
-| Data | Best home | Reason |
-|---|---|---|
-| Current proposal hash | Run state | Approval and execution must refer to the same proposal |
-| Validation errors | Run state and next-turn context | Code routes on them; the model needs them for revision |
-| Complete raw tool output | Evidence store with a reference in state | Large content should not inflate every checkpoint |
-| Customer language preference | Long-term memory | It can help across separate cases |
-| Policy version | Run state and trace | The team must know which rules governed the decision |
-| Full chat history | Conversation store; selected parts in context | Every model call needs only the relevant portion |
-
-Structured state makes completion precise. A conversational answer can finish when the model returns text. The refund run finishes after the proposal passes validation, the required approval matches its hash, the payment service confirms the effect, and the final identifiers have been checkpointed. The orchestrator can test those conditions without asking the model whether it thinks the task is done.
-
-State should remain compact and typed. Large documents, images, and logs belong in dedicated stores, referenced by stable IDs and integrity hashes. Sensitive fields need access control and retention rules because checkpoints can outlive the worker that created them.
-
-## Graph Runtimes Make Important Transitions Visible
-<!-- section-summary: A graph runtime helps when branches, cycles, interruption, and resumable state carry business meaning and deserve direct inspection. -->
-
-A **state graph** represents a run as nodes connected by permitted transitions. A node performs one bounded step and returns a state update. An edge identifies the next permitted node, while a conditional edge selects among destinations from the saved state.
-
-Ordinary code can express the same logic. A graph runtime earns its cost when the transitions themselves need to be inspected, resumed, visualized, and tested. The refund flow has a revision cycle, a policy branch, a long human pause, two terminal outcomes, and an external effect that requires recovery. Hiding those paths across callbacks and status fields would make reviews and incident analysis harder.
-
-LangGraph is a current low-level orchestration runtime for long-running, stateful agents. Its core capabilities include persistence, durable execution, human interruption, streaming, and state inspection. It leaves prompts, application architecture, graph state, and transition policy to the developer. Higher-level agent frameworks or SDK runners remain a better fit when an application mainly needs a standard model-tool loop.
-
-The following example shows the graph shape without implementing the model client, payment adapter, identity system, or database. Those dependencies deserve their own production components; including them here would hide the orchestration idea under setup code.
-
-```python
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
-
-builder = StateGraph(RefundState)
-
-builder.add_node("propose", propose_refund)
-builder.add_node("validate", validate_with_policy)
-builder.add_node("execute", execute_with_idempotency_key)
-builder.add_node("reject", record_rejection)
-
-def review(state: RefundState):
-    decision = interrupt({
-        "case_id": state["case_id"],
-        "proposal_hash": state["proposal_hash"],
-    })
-    return Command(
-        goto="execute" if decision["approved"] else "reject"
-    )
-
-builder.add_node("review", review)
-builder.add_edge(START, "propose")
-builder.add_edge("propose", "validate")
-builder.add_conditional_edges("validate", route_from_policy)
-builder.add_edge("execute", END)
-builder.add_edge("reject", END)
-
-graph = builder.compile(checkpointer=production_checkpointer)
-```
-
-The important idea sits in the boundaries. `validate_with_policy` returns structured state that `route_from_policy` can inspect. The `review` node pauses with a case ID and proposal hash, so the later decision can be matched to the same artifact. The checkpointer stores graph progress under a stable thread ID. The execution node still checks its authorization invariant and uses an idempotency key because arriving through an approved edge cannot guarantee the external service's transaction semantics.
-
-In a real service, the resume input should carry a trusted approval record ID rather than accepting reviewer identity or roles from the browser or model. Server-side authentication resolves the reviewer. A database transaction verifies the case, proposal hash, role, expiry, decision, and one-time-use marker before the graph continues.
-
-## Checkpoints: Let Another Worker Continue the Run
-<!-- section-summary: A checkpoint preserves committed progress at a transition so the run can resume after a pause, restart, or infrastructure failure. -->
-
-A **checkpoint** is a durable snapshot of run state at a meaningful transition. The worker that created it can disappear, and a later worker can load the same run and continue. This separates the lifecycle of the task from the lifecycle of one process.
-
-LangGraph checkpointers persist thread-scoped graph state. Stores serve a different purpose: they hold application-defined information that can cross threads, such as user preferences or shared knowledge. Production systems need a persistent checkpointer rather than an in-memory implementation, along with retention, encryption, access, and migration policies for the stored state.
-
-A checkpoint also defines a replay boundary. Operations before the checkpoint may run again when a node resumes or retries. Read-only calls can usually tolerate bounded replay. External writes require an explicit recovery contract because the remote system may have committed an effect before the orchestrator saved its result.
+The sequence diagram shows these ownership boundaries. The authenticated application supplies identity, the model supplies a proposal, policy supplies authorization, and the order service supplies the domain fact.
 
 ```mermaid
 sequenceDiagram
-    participant O as Orchestrator
-    participant P as Payment service
-    participant C as Checkpoint store
+    participant App as Authenticated application
+    participant Model
+    participant Runtime as Tool runtime
+    participant Policy as Authorization policy
+    participant Orders as Order service
+    participant State as Run state
 
-    O->>P: Create refund with idempotency key K
-    P->>P: Commit refund re_0001 for K
-    P--xO: Response is lost
-    Note over O,C: Saved state still says execution is pending
-    O->>P: Look up operation K
-    P-->>O: K already committed as re_0001
-    O->>C: Save refund ID and completed state
+    App->>Runtime: Eligible tools for usr_17
+    Runtime-->>Model: orders.get_status schema
+    Model-->>Runtime: Propose order_id = ord_482
+    Runtime->>Runtime: Validate arguments and create call ID
+    Runtime->>Policy: Can usr_17 read ord_482?
+    Policy-->>Runtime: Allow
+    Runtime->>Orders: Read status with service identity
+    Orders-->>Runtime: in_transit, latest event
+    Runtime->>State: Record succeeded outcome
+    Runtime-->>Model: Safe structured result
 ```
 
-The **idempotency key** identifies one intended effect. Reusing key `K` tells the payment service that a retry refers to the same refund. The service stores that key with the transaction and returns the earlier result when it sees the key again. Keeping the key only in graph state would provide no protection at the payment boundary.
+A real runtime may distribute these steps across several services. Their order still matters. Eligibility limits the model's choices before generation, while authorization makes the final decision immediately before execution.
 
-The lookup step handles an **ambiguous outcome**. A network timeout tells the caller that the response did not arrive; it says nothing certain about the remote commit. The orchestrator enters a reconciliation path, queries the operation by key, and classifies it as committed, absent, or still unknown. It escalates after a reviewed deadline rather than guessing.
+## Build the Runtime Around Ten Responsibilities
+<!-- section-summary: Ten connected responsibilities carry a proposed tool call from discovery to a recoverable state transition. -->
 
-This distinction is central to durable execution. A **retry** repeats one operation under an error policy. A **resume** loads a saved run and continues from a checkpoint. **Reconciliation** resolves uncertainty about an external effect. A production trace should name each event clearly because they imply different risks.
+The complete runtime can be understood as ten responsibilities. Each one answers a different production question, and each produces an input needed by the next step. Skipping one creates a specific gap: the model may see the wrong tool, the service may receive an unsafe request, or the run may lose the meaning of a failure.
 
-## Tool Execution: Treat Model Output as a Proposal
-<!-- section-summary: The tool runtime validates and authorizes model-proposed calls, controls resources, executes the dependency, and preserves failure meaning. -->
+1. **Discovery** finds tool definitions from application code, a registry, or a remote tool server.
+2. **Eligibility** selects the tools that this user, environment, and run state may consider.
+3. **Proposal validation** checks that the chosen name and arguments follow the declared contract.
+4. **Trusted context** supplies identity, run information, approved dependencies, and internal limits from outside model input.
+5. **Authorization** decides whether this principal may perform this action on this resource now.
+6. **Execution adapters** translate the tool contract into the owning service's application programming interface, usually shortened to **API**.
+7. **Effect control** applies timeouts and concurrency limits. It also defines safe retry and idempotency behavior.
+8. **Result semantics** preserve whether the call succeeded, failed safely, was denied, or may have changed an external system.
+9. **State transitions** decide whether the run continues, pauses, retries, reconciles, or stops.
+10. **Observability and recovery** preserve enough evidence to explain the call and repair an uncertain outcome.
 
-When a model emits a tool call, it proposes a name and arguments. The tool runtime decides whether that proposal can execute. It resolves the registered tool, parses the arguments, derives identity from trusted request context, checks permission, applies time and concurrency limits, and converts the result into a structured event for the orchestrator.
+These responsibilities form one path:
 
-This boundary prevents the model from granting itself authority. A model can request `issue_refund(order_id, amount, reason)`. The authenticated service supplies the principal and permissions. Application policy supplies the approval threshold. The payment adapter supplies the idempotency and reconciliation behavior.
+```mermaid
+flowchart TD
+    A["Discover tool definitions"] --> B["Filter eligible tools"]
+    B --> C["Model proposes a call"]
+    C --> D["Validate name and arguments"]
+    D --> E["Add trusted runtime context"]
+    E --> F["Authorize action on resource"]
+    F --> G["Execute through adapter"]
+    G --> H["Classify the result"]
+    H --> I["Persist state transition"]
+    I --> J["Trace, verify, or recover"]
 
-Tool failures also need machine-readable meaning. A plain exception string forces the model to guess whether another attempt is safe. The runtime can instead classify outcomes and map them to deterministic transitions:
+    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef control fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef effect fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,C choice
+    class D,E,F control
+    class G,H effect
+    class I,J evidence
+    linkStyle default stroke:#AAB9E8,stroke-width:3px
+```
 
-| Outcome | Meaning | Orchestrator response |
-|---|---|---|
-| `invalid_arguments` | No external call started | Return field errors for a bounded correction |
-| `permission_denied` | Trusted identity lacks authority | Stop the path and record the denial |
-| `rate_limited` | Dependency asks the caller to wait | Schedule delayed retry within the deadline |
-| `dependency_unavailable` | Read or safe operation failed temporarily | Retry or use an approved fallback |
-| `outcome_unknown` | A side effect may have committed | Reconcile by operation identity |
-| `succeeded` | Dependency confirmed the result | Checkpoint the effect identifier |
+The model participates at the proposal step. Software owns every gate around it. This separation lets a team change models without moving identity or payment policy into a prompt. It also lets the same adapter serve a deterministic workflow, a human-facing application, and an agent.
 
-Concurrency belongs in this layer as well. Two independent searches can run together, while two writes to the same order may need serialization. The model may suggest parallel calls, and the runtime still applies the dependency's concurrency budget and the application's conflict rules.
+## Discovery and Eligibility Limit the Choice
+<!-- section-summary: Discovery finds possible tools, while eligibility exposes only the subset relevant and permitted for the current step. -->
 
-The domain service remains the final authority for its own invariants. The orchestrator coordinates a refund, while the payment service owns transaction integrity and account rules. Duplicating those rules inside the harness would create two sources of truth that can drift apart.
+A small agent can receive three tool definitions in every model call. A production platform may connect to hundreds of operations across customer support, billing, data, and engineering systems. Sending the complete catalogue wastes context and gives the model many irrelevant choices.
 
-## Human Review Is a Durable Transition
-<!-- section-summary: A review step persists the proposed artifact, releases the worker, and resumes only for an authorized decision that matches that artifact. -->
+### Discovery finds possible tools
 
-A human review can last minutes or days, so it should appear as an explicit waiting state. The orchestrator saves the proposal, supporting evidence, proposal hash, requested reviewer role, expiry, and current policy version. It then releases the worker. No process needs to remain blocked while a person decides.
+**Discovery** answers, “Which tools exist?” Local function registration is the simplest implementation. The Model Context Protocol, known as **MCP**, gives clients a standard way to discover remote tools through `tools/list` and invoke one through `tools/call`. Each definition includes a name, description, and JSON Schema for its arguments. JSON Schema is a machine-readable description of the fields and value shapes a request may contain.
 
-The approval record binds the reviewer to one case and one proposal hash. If the agent changes the amount or evidence, the new hash invalidates the earlier decision. When the reviewer responds, server-side code authenticates the person, verifies the required role, consumes the decision once, and resumes the same run from its checkpoint.
+Discovery only finds candidates.
 
-LangGraph interrupts implement this pause-and-resume pattern. The runtime saves graph state through its persistence layer and resumes under the same thread ID when it receives a `Command(resume=...)`. Its documentation also warns that a resumed node starts again from the beginning of that node. Side effects placed before the interrupt therefore need idempotency, or they should move into a separate node after the review.
+### Eligibility creates a per-step allowlist
 
-Approval is only one use for interruption. The same pattern can request missing data, let an operator edit a generated action, or pause after a security signal. In every case, the resume event should come from an authenticated application boundary and match the saved run state.
+**Eligibility** decides which candidates belong in the current model step. A support agent investigating an order may receive read-only order and shipping tools. A refund tool can remain hidden until evidence has been collected and the workflow reaches a proposal state. A development environment should never expose a production deployment action simply because a registry contains it.
 
-## Cancellation, Budgets, and Deadlines Shape the Run
-<!-- section-summary: Limits and cancellation create explicit states that stop new work while preserving an honest record of effects already committed. -->
+Eligibility should use trusted facts. Useful inputs include the authenticated role, the current workflow state, the deployment environment, and feature-release policy. The resulting allowlist can then be passed to the model.
 
-Agent loops can consume tokens, time, tool capacity, and money. The orchestrator applies turn, token, cost, wall-clock, and per-tool limits according to the product's risk. It records which limit ended the run so operators can distinguish a planned budget stop from an infrastructure failure.
+Current OpenAI Agents SDK tooling supports conditional tool enabling. It also supports namespaces and deferred loading for larger tool surfaces. Namespaces provide a compact description such as `billing` or `shipping`, and deferred loading retrieves detailed tool definitions only after the model selects the relevant area.
 
-Cancellation needs durable state. A `cancel_requested` flag prevents a fresh worker from resuming work after an earlier worker received the request. The running worker passes cancellation signals to tools that support them and checks the durable flag before every new side effect.
+Current MCP `tools/list` results include cache hints. `ttlMs` says how long the client may treat the list as fresh, while `cacheScope` says whether a cached result may cross authorization contexts. A client that needs immediate change notifications opens a `subscriptions/listen` stream with `toolsListChanged` enabled. A matching notification then invalidates the cached list.
 
-An already committed external effect still exists after cancellation. The orchestrator records that fact, stops later steps, and begins compensation only when the domain supports a reviewed compensating action. A refund may require a separate reversal process; deleting the trace or marking the whole run "cancelled with no effects" would hide reality.
+Hiding a tool improves relevance and reduces accidental selection. It does not grant security. A stale client, crafted request, or compromised model path may still name a hidden tool. The execution path must repeat the eligibility check and perform authorization before any external call.
 
-Deadlines also interact with approval and reconciliation. A review request can expire, and an uncertain payment can reach an escalation deadline. Those outcomes deserve named states such as `approval_expired` or `reconciliation_required` because each state has a different owner and response.
+Tool definitions also need version and ownership metadata in the registry even if the model does not see all of it. The runtime should know which team owns the adapter, which schema revision it expects, and whether the operation is read-only or effectful. MCP tool annotations can describe behavior, although the MCP specification tells clients to treat annotations as untrusted unless the server itself is trusted.
 
-## Observability Explains the Path, While Evals Judge the Behaviour
-<!-- section-summary: Traces reconstruct one run, metrics reveal operational patterns, and evaluations compare behaviour with expected outcomes. -->
+## Validation and Trusted Context Create a Safe Request
+<!-- section-summary: Validation checks model-controlled fields, while trusted context supplies identity and internal dependencies that the model cannot choose. -->
 
-A model-call log shows prompts and responses. An orchestration trace connects those calls to state transitions, tools, checkpoints, retries, approval waits, policy versions, costs, and final external effects. This lets an engineer answer which branch ran, which proposal a reviewer approved, and whether a retry reused the original operation identity.
+After the model chooses a tool, the runtime still has a string name and model-generated arguments. Both are untrusted input.
 
-**Metrics** aggregate many runs. Completion rate, tool-error rate, reconciliation age, approval wait, latency, and cost per successful task reveal operational health. **Evaluations**, often shortened to **evals**, compare agent behaviour with expected cases. They can judge source quality, tool selection, policy compliance, trajectory, and final outcome.
+### Schema checks the proposed shape
 
-These three views work together. A failed eval identifies a behaviour regression. The trace explains the exact path for one case. Metrics show whether the same pattern affects production traffic. Shared run, tool, prompt, policy, and effect identifiers make those joins possible.
+The first validation layer checks the contract. The runtime resolves the exact registered tool and parses its arguments with a strict schema. A refund amount declared as a positive decimal should reject `"all of it"`. An order identifier should reject an unexpected object or extra fields. Schema validation catches shape and type errors before a service call starts.
 
-Sensitive content needs selective capture. A trace can record hashes, categories, sizes, timings, and references without copying every customer document. The observability design should follow the same access, retention, and deletion policies as the operational system.
+Business validation comes next. A schema can prove that `delivery_date` is a date. It cannot prove that the date falls inside the carrier's rescheduling window. Application code checks those cross-field and domain rules. Invalid requests return specific field errors so the orchestrator can permit a bounded correction.
 
-## Choosing the Smallest Runtime That Fits the Failure Model
-<!-- section-summary: Runtime choice follows the transitions, pauses, side effects, and recovery guarantees the application actually needs. -->
+### Trusted context supplies what the model cannot choose
 
-Start with the simplest control layer that can survive the failures your product accepts. An application function or agent SDK runner suits short tasks that can restart safely. Add a database-backed run record when state must cross requests. Use a graph runtime when cycles, conditional paths, subgraphs, state inspection, or human interrupts form a central part of the application.
+The runtime then adds **trusted context**. This is local application data that tool code can use without sending it to the model as editable arguments. It commonly holds the authenticated principal, run ID, policy client, service adapter, and deadline. The OpenAI Agents SDK represents this local data through `RunContextWrapper`; its documentation distinguishes local runtime context from the conversation content visible to the model.
 
-A general durable workflow engine such as Temporal, Restate, DBOS, or Dapr Workflow can coordinate an agent inside a larger business process. These systems are especially relevant when the organization already uses them for long-running services and wants one recovery model across agent and conventional workloads. LangGraph is more focused on agent-specific state and control flow. Some systems combine both layers.
+The following focused example exposes the key boundary. The model supplies only `order_id`. The signed-in principal and the service clients come from `RuntimeDeps`, which the application created before the run.
 
-The selection question is practical: **which failure must the runtime recover from, and which transition must the team inspect directly?** A three-turn research assistant may need only a bounded runner and trace. A refund agent with approval, an ambiguous payment outcome, and a two-day wait needs durable state, explicit transitions, and reconciliation.
+```python
+from dataclasses import dataclass
+from typing import Annotated
 
-Whichever runtime you choose, verify the same properties. A new worker can load the run. An approval matches the executed artifact. A repeated side effect preserves one operation identity. Invalid transitions fail closed. Cancellation prevents new work. The trace connects the final outcome to the state and versions that produced it.
+from agents import RunContextWrapper, function_tool
+from pydantic import BaseModel, Field
 
-## How the Pieces Work Together
-<!-- section-summary: Reliable orchestration comes from explicit ownership of decisions, state, effects, recovery, interruption, and evidence. -->
 
-The big picture now has a clear path. Context gives the model the information needed for one decision. The model proposes an action. The orchestrator reads structured state and chooses a permitted transition. The tool runtime validates and authorizes any external call. Checkpoints preserve progress, and reconciliation resolves uncertain effects. Human review supplies durable authority at selected boundaries. Traces, metrics, and evals connect the path to the outcome.
+class OrderStatus(BaseModel):
+    order_id: str
+    status: str
+    latest_event_at: str
 
-This structure explains why a normal loop remains valuable and why some applications need more. The extra machinery should correspond to a real lifecycle problem: a meaningful branch, a long pause, a costly side effect, a recovery requirement, or a transition that carries business authority. Once those problems appear, explicit orchestration gives the team a system it can inspect, test, resume, and operate.
+
+@dataclass
+class RuntimeDeps:
+    principal_id: str
+    policy: "OrderPolicy"
+    orders: "OrderClient"
+
+
+@function_tool(timeout=2.0, failure_error_function=None)
+async def get_order_status(
+    ctx: RunContextWrapper[RuntimeDeps],
+    order_id: Annotated[str, Field(pattern=r"^ord_[A-Za-z0-9]+$")],
+) -> OrderStatus:
+    await ctx.context.policy.require_order_read(
+        principal_id=ctx.context.principal_id,
+        order_id=order_id,
+    )
+    return await ctx.context.orders.get_status(order_id)
+```
+
+The `Field` pattern rejects malformed order IDs. `RunContextWrapper` supplies dependencies outside the model-visible schema. The policy check runs before the adapter call. The two-second timeout prevents this asynchronous tool from occupying the run indefinitely. Setting `failure_error_function=None` lets the application catch failures and map them to its own structured outcome contract.
+
+This code is one SDK implementation of the boundary. A Java service, an MCP client, or a workflow activity should preserve the same separation between proposed arguments and trusted execution context.
+
+## Authorization and Adapters Protect the Domain Boundary
+<!-- section-summary: Authorization decides whether the action is permitted, and an adapter translates the approved request into the owning service's operation. -->
+
+Validation can produce a perfectly shaped request that the caller has no right to perform. **Authorization** answers a separate question: may this authenticated principal perform this action on this resource under the current policy?
+
+### Policy evaluates current trusted facts
+
+An order read may require ownership of the order. A refund may require a support role and a matching approval above a threshold. A deployment may require the target service to be inside the operator's environment scope. These checks need current records from trusted systems. A role claimed in tool arguments or quoted from a retrieved document has no authority.
+
+The authorization decision should identify the policy version and the resource it evaluated. High-impact writes also need approval bound to the exact proposal. If the amount or destination changes after approval, the proposal hash changes and the runtime must request a new decision.
+
+### Adapters translate a stable tool contract
+
+After authorization, an **execution adapter** translates the stable tool contract into the API owned by the domain service. For example, `shipping.reschedule_delivery` may call a carrier API that uses different field names and status codes. The adapter normalises those details and protects the rest of the harness from provider changes.
+
+The adapter does not replace the domain service. The carrier still owns valid delivery windows. The payment system still owns account and transaction invariants. The runtime checks harness policy, while the domain service enforces the rules of its own data.
+
+Credentials follow the same boundary. The model sees neither a cloud token nor a customer OAuth token. The runtime obtains a short-lived workload identity or an approved delegated token for the specific service. For HTTP-based MCP authorization, the client includes an OAuth `resource` parameter that identifies the canonical MCP server URI. The server must validate that the token was issued for it as the intended audience and reject tokens meant for another resource. Authorization for any upstream API remains a separate domain boundary.
+
+Adapters also create a controlled place for rollout. A team can route a small percentage of read traffic through a new shipping adapter, compare its structured results with the old path, and fall back without changing prompts. Write adapters need stronger verification, such as provider-side test accounts or shadow validation that never commits an effect.
+
+## Timeouts, Retries, and Idempotency Control Failure
+<!-- section-summary: Timeouts bound waiting, retries repeat safe attempts, and idempotency preserves one intended external effect across repeated calls. -->
+
+External services fail in several ways. A request can wait in a queue, lose its connection, receive a temporary error, or commit a write before the response disappears. Treating all four conditions as “tool failed” creates unsafe recovery.
+
+### Timeouts cap waiting
+
+A **timeout** limits how long one phase may wait. The runtime should distinguish time spent waiting for capacity from time spent inside the dependency where possible. It also needs an overall deadline inherited from the run. A two-second tool timeout cannot extend a user request whose remaining budget is half a second.
+
+### Retry only failures that another attempt can change
+
+A **retry** sends another attempt after a failure that may be temporary. Read-only calls often tolerate a small retry budget with exponential backoff and random jitter. Backoff increases the delay between attempts. Jitter spreads callers across slightly different delays so they do not all retry at once.
+
+Permanent errors should return immediately. Invalid arguments need correction, and permission denial needs a new authorization path. Repeating either request consumes capacity without changing the cause.
+
+### Idempotency protects one intended write
+
+Writes require an **idempotency key**. This key identifies one intended effect across retries. The runtime creates it before the first attempt, stores it in run state, and sends it to the service that commits the effect. The service must record the key with the transaction. Keeping the key only in the agent transcript provides no protection at the external boundary.
+
+Consider a refund request with key `refund:case_814:proposal_3`. The payment service commits refund `re_901`, but the response is lost. The runtime must query by the same key or repeat the request under the same key. A new key could create a second refund.
+
+```mermaid
+sequenceDiagram
+    participant Runtime as Tool runtime
+    participant Payments as Payment service
+    participant State as Run state
+
+    Runtime->>State: Save effect key K before execution
+    Runtime->>Payments: Create refund with K
+    Payments->>Payments: Commit refund re_901 for K
+    Payments--xRuntime: Response is lost
+    Runtime->>State: Mark outcome_unknown
+    Runtime->>Payments: Look up K
+    Payments-->>Runtime: K committed as re_901
+    Runtime->>State: Save re_901 and mark succeeded
+```
+
+The lookup is **reconciliation**. It asks the owning service whether the effect committed. A confirmed effect moves the run forward. A confirmed absence may allow a retry under the same key. An unresolved result remains in a recovery state for an operator or scheduled reconciliation job.
+
+Temporal models failure-prone external operations as Activities and recommends idempotent Activity code. Activities provide timeouts and retry policies for tool adapters inside durable workflows. The default Activity retry policy permits repeated attempts. An effectful tool therefore needs named errors that must stop immediately and a bound on total retry time. Its idempotency and reconciliation rules must still match the domain service.
+
+## Result Semantics Drive State Transitions
+<!-- section-summary: A structured outcome preserves failure meaning so the orchestrator can choose a safe next state without asking the model to guess. -->
+
+The model needs a useful result, while the orchestrator needs an operational fact. A single free-form string rarely serves both purposes.
+
+Suppose an address-change tool returns `"Something went wrong"`. The model cannot tell whether it should fix an argument, ask for approval, retry later, or stop because the address already changed. The orchestrator also lacks a dependable transition.
+
+A production outcome separates a machine-readable status from the safe message shown to the model. It can carry a call ID, tool version, attempt count, and references to governed evidence. Effectful calls also carry the idempotency key and any committed external identifier. Sensitive payloads remain in the owning system.
+
+The main statuses should correspond to different actions:
+
+- `invalid_request` returns field errors for a bounded model correction;
+- `denied` stops execution and records the policy decision;
+- `retryable_failure` allows a scheduled attempt inside the remaining deadline;
+- `outcome_unknown` enters reconciliation and blocks another fresh write;
+- `succeeded` records the external identifier and permits the declared next step;
+- `cancelled` confirms that execution stopped before a new effect began.
+
+These statuses belong to the runtime contract. They should not depend on the model interpreting an exception sentence.
+
+The state diagram shows how the result controls the run. The model can revise an invalid proposal. Software owns retry, denial, reconciliation, and completion.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Proposed
+    Proposed --> Rejected: invalid_request
+    Rejected --> Proposed: bounded correction
+    Proposed --> Denied: denied
+    Proposed --> Waiting: retryable_failure
+    Waiting --> Proposed: scheduled retry
+    Proposed --> Reconciling: outcome_unknown
+    Reconciling --> Succeeded: effect confirmed
+    Reconciling --> Proposed: effect absent, same key
+    Proposed --> Succeeded: succeeded
+    Proposed --> Cancelled: cancelled before effect
+    Succeeded --> [*]
+    Denied --> [*]
+    Cancelled --> [*]
+```
+
+Parallel calls add one more rule. Results from independent reads can merge after both complete. Writes against the same resource often need a version check or serial execution. The model may request parallel work, while the runtime enforces dependency limits and rejects conflicting effects.
+
+## Observability and Recovery Close the Execution Path
+<!-- section-summary: Tool-call traces explain the path, while recovery procedures reconcile uncertain effects and prove that the run returned to a safe state. -->
+
+A tool runtime is incomplete if the team cannot answer what ran, under whose authority, and what changed. Imagine an operator finding two refund records after one agent run. A generic error log cannot show whether the model proposed two calls, the runtime retried one call, or the payment service duplicated one effect. Observability preserves that path, while recovery uses it to restore a safe state.
+
+### Trace the call without copying its payload
+
+OpenTelemetry represents one request path as a **trace** made of timed **spans**. A tool call can have a parent span for the agent step and child spans for authorization and the external service call. Shared trace context connects work across processes.
+
+Useful span attributes describe the operation without copying its payload. The tool name and version identify the adapter. A call ID joins the span to run state. Outcome class and attempt number explain recovery. Policy version identifies the authorization rules. Duration and dependency name support service analysis. An approved record reference can link to governed evidence.
+
+Raw prompts and customer documents should stay out of general telemetry. Credentials must never enter it. Unrestricted exception text can also expose source data. The trace can store a size, category, hash, or restricted record reference instead. Access and retention should follow the sensitivity of the underlying operation.
+
+Metrics reveal patterns across calls. A rise in `invalid_request` may point to a poor schema description. Increasing `denied` outcomes may reveal stale eligibility rules. Old `outcome_unknown` records indicate that reconciliation is stuck. Latency and saturation show whether the adapter or dependency needs capacity work.
+
+### Recovery follows the outcome class
+
+Recovery follows the outcome class. A temporary read failure can use its bounded retry policy. A permission denial goes to the access owner. An uncertain write goes to reconciliation under its original idempotency key. A schema rollout failure can route traffic back to the previous adapter version.
+
+A useful recovery test deliberately loses the response after a test write. The run should enter `outcome_unknown`, find the committed effect by key, persist its external identifier, and finish without a duplicate. The trace should show both attempts and the reconciliation decision. This test proves that the runtime handles the failure most likely to cause hidden damage.
+
+## Choose an Industrial Runtime Shape
+<!-- section-summary: Runtime shape follows tool location, interoperability, effect risk, and the durability required by the surrounding workflow. -->
+
+Teams rarely need a separate tool platform on their first day. An application with a few local tools can register typed functions in its agent software development kit, usually called an **SDK**. The application process can supply trusted context, enforce policy, call ordinary service clients, and emit OpenTelemetry spans.
+
+The current OpenAI Agents SDK can generate schemas for function tools and validate them with Pydantic. Conditional enabling filters tools for a run. Per-call timeouts bound asynchronous functions, while configurable failure handling decides whether an error returns to the model or reaches application code. This fits a Python application whose team owns both the agent and its adapters. The SDK runner coordinates the model interaction; application code still owns authorization and external effect semantics.
+
+MCP fits a different boundary. It standardises discovery and invocation across remote tool providers written in different languages. The client still needs a policy that identifies trusted servers. It must handle authorization and disambiguate tools whose names collide. Its runtime also owns timeout rules and maps MCP results into the application's outcome contract. Connecting a server should never imply that every advertised tool is eligible for every user.
+
+A durable workflow runtime fits effects that outlive one request. Temporal Activities can host service calls whose retries and timeouts need durable coordination. A smaller database-backed job can provide the same boundary for a bounded use case. The choice depends on the surrounding recovery requirement, not on the presence of a model.
+
+Managed tools can remove adapter and infrastructure work for common capabilities. Web search and file retrieval are common examples. Hosted code execution also moves the execution service outside the application.
+
+The team still needs to review the service boundary and its retention behavior. It must understand which permissions apply and how failures are reported. A managed call and a local function should both produce an outcome the orchestrator understands.
+
+Across these shapes, keep one stable internal contract:
+
+- model-visible name, purpose, and argument schema;
+- trusted eligibility and authorization inputs;
+- adapter version and effect policy;
+- structured outcome and state transition;
+- trace identity and recovery evidence.
+
+That contract lets the team replace an SDK wrapper, move a tool behind MCP, or run an adapter as a workflow activity without moving domain authority into the model. Reliable tool execution comes from preserving the boundary from proposal to verified effect.
 
 ## References
 
-- [OpenAI: Harness engineering—leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/)
-- [OpenAI Agents SDK: Agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
-- [OpenAI Agents SDK: Running agents](https://openai.github.io/openai-agents-python/running_agents/)
-- [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview)
-- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
-- [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
-- [Temporal: Durable execution](https://docs.temporal.io/temporal)
+- [OpenAI Agents SDK: Tools](https://openai.github.io/openai-agents-python/tools/)
+- [OpenAI Agents SDK: Context management](https://openai.github.io/openai-agents-python/context/)
+- [Model Context Protocol: Understanding MCP servers](https://modelcontextprotocol.io/docs/learn/server-concepts)
+- [Model Context Protocol specification: Tools](https://modelcontextprotocol.io/specification/latest/server/tools)
+- [Model Context Protocol specification: Caching](https://modelcontextprotocol.io/specification/latest/server/utilities/caching)
+- [Model Context Protocol specification: Authorization](https://modelcontextprotocol.io/specification/latest/basic/authorization)
+- [Temporal: Activities](https://docs.temporal.io/activities)
+- [Temporal: Retry Policies](https://docs.temporal.io/encyclopedia/retry-policies)
+- [Temporal: Detecting Activity failures](https://docs.temporal.io/encyclopedia/detecting-activity-failures)
 - [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/)

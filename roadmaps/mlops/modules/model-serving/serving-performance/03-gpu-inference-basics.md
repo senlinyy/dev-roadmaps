@@ -7,6 +7,19 @@ order: 3
 id: "article-mlops-model-serving-gpu-inference-basics"
 ---
 
+## Table of Contents
+
+1. [A GPU Is Useful Only When the Workload Can Use It](#a-gpu-is-useful-only-when-the-workload-can-use-it)
+2. [Characterize the Workload Before Choosing Hardware](#characterize-the-workload-before-choosing-hardware)
+3. [Understand the Compatibility Stack](#understand-the-compatibility-stack)
+4. [Model Memory and Compute Are Different Limits](#model-memory-and-compute-are-different-limits)
+5. [Batching and Concurrency Create the Operating Point](#batching-and-concurrency-create-the-operating-point)
+6. [Kubernetes Schedules Declared Device Resources](#kubernetes-schedules-declared-device-resources)
+7. [Choose Sharing and Isolation Deliberately](#choose-sharing-and-isolation-deliberately)
+8. [Observe the Complete Accelerator Path](#observe-the-complete-accelerator-path)
+9. [Release With Performance and Compatibility Gates](#release-with-performance-and-compatibility-gates)
+10. [References](#references)
+
 ## A GPU Is Useful Only When the Workload Can Use It
 
 <!-- section-summary: GPU inference can improve parallel model execution, but transfer, batching, memory, and idle capacity determine the real benefit. -->

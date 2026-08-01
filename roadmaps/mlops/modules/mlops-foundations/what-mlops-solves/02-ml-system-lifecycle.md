@@ -1,7 +1,7 @@
 ---
 title: "ML System Lifecycle"
-description: "Walk through the full production lifecycle for an ML system, from the business problem to data, training, evaluation, deployment, monitoring, and improvement."
-overview: "The ML system lifecycle moves one model version through a controlled sequence of product definition, data, training, evaluation, registration, release, operation, and feedback. Each state accepts evidence, produces evidence, and has an owner and stop rule."
+description: "Follow the controlled states and handoffs that carry an ML system from a product decision through data, training, release, operation, feedback, and retirement."
+overview: "The ML system lifecycle connects changing data, code, labels, infrastructure, decisions, and outcomes through explicit states. Every transition carries versioned evidence, a decision owner, an approval rule, and a return path."
 tags: ["MLOps", "core", "lifecycle"]
 order: 2
 id: "article-mlops-mlops-foundations-ml-system-lifecycle"
@@ -10,237 +10,468 @@ aliases:
   - child-what-mlops-solves-03-ml-system-lifecycle
 ---
 
+## Table of Contents
 
-## A Lifecycle Is A Controlled State Flow
-<!-- section-summary: The ML lifecycle moves one model version through states whose inputs, outputs, owners, gates, and recovery actions are explicit. -->
+1. [Why An ML System Needs A Lifecycle](#why-an-ml-system-needs-a-lifecycle)
+2. [A Lifecycle Is A Set Of States And Controlled Transitions](#a-lifecycle-is-a-set-of-states-and-controlled-transitions)
+3. [Every Transition Uses The Same Handoff Contract](#every-transition-uses-the-same-handoff-contract)
+4. [Move From A Defined Decision To Data Ready](#move-from-a-defined-decision-to-data-ready)
+5. [Move From Data Ready To A Traceable Candidate](#move-from-data-ready-to-a-traceable-candidate)
+6. [Move From Candidate To Approved Release Unit](#move-from-candidate-to-approved-release-unit)
+7. [Move From Approved Release To Active Production](#move-from-approved-release-to-active-production)
+8. [Move From Production Evidence To A Specific Change](#move-from-production-evidence-to-a-specific-change)
+9. [Use Backward Transitions To Repair Failures](#use-backward-transitions-to-repair-failures)
+10. [Retirement Is A Controlled Lifecycle State](#retirement-is-a-controlled-lifecycle-state)
+11. [Implement Lifecycle Records With Current Industrial Tools](#implement-lifecycle-records-with-current-industrial-tools)
+12. [The Complete Lifecycle In One View](#the-complete-lifecycle-in-one-view)
+13. [References](#references)
 
-An **ML system lifecycle** is the controlled path that one model-powered decision follows from definition to production evidence. Each state accepts an input, produces an artifact or decision, and has a named owner. A gate decides whether the work moves forward, stays for investigation, or returns to an earlier state.
+At a high level, the **ML system lifecycle** is the controlled path that carries a model-powered decision from definition to production, then carries production evidence back into improvement or retirement.
 
-The previous article introduced learning, release, and operating loops. A supporting example follows one version through those loops. We will use **FreshBasket**, a grocery chain that predicts how many strawberry crates each store should order for the next day. The prediction runs at 03:30, planners review it before 05:00, and supplier orders leave at 05:30.
+Learning, release, and operating loops describe the work that repeats over time. The lifecycle view describes the approved states within that work, the evidence that allowed entry, and the decisions that move the system elsewhere.
 
-Here is the lifecycle before any tool names enter the picture:
+Imagine a delivery-time model that has served the same artifact for several weeks. Its endpoint stays healthy. During those weeks, restaurant workflows change, feature data arrives later, a dependency receives an update, and labels continue to mature. The artifact stayed fixed while the system around it moved.
 
-| State | Required input | Evidence produced | Main owner | Stop or recovery rule |
-|---|---|---|---|---|
-| Product contract | Decision, user, timing, action | Target, metrics, guardrails, fallback | Product and domain | Return when action or label lacks a clear definition |
-| Dataset release | Source events and label policy | Version, manifest, validation report | Data | Block on immature labels, leakage, or failed quality checks |
-| Candidate run | Dataset, code, config, runtime | Model artifact, run record, evaluation report | ML | Reject when baseline, slice, or runtime gates fail |
-| Release unit | Approved candidate and serving contract | Registry version, image digest, rollout and rollback plan | ML and platform | Block when identity, signature, approval, or rollback evidence is missing |
-| Production | Controlled traffic | Service, data, prediction, label, and product signals | Operations and product | Pause, fall back, or roll back when stop rules fire |
-| Feedback | Mature outcomes and incident evidence | Change request, corrected data, new hypothesis | Product, data, and ML | Retrain only after the team identifies the change it wants to make |
+A lifecycle gives those changes a place to go. A new dataset cannot quietly replace the one used for an approved model. A successful training job cannot place its output into production by itself. A failing canary has a recorded return path. A retired endpoint cannot leave active credentials and scheduled jobs behind.
 
-This table is the lifecycle spine. A pipeline engine can automate transitions, and it should preserve the evidence and stop rules rather than turning the path into an unreviewed sequence of jobs.
+In essence, the lifecycle turns continuous change into explicit states, evidence, decisions, and recovery.
 
-## Define The Product Decision
-<!-- section-summary: The product contract fixes who receives the prediction, when it runs, what action follows, which label measures it, and which fallback protects operations. -->
+## Why An ML System Needs A Lifecycle
+<!-- section-summary: The lifecycle controls changes in product meaning, data, labels, code, infrastructure, models, and real-world outcomes. -->
 
-FreshBasket starts with one operational decision: how many strawberry crates should store `044` order for tomorrow? The model predicts demand by store and product. A planner can accept or override the recommendation, and the ordering system needs a fallback when the batch misses its deadline.
+Traditional release records usually center on code and infrastructure. ML systems need those records too, along with several other identities.
 
-The product contract records the parts that later stages must preserve:
+The same training code can produce a different model after the input data changes. The same model can produce different behaviour after a feature service starts returning defaults. The same score can create greater risk after the product changes its action from “recommend review” to “reject automatically.”
 
-```yaml
-decision: next-day fresh-produce order quantity
-prediction_time: "03:30 store local time"
-entity_key: [store_id, sku_id, forecast_date]
-target: units_sold_before_close_adjusted_for_stockout
-primary_metric: weighted_absolute_percentage_error
-guardrails:
-  top_volume_store_underforecast_rate: "<= 0.12"
-  planner_override_rate: "<= 0.15"
-  batch_ready_by: "04:30 local time"
-fallback: previous_approved_forecast_with_planner_warning
-owners:
-  product: fresh-produce-planning
-  model: demand-forecasting
-  data: retail-data-platform
-```
+Labels add another source of motion. A fraud decision happens immediately, while a confirmed chargeback may arrive weeks later. Service evidence appears first. Trustworthy model-quality evidence appears after enough outcomes mature and join back to the original predictions.
 
-The target needs special care. Raw units sold can understate demand when a store runs out of strawberries at 16:00, so FreshBasket records stockout evidence and reviews the label rule. The prediction time also limits features. Tomorrow's final weather and tomorrow's realised footfall cannot enter a forecast created at 03:30.
+The product can also influence the data it later observes. A recommendation changes what users see. A demand forecast changes inventory. A risk model changes which cases receive human review. Future data contains part of the system's earlier behaviour.
 
-This state ends when product, domain, data, and ML owners agree on the decision, timing, label, metrics, guardrails, and fallback. A training run cannot repair an unclear product contract.
+These relationships create two connected lifecycles:
 
-## Build A Versioned Dataset
-<!-- section-summary: The dataset state turns source events into eligible examples with a fixed time boundary, mature labels, validation evidence, and a durable identity. -->
+- The **ML system lifecycle** covers the product capability across many model versions.
+- The **model-version lifecycle** covers one candidate from creation through approval, production use, replacement, and retirement.
 
-The data pipeline builds one row per `(store_id, sku_id, forecast_date)`. It joins sales, inventory, promotions, store closures, weather observations available by prediction time, supplier changes, and later outcomes. It waits until labels mature, then writes an immutable dataset release.
-
-The release manifest gives training a stable input:
-
-```yaml
-dataset: strawberry-demand-examples
-version: 2026-06-30-r2
-prediction_window: 2026-01-01..2026-06-30
-label_as_of: 2026-07-07T00:00:00Z
-source_versions:
-  sales: iceberg_snapshot_881204
-  inventory: iceberg_snapshot_881260
-  promotions: git_7a421bc
-pipeline_commit: 4c91e20
-checks:
-  duplicate_entity_dates: 0
-  immature_labels: 0
-  missing_inventory_rate: 0.0018
-  promotion_join_rate: 0.9987
-manifest_sha256: 72f2b6c9a8f1d31e
-```
-
-The validation gate covers schema, keys, freshness, ranges, label maturity, leakage, joins, and distribution changes. A failed check has a response. Missing supplier records can stop publication, while a real increase in summer promotions can open a review and update the baseline after an owner confirms the event.
-
-The output of this state is a dataset identity plus its validation report. Training should read the versioned output, rather than a mutable table called `latest`.
-
-## Create And Evaluate A Candidate
-<!-- section-summary: A candidate run binds code, data, config, runtime, model artifact, metrics, slices, and failure examples under one run identity. -->
-
-FreshBasket launches a training job with the approved dataset release. The job records its Git commit, resolved config, container digest, package lock, seed policy, hardware, logs, metrics, and artifacts under one run ID.
-
-Evaluation compares the candidate with the current production model on the same protected data. The primary forecast metric supports ranking, while guardrails protect important operations. FreshBasket checks top-volume stores, new stores, promotion weeks, different regions, under-forecasting, planner overrides, runtime, and model package size.
-
-| Evidence | Champion `v17` | Candidate `v18` | Gate |
-|---|---:|---:|---|
-| Weighted absolute percentage error | 0.184 | 0.171 | improve |
-| Top-volume under-forecast rate | 0.109 | 0.113 | at most 0.120 |
-| Promotion-week error | 0.241 | 0.206 | no regression |
-| Batch runtime | 31 minutes | 34 minutes | ready before 04:30 |
-| Planner replay overrides | 13.2% | 12.4% | at most 15% |
-
-The candidate passes these example gates. That result creates an approval recommendation, and it does not send the model directly to all stores. The evaluation report still records uncertainty, weak slices, known limitations, and the exact artifact that reviewers examined.
-
-## Register The Release Unit
-<!-- section-summary: The release unit joins the model artifact, serving runtime, schemas, rules, approvals, rollout plan, and rollback target under one identity. -->
-
-A model file alone cannot describe a production release. FreshBasket's **release unit** contains the registered model version, scoring code or image, input and output schemas, feature or preprocessing bundle, threshold and business-rule config, evaluation report, approval, rollout plan, and rollback target.
-
-```yaml
-release_id: strawberry-demand-2026-07-08.1
-model_version: strawberry-demand-forecast:18
-model_digest: sha256:ab8910c2
-scoring_image: ghcr.io/freshbasket/demand-score@sha256:de1739a4
-input_schema: strawberry-demand-features-v6
-rules_config: produce-order-rules-v9
-evaluation_report: s3://freshbasket-ml/reviews/strawberry-demand/18/report.json
-approval_status: approved_for_shadow
-rollback:
-  model_version: strawberry-demand-forecast:17
-  scoring_image: ghcr.io/freshbasket/demand-score@sha256:c204f5a1
-```
-
-The registry or catalog records the model version and its lineage. Deployment configuration records where that version runs and which traffic or stores use it. Keeping these ideas separate prevents a registry label from silently changing production traffic without a deployment event.
-
-Before release, a packaging test loads the model inside the scoring image, validates a known input, checks the output schema, and confirms version metadata. The gate blocks when the model loads in training and fails in the real runtime.
-
-## Release Through Controlled Traffic
-<!-- section-summary: Shadow, canary, and expanded rollout stages gather production evidence while limiting the impact of a weak candidate. -->
-
-FreshBasket starts with **shadow scoring**. Version `18` receives real production inputs and writes comparison output, while planners continue to use version `17`. The team checks data compatibility, batch completion, forecast distributions, and store-level differences without changing an order.
-
-The next stage is a ten-store canary. Those planners see version `18` recommendations and can override them. The rollout then expands to one region before all stores. Each stage has a duration, pass rules, stop rules, an owner, and the same rollback target.
-
-```yaml
-stages:
-  - name: shadow
-    duration: 48h
-    pass: [batch_on_time, feature_errors_clear, score_diff_reviewed]
-  - name: canary_10_stores
-    duration: 24h
-    pass: [override_rate_clear, underforecast_proxy_clear, support_queue_normal]
-  - name: regional_canary
-    duration: 48h
-    pass: [planner_approval, stockout_proxy_clear, batch_on_time]
-stop_actions:
-  active_customer_or_store_harm: restore_v17
-  invalid_feature_publish: use_fallback_and_pause_rollout
-```
-
-Rollback restores the full release unit when the issue may involve model, preprocessing, or rules. A model-only rollback can leave a broken feature or changed threshold in place. The release runbook names which components move together and how the team verifies recovery.
-
-## Operate With Production Evidence
-<!-- section-summary: Operations combines system health, data health, prediction behaviour, mature quality, business outcomes, and human feedback with named actions. -->
-
-After full rollout, FreshBasket watches several signal layers. System signals show whether the batch starts, finishes, reads dependencies, and publishes output. Data signals show freshness, missingness, categories, and joins. Prediction signals show forecast distributions and fallback use. Quality signals compare forecasts with mature sales and stockout-adjusted labels. Product signals show planner overrides, waste, stockouts, and support reports.
-
-| Signal | Example response |
-|---|---|
-| Batch misses 04:30 | Publish the previous approved forecast with a visible warning |
-| Inventory features stale | Pause affected stores and route them to manual planning |
-| Forecast distribution doubles in one region | Check promotions, units, supplier packs, and recent releases |
-| Label join delayed | Mark quality dashboard stale and fix the label pipeline before retraining |
-| Stockouts rise after rollout | Restore `v17`, preserve incident evidence, and inspect affected slices |
-
-Prediction records connect these layers. Each row carries the model version, release ID, entity keys, prediction time, input references or permitted feature values, output, fallback state, and later label link. Privacy and retention rules control sensitive records.
-
-An alert only helps when it points to an owner, dashboard, runbook, and decision. The operations state should produce evidence that the team can use, rather than a collection of thresholds with no response path.
-
-## Failure Moves Work Backward Deliberately
-<!-- section-summary: Lifecycle failures return work to the state that owns the broken assumption while preserving the evidence that triggered the move. -->
-
-A lifecycle needs backward transitions because different failures belong to different owners. A stale source belongs to dataset preparation. A weak regional result belongs to candidate evaluation. An incompatible input schema belongs to packaging and integration. A latency regression may belong to the runtime or capacity design. A harmful product outcome may require changes to the model, business rule, or original product contract.
-
-Sending every failure to “retrain the model” hides these distinctions. Retraining on the same broken source reproduces the data problem. Rebuilding the same model package does not repair an unclear product action. The incident or failed gate should identify the earliest invalid assumption and return work to that state.
-
-| Failure evidence | Owning state | Immediate protection | Durable correction |
-| --- | --- | --- | --- |
-| Late or incomplete inventory events | Dataset release | quarantine dataset and use prior snapshot | repair ingestion and rebuild under a new identity |
-| Candidate misses promotion-week guardrail | Candidate evaluation | reject candidate | change data, features, objective, or hypothesis |
-| Runtime cannot load preprocessing bundle | Release unit | block deployment | fix packaging and rerun integration checks |
-| Canary raises planner override rate | Controlled release | stop expansion and restore prior release | inspect affected slices and workflow impact |
-| Target definition no longer matches ordering policy | Product contract | use fallback and pause retraining | redefine decision, label, and evaluation gates |
-
-Every backward move should preserve the failed dataset, run, report, release request, or incident record. These artifacts explain why the next version exists. They also prevent a corrected build from quietly replacing the evidence attached to an earlier identity.
+The system lifecycle may last for years. Several model versions can move through it at once: one in experimentation, one in canary, one active, and one preserved for rollback.
 
 ```mermaid
 flowchart TD
-    Signal["Failed gate or production signal"] --> Classify{"Which assumption failed first?"}
-    Classify --> Product["Product contract"]
-    Classify --> Data["Dataset release"]
-    Classify --> Candidate["Candidate and evaluation"]
-    Classify --> Package["Release unit"]
-    Classify --> Runtime["Deployment or operations"]
-    Product --> Protect["Fallback, pause, or restore"]
-    Data --> Protect
-    Candidate --> Protect
-    Package --> Protect
-    Runtime --> Protect
-    Protect --> Correct["Create a new identity with corrected evidence"]
+    A["ML system<br/>product decision and controls"] --> B["Candidate version 43<br/>evaluation"]
+    A --> C["Version 42<br/>active production"]
+    A --> D["Version 41<br/>rollback ready"]
+    A --> E["Version 40<br/>retired"]
+    C --> F["Predictions, actions,<br/>labels, and outcomes"]
+    F --> G["Reviewed change reason"]
+    G --> A
+
+    classDef system fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px;
+    classDef candidate fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
+    classDef active fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
+    classDef history fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px;
+    class A system;
+    class B candidate;
+    class C,F,G active;
+    class D,E history;
 ```
 
-This failure map also clarifies ownership during incidents. Operations can activate the safe fallback immediately, while product, data, ML, or platform owners investigate the state they control.
+This distinction prevents a common mistake. Replacing a model version is one possible response to production evidence. A label-pipeline repair, feature change, threshold update, product-policy change, capacity adjustment, or full system retirement may fit the evidence better.
 
-## Turn Feedback Into The Next Change
-<!-- section-summary: Feedback creates a specific change request from mature labels, incidents, human review, and product evidence before another candidate runs. -->
+## A Lifecycle Is A Set Of States And Controlled Transitions
+<!-- section-summary: A state describes the approved condition of an ML asset, while a transition records the decision and evidence that changes that condition. -->
 
-FreshBasket joins each forecast with later sales, stockouts, waste, planner overrides, and notes. The team reviews errors by store, product, promotion type, region, and weather. An incident may reveal a supplier pack-size change. A steady quality decline may reflect a new store mix. Planner notes may show that a business rule needs adjustment while the model remains useful.
+A **state** describes the current approved condition of a lifecycle subject. The subject may be the full ML capability, a dataset release, a model candidate, or a production release.
 
-The feedback state produces a **change reason**. Examples include a scheduled data refresh, corrected promotion labels, a new-store segment regression, a feature outage fix, or a product contract change. The reason enters the next experiment and run record.
+A **transition** is the recorded decision that changes that condition. For example, a model candidate moves to `approved_for_canary` after its evaluation and integration evidence passes the release policy.
 
-Retraining is one possible response. A broken source needs repair and dataset rebuilding. A changed supplier pack may need a feature or rule update. An unclear planner action may need product design work. Naming the reason keeps the lifecycle from turning every alert into automatic retraining.
+The difference matters because work can run without changing state. A training job may fail and retry while the latest approved dataset remains `data_ready`. A shadow deployment may collect evidence while the current production release remains active. State changes only after the authority for that transition accepts the required evidence.
 
-## Putting It All Together
-<!-- section-summary: The lifecycle gives every model version a state, evidence packet, owner, gate, and recovery path from product definition through feedback. -->
+### Pipeline steps and lifecycle states serve different purposes
 
-FreshBasket's lifecycle starts with a product contract and ends with a specific reason for the next change. A versioned dataset enters a candidate run. Evaluation produces a decision packet. The release unit joins the model with its runtime and rules. Shadow and canary stages limit risk. Production signals drive fallbacks, rollback, investigation, and improvement.
+A pipeline step says, “run this command after that command.” A lifecycle state says, “this subject has satisfied these conditions and may now be used in these ways.”
+
+Suppose an orchestrator finishes a training task with exit code zero. That result proves that the process completed. It leaves several questions open:
+
+- Did the job read the approved dataset?
+- Is the produced artifact loadable?
+- Did important segments pass?
+- Did security and integration checks pass?
+- Who approved production exposure?
+
+The lifecycle keeps the model in `candidate` until the relevant decisions exist. Automation can prepare and evaluate the evidence. Policy and accountable owners control the state change.
+
+### Forward movement is only one part of the map
+
+Production lifecycles need backward and terminal paths. A failed data gate returns work to dataset preparation. A canary defect returns the release to packaging or model development. A harmful product outcome can reopen the original decision. Retirement stops new use and closes dependencies after retention and rollback obligations are satisfied.
 
 ```mermaid
-flowchart LR
-    Contract[Product contract] --> Data[Dataset release]
-    Data --> Candidate[Candidate run]
-    Candidate --> Review{Evaluation gate}
-    Review -->|reject| Candidate
-    Review -->|approve| Release[Release unit]
-    Release --> Rollout[Shadow and canary]
-    Rollout -->|stop| Recovery[Fallback or rollback]
-    Rollout -->|pass| Production[Production operation]
-    Production --> Feedback[Labels, incidents, human feedback]
-    Feedback --> Change[Named change reason]
-    Change --> Data
+flowchart TD
+    P["defined"] --> D["data_ready"]
+    D --> C["candidate"]
+    C --> A["approved_release"]
+    A --> S["shadow"]
+    S --> K["canary"]
+    K --> R["active"]
+    R --> U["superseded"]
+    U --> X["retired"]
+
+    D -->|data gate fails| P
+    C -->|candidate rejected| D
+    S -->|integration defect| A
+    K -->|stop rule fires| A
+    R -->|rollback| U
+    R -->|decision changes| P
+
+    classDef define fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px;
+    classDef build fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
+    classDef release fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px;
+    classDef active fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
+    classDef stop fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px;
+    class P,D define;
+    class C,A build;
+    class S,K release;
+    class R active;
+    class U,X stop;
 ```
 
-Each arrow represents a controlled handoff. The handoff carries identities and evidence, and the receiving state checks them. This structure gives automation useful boundaries and gives people a clear place to stop when the evidence fails.
+The state names can differ across organizations. Their contracts should remain precise enough for people and automation to agree on the current condition and allowed next actions.
+
+## Every Transition Uses The Same Handoff Contract
+<!-- section-summary: Each transition names the subject, entry evidence, decision policy, accountable owner, exit evidence, and return path. -->
+
+A state name alone leaves room for disagreement. A data scientist may consider a candidate ready because its metrics look good, while the release owner still lacks a load test and rollback target. A handoff contract gives both sides the same definition of readiness.
+
+Every lifecycle transition answers six questions:
+
+1. **Subject:** Which exact dataset, model, image, release, or ML capability may change state?
+2. **Entry evidence:** Which identities and reports must already exist?
+3. **Decision rule:** Which versioned policy determines pass, reject, review, or expiry?
+4. **Authority:** Which service or person can make the decision?
+5. **Exit evidence:** Which durable record proves the new state?
+6. **Return path:** What protects users and where does work go after rejection or failure?
+
+These questions form the lifecycle's common framework. Data publication, model approval, canary expansion, rollback, and retirement can all use it.
+
+A candidate-to-release handoff might use this record:
+
+```yaml
+transition: candidate_to_approved_release
+subject:
+  model_id: customer-risk@42
+  dataset_id: risk-examples@snapshot-8842
+  code_commit: 7d83a14
+  training_image: registry.example/ml/train@sha256:32421559c392d95d4b0f25a7b9a388f50eafeb73c592fb38ac6c3bb31fc4a8d6
+entry_evidence:
+  evaluation_report: evaluations/customer-risk-42.json
+  integration_test: passed
+decision:
+  status: approved_for_canary
+  policy_version: model-release-v7
+  owner: risk-ml-platform
+exit_evidence:
+  release_id: customer-risk-release-42.1
+return_path:
+  rollback_target: customer-risk@41
+```
+
+The format can live in a registry, metadata database, catalog, or managed ML platform. The relationships must be queryable. An operator should be able to start from `release_id` and recover the approved model, dataset, code, runtime, evidence, policy, and owner.
+
+### Evidence is immutable; decisions can expire
+
+An evaluation report should retain the result it measured. A later policy can make a new decision from that report, or require fresh evaluation. Overwriting the earlier report would erase why the original approval occurred.
+
+Approvals may expire after a model, dataset, dependency, regulation, or product action changes. The lifecycle record keeps the historical decision and creates a new transition request. This gives audits and incidents an honest timeline.
+
+### The receiving state validates the handoff
+
+The producer cannot declare its own handoff complete. The receiving stage checks the identifiers, signatures, policy version, permissions, and evidence it requires.
+
+For example, a release controller may reject an approved model because the referenced image digest is missing or the rollback target can no longer load. The evaluation decision remains valid for the model's measured behaviour. The release transition stays blocked until its own contract passes.
+
+## Move From A Defined Decision To Data Ready
+<!-- section-summary: The data-ready transition proves that one versioned dataset follows the product decision, time boundary, label rule, quality policy, and access controls. -->
+
+The `defined` state supplies a versioned product decision: prediction moment, action, target, success measures, guardrails, fallback, and owners. The data transition asks whether historical records can represent that decision honestly.
+
+Its main output is a **dataset release**. This is a stable identity for eligible examples, feature logic, label policy, split rules, source versions, and validation evidence.
+
+Consider an observation created at 10:00. A customer-status feature was written at 11:30 after an investigation completed. A join using only the customer ID would leak future information into training. A **point-in-time join** selects the latest eligible feature value at or before 10:00.
+
+Labels also have a time boundary. A customer without a churn event after seven days may still churn inside the agreed 30-day window. The dataset release waits for the label to mature or marks the example unresolved.
+
+### Entry and exit evidence
+
+The transition enters with the product contract, source definitions, feature logic, label policy, and access rules. It exits with:
+
+- an immutable table snapshot, warehouse snapshot, or file manifest;
+- a schema and entity-key definition;
+- prediction-time and label-maturity cutoffs;
+- training, validation, and protected-test split identities;
+- validation results for freshness, keys, joins, missingness, ranges, and leakage;
+- data classification, owner, access, and retention records.
+
+The data gate rejects the transition if a hard rule fails. A real distribution shift may open a review instead. The reviewer decides whether the change reflects valid new behaviour, a source defect, or an outdated baseline.
+
+Suppose an identifier migration reduces feature-join coverage from 99.8% to 82% in one region. The gate quarantines the new release and preserves the previous approved snapshot. The data owner repairs the mapping, rebuilds under a new identity, reruns the checks, and compares affected keys before requesting another transition.
+
+### Current tools support the record
+
+Delta Lake and Apache Iceberg can give object-storage tables versioned states. Warehouses can use snapshots or immutable release tables. dbt constraints and tests often cover structural checks; Great Expectations, Soda, or Deequ can add rules that span systems or distributions.
+
+OpenLineage can record compatible dataset, job, and run relationships across processing tools. It supplies lineage metadata. The dataset owner still defines the quality policy and decides whether a release is fit for training.
+
+## Move From Data Ready To A Traceable Candidate
+<!-- section-summary: The candidate transition binds one training output to the approved dataset, code, configuration, environment, compute, run, and basic artifact checks. -->
+
+The `data_ready` state authorizes a particular dataset release for training. A training job uses that release with versioned code, configuration, and runtime to produce a model candidate.
+
+The important transition result is traceability. The candidate record connects:
+
+- dataset release and feature definitions;
+- Git commit and resolved training configuration;
+- dependency lock or container digest;
+- framework version, seed policy, and hardware class;
+- run identity, logs, metrics, and artifacts;
+- model signature and a basic load test.
+
+Experiment tracking systems hold these relationships. MLflow 3 uses runs for executions and Logged Models for model identities. Metrics can link directly to a Logged Model and the dataset that produced them. Weights & Biases and provider-native trackers can fill the same role.
+
+The orchestrator has a separate job. Airflow, Dagster, or a managed ML pipeline starts the training task with the approved inputs, records its status, and preserves failure details. The tracker records what the execution produced. Neither system approves production use.
+
+### A completed run and a valid candidate are different results
+
+A job can exit successfully and still produce an unusable artifact. The output may have a missing dependency, incompatible signature, corrupt serialization, or incomplete metadata.
+
+The candidate transition therefore loads the artifact in a clean environment and scores a known input. It checks the output schema and verifies that the recorded model identity matches the artifact. A failure blocks candidate publication and points back to training or packaging.
+
+A transient compute interruption can retry under the declared run policy. A code correction, data change, or configuration change creates a new run identity. Partial artifacts remain marked unusable unless a later process explicitly validates them.
+
+For a small team, a containerized training script on a managed job covers execution well. MLflow can hold the run and model relationships.
+
+Managed jobs remain the practical default until the workload needs greater control over distributed execution or specialized scheduling. A team may then accept the operating cost of Kubernetes or Ray.
+
+## Move From Candidate To Approved Release Unit
+<!-- section-summary: The approval transition combines model and system evaluation with the complete runtime package that production will execute. -->
+
+A candidate has traceable origins, yet traceability cannot prove that users should receive its output. The approval transition tests both model behaviour and the complete production package. It then records whether this exact unit may enter controlled exposure.
+
+Evaluation compares the candidate with a meaningful baseline and the current production model. It measures the primary task, important groups, realistic input conditions, latency, resource use, and integration behaviour.
+
+Suppose overall recall improves from 0.81 to 0.85, while the false-positive rate for one protected segment rises from 0.04 to 0.11. The aggregate improvement cannot approve the candidate because the segment guardrail failed.
+
+Scores may also need **calibration**. If only 45 of 100 cases scored near `0.8` later show the predicted outcome, the score overstates risk for that group. Calibration analysis makes that mismatch visible. A decision threshold then translates the score into a product action, so threshold evaluation must use the real cost of false positives and false negatives.
+
+Robustness tests show behaviour under expected stress. A new category, missing optional field, image corruption, or moderate data shift can reveal a failure that average validation data hides. Unfamiliar inputs may need an uncertainty or human-review path.
+
+### Approval creates a decision, not a deployment
+
+The evaluation report records measurements, weak segments, representative failures, runtime results, and known limitations. A versioned gate compares that evidence with policy. High-impact use may add security, privacy, fairness, domain, or independent review.
+
+The approved subject is a **release unit**, which joins:
+
+- the model artifact and model signature;
+- preprocessing or feature retrieval rules;
+- scoring code and dependency environment;
+- input and output schemas;
+- thresholds and product policy;
+- serving image or managed serving specification;
+- evaluation and approval records;
+- rollout stages, stop rules, and rollback target.
+
+Packaging tests load this exact unit in a production-like environment. They send known inputs through preprocessing, inference, post-processing, and telemetry. A model that works in the training process and fails in the serving image stays out of production.
+
+### Registry and deployment remain separate
+
+A registry or governed catalog records model versions, lineage, permissions, and approval metadata. Deployment places a release into an endpoint, batch job, application, or device.
+
+MLflow fixed model stages are deprecated. Current workflows use immutable versions, tags, and aliases. Managed registries in SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks Unity Catalog can represent the same model-version responsibility.
+
+An alias such as `champion` can point to an approved model version. The deployment record still states where that version runs, which complete release unit surrounds it, and which traffic receives it.
+
+## Move From Approved Release To Active Production
+<!-- section-summary: Shadow, canary, and progressive rollout transitions gather production evidence while preserving explicit stop and rollback paths. -->
+
+The `approved_release` state means the release has enough offline and integration evidence to enter controlled production exposure. It has not yet earned full traffic.
+
+A **shadow** transition sends production inputs through the candidate without using its output for the live action. This exposes schema errors, missing features, latency, capacity, and prediction differences. Real data still brings privacy and cost obligations.
+
+A **canary** transition gives the candidate a small, stable cohort. Online systems may use eligible traffic or account groups. Batch systems may use one partition, location, or time window. The canary records its duration, entry cohort, quality proxies, service limits, stop rules, and owner.
+
+```mermaid
+flowchart TD
+    A["approved_release"] --> B["shadow"]
+    B --> C{"Shadow evidence passes?"}
+    C -->|No| X["blocked<br/>repair release unit"]
+    C -->|Yes| D["canary"]
+    D --> E{"Canary evidence passes?"}
+    E -->|No| F["rollback<br/>restore previous release"]
+    E -->|Yes| G["expanded rollout"]
+    G --> H["active"]
+    H --> I["rollback target retained<br/>through recovery window"]
+
+    classDef ready fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px;
+    classDef decide fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
+    classDef stop fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px;
+    classDef active fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
+    class A,B,D,G ready;
+    class C,E decide;
+    class X,F stop;
+    class H,I active;
+```
+
+Suppose the canary accepts valid requests, yet a recently added category produces an empty feature vector. The stop rule removes the release from traffic and restores the previous complete unit. The incident preserves affected prediction references. The owner repairs the feature or schema path, adds a regression case, and creates a new release identity.
+
+Rollback is itself a lifecycle transition. It identifies the release leaving traffic, the restored target, the trigger evidence, the decision owner, and the verification window. Restoring only the model can leave changed preprocessing or policy in place.
+
+Managed endpoints provide much of the traffic mechanism for teams using a cloud ML platform. Kubernetes platforms may use KServe with compatible traffic management. A standard API service behind a load balancer can support a small workload. Each implementation still needs the same state evidence and recovery record.
+
+## Move From Production Evidence To A Specific Change
+<!-- section-summary: The feedback transition verifies operational and outcome evidence, identifies the changed assumption, and creates one owned change request. -->
+
+The `active` state produces two kinds of evidence. Immediate evidence covers service execution, feature availability, schema failures, prediction behaviour, fallbacks, and release identity. Delayed evidence arrives after labels and product outcomes mature.
+
+A prediction record connects the two clocks. It identifies the release, model, event time, governed entity references, output, product action, and fallback. The later label or outcome uses the same join key or an approved mapping.
+
+Feedback creates a lifecycle transition only after the evidence is trustworthy. The first review checks monitoring freshness, schema versions, label volume, join coverage, and policy versions. The next review compares segments, features, actions, releases, and representative records.
+
+Suppose label-based quality drops sharply while outcome join coverage falls from 96% to 51%. The correct change request is “repair and backfill the outcome join.” Retraining from the partial labels would hide the evidence failure and create a questionable dataset.
+
+### One symptom can lead to several destinations
+
+A verified finding can return to:
+
+- product definition after the action or risk boundary changes;
+- dataset preparation after a source, feature, or label defect;
+- candidate development after genuine model decay;
+- release packaging after a dependency or schema mismatch;
+- operations after a capacity, telemetry, or routing issue;
+- retirement after the capability loses value or safe support.
+
+The transition record names the evidence, affected scope, immediate protection, responsible stage, owner, and verification plan. This is more useful than an alert whose only action says “retrain.”
+
+A schedule or drift signal may launch training after the evidence supports that choice. The resulting candidate still passes the current data, evaluation, approval, and rollout transitions. Continuous training and automatic production release remain separate authorities.
+
+### Account for the model's influence
+
+A recommendation changes which items receive exposure. A risk model changes which cases reach human review. A forecast changes inventory and therefore observed sales.
+
+Production records should retain the model output and the action that followed. Reviewers can then distinguish an environmental change from a feedback effect created by the product itself. Human corrections, overrides, appeals, and support reports add evidence that aggregate metrics may miss.
+
+## Use Backward Transitions To Repair Failures
+<!-- section-summary: Lifecycle incidents protect users, preserve the failed state, locate the earliest invalid assumption, create a corrected identity, and replay the required gates. -->
+
+A production symptom rarely identifies its owning lifecycle stage. Stale predictions can come from delayed data, old features, a broken cache, or a model that no longer matches current behaviour.
+
+The investigation follows a fixed order. Protect the current user or operation. Preserve the failed versions and evidence. Locate the earliest assumption that stopped being true. Repair that stage under a new identity, then replay its downstream gates.
+
+```mermaid
+flowchart TD
+    A["Failed gate or production signal"] --> B["Protect<br/>pause, fallback, or rollback"]
+    B --> C["Preserve dataset, run, model,<br/>release, traces, and outcome evidence"]
+    C --> D{"Earliest invalid assumption"}
+    D --> P["Product decision"]
+    D --> DA["Data or labels"]
+    D --> M["Candidate or evaluation"]
+    D --> R["Release package"]
+    D --> O["Runtime or monitoring"]
+    P --> N["Correct under a new identity"]
+    DA --> N
+    M --> N
+    R --> N
+    O --> N
+    N --> V["Replay required gates<br/>and verify recovery"]
+
+    classDef signal fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px;
+    classDef protect fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px;
+    classDef decide fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
+    classDef repair fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
+    class A signal;
+    class B,C protect;
+    class D,P,DA,M,R,O decide;
+    class N,V repair;
+```
+
+### Containment protects the present
+
+An online service may use a safe rule or previous release. A batch system may publish the previous approved result with a visible stale-data warning. A high-impact workflow may pause automation and open human review.
+
+Containment should be defined before an incident. The owner, command or control, expected user effect, and recovery check belong in the runbook and release record.
+
+### The earliest invalid assumption owns the durable repair
+
+A late source returns to data ingestion and the dataset release. A protected-segment failure returns to candidate development and evaluation. A model-loading error returns to packaging. A canary latency regression may return to feature lookup, capacity, or serving code. A target that no longer reflects the product action returns to the product definition.
+
+Retraining on broken labels reproduces the defect. Repackaging the same artifact cannot repair a changed decision rule. The transition map keeps those responsibilities separate.
+
+### Recovery reuses the lifecycle evidence path
+
+The correction receives a new version and regression case. A data repair rebuilds and compares affected rows. A candidate repair reruns evaluation and protected slices. A release repair repeats integration, shadow, and canary checks. A monitoring repair tests alert delivery and the runbook.
+
+Recovery evidence shows that the original symptom cleared and neighboring guardrails remained healthy. Traffic returns gradually through an approved transition.
+
+## Retirement Is A Controlled Lifecycle State
+<!-- section-summary: Retirement stops new use, closes active dependencies and permissions, preserves required evidence, and deletes assets after policy obligations expire. -->
+
+A model version may leave active traffic after a replacement succeeds. The wider ML capability may retire after its product decision disappears, a required data source closes, safe support ends, or remaining risk exceeds the value.
+
+Retirement starts with dependency discovery. Registry, deployment, and lineage records should reveal endpoints, batch schedules, applications, shadow jobs, dashboards, alerts, feature tables, credentials, and downstream consumers.
+
+The retirement transition then:
+
+1. blocks new deployment of the retiring subject;
+2. moves traffic and scheduled work to an approved replacement or fallback;
+3. observes the replacement through its recovery window;
+4. stops obsolete jobs and endpoints;
+5. revokes dedicated identities and permissions;
+6. marks registry and catalog records as retired;
+7. preserves required evaluation, decision, incident, and prediction evidence;
+8. deletes artifacts and data after retention, audit, and rollback obligations expire.
+
+Suppose an upstream provider will remove a required feature source. Lineage identifies the datasets and models that depend on it. A replacement feature passes through a new dataset and model transition. Production traffic moves gradually, while the previous source remains available through the agreed recovery window. Jobs and credentials close after the new path proves stable.
+
+Retirement records prevent unsupported artifacts from appearing production-ready. They also close cost, privacy, security, and operational obligations that survive after traffic stops.
+
+## Implement Lifecycle Records With Current Industrial Tools
+<!-- section-summary: Current tools implement execution, identity, evidence, release, and observability responsibilities while lifecycle policy remains explicit. -->
+
+Lifecycle contracts make tool selection concrete. The team needs one place to identify inputs, one record of execution and model evidence, one controlled release path, and one way to connect production behaviour with outcomes. These responsibilities can live inside an integrated platform or across several compatible systems.
+
+**Versioned source and data** identify the inputs. Git records code and configuration. OCI image digests identify runtimes. A warehouse snapshot, immutable manifest, Delta Lake version, or Iceberg snapshot identifies training data.
+
+**Execution and metadata** record what happened. Airflow or Dagster can orchestrate a composable stack. SageMaker AI Pipelines, Vertex AI Pipelines, Azure Machine Learning jobs, or Databricks Jobs reduce platform work inside a chosen cloud. MLflow 3, Weights & Biases, or provider tracking connects runs, models, datasets, metrics, and artifacts.
+
+**Registry and release control** record what may run and where it runs. MLflow Model Registry and managed cloud registries govern model versions. A managed endpoint, application deployment system, or Kubernetes serving platform owns production placement and traffic. The release record connects the deployed unit back to approval evidence.
+
+**Production evidence** records what the running system did. OpenTelemetry supplies portable service traces, metrics, and logs. Prometheus or cloud monitoring handles operational measurements. A model-monitoring platform and governed outcome join supply data, prediction, and delayed-quality evidence.
+
+OpenLineage can connect dataset, job, and run metadata across compatible tools. IAM, catalogs, approval policies, retention, and audit records apply across every state. NIST AI RMF offers a broader framework for continuous governance, context, measurement, and risk treatment.
+
+A small production path can keep code in Git and identify training data through an immutable warehouse snapshot. A containerized managed job performs training, while MLflow records runs and model evidence. A registry table plus one managed endpoint controls release. OpenTelemetry and a governed outcome join connect production operation to feedback.
+
+This path covers each lifecycle contract with limited platform surface. Additional systems earn their place after scale, latency, reuse, portability, or governance creates a clear need.
+
+## The Complete Lifecycle In One View
+<!-- section-summary: The lifecycle connects system and model states through versioned subjects, evidence, decisions, owners, return paths, and retirement. -->
+
+The ML system lifecycle keeps continuous change reviewable. The system capability carries the product decision and controls across many model versions. Each model candidate links to a governed dataset, code, runtime, run, evaluation, and release unit.
+
+Transitions provide the control points. Entry evidence shows what already passed. A versioned policy and accountable owner decide whether the subject may move. Exit evidence proves the new state. The return path protects users and sends failed work to the stage that owns the broken assumption.
+
+Production feedback creates a specific change request after evidence integrity is confirmed. The request may affect data, code, model behaviour, release infrastructure, product policy, or the whole capability. Retirement closes the path after active use, access, retention, and rollback obligations end.
+
+This framework gives automation firm boundaries and gives people an honest history. A production prediction can lead backward to every decision that enabled it and forward to the outcome that justifies the next controlled transition.
 
 ## References
 
-- [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)
-- [TensorFlow: Understanding TFX Pipelines](https://www.tensorflow.org/tfx/guide/understanding_tfx_pipelines)
-- [Microsoft Learn: MLOps model management with Azure Machine Learning](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-management-and-deployment?view=azureml-api-2)
-- [AWS SageMaker AI: Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
-- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
-- [Google Research: The ML Test Score](https://research.google/pubs/the-ml-test-score-a-rubric-for-ml-production-readiness-and-technical-debt-reduction/)
+- [Google Cloud: MLOps continuous delivery and automation pipelines](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)
+- [Google: Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
+- [Microsoft Azure Architecture Center: Machine learning operations](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/machine-learning-operations-v2)
+- [Amazon SageMaker AI: Implement MLOps](https://docs.aws.amazon.com/sagemaker/latest/dg/mlops.html)
+- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
+- [MLflow Tracking](https://mlflow.org/docs/latest/tracking/)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [Databricks: Machine learning lifecycle](https://docs.databricks.com/aws/en/machine-learning/concepts/ml-lifecycle)
+- [Databricks: Track and compare models with MLflow Logged Models](https://docs.databricks.com/aws/en/mlflow/logged-model)
+- [OpenLineage documentation](https://openlineage.io/docs/)
+- [OpenTelemetry documentation](https://opentelemetry.io/docs/)
+- [Delta Lake documentation](https://docs.delta.io/)
+- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/)

@@ -1,304 +1,502 @@
 ---
 title: "Label Quality and Adjudication"
-description: "Design annotation guidelines, measure agreement, resolve disputed labels, and release a trustworthy labeled dataset."
-overview: "Reliable labels come from a controlled human workflow. A supporting example follows a support-ticket urgency model through label definitions, annotator training, blind overlap, agreement checks, adjudication, dataset release, privacy controls, and production feedback."
+description: "Design label policies, annotation work, agreement review, adjudication, and versioned releases that models can learn from safely."
+overview: "Labels turn human judgment and operational outcomes into a model's learning signal. Learn how production teams define targets, guide and calibrate reviewers, sample difficult cases, preserve provenance, measure disagreement, adjudicate ambiguity, govern sensitive work, revise mature outcomes, and release traceable label sets."
 tags: ["MLOps", "data", "labels", "quality"]
 order: 4
 id: "article-mlops-data-for-ml-systems-label-quality-and-adjudication"
 ---
 
+## Table of Contents
 
-## Why Label Quality Needs a Workflow
-<!-- section-summary: Label quality comes from clear definitions, trained annotators, independent review, adjudication, versioning, and production feedback. -->
+1. [Labels Turn Decisions Into A Learning Signal](#labels-turn-decisions-into-a-learning-signal)
+2. [Define The Target Before Collecting Answers](#define-the-target-before-collecting-answers)
+3. [Design A Task That A Reviewer Can Actually Answer](#design-a-task-that-a-reviewer-can-actually-answer)
+4. [Sample The Queue For Learning And Quality](#sample-the-queue-for-learning-and-quality)
+5. [Preserve Every Judgment And Its Provenance](#preserve-every-judgment-and-its-provenance)
+6. [Use Agreement To Locate Ambiguity](#use-agreement-to-locate-ambiguity)
+7. [Resolve Disputes Through Consensus And Adjudication](#resolve-disputes-through-consensus-and-adjudication)
+8. [Calibrate Reviewers And Protect The Workforce](#calibrate-reviewers-and-protect-the-workforce)
+9. [Keep Process-Generated Labels Honest](#keep-process-generated-labels-honest)
+10. [Release A Versioned Label Set](#release-a-versioned-label-set)
+11. [Use Production Feedback To Repair The Guidelines](#use-production-feedback-to-repair-the-guidelines)
+12. [The Main Idea](#the-main-idea)
+13. [References](#references)
 
-A **label** is the answer a supervised model learns to predict. An **annotation** is one person's recorded judgment about an example. The two words often appear together, yet the distinction matters. Three people can annotate one ticket and produce three judgments. The released dataset may contain one final label after the team resolves their disagreement.
+## Labels Turn Decisions Into A Learning Signal
+<!-- section-summary: A label is the governed answer a model learns from, created from human judgments or operational outcomes under a specific policy. -->
 
-Imagine **RelayDesk**, a company that provides customer support software. RelayDesk wants a model to identify urgent tickets so the operations team can place them in a fast-response queue. A message about a password reset can wait. A report that every checkout request is failing for a large retailer needs immediate attention. The model target has three values: `routine`, `urgent`, and `critical`.
+Suppose a team wants a model to route incoming support requests. The target has three classes: routine, urgent, and critical. The names look clear until reviewers see real messages.
 
-The first pilot uses labels copied from the old ticket priority field. Model accuracy reaches 94%, which sounds excellent. During review, the team discovers that many agents left every ticket at the default priority. Other agents marked difficult customers as urgent even when the product worked normally. The model learned those habits. The metric measured agreement with an inconsistent field rather than agreement with RelayDesk's current incident policy.
+One message says that “everything is down” but provides no product, location, or timestamp. One reports a failed login for a single user at a large customer. Another includes evidence that checkout has failed across dozens of stores. Reviewers can disagree because they lack context, interpret severity differently, or follow different assumptions about customer size.
 
-Reliable label quality needs a production workflow:
+If those judgments are copied directly into a training table, the model learns the inconsistency. It may treat angry wording as urgency, customer tier as technical severity, or one reviewer’s habits as policy. Higher model accuracy against those labels only shows that the model reproduced the collected answers.
 
-| Part | Plain meaning | RelayDesk artifact |
-|---|---|---|
-| Label policy | The business meaning of every class | `urgency-policy-v3.md` |
-| Annotation guide | Rules and examples for human reviewers | `annotation-guide-v3.pdf` |
-| Overlap | Several reviewers label the same hidden sample | `overlap_batch_2026_07_10` |
-| Agreement | A measurement of how consistently reviewers apply the guide | Pairwise matrix and Krippendorff's alpha |
-| Adjudication | A qualified reviewer resolves disputed cases | `adjudication_events` table |
-| Gold set | A protected set of reviewed examples used for training and quality checks | `urgency_gold_v3` |
-| Release manifest | The exact examples, policy version, and checks in one dataset release | `labels-2026-07-12.yml` |
+The same issue appears in labels generated by operational processes. A chargeback event can serve as a fraud label, a readmission can serve as a clinical outcome, and an account closure can serve as churn. Each event still follows a policy. Chargebacks can be reversed. Readmission data can arrive late. A closed account may represent fraud prevention, relocation, or a duplicate account. The database event is observable; its meaning as a target requires design.
 
-This workflow treats human judgment as a source of data that needs design, testing, ownership, and change control. It also protects annotators. Clear instructions, appropriate access, training time, realistic workload, and a route for questions are parts of data quality rather than administrative details.
+In essence, labeling converts evidence into the answer the model is asked to learn. A reliable system separates the raw evidence, each judgment, the final released label, and the policy that connected them.
 
 ```mermaid
-flowchart LR
-    Decision["Product decision and error costs"] --> Policy["Label policy and annotation guide"]
-    Policy --> Queue["Eligible, blinded annotation queue"]
-    Queue --> Reviewers["Independent reviewer judgments"]
-    Reviewers --> Agreement["Agreement and disagreement analysis"]
-    Agreement --> Adjudicate["Qualified adjudication"]
-    Adjudicate --> Release["Versioned gold label release"]
-    Release --> Feedback["Training, audits, and production feedback"]
-    Feedback --> Policy
+flowchart TD
+    D["Product decision<br/>and error costs"] --> P["Label policy<br/>target, evidence, exclusions"]
+    P --> T["Task design<br/>context, choices, abstention"]
+    T --> Q["Sampled queue<br/>coverage and quality controls"]
+    Q --> J["Independent judgments<br/>with provenance"]
+    J --> A["Agreement and ambiguity analysis"]
+    A --> C["Consensus or expert adjudication"]
+    C --> R["Versioned label release"]
+    R --> M["Model training and evaluation"]
+    M --> F["Production feedback<br/>and outcome revisions"]
+    F --> P
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef pink fill:#FB7185,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class D,P yellow;
+    class T,Q teal;
+    class J,A,C blue;
+    class R,M,F pink;
 ```
 
-The workflow separates individual judgments from the released label. Agreement measures expose unclear guidance or difficult categories, while adjudication records the final decision and reason. Production feedback can reveal policy gaps and starts a reviewed update rather than silently relabeling history.
+The workflow has two quality loops. The annotation loop improves guidance, reviewer calibration, and dispute handling. The production loop compares released labels with later evidence and real decision outcomes. Both loops preserve history so a guideline repair never silently changes the meaning of an older dataset.
 
-## Define the Decision Before the Labels
-<!-- section-summary: The team should define the product action and error costs before asking annotators to choose classes. -->
+## Define The Target Before Collecting Answers
+<!-- section-summary: A label policy connects a product decision to a target, eligible evidence, time boundary, ambiguity path, owner, and revision process. -->
 
-RelayDesk first defines what the model's answer will change. A critical prediction pages the incident desk and moves the ticket ahead of routine support work. An urgent prediction creates a 30-minute response target. A routine prediction stays in the normal queue. These actions make label mistakes concrete.
+Reviewers need a question grounded in a real action. “Is this ticket bad?” leaves the construct open to personal interpretation. “Does this request contain evidence that meets the incident desk’s paging policy at submission time?” identifies the action, evidence threshold, and decision moment.
 
-A **false negative** happens when the label or model misses a genuinely urgent case. A **false positive** happens when it escalates a routine case. Missing a major outage can delay recovery for many customers. Escalating too many routine tickets can overwhelm the incident desk. The label policy therefore describes both the class and the action behind it.
+### Define the construct and its observable evidence
+
+A **construct** is the idea the team wants to measure, such as urgency, fraud, relevance, toxicity, or clinical deterioration. Most constructs cannot be read directly from one database field. The label policy states how observable evidence represents that idea.
+
+For each class, define the qualifying evidence, exclusions, and downstream action. A critical support label may require evidence of widespread active service loss. Customer size and emotional language may be explicitly insufficient. A routine label may mean that the available evidence shows no active material loss; it should never mean that the reviewer was uncertain.
+
+The error costs shape the policy. Missing a widespread outage delays incident response. Escalating routine requests exhausts the incident desk. The labeling team needs both consequences because the class boundary encodes that tradeoff.
 
 ```yaml
 label_policy:
-  name: relaydesk-ticket-urgency
-  version: 3
-  owner: support-operations-quality
+  name: support_impact
+  version: 5
+  decision_time: request_received_at
+  owner: service-operations-quality
+
   classes:
     routine:
-      definition: "Normal product or account help with no active material service loss."
-      action: "Standard support queue."
+      evidence: no active material service loss
+      action: standard support queue
     urgent:
-      definition: "Material service loss for one customer or a time-sensitive security concern."
-      action: "Response target of 30 minutes."
+      evidence: active service loss with limited scope
+      action: expedited operational review
     critical:
-      definition: "Confirmed or strongly evidenced widespread outage, active compromise, or severe safety impact."
-      action: "Page the incident desk immediately."
-  abstain_label: needs_more_context
-  policy_effective_at: "2026-07-01T00:00:00Z"
+      evidence: active widespread loss, compromise, or safety impact
+      action: page the incident desk
+
+  insufficient_evidence:
+    - customer tier by itself
+    - emotional language by itself
+    - historical incident without current impact
+
+  ambiguity:
+    abstain: needs_context
+    exclude: out_of_scope
+    escalation: domain_reviewer
 ```
 
-The **abstain label** gives annotators a safe answer when the evidence cannot support a class. RelayDesk uses `needs_more_context` when the message refers to an outage but omits the affected product, customer scope, and time. The annotation system sends these examples to a context-enrichment queue instead of forcing a guess.
+### Define time, population, and negative labels
 
-The team also identifies the evidence annotators may use. The annotation screen shows the ticket subject, message body, account tier, product, current service-status snapshot, and previous two customer messages. It hides the existing priority and model prediction because those fields can anchor the reviewer to an old or automated answer.
+The label must use evidence available at the model’s prediction time. A later incident review can establish the ultimate scope, but a routing model at request arrival could not see it. A dataset may store both the initial decision label and the later outcome label because they answer different questions.
 
-Before collection starts, security and privacy owners review the data. Customer messages can contain names, email addresses, API keys, payment details, or health information. RelayDesk masks common secrets and direct identifiers, restricts project access, records export events, and sets a retention period. The annotation vendor receives only the fields required for the task. A team should involve its privacy and legal specialists when the work includes personal data, regulated records, human-subjects research, or worker monitoring.
+Population rules also matter. Does the task include automated alerts, employee test accounts, unsupported languages, duplicates, and messages with missing attachments? Exclusions should carry reason codes. Quietly deleting hard examples produces a cleaner dataset and a weaker deployment claim.
 
-## Write an Annotation Guide
-<!-- section-summary: A useful annotation guide defines every class, shows positive and negative examples, covers edge cases, and records policy changes. -->
+Negative labels need special care. “No recorded chargeback” can mean a legitimate transaction, an immature dispute window, an unobserved dispute at another processor, or a missing feed. Only the first case is a confirmed negative under many fraud definitions. A maturity and observation policy keeps the others out of supervised training until the evidence supports an answer.
 
-An **annotation guide** turns the label policy into instructions a reviewer can apply to one example. It needs more detail than a class name. Google Cloud's labeling guidance recommends clear instructions with common examples and corner cases, and that advice matches what production teams learn quickly: unclear edge cases create systematic label noise.
+### Assign ownership to the meaning
 
-RelayDesk writes each rule with six fields:
+The policy owner has authority to answer domain questions and approve changes. Labeling operations owns task delivery and workforce quality. Data engineering owns source integrity and release construction. The model owner documents how labels affect training and evaluation. Privacy, security, legal, and safety specialists own controls within their domains.
 
-1. The class definition in plain language.
-2. Evidence that supports the class.
-3. Evidence that is insufficient by itself.
-4. Positive examples.
-5. Near-miss examples from another class.
-6. The escalation path for uncertainty.
+Clear ownership prevents an annotation vendor or ML engineer from redefining the business target through an implementation shortcut. It also gives reviewers a route for policy questions that cannot be resolved through examples alone.
 
-Here is one guide entry:
+## Design A Task That A Reviewer Can Actually Answer
+<!-- section-summary: Annotation quality depends on the context, instructions, response options, and interface available for one concrete judgment. -->
 
-```yaml
-guide_entry:
-  rule_id: critical-widespread-outage
-  class: critical
-  choose_when:
-    - "The ticket reports active failure across several customer locations."
-    - "A current service-status incident or monitoring alert supports the report."
-  insufficient_by_itself:
-    - "The customer writes 'everything is broken' with no product or scope details."
-    - "The customer has an enterprise account."
-    - "The message uses capital letters or angry language."
-  positive_example: "Checkout returns HTTP 503 in 42 stores; status incident PAY-1842 is active."
-  near_miss_example: "One store cannot sign in after an administrator changed SSO settings."
-  uncertainty_action: needs_more_context
+A sound policy can still produce poor labels if the task hides necessary context or asks too much at once. Task design translates policy into one reviewable unit.
+
+### Show the minimum sufficient context
+
+The interface should expose the evidence needed by the policy. A support reviewer may need the request and affected product. Current service status and the recent conversation can establish scope. A vision reviewer may need the source image and relevant region.
+
+Extra fields can create anchoring or privacy risk. An old priority may pull the reviewer toward an obsolete policy. Model predictions and customer-value scores can also steer judgment away from the evidence.
+
+For complex tasks, split the work into stages. One reviewer can identify candidate text spans, another can classify the extracted evidence, and a domain reviewer can resolve high-risk cases. Label Studio supports multiple annotations per task and can preserve whether regions originated from a model or a person. Argilla supports structured fields, questions, suggestions, responses, metadata, and vectors around each record. The surrounding policy determines which features belong in the workflow.
+
+### Write guidance around boundaries
+
+A useful guide explains each class in plain language, lists qualifying and insufficient evidence, and includes positive, negative, and near-boundary examples. Near misses teach more than obvious examples because they show why two similar records receive different answers.
+
+Guidance should explain the main sources of uncertainty. It covers duplicates and missing context, then states how to handle conflicting or multi-label evidence. Separate rules address offensive content and domain escalation. Each rule needs a stable ID so an annotation or adjudication can cite it. A change log connects modified rules to affected labels.
+
+```mermaid
+flowchart TD
+    E["Review available evidence"] --> S{"Enough evidence<br/>for the task?"}
+    S -->|"No"| U["Choose needs_context<br/>and a reason code"]
+    S -->|"Yes"| O{"Inside the<br/>defined scope?"}
+    O -->|"No"| X["Choose out_of_scope"]
+    O -->|"Yes"| B["Apply class boundary<br/>from the current guide"]
+    B --> R["Record label, confidence band,<br/>rationale code, and rule ID"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class E,S yellow;
+    class O,B teal;
+    class U,X,R blue;
 ```
 
-The near-miss example helps reviewers see the boundary. Technical severity needs evidence beyond account size, and outage scope needs evidence beyond frustrated writing. These distinctions prevent the label from turning into a proxy for customer tier or tone.
+An **abstain** option means that the evidence cannot support a class. It differs from a low-confidence guess. Track why reviewers abstain: missing source context, policy gap, unreadable input, unsupported language, or domain escalation. Those reasons reveal task and product repairs.
 
-RelayDesk tests the guide with a calibration batch of 100 tickets. Annotators label the batch independently, then discuss disagreements with the policy owner. The owner updates the guide when several trained reviewers interpret one rule differently. A one-off mistake may need coaching. Repeated disagreement around the same boundary usually points to the guide, available context, or class design.
+### Test the task before scaling it
 
-Every guide release keeps a change log. If version 4 changes security reports from `urgent` to `critical`, the team can identify which old labels used version 3 and decide whether those examples need relabeling. Silent policy changes create a dataset that mixes incompatible meanings under one column.
+A pilot uses a diverse calibration batch and a small group of trained reviewers. Reviewers work independently, then discuss disagreements with the policy owner. Repeated confusion around one rule usually points to a guide, interface, evidence, or class-design problem.
 
-## Build the Annotation Queue
-<!-- section-summary: The annotation queue should sample representative cases, assign blind overlap, protect sensitive fields, and preserve provenance. -->
+The pilot also measures completion time distribution, abandoned tasks, interface errors, and accessibility. Speed is operational context, not a direct quality score. An unusually fast response may reflect an easy task, a good shortcut, or rushed work.
 
-The **annotation queue** is the set of examples and assignments that move through the labeling tool. RelayDesk uses Label Studio in this example, while other teams may use a managed cloud service or an internal interface. Tool choice matters less than the controls around sampling, assignment, provenance, and export.
+Model suggestions can accelerate annotation after the baseline workflow is understood. Suggestions must carry model and version provenance. Blind audit tasks remain free of suggestions so the team can measure anchoring and independent human performance.
 
-Random sampling alone can underrepresent rare critical tickets. RelayDesk builds a stratified queue with routine tickets, known incident windows, security-related keywords, languages, account sizes, products, and newly launched features. Stratification means the team deliberately samples from important groups. The final training distribution can use separate weights; the review queue needs enough examples to measure quality in risky slices.
+## Sample The Queue For Learning And Quality
+<!-- section-summary: Annotation queues combine representative sampling, rare-case coverage, difficult examples, and blind quality controls with known sampling provenance. -->
+
+The queue determines which parts of the world receive careful human attention. Pure random sampling estimates common cases well and may contain too few rare, harmful, or newly introduced examples. Pure uncertainty sampling finds difficult cases and distorts the apparent production distribution.
+
+### Combine sampling purposes explicitly
+
+A production queue commonly includes four streams:
+
+- a random sample for an unbiased view of the eligible population;
+- stratified samples for required classes, languages, products, sites, and risk segments;
+- difficult or uncertain examples for boundary learning and active learning;
+- protected gold and overlap tasks for reviewer-quality measurement.
+
+Each task stores its sampling stream and selection score. Training can weight or resample examples later. Quality reports should avoid treating an intentionally enriched queue as a natural prevalence estimate.
+
+Active learning prioritizes records that may teach the model most, often through uncertainty, disagreement, novelty, or expected error reduction. It needs exploration because a model can be confidently wrong in unseen regions. A continuing random stream and segment coverage report protect against that blind spot.
+
+### Plan overlap around risk
+
+**Overlap** sends the same example to multiple reviewers independently. High-risk classes, new rules, new reviewer cohorts, and ambiguous examples deserve more overlap. Mature, low-risk tasks can use less.
+
+Blind overlap hides peer answers and model suggestions until submission. The overlap rate belongs in the queue manifest. Dynamic allocation can send a third reviewer after disagreement, although the first two judgments should remain immutable.
+
+### Check class and segment coverage
+
+Coverage reports start with example and independent-unit counts for each required segment. Label counts establish how much evidence supports each class. Separate rates describe abstention, disagreement, adjudication, and source missingness. A language with high abstention may need translated guidance or qualified reviewers. A rare class with only a few gold examples provides weak calibration evidence.
+
+Intersectional segments matter where risk depends on combinations such as language and product, device and environment, or site and demographic group. The workflow can expand sampling or narrow the release scope after a coverage gap appears.
+
+## Preserve Every Judgment And Its Provenance
+<!-- section-summary: Immutable annotation events keep raw judgments separate from consolidated labels and record who, what, how, and under which policy produced each answer. -->
+
+One final-label column erases the history needed to debug quality. The system should retain individual annotation events, adjudication events, and released labels as related records.
+
+### Record raw judgments as immutable events
+
+An annotation event identifies the example, task, reviewer pseudonym, and reviewer role. It records the policy, guide, interface, and evidence versions used for the judgment. The answer carries any abstention or rationale code, timestamps, sampling stream, and suggestion provenance. Edits append a revision or replacement event so the original answer remains auditable.
+
+```json
+{
+  "annotation_id": "ann_7f31",
+  "example_id": "request_82c4",
+  "assignment_id": "queue_v8_0142",
+  "reviewer_key": "worker_pseudo_19",
+  "reviewer_role": "primary",
+  "policy_version": 5,
+  "guide_version": "5.2",
+  "evidence_snapshot": "support_requests@184",
+  "label": "needs_context",
+  "reason_code": "missing_affected_scope",
+  "suggestion": null,
+  "sampling_stream": "random_audit",
+  "submitted_at": "event_timestamp"
+}
+```
+
+The public ML dataset uses pseudonymous reviewer keys or omits them. A restricted workforce system holds any identity mapping needed for access review, coaching, payment, or incident investigation. Retention and access follow the sensitivity of the source and worker data.
+
+### Keep consolidation and adjudication separate
+
+A consolidated label may come from majority vote, a probabilistic aggregation method, or expert adjudication. Store the method and input annotation IDs. AWS Ground Truth documentation, for example, describes task-specific consolidation across multiple workers and warns that its confidence scores are meaningful for comparisons within a labeling job, not as universal correctness probabilities.
+
+That platform is now closed to new customers and maintained for existing users without planned feature expansion. Existing deployments can continue under their support constraints. Ground Truth should no longer serve as the default choice for a new annotation program.
+
+### Connect provenance to the source
+
+The label record should identify the exact source snapshot. Delta and Iceberg table versions, immutable object paths, warehouse snapshots, or versioned document collections make the evidence reproducible. The task export, annotation events, adjudication history, and final label manifest each receive a digest.
+
+OpenLineage can connect labeling jobs to input and output datasets. MLflow can log the released label dataset as a training or evaluation input. These records complement the governed source; they do not replace it.
+
+## Use Agreement To Locate Ambiguity
+<!-- section-summary: Agreement metrics measure consistency under one policy, while class, segment, and reason analysis explain where judgments diverge. -->
+
+**Inter-annotator agreement** describes how consistently reviewers answer the same tasks. It is a diagnostic for guidance, task difficulty, reviewer calibration, and class boundaries.
+
+### Start with the disagreement itself
+
+Raw agreement is the fraction of overlap tasks with matching answers. It is easy to explain and can look high under severe class imbalance. Two reviewers who choose the dominant class for every example may agree often while missing every rare critical case.
+
+Cohen’s kappa adjusts for chance agreement between two reviewers. Fleiss’ kappa extends a related idea to multiple raters under specific assumptions. Krippendorff’s alpha supports multiple annotators, missing judgments, and different measurement levels through a chosen disagreement function.
+
+No statistic supplies a universal pass threshold. The report should name the metric, unit, missing-data treatment, class weighting or distance function, overlap sampling design, and uncertainty interval. Compare the result with prior calibrated batches and the risk of the task.
+
+```mermaid
+flowchart TD
+    M["Overall agreement moved"] --> C["Inspect class confusion"]
+    C --> S["Compare segments,<br/>reviewer cohorts, and rule IDs"]
+    S --> R["Group disagreement<br/>by reason code"]
+    R --> Q{"Main source?"}
+    Q -->|"Policy boundary"| G["Repair guidance<br/>and relabel affected cases"]
+    Q -->|"Missing evidence"| I["Repair source or interface"]
+    Q -->|"Reviewer calibration"| K["Coach and recalibrate"]
+    Q -->|"Legitimate ambiguity"| A["Preserve uncertainty<br/>or escalate"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class M,C yellow;
+    class S,R teal;
+    class Q,G,I,K,A blue;
+```
+
+### Agreement and correctness answer different questions
+
+Reviewers can agree on a flawed policy. Correctness needs a reference grounded in domain authority or later verified outcomes. Protected gold tasks, expert audits, source evidence, and downstream investigations provide different forms of reference.
+
+Gold labels also carry uncertainty. An adjudicated example may later change after new evidence. Store who approved it, which policy applied, and which evidence was available. Gold-set versions keep reviewer calibration aligned with the current definition.
+
+Per-class and per-segment views matter more than one average. A high overall score can hide confusion between urgent and critical, lower agreement in one language, or a new product area with missing context. Pairwise reviewer analysis can reveal calibration needs, but small sample sizes and task allocation must be considered before judging individuals.
+
+## Resolve Disputes Through Consensus And Adjudication
+<!-- section-summary: Consolidation handles routine variation, while qualified adjudication resolves policy-sensitive or high-risk disputes and records the reason. -->
+
+Disagreement is data about the task. The response depends on whether the case reflects ordinary noise, a difficult perception task, a domain-policy boundary, or genuinely insufficient evidence.
+
+### Use consensus for well-defined repeated judgments
+
+Majority vote can work for clear categorical tasks with independent, similarly qualified reviewers. Geometry tasks may aggregate bounding boxes or segmentations through overlap rules. Probabilistic methods can estimate latent labels and reviewer reliability.
+
+Consensus should never hide the original answers. A 2–1 vote and a unanimous decision carry different information. Low consensus, rare classes, high-risk actions, and policy-sensitive disputes route to review.
+
+### Use adjudication for authority and explanation
+
+**Adjudication** gives a qualified reviewer or panel the authority to choose the released label, request more evidence, preserve uncertainty, exclude the example, or raise a policy question. The adjudicator sees the source evidence, independent annotations, reviewer rationales, and relevant guide rules. Model predictions remain hidden for independent quality review.
+
+```mermaid
+stateDiagram-v2
+    [*] --> IndependentlyLabeled
+    IndependentlyLabeled --> ConsensusReady: answers satisfy consolidation rule
+    IndependentlyLabeled --> Disputed: answers conflict or risk is high
+    ConsensusReady --> Finalized: provenance and confidence checks pass
+    Disputed --> Adjudication
+    Adjudication --> Finalized: domain decision recorded
+    Adjudication --> NeedsContext: evidence is insufficient
+    Adjudication --> PolicyQuestion: guide cannot resolve case
+    PolicyQuestion --> GuidelineRepair
+    GuidelineRepair --> RelabelQueue: affected examples identified
+    NeedsContext --> RelabelQueue: source evidence added
+    RelabelQueue --> IndependentlyLabeled
+    Finalized --> [*]
+```
+
+Reason codes turn adjudication into system feedback. Examples include missing context, class-boundary ambiguity, conflicting sources, unsupported language, and policy exception. Trends in those codes point toward guideline, interface, source, or product repairs.
+
+Adjudicated labels should stay outside ordinary agreement calculations because the adjudicator has a different role and often sees more information. Report adjudication rate and resolution reasons separately.
+
+## Calibrate Reviewers And Protect The Workforce
+<!-- section-summary: Reviewer quality depends on recurring calibration, fair feedback, appropriate expertise, secure access, and safeguards for sensitive work. -->
+
+Label quality is a property of the full work system. Reviewer knowledge matters, along with instructions, evidence, interface, workload, management, compensation, and psychological safety.
+
+### Calibrate before and during production work
+
+Onboarding uses training examples, explanation, and a calibration batch. Reviewers need to explain class boundaries and use abstention correctly before receiving production tasks. Domain-specific work may require credentials or specialist roles.
+
+Recurring calibration mixes hidden current gold tasks into the queue and runs periodic blind overlap. Scores are reviewed by class and rule. A cohort-wide drop often points to changed data or stale guidance. An individual drop may reflect training needs, task mismatch, access problems, or workload.
+
+Gold tasks can become memorized. Rotate them, limit exposure, and maintain a separate expert-audit stream. Reviewer feedback should include reasons and corrected guidance. Punitive scoreboards encourage guessing and concealment.
+
+### Govern sensitive content and worker data
+
+Apply data minimization before annotation. Mask direct identifiers and secrets, restrict fields to the task, separate identity mappings, encrypt storage and transport, log exports, limit retention, and use least-privilege access. Public crowd work may be unsuitable for personal, confidential, regulated, or proprietary data.
+
+Harmful content requires exposure controls. Give advance notice and offer voluntary task assignment where possible. Rotation, breaks, an escalation route, wellness resources, and qualified supervision reduce sustained exposure. Never infer worker well-being from speed or error metrics alone.
+
+Workforce governance also covers clear instructions, accessible interfaces, realistic time, payment for required calibration and review, a dispute process, and non-retaliatory reporting of policy gaps. NIST AI RMF outcomes emphasize defined human roles, documented oversight, representative evaluation, and accountability for risk decisions.
+
+### Separate quality analytics from surveillance
+
+Pseudonymous reviewer analytics support calibration and investigation. Access to identifiable performance data should be restricted, purpose-limited, and retained under policy. Aggregate trends can guide system repair without broadcasting individual rankings.
+
+The annotation program should document which automated assistance, productivity measures, and quality scores affect work allocation or compensation. Reviewers need a route to challenge incorrect gold answers and tool failures.
+
+## Keep Process-Generated Labels Honest
+<!-- section-summary: Operational events become reliable labels only after maturity, observation coverage, policy mapping, and later revisions are represented explicitly. -->
+
+Many labels originate in software workflows. Payment disputes, deliveries, readmissions, account renewals, and incident resolutions can create strong evidence. They also carry delay, censoring, missingness, and policy effects.
+
+### Separate event occurrence from target meaning
+
+A process-generated label first defines the eligible population, prediction time, and outcome window. It names the source systems and observation requirement. Positive, confirmed-negative, reversal, and exclusion rules then map the observed events to target states.
+
+For example, a transaction may count as a confirmed fraud positive after an upheld dispute. A transaction with no dispute qualifies as a negative only after the dispute window matures and every relevant processor feed is complete. Open disputes and missing feeds remain unresolved.
 
 ```sql
-CREATE OR REPLACE TABLE labeling.urgency_queue_2026_07_10 AS
-WITH candidates AS (
-  SELECT
-    ticket_id,
-    created_at,
-    product_area,
-    language,
-    account_tier,
-    incident_window,
-    masked_subject,
-    masked_body,
-    ROW_NUMBER() OVER (
-      PARTITION BY product_area, language, incident_window
-      ORDER BY FARM_FINGERPRINT(ticket_id)
-    ) AS sample_rank
-  FROM privacy_safe.support_ticket_annotation_view
-  WHERE created_at >= TIMESTAMP '2026-06-01 00:00:00 UTC'
-)
-SELECT *
-FROM candidates
-WHERE sample_rank <= 500;
+select
+  transaction_id,
+  case
+    when dispute_status = 'upheld' then 'fraud'
+    when outcome_window_mature
+     and processor_coverage_complete
+     and dispute_status is null then 'legitimate'
+    else 'unresolved'
+  end as label,
+  outcome_observed_at,
+  policy_version
+from governed.transaction_outcomes;
 ```
 
-The queue stores `example_id`, `source_snapshot`, `policy_version`, `guide_version`, `assignment_id`, `annotator_role`, `started_at`, `submitted_at`, and tool export version. The public training table uses **pseudonymous** annotator IDs: stable substitute identifiers that do not directly reveal a person's identity. A restricted operations table maps those IDs to workforce records only when coaching, payment, access review, or an investigation requires it.
+The unresolved state protects the model from false negatives. Training pipelines filter or model that state according to the contract. They should avoid silently converting it to zero.
 
-RelayDesk assigns 20% of examples to two independent annotators and 5% to three. This **blind overlap** keeps each reviewer's answer hidden from the others until submission. The remaining examples receive one annotation unless an automated rule, low confidence, or later model review sends them to a second reviewer. The team changes these percentages according to risk, budget, class rarity, and observed disagreement.
+### Track maturity and revision
 
-## Measure Agreement Carefully
-<!-- section-summary: Agreement metrics reveal inconsistent judgments, while class-level reviews and sampled audits explain why the disagreement exists. -->
+Labels can move through provisional, mature, corrected, and withdrawn states. Append label events with `valid_from`, `observed_at`, `supersedes_label_id`, and reason. A current view can expose the latest accepted answer, while historical releases retain the version used by each model.
 
-**Inter-annotator agreement** measures how consistently reviewers apply the labeling policy to the same examples. Raw agreement is the fraction of overlapped examples with the same answer. It is easy to explain, yet it can look high when one class dominates. If 95% of tickets are routine, two careless reviewers can agree often by choosing `routine` every time.
+A policy change may alter old examples. Revisions should identify the affected population, rebuild labels from a pinned source, rerun quality checks, and create a new release. Models trained on superseded labels are discoverable through dataset and experiment lineage.
 
-RelayDesk reports raw agreement, a chance-adjusted statistic, class-level confusion, and slice-level results. Krippendorff's alpha is useful because it supports multiple annotators and missing judgments. Cohen's kappa can work for exactly two annotators. The team documents which statistic, distance function, and missing-data rules it uses because an agreement score without its calculation policy is hard to compare.
+### Audit the process that creates the outcome
 
-```python
-from collections import Counter
+Operational labels can reflect human intervention or product policy. A fraud team may investigate only high-scoring transactions, leaving low-scoring fraud unobserved. A support resolution code may be chosen for reporting convenience. A recommendation click depends on what the old model displayed.
 
+These feedback effects need an observation policy, randomized audits where feasible, and careful interpretation. The process owner and model owner should document how selection, intervention, and missing outcomes shape the label.
 
-def raw_agreement(pairs: list[tuple[str, str]]) -> float:
-    if not pairs:
-        raise ValueError("agreement needs at least one annotation pair")
-    matching = sum(left == right for left, right in pairs)
-    return matching / len(pairs)
+## Release A Versioned Label Set
+<!-- section-summary: A label release freezes source evidence, policies, judgments, final labels, quality results, coverage, limitations, and owners into one traceable dataset version. -->
 
+A production label set is an immutable release. It can be reproduced, compared, deprecated, and linked to every model that consumes it.
 
-def disagreement_table(pairs: list[tuple[str, str]]) -> Counter:
-    return Counter(
-        tuple(sorted((left, right)))
-        for left, right in pairs
-        if left != right
-    )
-```
+### Build the release from governed artifacts
 
-The weekly report might show 87% raw agreement and alpha of 0.71 overall. The important detail is the confusion table: `urgent` versus `critical` accounts for most disagreements, especially for security reports without a confirmed incident. Spanish tickets also have lower agreement because one translated example in the guide uses ambiguous wording.
-
-Agreement measures consistency, while correctness needs evidence about the policy and real outcome. A whole team can apply a flawed rule consistently. RelayDesk therefore audits a sample with a senior support incident manager and compares labels with later operational outcomes such as confirmed incident scope and response action. The team also checks per-class recall on a protected **gold set**, a held-back collection whose correct labels were adjudicated by trusted experts. Agreement, expert audit, and downstream evidence answer different questions, and the release report includes all three.
-
-## Adjudicate Disputed Examples
-<!-- section-summary: Adjudication resolves disagreement through a qualified reviewer, records the reason, and sends recurring ambiguity back into the guide. -->
-
-**Adjudication** is the process of deciding the released label when annotations conflict or the example carries unusual risk. An adjudicator needs domain authority and a clear scope. RelayDesk uses trained incident managers for critical-versus-urgent disputes and security specialists for suspected compromise. A labeling operations lead handles routine process questions.
-
-The adjudicator sees the original evidence, both blind annotations, each reviewer's optional rationale, and the relevant guide rule. The screen still hides the model prediction. The adjudicator may choose one class, request more context, exclude the example, or send a policy question to the owner.
-
-```yaml
-adjudication_event:
-  example_id: ticket_841922
-  policy_version: 3
-  submitted_labels: [urgent, critical]
-  final_label: needs_more_context
-  reason_code: missing_incident_scope
-  rule_ids:
-    - critical-widespread-outage
-    - urgent-single-customer-impact
-  adjudicator_role: incident-manager
-  guide_change_requested: true
-  resolved_at: "2026-07-11T14:22:10Z"
-```
-
-Reason codes turn disputes into operational data. RelayDesk charts them every week. A rise in `missing_incident_scope` can lead to a product change that asks customers how many sites are affected. A rise in `unclear-security-boundary` can lead to a new guide example and specialist training. Adjudication should improve the system around future labels rather than act only as a cleanup queue.
-
-The team keeps adjudicated examples out of the ordinary agreement calculation because the final answer has access to more evidence and authority. It reports the adjudication rate separately. A rising rate may signal a changed product, weak instructions, insufficient context, or rushed annotator onboarding.
-
-## Release a Versioned Label Set
-<!-- section-summary: A label release records source data, policy, guide, annotation events, final labels, checks, and known limitations as one immutable dataset version. -->
-
-A labeled dataset needs the same traceability as code and model artifacts. RelayDesk creates an immutable release manifest after quality checks pass. The manifest links every final label to the source snapshot and policy version without exposing restricted annotator identities.
+The release pipeline reads a pinned source snapshot, immutable annotation events, adjudication events, and process-generated outcome revisions. It resolves one accepted label per example under a named policy. It writes the final table and a manifest.
 
 ```yaml
 label_release:
-  id: relaydesk-urgency-labels-2026-07-12
-  source_snapshot: warehouse.support_tickets@2026-07-10T23:59:59Z
-  queue_query_commit: 81db2f4
-  policy_version: 3
-  guide_version: 3.2
-  tool_export_sha256: 4df17b6e...
-  examples: 18420
-  overlap_rate: 0.20
-  adjudication_rate: 0.083
-  quality:
-    raw_agreement: 0.87
-    krippendorff_alpha: 0.71
-    gold_set_accuracy: 0.91
-  exclusions:
-    privacy_review: 42
-    corrupt_content: 19
-    unresolved_context: 311
+  id: support_impact_v12
+  source_snapshot: \${SOURCE_SNAPSHOT}
+  policy_version: 5
+  guide_version: "5.2"
+  queue_manifest_digest: \${QUEUE_DIGEST}
+  annotation_export_digest: \${ANNOTATION_DIGEST}
+  released_table: governed.labels.support_impact_v12
+
+  quality_evidence:
+    overlap_sample: recorded
+    agreement_report: \${AGREEMENT_REPORT}
+    gold_audit: \${GOLD_AUDIT}
+    adjudication_report: \${ADJUDICATION_REPORT}
+    segment_coverage: \${COVERAGE_REPORT}
+
+  known_limits:
+    - unsupported language cohort excluded
+    - newest outcomes remain immature
+
   owners:
-    labeling: support-operations-quality
-    privacy: privacy-engineering
-    model: ticket-intelligence
+    policy: service-operations-quality
+    data: ml-data-platform
+    workforce: annotation-operations
 ```
 
-The pipeline validates unique example IDs, allowed classes, complete timestamps, current policy versions, export hashes, overlap assignment, and exclusion reason codes. It also compares class and slice distributions with the planned queue. A large unexpected shift blocks release until an owner explains it.
+The manifest records counts and artifact locations. Quality gates remain specific to the risks of each class and segment.
 
-The test set receives stricter protection. Separate credentials keep its labels outside hyperparameter search, prompt iteration, and feature design. RelayDesk records every evaluation and creates a new test release when product behavior changes enough that the old set no longer represents production.
+### Gate integrity, quality, coverage, and governance
 
-## Operate the Labeling System
-<!-- section-summary: Production labeling needs dashboards for queue health, agreement, adjudication, slice coverage, policy drift, privacy, and annotator support. -->
+Integrity checks verify unique example IDs, accepted classes, and valid policy versions. They also confirm source references, required timestamps, and complete provenance. Disputed cases need consolidation or adjudication status. Exclusions and abstentions need reason codes.
 
-Label quality changes over time because products, customers, policies, and annotator teams change. RelayDesk monitors queue age, completion time, abstention rate, agreement, adjudication rate, gold-set performance, class distribution, slice coverage, and privacy exclusions. It avoids using speed as a quality score. Fast annotation can reflect an easy batch, strong training, or rushed work, so operations reviews speed beside quality and workload evidence.
+Quality checks cover agreement with its calculation policy, class-confusion patterns, gold and expert audits, reviewer calibration, and adjudication rate. Coverage checks protect required classes, segments, languages, sites, and independent entities. Governance checks verify access, privacy review, retention, worker safeguards, and approval.
 
-Production feedback closes the loop. Confirmed incidents, agent overrides, customer escalations, and post-incident reviews create candidates for relabeling. The team samples these cases rather than copying operational outcomes directly. An agent override can be wrong, and an incident classification can change after investigation.
+Failures lead to specific controls. A source mismatch stops the build. Low agreement around one rule returns affected examples to guideline repair. Thin rare-class coverage expands sampling or narrows model scope. A privacy breach quarantines the release and triggers the incident process. Recovery produces a new immutable release.
 
-The monthly runbook asks:
+### Track consumption and maturity
 
-- Did any class definition or business action change?
-- Which disagreement reason increased most?
-- Do language, product, customer, and accessibility slices have enough reviewed examples?
-- Did gold-set performance fall for a new annotator cohort?
-- Are abstentions revealing missing context that the interface can supply?
-- Did any export, access, retention, or privacy control fail?
-- Which released datasets need deprecation after a policy change?
+Delta or Iceberg tables can retain label-release history. MLflow can log the versioned dataset as training, validation, or evaluation input. A registry or catalog records owners, policy, sensitivity, and deprecation. OpenLineage can connect source, labeling jobs, release tables, training datasets, and models.
 
-NIST's AI Risk Management Framework emphasizes documented roles, representative evaluation, human oversight, and testing under conditions similar to deployment. A labeling workflow supports those outcomes by keeping human decisions, responsibilities, limitations, and changes visible.
+Label Studio and Argilla are common foundations for configurable human annotation and structured feedback. Internal interfaces remain common for specialized evidence or policy. Managed and outsourced services can supply workforce and tooling. The organization retains ownership of target meaning, privacy, quality thresholds, and audit evidence.
 
-## Detect And Correct Label Workflow Failures
-<!-- section-summary: Common labeling failures include vague classes, hidden anchoring, unrepresentative queues, forced guesses, weak adjudication, and silent policy mixing. -->
+AWS Ground Truth remains relevant for existing customers under its maintenance status. Its current closure to new customers makes it unsuitable as the default recommendation for a new program.
 
-The first failure is a vague class such as `bad` or `high risk`. The fix is a product action, evidence rules, near-miss examples, and an abstain path. The second failure is anchoring: reviewers see an old priority or model prediction and copy it. Blind annotation and controlled model-assisted labeling reduce that risk.
+## Use Production Feedback To Repair The Guidelines
+<!-- section-summary: Production errors and later outcomes feed a controlled repair loop that updates guidance, relabels affected examples, and preserves previous releases. -->
 
-The third failure is a representative-looking random sample that misses rare harmful cases. Stratified sampling and slice coverage checks create enough evidence for review. The fourth failure is treating agreement as truth. Expert audits, protected gold examples, and later operational evidence test whether consistent judgments match the intended decision.
+The deployed model reveals cases the original queue missed. Overrides, appeals, confirmed incidents, post-event reviews, delayed outcomes, and high-confidence errors can all become candidates for analysis.
 
-The fifth failure is silent policy mixing. A table can contain labels from guide versions 1, 2, and 3 while exposing only `final_label`. Release manifests and row-level policy versions let the team relabel or filter incompatible records. The sixth failure is weak worker support. Annotators need training, questions, feedback, reasonable time, secure access, and clear escalation. Quality controls that only punish individuals will miss unclear instructions and broken tools.
+### Treat feedback as evidence requiring review
 
-Before release, RelayDesk runs these checks:
+An operator override is one judgment under production pressure. A customer complaint may identify a real failure or a disagreement with policy. A model-human disagreement can come from either side. Route these events into a sampled review queue with source and model provenance.
 
-```sql
-SELECT
-  COUNT(*) AS examples,
-  COUNT(DISTINCT example_id) AS unique_examples,
-  COUNTIF(final_label NOT IN ('routine', 'urgent', 'critical')) AS invalid_labels,
-  COUNTIF(policy_version != 3) AS wrong_policy_version,
-  COUNTIF(final_label IS NULL) AS missing_final_labels,
-  COUNTIF(adjudicated AND adjudication_reason IS NULL) AS missing_reasons
-FROM labeling.relaydesk_urgency_labels_2026_07_12;
+Compare feedback by class, segment, guide rule, source, model version, and decision path. A cluster of missed critical cases may reveal insufficient context in the task, a changed product, weak rare-class sampling, or a feature problem.
+
+### Repair the smallest responsible layer
+
+A reviewer mistake calls for coaching and recalibration. Repeated ambiguity calls for a guideline or class-design change. Missing context calls for a source or interface repair. A process-label reversal calls for maturity or revision logic. A shifted population calls for new sampling and coverage.
+
+Policy changes create a new version. The owner identifies affected examples through rule IDs and reason codes, sends them through relabeling or deterministic recomputation, and releases a new dataset. Training and evaluation then use compatible label definitions.
+
+```mermaid
+flowchart TD
+    F["Production feedback<br/>or later outcome"] --> V["Verify evidence and scope"]
+    V --> C["Cluster by class, segment,<br/>rule, source, and model"]
+    C --> R{"Responsible layer"}
+    R -->|"Reviewer calibration"| K["Coach and recalibrate"]
+    R -->|"Guideline ambiguity"| G["Version guideline<br/>and relabel affected cases"]
+    R -->|"Missing task context"| I["Repair source or interface"]
+    R -->|"Outcome revision"| O["Append corrected label event"]
+    K --> N["New quality evidence"]
+    G --> N
+    I --> N
+    O --> N
+    N --> L["New immutable label release"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class F,V yellow;
+    class C,R teal;
+    class K,G,I,O,N,L blue;
 ```
 
-The counts should show one row per example, zero invalid labels, zero wrong policy versions, zero missing final labels, and zero adjudicated rows without a reason. The release job then stores the query result with the manifest.
+The loop also measures repair effectiveness. A new guideline should reduce the targeted disagreement without damaging another class. Reviewer calibration should improve on fresh gold tasks. A maturity repair should reduce later label reversals. The evidence travels with the new release.
 
-## Putting It Together
-<!-- section-summary: Trustworthy labels come from a documented decision, clear instructions, controlled assignments, agreement review, adjudication, and a versioned release. -->
+## The Main Idea
+<!-- section-summary: Trustworthy labels preserve the connection between a product decision, available evidence, individual judgments, final resolution, and later revisions. -->
 
-RelayDesk started with an old priority field that produced an impressive metric and weak training evidence. The team replaced that shortcut with a labeling system. Product and operations owners defined the action behind each class. Annotation leads wrote examples and edge cases. The queue sampled risky slices and assigned blind overlap. Agreement reports exposed unclear boundaries. Qualified adjudicators resolved disputes and recorded reasons. A release manifest joined the labels to their policy, source snapshot, checks, owners, and limitations.
+Labels are model inputs created through policy. Human reviewers, operational systems, and automated suggestions all contribute evidence under limits that need to be explicit.
 
-This workflow gives the model team a training target it can explain. It also gives operations a path to improve labels when the product changes. Label quality is ongoing production work, and the evidence should travel with every dataset and model version that uses it.
+The production framework starts with the target and decision time. It turns that policy into an answerable task, samples the queue for coverage and learning, preserves every judgment, uses agreement to locate ambiguity, and resolves disputes with the right authority. Reviewer calibration and workforce safeguards support both quality and responsible operation.
 
-This closes Training Data Basics. The Data Quality submodule follows with automated schema, missing-value, range, label, and training-serving skew checks that protect every dataset release before a model uses it.
+Process-generated outcomes need mature observation and a revision history. Every release pins its sources and policy, then connects the accepted labels to their annotation provenance. The manifest carries quality and segment evidence. It also states known limits and ownership. Production feedback repairs the responsible layer and creates a new traceable version.
+
+A strong label set lets the team answer practical questions: what did this label mean, which evidence supported it, who or what produced it, how was disagreement resolved, which policy applied, and which models learned from it?
 
 ## References
 
-- [Google Cloud: What is data labeling?](https://cloud.google.com/use-cases/data-labeling) - Official overview of labeling workflows, quality controls, representative data, privacy, and annotator guidance.
-- [Google Cloud Document AI: Label documents](https://docs.cloud.google.com/document-ai/docs/label-documents) - Official guidance on instructions, common cases, corner cases, and trainee quality review.
-- [Label Studio: Label and annotate data](https://labelstud.io/guide/labeling.html) - Official open-source tool documentation for annotation tasks and collaborative review.
-- [Label Studio: Measure inter-annotator agreement and build consensus](https://labelstud.io/tutorials/how_to_measure_inter_annotator_agreement_and_build_human_consensus) - Official tutorial for agreement, consensus, ground truth, and model comparison.
-- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) - Primary framework outcomes for roles, human oversight, data suitability, representative evaluation, documentation, and independent review.
-- [NIST AI RMF Appendix C: Human-AI Interaction](https://airc.nist.gov/airmf-resources/airmf/appendices/app-c-ai-risk-management-and-human-ai-interaction/) - Primary guidance on defined human roles and the limits of converting complex judgments into measurable values.
-- [NIST AI Metrology Center](https://airc.nist.gov/metrology/) - Primary catalog of AI measurement methods, including annotator agreement evaluation.
-- [Artstein and Poesio: Inter-Coder Agreement for Computational Linguistics](https://aclanthology.org/J08-4004/) - Primary research survey covering agreement concepts and common statistics.
+- [Label Studio labeling guide](https://labelstud.io/guide/labeling.html)
+- [Label Studio agreement and consensus tutorial](https://labelstud.io/tutorials/how_to_measure_inter_annotator_agreement_and_build_human_consensus)
+- [Argilla dataset records, fields, questions, and metadata](https://docs.argilla.io/latest/how_to_guides/dataset/)
+- [Argilla annotation workflow](https://docs.argilla.io/latest/how_to_guides/annotate/)
+- [Amazon SageMaker Ground Truth enhanced data labeling and service status](https://docs.aws.amazon.com/sagemaker/latest/dg/sms-data-labeling.html)
+- [Amazon SageMaker Ground Truth annotation consolidation](https://docs.aws.amazon.com/sagemaker/latest/dg/sms-annotation-consolidation.html)
+- [Amazon SageMaker Ground Truth output data and provenance](https://docs.aws.amazon.com/sagemaker/latest/dg/sms-data-output.html)
+- [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
+- [NIST AI RMF Human-AI Interaction](https://airc.nist.gov/airmf-resources/airmf/appendices/app-c-ai-risk-management-and-human-ai-interaction/)
+- [Inter-Coder Agreement for Computational Linguistics](https://aclanthology.org/J08-4004/)
+- [Delta Lake table history](https://docs.delta.io/delta-utility/)
+- [Apache Iceberg Spark queries](https://iceberg.apache.org/docs/latest/spark-queries/)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/dataset/)
+- [OpenLineage object model](https://openlineage.io/docs/spec/object-model/)

@@ -10,6 +10,18 @@ aliases:
   - child-inference-patterns-02-streaming-inference-explained
 ---
 
+## Table of Contents
+
+1. [What Streaming Inference Solves](#what-streaming-inference-solves)
+2. [Events, Topics, Consumers, and Offsets](#events-topics-consumers-and-offsets)
+3. [A Streaming Inference Workflow](#a-streaming-inference-workflow)
+4. [Designing the Event Contract](#designing-the-event-contract)
+5. [Scaling Consumers with Lag](#scaling-consumers-with-lag)
+6. [Failure Handling and Replay](#failure-handling-and-replay)
+7. [Operational Checks](#operational-checks)
+8. [Putting It Together](#putting-it-together)
+9. [References](#references)
+
 ## What Streaming Inference Solves
 <!-- section-summary: Streaming inference scores events continuously as they arrive, which fits workflows that need near-real-time decisions without blocking a user request. -->
 

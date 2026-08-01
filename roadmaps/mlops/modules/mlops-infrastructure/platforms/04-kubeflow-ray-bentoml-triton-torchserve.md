@@ -8,6 +8,19 @@ id: "article-mlops-mlops-infrastructure-kubeflow-ray-bentoml-triton-torchserve"
 aliases: ["mlops-tooling-overview", "kubeflow-ray-bentoml-triton-torchserve", "roadmaps/mlops/modules/mlops-infrastructure/platforms/02-kubeflow-ray-bentoml-triton-torchserve.md", "child-platforms-02-kubeflow-ray-bentoml-triton-torchserve"]
 ---
 
+## Table of Contents
+
+1. [Platform Tools Implement Different Responsibilities](#platform-tools-implement-different-responsibilities)
+2. [Handoff Contracts Keep Layers Independent](#handoff-contracts-keep-layers-independent)
+3. [Workflow Control Owns Durable Run State](#workflow-control-owns-durable-run-state)
+4. [Distributed Compute Owns Parallel Execution](#distributed-compute-owns-parallel-execution)
+5. [Packaging Owns The Prediction Application](#packaging-owns-the-prediction-application)
+6. [Inference Runtimes Own Efficient Model Execution](#inference-runtimes-own-efficient-model-execution)
+7. [Serving Control Owns Desired Endpoint State](#serving-control-owns-desired-endpoint-state)
+8. [Compose Layers Without Duplicating Control](#compose-layers-without-duplicating-control)
+9. [Select Tools Through Responsibility And Failure](#select-tools-through-responsibility-and-failure)
+10. [References](#references)
+
 ## Platform Tools Implement Different Responsibilities
 <!-- section-summary: Workflow, compute, packaging, inference, and serving tools solve different parts of an ML platform and meet through explicit handoffs. -->
 

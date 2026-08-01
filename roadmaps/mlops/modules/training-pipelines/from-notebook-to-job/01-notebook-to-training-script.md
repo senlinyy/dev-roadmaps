@@ -1,408 +1,373 @@
 ---
 title: "Training Scripts"
 description: "Turn exploratory notebook work into a versioned Python training entrypoint with clear functions, inputs, outputs, exit behaviour, and tests."
-overview: "A training script turns notebook exploration into reviewed code that another process can call. This article owns code structure, one command-line entrypoint, dependency boundaries, output contracts, and testability. Later articles own configuration design, artifact publication, containers, schedulers, and orchestration."
+overview: "A production training program makes notebook state explicit through data, configuration, dependency, and output contracts, then exposes one package entrypoint that runs consistently on a laptop, in CI, and as a managed training job."
 tags: ["MLOps", "core", "training"]
 order: 1
 id: "article-mlops-training-pipelines-notebook-to-training-script"
 ---
 
-## A Training Script Is A Stable Program Boundary
-<!-- section-summary: A training script gives notebooks, CI, containers, and schedulers one reviewed command with explicit inputs, outputs, and exit behaviour. -->
+## Table of Contents
 
-A **training script** is a versioned program that loads declared inputs, trains and evaluates a model, writes required outputs, and exits with a meaningful status. It gives people and automation one stable command instead of requiring a notebook kernel with hidden state.
+1. [A Notebook Can Succeed While Its Job Fails](#a-notebook-can-succeed-while-its-job-fails)
+2. [Understand What Notebooks Optimize For](#understand-what-notebooks-optimize-for)
+3. [Turn Hidden State Into Program Contracts](#turn-hidden-state-into-program-contracts)
+4. [Extract Preparation, Training, Evaluation, and Saving](#extract-preparation-training-evaluation-and-saving)
+5. [Create One Testable Entrypoint](#create-one-testable-entrypoint)
+6. [Separate the CLI From Training Configuration](#separate-the-cli-from-training-configuration)
+7. [Package the Code as a Python Project](#package-the-code-as-a-python-project)
+8. [Make Retries Safe](#make-retries-safe)
+9. [Report Progress Through Structured Logs and Exit Status](#report-progress-through-structured-logs-and-exit-status)
+10. [Test the Program at Three Levels](#test-the-program-at-three-levels)
+11. [Carry the Same Boundary Into a Managed Job](#carry-the-same-boundary-into-a-managed-job)
+12. [The Main Idea](#the-main-idea)
+13. [References](#references)
 
-This article owns that program boundary. The script should have clear functions, one entrypoint, a command-line interface, injectable dependencies, an output contract, and tests. The next article owns the detailed training configuration. The artifact article owns publication and review bundles. Later pipeline and infrastructure articles own containers, Kubernetes Jobs, and orchestrators.
+## A Notebook Can Succeed While Its Job Fails
+<!-- section-summary: A notebook result is ready for automation after explicit inputs, dependencies, outputs, and one repeatable command replace hidden state. -->
 
-The distinction keeps the design portable. A good script can run from a laptop, CI fixture, container, managed training job, or scheduler because those systems call the same entrypoint.
+A data scientist finishes a churn-model experiment before the scheduled retraining window. The final notebook cell reports a useful improvement, and the release owner must decide whether the candidate is ready for an automated training job.
 
-## Separate The Four Contracts Hidden Inside A Notebook
-<!-- section-summary: A production training program separates invocation, data, computation, and output contracts so each boundary can be reviewed and tested. -->
+A platform engineer restarts the notebook kernel and runs all cells from the top. Training now fails because one feature table was loaded manually in an earlier session. After that is fixed, the score changes because a cell that sets the random seed runs after model construction. The saved artifact lands in a personal directory that the job runner cannot access.
 
-A notebook often blends four contracts because one person controls the whole session:
+If the team sends this notebook directly to scheduled compute, the job may fail after consuming expensive resources or publish an artifact with unclear inputs. The visible consequences are a missed retraining window, an absent candidate, and no reliable evidence for the release decision.
 
-1. The **invocation contract** says which command starts the run, which arguments are required, what exit codes mean, and how cancellation behaves.
-2. The **data contract** says which immutable snapshot is read, which schema and point-in-time rules apply, and what validation stops the run.
-3. The **computation contract** says how features, splits, seeds, training, and evaluation turn inputs into a candidate.
-4. The **output contract** says which files and metadata prove completion and where they are published.
+Success has a concrete shape. From a clean checkout, another engineer can install the declared environment and run one command against a named data snapshot. The process produces a verified model bundle, structured metrics, and exit status `0`. A second run with the same declared inputs follows the same computation and never overwrites the first completed result.
 
-The script is the boundary that joins these contracts without hiding them. The scheduler owns *when* and *where* the command runs. Configuration owns declared run choices. Functions own transformations and training logic. The artifact bundle owns evidence. If the script also queries “latest data,” invents its run ID, chooses production credentials, and promotes the model, then a retry can perform different work or cross a release boundary without review.
+This transition is about creating a **program boundary**. At a high level, the boundary states everything the training program receives, everything it controls, every external service it may call, and every result it promises to produce.
+
+## Understand What Notebooks Optimize For
+<!-- section-summary: Notebooks support exploration through interactive state, while automated jobs need a clean process that reconstructs all required state from declared inputs. -->
+
+Notebooks are designed for exploration. A data scientist can inspect a dataframe, change one transformation, rerun two cells, draw a chart, and keep useful objects in memory. That feedback loop is valuable because model development involves questions whose answers shape the next step.
+
+The same flexibility creates risks for automation. The kernel remembers variables from earlier executions. Cells can run in a different order from the document. A local file or credential may exist on one laptop. A chart can look correct even though the saved model came from an older object still held in memory.
+
+An automated job starts in a fresh process. It has no helpful memory from yesterday's session. It follows one control flow, receives a fixed environment, writes to declared locations, and communicates success through process state. You can think of the rewrite as turning the notebook's working memory into a program that can explain itself.
 
 ```mermaid
-flowchart LR
-    Caller["Human, CI, or orchestrator"] --> Invoke["Invocation contract"]
-    Config["Resolved configuration"] --> Program["Training program"]
-    Snapshot["Immutable data snapshot"] --> Validate["Data contract and validation"]
-    Invoke --> Program
-    Validate --> Program
-    Program --> Bundle["Staged output bundle"]
-    Bundle --> Verify["Output contract verification"]
-    Verify --> Publish["Immutable completed run"]
+flowchart TD
+    N["Notebook session<br/>(interactive cells and kernel state)"] --> H["Hidden assumptions<br/>(order, globals, files, and choices)"]
+    H --> C["Explicit contracts<br/>(data, config, dependencies, and outputs)"]
+    C --> P["Installed program<br/>(one entrypoint and control flow)"]
+    P --> J["Repeatable job<br/>(fresh process and recorded evidence)"]
 ```
 
-This layout also makes failure legible. Argument or configuration failure happens before expensive work. Data validation failure produces evidence but no model candidate. Training failure leaves an incomplete attempt, not a success marker. Output verification failure prevents publication. The caller can retry only when the failure class and idempotency policy allow it.
+The notebook can remain as an exploration surface. Its durable contribution is the understood algorithm, feature logic, metric choice, and plots that informed the decision. Reusable computation moves into importable modules, and the notebook calls those modules if interactive analysis continues.
 
-Reproducibility allows for legitimate hardware-level variation. The command must record enough identity and state for another engineer to reconstruct the intended computation and compare results within declared tolerances. The script should therefore print and persist the resolved configuration, input snapshot, code and image identity, library environment, seed policy, output location, and final status. This turns hidden notebook state into explicit evidence.
+## Turn Hidden State Into Program Contracts
+<!-- section-summary: Data, configuration, dependency, and output contracts make every important training assumption visible to callers and tests. -->
 
-## Apply The Program Boundary To A Clinic Model
-<!-- section-summary: The clinic scenario turns a useful notebook into a command another engineer can run from a clean checkout. -->
+A **contract** is an agreement at a program boundary. It describes valid inputs, expected behavior, and the evidence produced after success or failure. Four contracts capture most of the state that notebooks hide.
 
-Imagine **CareBridge Clinics**, which predicts whether a patient may miss an appointment so staff can offer reminders or rescheduling help. A data scientist has a notebook that reads an extract, fills missing values, trains a scikit-learn model, calculates validation metrics, and saves `model.joblib`.
+### Data Contract
 
-The notebook proves the idea, but its execution depends on cell order, local paths, variables left in memory, and manual choices. The production question is narrower than deployment: can another engineer clone the repository and run one reviewed command that produces the same kinds of outputs from declared inputs?
+The data contract identifies the exact training and validation inputs. It includes snapshot or manifest identity, schema, required columns, types, label definition, and time boundaries. The program validates these properties before expensive training starts.
 
-CareBridge chooses this package shape:
+For a weekly fraud retrain, `transactions_features@1842` is a useful input identity. `warehouse.latest_features` is fragile because a retry may read different rows. If the label column is missing, the process should fail before allocating a GPU and report the snapshot plus missing field.
 
-The package keeps `data.py`, `features.py`, `model.py`, and `evaluate.py` beside the coordinating `train.py` entrypoint. The `tests` directory holds readable fixtures, focused feature tests, and one training smoke test. This layout makes ownership visible without giving the command-line module every responsibility.
+### Configuration Contract
 
-Each module has one responsibility. `train.py` coordinates the workflow and avoids owning feature logic, metric formulas, or storage clients.
+The configuration contract records choices for this run: model family, feature set, split policy, seed, hyperparameters, and evaluation thresholds. The program writes the resolved configuration as an output artifact so a reviewer can see the values after defaults and approved overrides were applied.
 
-## Move Notebook Cells Into Named Functions
-<!-- section-summary: Named functions expose inputs and outputs, remove hidden state, and let tests isolate data, feature, training, and evaluation behaviour. -->
+### Dependency Contract
 
-The first rewrite extracts notebook cells into functions whose arguments show what they need.
+The dependency contract defines the Python version, project package, libraries, system dependencies, and external service interfaces required by the program. A lockfile and container image digest make the software environment inspectable. Credentials remain runtime secrets; the program receives clients or secret-backed configuration instead of reading a developer's home directory.
+
+### Output Contract
+
+The output contract defines which evidence marks a successful run. A minimal bundle might contain the serialized model, `metrics.json`, `run.json`, an input-output signature, and a completion manifest. The caller supplies the output destination. The program writes an attempt in a staging location and exposes the completed bundle after verification.
+
+```mermaid
+flowchart TD
+    D["Data contract<br/>(immutable inputs and schema)"] --> T["Training program<br/>(one controlled computation)"]
+    C["Configuration contract<br/>(resolved run choices)"] --> T
+    E["Dependency contract<br/>(package, lock, and runtime)"] --> T
+    T --> O["Output contract<br/>(model, metrics, lineage, and status)"]
+    O --> R["Reviewable run<br/>(evidence another system can consume)"]
+```
+
+These contracts also classify failure. Invalid arguments fail at invocation. A schema mismatch fails data validation. A library import failure identifies the runtime environment. A missing completion manifest means publication never completed. The caller can decide whether a retry is safe from the failure class and committed output state.
+
+## Extract Preparation, Training, Evaluation, and Saving
+<!-- section-summary: Small functions expose data flow and isolate deterministic model logic from storage, tracking, and other side effects. -->
+
+Notebook cells often mix dataframe mutation, model fitting, metric calculation, plotting, and file writes. The first engineering step gives each responsibility a named function with explicit arguments and returns.
+
+**Preparation** converts validated examples into model inputs. **Training** receives prepared data and a resolved configuration. **Evaluation** compares the fitted model with declared validation data. A **pure function** determines its result from explicit arguments and avoids changing external state. Preparation and evaluation can usually follow that pattern. Training also receives its seed because randomized fitting depends on it.
+
+Saving is a side-effect boundary. It receives a completed result and an output adapter, then writes the declared bundle. Keeping this effect visible allows a unit test to exercise model logic in memory and an integration test to use temporary storage.
 
 ```python
 from dataclasses import dataclass
-from pathlib import Path
-
-import pandas as pd
-from sklearn.base import ClassifierMixin
-
 
 @dataclass(frozen=True)
-class TrainingResult:
-    model: ClassifierMixin
-    metrics: dict[str, float]
-    feature_names: list[str]
+class TrainConfig:
+    seed: int
+    regularization: float
 
 
-def load_examples(path: Path) -> pd.DataFrame:
-    return pd.read_parquet(path)
+def prepare(examples):
+    features = ("account_age_days", "sessions_30d", "support_tickets_30d")
+    return examples.loc[:, features], examples["churned"]
 
 
-def build_features(examples: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    feature_names = [
-        "appointment_hour",
-        "days_since_booking",
-        "previous_no_show_count_180d",
-        "reminder_confirmed",
-    ]
-    return examples[feature_names], examples["missed_appointment"]
+def train(train_examples, config: TrainConfig):
+    X_train, y_train = prepare(train_examples)
+    return fit_classifier(X_train, y_train, config)
 
 
-def train_and_evaluate(
-    train_examples: pd.DataFrame,
-    valid_examples: pd.DataFrame,
-    seed: int,
-) -> TrainingResult:
-    X_train, y_train = build_features(train_examples)
-    X_valid, y_valid = build_features(valid_examples)
-    model = fit_classifier(X_train, y_train, seed=seed)
-    metrics = evaluate_classifier(model, X_valid, y_valid)
-    return TrainingResult(model, metrics, list(X_train.columns))
+def evaluate(model, valid_examples) -> dict[str, float]:
+    X_valid, y_valid = prepare(valid_examples)
+    return calculate_metrics(model, X_valid, y_valid)
+
+
+def save(model, metrics, output, run_record, writer) -> None:
+    writer.commit(model=model, metrics=metrics, output=output, run_record=run_record)
 ```
 
-The functions receive paths, dataframes, and a seed instead of reading globals. `TrainingResult` makes the output shape explicit. Feature construction and evaluation remain independently testable. A storage implementation can change without changing the training calculation.
+This structure makes data flow readable. `prepare` receives a dataframe and returns features plus labels. `train` has no reason to find a dataset or invent hyperparameters. `evaluate` calculates the declared metrics. The storage adapter handles persistence after those calculations finish.
 
-The script should also avoid import-time work. Importing `carebridge_no_show.train` should not connect to a warehouse, parse production credentials, create directories, or start training. Side effects belong inside called functions after argument validation.
+Importing the package should never start training, connect to a warehouse, create directories, or initialize a cloud client. Imports define functions and types. The entrypoint performs side effects after it has validated invocation and configuration.
 
-## Create One Training Entrypoint
-<!-- section-summary: The entrypoint coordinates validation, loading, training, output writing, and failure reporting without hiding business logic. -->
+## Create One Testable Entrypoint
+<!-- section-summary: One entrypoint coordinates adapters and pure functions while returning a structured result that tests and callers can inspect. -->
 
-The entrypoint assembles the functions and returns a small result that tests and callers can inspect.
+The **entrypoint** is the function that coordinates one complete training attempt. It loads declared data, validates contracts, calls the model functions, saves the bundle, and returns a structured summary.
+
+The entrypoint receives external capabilities through **dependency injection**. In another term, it accepts the data reader, bundle writer, and tracker that it needs instead of constructing fixed production clients inside the function. A local run can use filesystem adapters. A managed job can use mounted object-storage paths and MLflow tracking. Tests can use in-memory readers and temporary directories.
 
 ```python
-import json
-import uuid
-from collections.abc import Callable
 from pathlib import Path
-
-import joblib
-
 
 def run_training(
-    train_path: Path,
-    valid_path: Path,
-    output_dir: Path,
-    seed: int,
-    model_writer: Callable[[object, Path], object] = joblib.dump,
-) -> dict[str, object]:
-    if output_dir.exists():
-        raise FileExistsError(f"refusing to overwrite committed run: {output_dir}")
-
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    attempt_id = uuid.uuid4().hex
-    staging_dir = output_dir.parent / f".{output_dir.name}.attempt-{attempt_id}"
-    staging_dir.mkdir()
-
-    train_examples = load_examples(train_path)
-    valid_examples = load_examples(valid_path)
-    result = train_and_evaluate(train_examples, valid_examples, seed)
-
-    model_path = staging_dir / "model.joblib"
-    metrics_path = staging_dir / "metrics.json"
-    schema_path = staging_dir / "feature-schema.json"
-
-    model_writer(result.model, model_path)
-    metrics_path.write_text(json.dumps(result.metrics, indent=2))
-    schema_path.write_text(json.dumps({"features": result.feature_names}, indent=2))
-    commit_output(staging_dir=staging_dir, output_dir=output_dir)
-    verify_output_bundle(output_dir)
-
-    return {
-        "model_path": str(output_dir / model_path.name),
-        "metrics_path": str(output_dir / metrics_path.name),
-        "schema_path": str(output_dir / schema_path.name),
-        "metrics": result.metrics,
-    }
+    *,
+    run_id: str,
+    train_uri: str,
+    valid_uri: str,
+    output: Path,
+    config: TrainConfig,
+    reader,
+    writer,
+):
+    train_examples = reader.read(train_uri)
+    valid_examples = reader.read(valid_uri)
+    validate_examples(train_examples, valid_examples)
+    model = train(train_examples, config)
+    metrics = evaluate(model, valid_examples)
+    save(
+        model,
+        metrics,
+        output,
+        build_run_record(run_id, config, train_uri, valid_uri),
+        writer,
+    )
+    return {"run_id": run_id, "output": output, "metrics": metrics}
 ```
 
-`output_dir` now names a committed bundle rather than a work directory. The attempt writes under a hidden, run-scoped staging path. Only `commit_output` can expose it at the final path. Writing to this directory boundary keeps the program independent from a particular tracker or object store. The training-artifacts article will expand this small bundle into resolved config, data manifest, environment record, segment report, and review packet.
+`run_training` contains workflow order while domain logic remains in focused functions. The logical `run_id` arrives from the caller, which lets an orchestrator correlate retries. The writer owns the output commit protocol. A tracking adapter can log the same metrics and artifacts to MLflow after the bundle is verified, while the training calculation stays independent from the tracking vendor.
 
-Exceptions should carry the failed layer and input identity. A missing required feature should name the column and dataset path. The command should exit nonzero after an unrecoverable failure. A successful exit means the required output contract exists, rather than only meaning the Python process reached its final line.
+## Separate the CLI From Training Configuration
+<!-- section-summary: The CLI tells a process how to invoke one run, while the configuration file carries the model and evaluation choices for that run. -->
 
-The output write needs a commit boundary. If `joblib.dump` succeeds and metric serialization fails, the directory contains a model that looks complete to a downstream process. A safer implementation writes into a run-scoped staging directory, verifies every required file, writes a manifest last, and then publishes the directory or a `_SUCCESS` marker atomically within the storage system.
+The **command-line interface**, or **CLI**, is the process invocation contract. It should stay small and stable. The configuration file selects the approved training behavior. Immutable input references identify the data, while the output destination and run ID tie the process to its evidence.
 
-:::expand[Implement a verified local bundle commit]{kind="pattern"}
-The fuller helper below shows the pattern experienced teams use for a local filesystem. It computes digests, requires a success marker, rejects changed files, and publishes with a same-filesystem rename. The visible article only requires the lifecycle: stage, verify, mark complete, publish, and verify again before loading.
+The training configuration holds the larger set of modeling choices. Putting every tree depth, feature switch, threshold, and optimizer setting into CLI flags creates a long command that is hard to review. A versioned config file gives those related values one validated document. A few controlled overrides can remain available for approved operational needs.
 
-```python
-import hashlib
-import json
-import os
-from pathlib import Path
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-class BundleVerificationError(RuntimeError):
-    pass
-
-
-def read_manifest(bundle_dir: Path) -> dict[str, object]:
-    if not (bundle_dir / "_SUCCESS").is_file():
-        raise BundleVerificationError("bundle has no _SUCCESS marker")
-    try:
-        return json.loads((bundle_dir / "manifest.json").read_text())
-    except (FileNotFoundError, json.JSONDecodeError) as error:
-        raise BundleVerificationError("bundle manifest is missing or invalid") from error
-
-
-def verify_manifest_files(bundle_dir: Path, manifest: dict[str, object]) -> None:
-    for name, expected in manifest["files"].items():
-        path = bundle_dir / name
-        if not path.is_file():
-            raise BundleVerificationError(f"manifest file is missing: {name}")
-        actual_digest = sha256(path)
-        if actual_digest != expected["sha256"]:
-            raise BundleVerificationError(
-                f"digest mismatch for {name}: {actual_digest}"
-            )
-
-
-def verify_output_bundle(bundle_dir: Path) -> None:
-    verify_manifest_files(bundle_dir, read_manifest(bundle_dir))
-
-
-def commit_output(staging_dir: Path, output_dir: Path) -> None:
-    required = ["model.joblib", "metrics.json", "feature-schema.json"]
-    missing = [name for name in required if not (staging_dir / name).is_file()]
-    if missing:
-        raise RuntimeError(f"incomplete training output: {missing}")
-    if output_dir.exists():
-        raise FileExistsError(f"run is already committed: {output_dir}")
-
-    manifest = {
-        "files": {
-            name: {"sha256": sha256(staging_dir / name)} for name in required
-        }
-    }
-    (staging_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    verify_manifest = json.loads((staging_dir / "manifest.json").read_text())
-    if verify_manifest != manifest:
-        raise BundleVerificationError("manifest changed while it was written")
-    verify_manifest_files(staging_dir, verify_manifest)
-    (staging_dir / "_SUCCESS").write_text("")
-    os.rename(staging_dir, output_dir)
-```
-
-The local-filesystem implementation uses a rename on the same filesystem as its commit operation. Downstream code calls `verify_output_bundle` before loading the model: it requires both `manifest.json` and `_SUCCESS`, then recomputes every digest. The marker gives the scheduler a clear distinction between a completed bundle and files left by a killed worker. Object stores have different rename and consistency behaviour, so production code should use the store's conditional create or commit-table primitive, or write to an immutable final prefix only after validation.
-:::
-
-## Define The Command-Line Contract
-<!-- section-summary: A command-line interface gives humans and automation the same typed input surface and predictable exit behaviour. -->
-
-Python's `argparse` module can provide the first command contract:
+Python's standard-library `argparse` is a strong default for one training command because it adds help, type conversion, required arguments, and standard usage errors without another runtime dependency. Typer can improve a larger human-facing CLI with subcommands and rich typing, though a single job entrypoint rarely needs that extra layer.
 
 ```python
 import argparse
 from pathlib import Path
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="carebridge-train")
-    parser.add_argument("--train-path", type=Path, required=True)
-    parser.add_argument("--valid-path", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--seed", type=int, default=20260712)
-    return parser.parse_args()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="train-model", allow_abbrev=False)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--train-uri", required=True)
+    parser.add_argument("--valid-uri", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--run-id", required=True)
+    return parser
 
 
 def main() -> int:
-    args = parse_args()
-    run_training(
-        train_path=args.train_path,
-        valid_path=args.valid_path,
-        output_dir=args.output_dir,
-        seed=args.seed,
+    args = build_parser().parse_args()
+    config = load_and_validate_config(args.config)
+    summary = run_training(
+        run_id=args.run_id,
+        train_uri=args.train_uri,
+        valid_uri=args.valid_uri,
+        output=args.output,
+        config=config,
+        reader=build_reader(),
+        writer=build_writer(),
+    )
+    emit_event(
+        "training_completed",
+        run_id=summary["run_id"],
+        output=str(summary["output"]),
     )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 ```
 
-A local run and a scheduled job can now call the same interface:
+The executable boundary ends with `raise SystemExit(main())`. This passes the returned integer to the operating system, container runtime, and managed job service. Argument errors from `argparse` produce a usage message and status `2` before training starts.
+
+## Package the Code as a Python Project
+<!-- section-summary: An importable project with pyproject metadata, a console entrypoint, and a committed lockfile gives local and remote jobs the same installable code. -->
+
+A production training program should be an importable Python project. This keeps functions available to notebooks and tests while giving automation an installed console command. A `src/` layout places `churn_training` under `src/`, separate from the project-level `pyproject.toml`, `uv.lock`, and `tests/` directories. That layout reduces accidental imports from the repository root and exercises the installed package during tests.
+
+`pyproject.toml` declares project metadata, supported Python, runtime dependencies, and the console entrypoint. Development-only tools belong in a dependency group.
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "churn-training"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["mlflow", "pandas", "pyarrow", "scikit-learn"]
+
+[project.scripts]
+train-model = "churn_training.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+```
+
+`uv.lock` records the exact resolved dependency versions and should be committed. `uv run --locked` verifies that the lockfile matches `pyproject.toml` before running the installed command. CI should fail if a dependency change left the lock stale.
 
 ```bash
-python -m carebridge_no_show.train \
-  --train-path data/no_show_train.parquet \
-  --valid-path data/no_show_valid.parquet \
-  --output-dir runs/no-show-2026-07-12 \
-  --seed 20260712
+uv lock --check
+uv sync --locked
+uv run --locked train-model --help
+uv run --locked pytest
 ```
 
-Paths and seeds are appropriate for this first article. The next article replaces a growing list of flags with a validated config file and controlled overrides.
+The project metadata expresses compatible dependency ranges. The lockfile identifies the concrete environment used by the application. A container build can install the project from the same lock and record the resulting image digest. This creates a traceable path from source revision to installed package to managed training job.
 
-The command contract should define expected exit states. Argument parsing returns a usage error before data access. Contract validation errors identify the dataset and missing field. Training failures preserve logs and the staging directory for diagnosis. Publication failures leave the output uncommitted and safe to retry. Infrastructure termination, such as an evicted worker, produces no success marker, so an orchestrator can retry the same immutable inputs under a new attempt ID.
+## Make Retries Safe
+<!-- section-summary: Retry-safe training separates a logical run from its attempts, stages outputs privately, and commits one verified result without overwriting history. -->
 
-A useful command output is short and machine-readable. It should print the run ID, train and validation snapshot IDs, output URI, and terminal status. Large logs belong in structured log storage, while this short summary helps a human and scheduler locate the run evidence. The command should avoid printing patient records or credentials during validation failures.
+Managed jobs can stop because of spot interruption, node failure, network loss, or a platform timeout. An orchestrator may retry automatically. The training boundary must define what repeated invocation means.
 
-## Make The Script Testable
-<!-- section-summary: Focused unit tests protect feature logic, while a tiny smoke test proves the real entrypoint writes a loadable output bundle. -->
+**Idempotency** means repeating an operation with the same logical identity avoids conflicting committed effects. Training itself may consume compute again, especially with non-deterministic hardware. The publication boundary still ensures that one logical run produces at most one committed result.
 
-Unit tests should cover deterministic feature and evaluation rules. A smoke test runs the real entrypoint on a tiny, readable fixture:
+Use a stable logical `run_id` and a separate attempt identity. Each attempt writes to a private staging prefix. After training, the writer validates required files and digests, writes the manifest last, and atomically exposes the completed result through the storage system's supported commit primitive. A completed output is immutable. A retry that finds it reports the existing result or stops according to policy.
+
+```mermaid
+flowchart TD
+    R["Logical run<br/>(stable inputs and run ID)"] --> A1["Attempt one<br/>(private staging prefix)"]
+    A1 --> F["Worker interruption<br/>(no completion manifest)"]
+    F --> A2["Attempt two<br/>(new private staging prefix)"]
+    A2 --> V["Bundle verification<br/>(files, digests, and metadata)"]
+    V --> C["Single commit<br/>(immutable completed output)"]
+    C --> X["Later retry<br/>(find existing committed result)"]
+```
+
+Local filesystems can use a same-filesystem atomic rename. Object stores have different semantics and may use conditional object creation, immutable prefixes, transaction tables, or a manifest pointer. The writer adapter owns those details. Downstream consumers read bundles carrying a completion manifest and verify them before loading the model.
+
+Side effects outside the output bundle need the same care. Metric logging should use the stable run and attempt identity. Registry promotion belongs after evaluation and approval, far outside the training function. Sending notifications or changing aliases inside `train()` would make an infrastructure retry repeat a release action.
+
+## Report Progress Through Structured Logs and Exit Status
+<!-- section-summary: Structured events explain what the job attempted, while exit status gives the runtime one unambiguous success or failure signal. -->
+
+Humans and automation observe training through different surfaces. A human needs enough context to diagnose a failure. A scheduler needs a terminal process status. Structured logs and exit codes serve those needs together.
+
+A **structured log** records an event name plus named fields. Instead of a sentence such as “loading data,” emit an event with `run_id`, `attempt_id`, `snapshot`, and elapsed time. Log records should identify phases, counts, metrics, output URIs, and failure classes. They should exclude raw training records, access tokens, and secret values.
+
+```json
+{"event":"data_validated","run_id":"retrain-1842","attempt":2,"rows":8204419}
+{"event":"model_evaluated","run_id":"retrain-1842","roc_auc":0.8421}
+{"event":"bundle_committed","run_id":"retrain-1842","output":"s3://ml-runs/retrain-1842"}
+```
+
+Exit status `0` means the required output contract was committed and verified. A nonzero status means the job failed. Teams can define a small documented taxonomy, such as usage error, data-contract failure, training failure, or publication failure. The structured terminal event carries the detailed reason because schedulers often display only “failed” plus the integer status.
+
+The outer `cli()` function can translate `DataContractError` into status `3` and an unexpected execution failure into status `1`. It emits `training_failed` with the failure class before returning. The module then calls `raise SystemExit(cli())`, which forwards that result to the runtime.
+
+The program should allow termination signals to end the process and leave the staging attempt uncommitted. A success event belongs after bundle verification. Reaching the end of model fitting is an intermediate state because serialization or publication can still fail.
+
+## Test the Program at Three Levels
+<!-- section-summary: Unit, integration, and smoke tests cover model logic, boundary adapters, and the installed command without turning CI into a full training platform. -->
+
+**Unit tests** exercise focused functions in memory. They protect feature selection, schema validation, metric calculation, and configuration parsing. These tests run quickly and explain failures precisely.
+
+**Integration tests** join real internal components across a boundary. A test can read a tiny Parquet fixture, train a lightweight model, commit a bundle to a temporary directory, and verify every required file. External warehouses and production buckets stay behind test adapters.
+
+A **smoke test** invokes the installed `train-model` command from a clean environment. It first proves that packaging and imports work outside the source tree. The same run then exercises argument parsing and control flow. Its final assertions check the exit status and output bundle. The fixture stays small because program viability is the target. Production model quality requires representative evaluation data.
 
 ```python
-import joblib
-
-from carebridge_no_show.train import run_training
+import subprocess
 
 
-def test_training_entrypoint_writes_required_outputs(tmp_path):
-    output_dir = tmp_path / "run-42"
-    result = run_training(
-        train_path="tests/fixtures/no_show_train.parquet",
-        valid_path="tests/fixtures/no_show_valid.parquet",
-        output_dir=output_dir,
-        seed=17,
+def test_installed_training_command(tmp_path):
+    completed = subprocess.run(
+        [
+            "train-model",
+            "--config", "tests/fixtures/config.yml",
+            "--train-uri", "tests/fixtures/train.parquet",
+            "--valid-uri", "tests/fixtures/valid.parquet",
+            "--output", str(tmp_path / "run"),
+            "--run-id", "smoke-run",
+        ],
+        capture_output=True,
+        text=True,
     )
 
-    assert (output_dir / "_SUCCESS").exists()
-    assert (output_dir / "manifest.json").exists()
-    verify_output_bundle(output_dir)
-    assert "roc_auc" in result["metrics"]
-    joblib.load(output_dir / "model.joblib")
+    assert completed.returncode == 0
+    assert (tmp_path / "run" / "manifest.json").is_file()
+    assert (tmp_path / "run" / "metrics.json").is_file()
 ```
 
-The fixture should include a missing optional value, a rare category, both target classes, and a row that protects a known feature bug. The metric assertion stays loose because the smoke test checks mechanics. Production model-quality gates belong in the evaluation and delivery modules.
+The test suite also needs negative cases. Remove a required feature and assert a data-contract failure with no committed output. Interrupt the writer and assert that staging files never appear as a successful bundle. Invoke the same run twice and assert that the committed result stays immutable.
 
-Tests can pass fake readers or temporary directories when external systems sit behind small adapters. Pull-request tests should avoid production warehouses, registries, and buckets.
+Model-quality gates need representative evaluation data and belong in a separate validation workflow. Pull-request smoke tests prove the training program can execute its contract; they should avoid claiming that a tiny fixture validates production performance.
 
-The smoke test should also cover the failure boundary. The required cases are an interrupted model write, a corrupted committed model, and a retry after an incomplete attempt. Each case exercises the real entrypoint rather than only testing a helper.
+## Carry the Same Boundary Into a Managed Job
+<!-- section-summary: A managed job supplies compute, mounted inputs, secrets, and durable outputs while invoking the same packaged command tested locally. -->
 
-:::expand[Test interruption, corruption, and retry through the entrypoint]{kind="example"}
-This complete test group is useful when implementing the pattern. The first test proves partial output never gains a success marker. The second proves a digest mismatch blocks loading. The third proves a later attempt can publish one verified bundle without deleting evidence from the interrupted attempt.
+The move from laptop to managed training should change adapters and resource configuration, while the program contract remains stable. The container acts as a portable runtime envelope for the installed package, dependency lock, and required system libraries. The managed service supplies compute and workload identity. It also maps durable data into paths or URIs that the CLI receives. The container starts the same `train-model` command exercised by the local and CI smoke tests.
 
-```python
-import pytest
-
-
-TRAIN = "tests/fixtures/no_show_train.parquet"
-VALID = "tests/fixtures/no_show_valid.parquet"
-
-
-def interrupted_writer(_model, path):
-    path.write_bytes(b"partial-model")
-    raise OSError("worker terminated during model write")
-
-
-def test_partial_attempt_never_appears_committed(tmp_path):
-    output_dir = tmp_path / "run-42"
-    with pytest.raises(OSError, match="terminated"):
-        run_training(
-            Path(TRAIN), Path(VALID), output_dir, seed=17,
-            model_writer=interrupted_writer,
-        )
-
-    assert not output_dir.exists()
-    attempts = list(tmp_path.glob(".run-42.attempt-*"))
-    assert len(attempts) == 1
-    assert not (attempts[0] / "_SUCCESS").exists()
-
-
-def test_corrupt_committed_model_is_rejected(tmp_path):
-    output_dir = tmp_path / "run-42"
-    run_training(Path(TRAIN), Path(VALID), output_dir, seed=17)
-    (output_dir / "model.joblib").write_bytes(b"corrupt")
-
-    with pytest.raises(BundleVerificationError, match="digest mismatch"):
-        verify_output_bundle(output_dir)
-
-
-def test_retry_can_publish_after_an_interrupted_attempt(tmp_path):
-    output_dir = tmp_path / "run-42"
-    with pytest.raises(OSError):
-        run_training(
-            Path(TRAIN), Path(VALID), output_dir, seed=17,
-            model_writer=interrupted_writer,
-        )
-
-    result = run_training(Path(TRAIN), Path(VALID), output_dir, seed=17)
-
-    verify_output_bundle(output_dir)
-    assert Path(result["model_path"]) == output_dir / "model.joblib"
-    assert len(list(tmp_path.glob(".run-42.attempt-*"))) == 1
+```mermaid
+flowchart TD
+    L["Local run<br/>(uv environment and fixture paths)"] --> C["Installed command<br/>(train-model entrypoint)"]
+    CI["CI smoke test<br/>(clean package and tiny data)"] --> C
+    C --> IM["Pinned container<br/>(package, lock, and system libraries)"]
+    IM --> MJ["Managed training job<br/>(compute, identity, and network)"]
+    IN["Managed inputs<br/>(mounted paths or immutable URIs)"] --> MJ
+    MJ --> OUT["Durable outputs<br/>(verified bundle and job status)"]
 ```
-:::
 
-Remove `previous_no_show_count_180d` from a separate fixture, run the command, and assert a nonzero exit, no `_SUCCESS` marker, and an error that names the missing column. These tests guard the two states that commonly confuse orchestration: training code failed, or training finished while publication remained incomplete.
+Azure Machine Learning command jobs substitute declared inputs and outputs into a command running in an environment. SageMaker training containers expose input channels beneath `/opt/ml/input/data`. They collect final model artifacts from `/opt/ml/model` and other outputs from `/opt/ml/output/data`. In both systems, the managed service owns resources and workload identity, while the training command owns data validation and the model-output contract.
 
-Idempotency matters during retries. The script should never overwrite an already committed run directory. The orchestrator can reuse the same logical run ID with a new attempt-specific staging prefix, then let exactly one verified attempt publish the immutable result. This prevents two retried workers from interleaving model and metric files.
+A small adapter can translate provider paths into the CLI contract. For SageMaker, the container entrypoint can pass `SM_CHANNEL_TRAIN`, `SM_CHANNEL_VALID`, and `SM_MODEL_DIR` as CLI values. For Azure Machine Learning, the job definition can substitute `${{inputs.train}}` and `${{outputs.model}}` into the command. The training functions stay unaware of either provider.
 
-## Hand Off To Later Pipeline Layers
-<!-- section-summary: The stable script hands a command, inputs, outputs, exit status, and resource expectations to configuration, packaging, and orchestration layers. -->
+Before the scheduled job runs, the platform engineer performs a local container smoke test with the same command and a tiny mounted fixture. The managed job then records the image digest, code revision, input asset versions, resolved config, and output URI. Success evidence includes process status `0`, a verified bundle in durable storage, and searchable logs carrying the same run ID.
 
-Later layers need a small handoff contract:
+## The Main Idea
+<!-- section-summary: Notebook exploration reaches production training after explicit contracts, importable functions, one entrypoint, safe outputs, and layered tests replace hidden state. -->
 
-| Layer | What it receives from this article |
-|---|---|
-| Training configuration | Supported inputs, defaults, and validation surface |
-| Artifact publication | Output directory and required files |
-| Container packaging | Module command, dependency lock, and filesystem expectations |
-| Kubernetes or managed training | Command, resource needs, exit code, and durable output location |
-| Orchestration | Step inputs, outputs, timeout, retry safety, and failure state |
+Notebooks are valuable for interactive discovery. Automated training needs a fresh process that can reconstruct every required choice from declared evidence. The program boundary makes that transition possible.
 
-Those articles can change the runtime without rewriting training logic. A container runs `python -m carebridge_no_show.train`. A Kubernetes Job or managed service invokes that same command. An orchestrator passes versioned paths and checks the output contract.
+Data, configuration, dependency, and output contracts replace kernel memory. Preparation, training, and evaluation functions expose the calculation. An injected writer owns publication side effects. One CLI invokes a testable entrypoint. `pyproject.toml` and a committed `uv.lock` make the code installable and the dependency resolution traceable.
 
-## Putting It Together
-<!-- section-summary: A training script converts notebook exploration into one reviewed, callable, testable program boundary. -->
+Retry-safe staging prevents partial artifacts from appearing complete. Structured logs explain each phase, while exit status tells the runtime whether the output contract succeeded. Unit tests protect logic, integration tests protect boundaries, and a smoke test proves the installed command works from a clean environment.
 
-CareBridge moved hidden notebook state into named functions. One entrypoint loads declared data, trains and evaluates the model, writes a required bundle, and reports failure through exceptions and exit status. The CLI gives people and automation the same surface. Unit and smoke tests protect the important mechanics.
-
-This narrow boundary prepares the next steps without teaching them early. Training config will control run choices. Artifact publication will preserve evidence. Containers and schedulers will provide runtime isolation and compute. Orchestration will coordinate the script with data validation, evaluation, and registry handoff.
+The result is a training program that runs the same way on a laptop, in CI, inside a container, and on managed compute. The platform around it can change without rewriting the model calculation or inventing hidden state.
 
 ## References
 
-- [Python documentation: `argparse`](https://docs.python.org/3/library/argparse.html)
-- [Python documentation: `dataclasses`](https://docs.python.org/3/library/dataclasses.html)
-- [pytest documentation](https://docs.pytest.org/en/stable/getting-started.html)
-- [scikit-learn: Developing scikit-learn estimators](https://scikit-learn.org/stable/developers/develop.html)
+- [uv: Project Structure and Files](https://docs.astral.sh/uv/concepts/projects/layout/) - Official guidance for `pyproject.toml`, project environments, and committed `uv.lock` files.
+- [uv: Locking and Syncing](https://docs.astral.sh/uv/concepts/projects/sync/) - Official behavior for locked runs, lockfile checks, exact syncing, and dependency groups.
+- [Python Packaging User Guide: Writing `pyproject.toml`](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/) - Official project metadata, build-system, dependency, and console-script guidance.
+- [Python Packaging User Guide: `src` Layout Versus Flat Layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/) - Official explanation of installed-package testing and accidental import risks.
+- [Python: `argparse`](https://docs.python.org/3/library/argparse.html) - Official parsing, required argument, usage error, and exit behavior.
+- [pytest Documentation](https://docs.pytest.org/en/stable/) - Official fixtures, temporary paths, parametrization, and integration-testing guidance.
+- [MLflow: Experiment Tracking](https://mlflow.org/docs/latest/tracking) - Official run, metric, artifact, model, and dataset tracking concepts.
+- [Azure Machine Learning: Train Models](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-train-model?view=azureml-api-2) - Official command-job inputs, environments, code, and submission workflow.
+- [Amazon SageMaker AI: Training Storage Paths](https://docs.aws.amazon.com/sagemaker/latest/dg/model-train-storage-env-var-summary.html) - Official container paths for training inputs, outputs, model artifacts, and checkpoints.
+- [Amazon SageMaker AI: Training and Inference Toolkits](https://docs.aws.amazon.com/sagemaker/latest/dg/amazon-sagemaker-toolkits.html) - Official training-container structure, entrypoint, stdout, stderr, and model-output guidance.

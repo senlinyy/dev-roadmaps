@@ -1,6 +1,6 @@
 ---
-title: "Cloud MLOps Services"
-description: "Compare managed cloud services after the learner understands the underlying workflow."
-tags: ["advanced", "cloud"]
+title: "Cloud MLOps Platforms"
+description: "Learn how AWS, Azure, Google Cloud, and Databricks connect data, identity, training, release, serving, and operations into production ML platforms."
+tags: ["advanced", "cloud", "platforms"]
 order: 3
 ---

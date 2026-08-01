@@ -1,373 +1,409 @@
 ---
 title: "Classification Metrics"
-description: "Read classification metrics through confusion matrices, precision, recall, F1, ROC AUC, distinct AP and PR AUC calculations, calibration, thresholds, and segment reports."
-overview: "Classification metrics explain how a model sorts examples into classes. A supporting example follows a marketplace fraud model through a confusion matrix, threshold table, scikit-learn report, calibration check, Evidently report, and release gate."
+description: "Understand classification quality through confusion-matrix counts, decision metrics, thresholds, probability quality, class averages, and segment evidence."
+overview: "Classification metrics describe several layers of model behaviour: which labels are correct, which mistakes occur, how scores rank cases, how probabilities behave, and how a chosen threshold affects the real workflow."
 tags: ["MLOps", "core", "metrics"]
 order: 2
 id: "article-mlops-model-evaluation-classification-metrics"
 ---
 
+## Table of Contents
 
-## Classification Metrics Explain Which Mistakes The Model Makes
-<!-- section-summary: Classification metrics measure how well a model assigns examples to classes and which mistake patterns matter in the product. -->
+1. [Classification Metrics Measure More Than Correct Labels](#classification-metrics-measure-more-than-correct-labels)
+2. [Accuracy Can Hide the Error That Matters](#accuracy-can-hide-the-error-that-matters)
+3. [The Confusion Matrix Turns Predictions Into Consequences](#the-confusion-matrix-turns-predictions-into-consequences)
+4. [Precision, Recall, Specificity, and F1 Answer Different Questions](#precision-recall-specificity-and-f1-answer-different-questions)
+5. [The Threshold Decides What the Product Does](#the-threshold-decides-what-the-product-does)
+6. [Probability Quality Is a Different Layer of Evaluation](#probability-quality-is-a-different-layer-of-evaluation)
+7. [Multiclass Averages Need an Explicit Meaning](#multiclass-averages-need-an-explicit-meaning)
+8. [Segment Evaluation Finds Failures Hidden by the Average](#segment-evaluation-finds-failures-hidden-by-the-average)
+9. [Build a Repeatable Classification Report](#build-a-repeatable-classification-report)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
-A **classification model** predicts a category. The category might be `fraud` or `legit`, `urgent` or `normal`, `cancel` or `stay`, `spam` or `safe`, `approved` or `needs_review`. Classification metrics measure how those predicted categories compare with the true labels.
+## Classification Metrics Measure More Than Correct Labels
+<!-- section-summary: Classification evaluation follows the prediction from a score to a class decision, then measures mistakes, probability quality, and effects on important populations. -->
 
-The title answer is direct: **classification metrics help you count correct labels, missed positives, false alarms, class-level quality, ranking quality, and probability quality so you can choose a release threshold with evidence**. The metric names matter less than the question they answer.
+A **classification model** predicts a category. An email filter may choose `spam` or `safe`. A quality-control system may choose `defect` or `pass`. A message-routing model may choose `urgent`, `standard`, or `low_priority`.
 
-In the previous article, you saw that metric choice starts with the product cost of a mistake. This article zooms into the classification toolkit. You will read a confusion matrix, compute precision and recall, compare thresholds, inspect ROC AUC and average precision, check calibration, and build a report that a release reviewer can understand.
+At first, evaluation seems like a simple counting exercise: compare the predicted category with the known category and calculate the percentage that match. That percentage is accuracy. It answers a real question, but it answers only one question.
 
-## A Supporting Example: Fraud Review
-<!-- section-summary: A supporting example uses a marketplace fraud model where false declines and missed fraud both cost money. -->
+Production teams usually need a richer explanation. They need to know which class the model missed, how many unnecessary actions it created, whether an uncommon class received poor treatment, and what changed after the decision threshold moved. If the output is used as a probability, they also need to know whether a score such as `0.8` carries trustworthy meaning.
 
-Imagine **MarketLane**, a marketplace for secondhand electronics. A fraud model scores each seller payout request. When the score crosses a threshold, the payout is held for manual review. When the score stays below the threshold, the payout proceeds automatically.
+You can think of classification evaluation as three connected layers:
 
-The evaluation set is `payout_fraud_holdout_2026_06`. It has 80,000 payout requests and a delayed fraud label from chargebacks, buyer disputes, and trust-and-safety investigations. The positive class is `fraud`. That definition matters because every metric with "positive" in the name refers to fraud cases.
+- **Score quality:** Does the model place positive cases above negative cases? ROC AUC and average precision examine this layer across many possible thresholds.
+- **Decision quality:** After a threshold turns scores into labels, which cases become true positives, false positives, false negatives, and true negatives? Accuracy, precision, recall, specificity, and F1 examine this layer.
+- **Probability quality:** If the score claims to be a probability, do confident predictions deserve that confidence? Log loss, Brier score, and calibration curves examine this layer.
 
-The team evaluates two versions:
+These layers feed a product decision. A fraud score may decide which payments enter review. A defect score may decide which parts leave the production line. An urgency score may decide which messages reach an on-call queue. The useful metric follows the consequence of that action.
 
-| Model | Description |
-|---|---|
-| `payout-risk:v18` | Current production model |
-| `payout-risk:v19-candidate` | New model with device velocity, seller tenure, and listing-category features |
-
-MarketLane wants fewer missed fraud payouts, while keeping manual review volume inside the team capacity of 9,000 cases per month. That means the metric conversation needs both fraud catch rate and reviewer load.
-
-## Start With The Confusion Matrix
-<!-- section-summary: A confusion matrix counts true positives, false positives, true negatives, and false negatives at one threshold. -->
-
-A **confusion matrix** is the first table to inspect because it shows the raw counts behind the metric names. For a binary fraud model, the rows are true labels and the columns are predicted labels.
-
-At threshold `0.62`, the candidate creates this confusion matrix:
-
-| Actual / Predicted | Predicted legit | Predicted fraud |
-|---|---:|---:|
-| Actual legit | 72,900 | 3,600 |
-| Actual fraud | 1,050 | 2,450 |
-
-The four cells have plain meanings:
-
-| Cell | Count | Meaning for MarketLane |
-|---|---:|---|
-| True negative | 72,900 | Legit payout moved automatically |
-| False positive | 3,600 | Legit payout held for review |
-| False negative | 1,050 | Fraud payout slipped through |
-| True positive | 2,450 | Fraud payout held for review |
-
-![MarketLane fraud confusion matrix](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/confusion-matrix.png)
-*The confusion matrix keeps the fraud review grounded in counts, so reviewers can see how many payouts were paid, held, missed, or correctly stopped.*
-
-The matrix shows the real tradeoff. The candidate catches 2,450 fraud payouts and misses 1,050. It also sends 3,600 legit payouts into review. A product owner can understand those counts faster than a wall of percentages.
-
-You can compute the matrix with scikit-learn:
-
-```python
-from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
-
-y_true = eval_df["is_fraud"].to_numpy()
-y_pred = eval_df["risk_score"].to_numpy() >= 0.62
-
-matrix = confusion_matrix(y_true, y_pred, labels=[0, 1])
-print(matrix)
-
-display = ConfusionMatrixDisplay(
-    confusion_matrix=matrix,
-    display_labels=["legit", "fraud"],
-)
-display.plot(values_format="d")
+```mermaid
+flowchart TD
+    D["Product decision<br/>What action will the model influence?"] --> P["Positive class<br/>Which event requires attention?"] --> S["Model score or probability"] --> T["Decision threshold"] --> C["Confusion-matrix counts"] --> M["Decision metrics<br/>precision, recall, specificity, F1"] --> R["Release evidence by class and segment"]
+    S --> Q["Score and probability checks<br/>AP, ROC AUC, log loss, Brier, calibration"] --> R
+    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    class D,P context
+    class S,T,C mechanism
+    class M,Q,R evidence
 ```
 
-The `labels=[0, 1]` line keeps the row and column order stable. That small habit avoids embarrassing review mistakes where the team reads the positive class backward.
+The positive class deserves an explicit definition before any calculation. In defect detection, `positive` might mean a part that must be removed. In urgent-message triage, it might mean a message that needs a response within fifteen minutes. The words *positive* and *negative* describe the class chosen for measurement; they do not mean good and bad.
 
-## Precision, Recall, And F1
-<!-- section-summary: Precision measures alert quality, recall measures caught positives, and F1 summarizes both when the tradeoff is balanced enough. -->
+The evaluation population matters just as much. A recall score from last month's completed reviews may say little about new regions, new devices, or cases whose labels have not matured. A trustworthy metric report states the label definition, evaluation population, time window, and decision rule beside every result.
 
-**Recall** tells MarketLane how many true fraud payouts the model catches. In the matrix above, recall is `2,450 / (2,450 + 1,050) = 0.70`. If fraud loss is the biggest concern, recall gets close attention.
+## Accuracy Can Hide the Error That Matters
+<!-- section-summary: Accuracy counts every correct label equally, so a common class can dominate the result while the model fails on the rare class that drives the product decision. -->
 
-**Precision** tells MarketLane how many held payouts are truly fraud. In the same matrix, precision is `2,450 / (2,450 + 3,600) = 0.40`. If reviewer capacity and seller experience are the biggest concern, precision gets close attention.
+**Accuracy** is the share of examples whose predicted label matches the known label. It gives every evaluated example the same influence on the final percentage.
 
-**F1** combines precision and recall into one score. It can help compare models when the team cares about both false positives and false negatives. It should not replace the confusion matrix, because two models can have similar F1 scores and very different review volumes.
+`accuracy = correct predictions / all predictions`
 
-A scikit-learn classification report gives the common numbers in one table:
+It is easy to explain and useful for tasks where classes occur at similar rates and mistakes carry similar costs. Handwritten-digit recognition on a balanced evaluation set is one possible case. Predicting the wrong digit still needs inspection, but no single digit automatically owns almost the whole score.
+
+Now consider 10,000 incoming messages. Only 100 are genuinely urgent. A model that labels every message as `standard` gets 9,900 predictions correct.
+
+```mermaid
+pie showData
+    title True labels in the message evaluation set
+    "Standard messages" : 9900
+    "Urgent messages" : 100
+```
+
+The model has 99 percent accuracy and zero ability to find urgent work. The common class overwhelms the headline number. This pattern is called **class imbalance**: one class appears far more often than another in the evaluation population.
+
+Class imbalance is part of the explanation, but frequency alone does not choose the metric. The cost of each mistake matters. Missing an urgent message may delay incident response. Flagging a standard message may consume a few minutes of human review. Those consequences point toward high recall for the urgent class, with precision and queue volume protecting the reviewers.
+
+Accuracy can also hide a trade-off after the model improves. Suppose a second model catches 90 of the 100 urgent messages and incorrectly flags 400 standard messages. It makes 410 mistakes, so its accuracy is 95.9 percent. The all-standard model still has higher accuracy. Yet the second model may create a far better service if the team can review 490 alerts and urgent misses carry serious cost.
+
+**Balanced accuracy** gives each class more influence. For binary classification, it averages recall for the positive class and recall for the negative class, which is also called specificity. It helps reveal a model that succeeds mainly through the majority class.
+
+Balanced accuracy still remains a statistical summary. It does not know that a missed urgent message costs more than an unnecessary review. The report should preserve the actual error counts, class-specific rates, and operational workload beside any average.
+
+## The Confusion Matrix Turns Predictions Into Consequences
+<!-- section-summary: A confusion matrix records the four possible outcomes of a binary decision and provides the counts used by most threshold-based classification metrics. -->
+
+A **confusion matrix** compares the known class with the class chosen by the model. For a binary decision, every evaluated example falls into one of four cells.
+
+The word *true* means the prediction agrees with the known label. The word *false* means it disagrees. *Positive* and *negative* name the two sides of the decision. Combining those words produces the four outcomes: true positive, false positive, false negative, and true negative.
+
+The matrix makes two perspectives visible at once. Looking across actual positive cases reveals which ones were found or missed. Looking across positive predictions reveals which actions were useful or unnecessary. The diagram below follows one evaluated case through those two questions and ends at its matrix cell.
+
+```mermaid
+flowchart TD
+    A{"Is the actual case positive?"}
+    A -- "Yes" --> PY{"Did the model predict positive?"} -- "Yes" --> TP["True positive<br/>Needed action and received it"]
+    PY -- "No" --> FN["False negative<br/>Needed action and was missed"]
+    A -- "No" --> PN{"Did the model predict positive?"} -- "Yes" --> FP["False positive<br/>Received unnecessary action"]
+    PN -- "No" --> TN["True negative<br/>Correctly left alone"]
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef correct fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef error fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,PY,PN question
+    class TP,TN correct
+    class FP,FN error
+```
+
+Suppose a camera system checks 1,000 manufactured parts. A confirmed defect is the positive class. At the chosen threshold, the system produces these counts:
+
+| Actual class | Predicted pass | Predicted defect |
+|---|---:|---:|
+| Pass | 855 true negatives | 45 false positives |
+| Defect | 25 false negatives | 75 true positives |
+
+Read the matrix in operational language:
+
+- **75 true positives:** defective parts were removed.
+- **25 false negatives:** defective parts continued down the line.
+- **45 false positives:** acceptable parts were stopped for inspection.
+- **855 true negatives:** acceptable parts continued without interruption.
+
+The raw counts reveal scale. A recall of 75 percent might sound acceptable until the reader learns that the remaining 25 defects enter a safety-critical assembly each hour. A precision of 62.5 percent might sound weak until the reader learns that the inspection station can cheaply clear the 45 false alarms.
+
+The same metric can describe different consequences in another product. A false positive in spam filtering moves a safe email to a review folder. A false positive in payment risk may delay a legitimate customer. A false negative in defect detection releases a faulty part. Metric names stay constant while their costs change.
+
+Pay close attention to matrix orientation. Scikit-learn's `confusion_matrix(y_true, y_pred, labels=[0, 1])` places true labels on rows and predicted labels on columns. Other tools may display the axes differently. A production report should label both axes, show the class names, and keep the class order explicit. Silent axis reversal can turn a false-negative count into a false-positive count during review.
+
+## Precision, Recall, Specificity, and F1 Answer Different Questions
+<!-- section-summary: Precision, recall, specificity, and F1 summarize different relationships among the same four counts, so the product consequence should choose which one leads. -->
+
+The confusion matrix gives the facts. Metrics turn selected parts of those facts into rates that can be compared across evaluation sets.
+
+### Precision asks whether positive predictions deserve action
+
+**Precision** starts from everything the model predicted as positive. It asks: *Of the cases that received the action, how many truly needed it?*
+
+`precision = TP / (TP + FP)`
+
+For the defect system, precision is `75 / (75 + 45) = 0.625`. About 62.5 percent of stopped parts are defective. The remaining 37.5 percent create unnecessary inspection work.
+
+Precision matters if false alarms are expensive. A manual review team has limited capacity. A customer may be harmed by an unnecessary block. An alert stream may lose trust if most alerts lead nowhere.
+
+### Recall asks how much of the positive class was found
+
+**Recall**, also called **sensitivity** or the **true positive rate**, starts from every truly positive case. It asks: *Of all cases that needed action, how many did the model find?*
+
+`recall = TP / (TP + FN)`
+
+The defect system has recall `75 / (75 + 25) = 0.75`. It catches 75 percent of the defects and misses 25 percent.
+
+Recall deserves priority if missing a positive case carries serious cost. Urgent-message routing, disease screening, fraud detection, and safety inspection often fit this pattern. High recall usually creates more positive predictions, so the team watches precision and workload beside it.
+
+### Specificity protects the negative class
+
+**Specificity**, also called the **true negative rate**, starts from every truly negative case. It asks: *Of all cases that should remain untouched, how many did the model leave alone?*
+
+`specificity = TN / (TN + FP)`
+
+The defect system has specificity `855 / (855 + 45) = 0.95`. It lets 95 percent of acceptable parts continue normally.
+
+Specificity deserves attention in products where the negative class represents a large population that should avoid interruption. Screening systems often report sensitivity and specificity together because one protects detection and the other protects people from unnecessary follow-up.
+
+### F1 compresses precision and recall
+
+**F1** is the harmonic mean of precision and recall.
+
+`F1 = 2 × precision × recall / (precision + recall)`
+
+For the example, F1 is about `0.682`. The harmonic mean drops sharply if either precision or recall is weak, so F1 is useful for comparing systems that need a balance between finding positives and limiting false alarms.
+
+F1 leaves true negatives out of its calculation. It also gives precision and recall equal importance. Those choices may fit a search for one balanced summary, but they may conflict with the product. An urgent triage service may care far more about recall. A costly automatic block may place more weight on precision. `F_beta` makes that weighting explicit: values of `beta` above one emphasize recall, while values below one emphasize precision.
+
+```mermaid
+mindmap
+  root((Choose from the consequence))
+    Missed positives dominate
+      Recall
+      False-negative count
+    Unnecessary actions dominate
+      Precision
+      False-positive count
+    Protect the negative class
+      Specificity
+      False-positive rate
+    Need a balanced summary
+      F1 or F-beta
+      Keep raw counts visible
+    Both classes deserve equal weight
+      Balanced accuracy
+      Per-class recall
+```
+
+No summary should erase support, which is the number of true examples for a class. A recall of 80 percent based on ten positive examples has a different evidence strength from the same rate based on ten thousand. Counts and uncertainty remain part of the release decision.
+
+## The Threshold Decides What the Product Does
+<!-- section-summary: A decision threshold converts scores into labels, changing precision, recall, false alarms, misses, and workload without changing the underlying model. -->
+
+Many binary classifiers produce a score or probability before they produce a class label. The **decision threshold** is the cutoff that turns that continuous output into an action.
+
+Suppose an urgent-message model assigns scores from zero to one. A threshold of `0.70` sends only high-scoring messages to the urgent queue. A threshold of `0.30` sends many more messages. The model weights stay the same; the workflow changes.
+
+```mermaid
+flowchart TD
+    S["Same model scores"] --> L["Lower threshold"]
+    S --> H["Higher threshold"]
+    L --> LA["More cases predicted positive"] --> LR["Recall usually rises"]
+    LA --> LP["False alarms and workload may rise"]
+    H --> HA["Fewer cases predicted positive"] --> HP["Precision may rise"]
+    HA --> HM["More positive cases may be missed"]
+    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef effect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class S source
+    class L,H choice
+    class LA,LR,LP,HA,HP,HM effect
+```
+
+Scikit-learn classifiers commonly use `0.5` for probabilities or `0` for decision scores in their default binary class prediction. Those defaults have no automatic connection to staffing, safety, customer friction, or financial loss. The product needs an operating point that matches its actual decision.
+
+Consider an alert service with capacity for 800 reviews per day:
+
+| Threshold | Recall | Precision | Alerts per day |
+|---:|---:|---:|---:|
+| 0.30 | 0.94 | 0.22 | 1,260 |
+| 0.45 | 0.88 | 0.31 | 790 |
+| 0.60 | 0.76 | 0.46 | 510 |
+| 0.75 | 0.58 | 0.64 | 300 |
+
+Threshold `0.30` finds most positive cases and exceeds capacity. Threshold `0.75` creates a clean queue and misses many positives. Threshold `0.45` fits the stated capacity and may become a candidate operating point if its false-negative cost is acceptable.
+
+Threshold selection belongs on validation data. Repeatedly adjusting the cutoff against the final holdout leaks information from the release test into the design. The team can tune the threshold through a versioned rule or a tool such as `TunedThresholdClassifierCV`, then lock it before final evaluation.
+
+Score-based metrics answer a related question before the threshold is fixed. **ROC AUC** measures how often positive cases tend to rank above negative cases across thresholds. **Average precision (AP)** summarizes the precision-recall curve and is often informative for rare positives. Random scores have AP near the positive-class prevalence, so the baseline stays visible.
+
+ROC AUC or AP can show that a candidate orders cases better overall. Neither metric says how many alerts the selected threshold produces. The release report needs the curve summary and the actual operating-point counts.
+
+## Probability Quality Is a Different Layer of Evaluation
+<!-- section-summary: Log loss, Brier score, and calibration curves evaluate probability estimates, while confusion-matrix metrics evaluate the labels created by a threshold. -->
+
+A class decision and a probability answer different questions about the same case. The decision says which action to take. The probability describes how uncertain the outcome is.
+
+The label `urgent` answers, “Should this message enter the urgent queue under the current policy?” The probability `0.80` makes a stronger claim: “Messages with similar evidence should be urgent about 80 percent of the time.”
+
+Two models can create identical labels at a threshold of `0.50` and receive identical precision and recall. One may assign positive cases probabilities near `0.55`, while another assigns probabilities near `0.99`. Thresholded metrics treat both as positive. Probability metrics see the difference in confidence.
+
+```mermaid
+flowchart TD
+    P["Predicted probability"] --> D["Apply the product threshold"] --> L["Class label"] --> M["Confusion matrix, precision,<br/>recall, specificity, F1"]
+    P --> F["Keep the probability"] --> B["Brier score and log loss"] --> R["Is the probability forecast useful?"]
+    F --> C["Calibration curve"]
+    C --> R
+    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef route fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    class P input
+    class D,L,F route
+    class M,B,C,R evidence
+```
+
+**Brier score loss** is the mean squared difference between the predicted probability and the binary outcome. A prediction of `0.90` followed by a positive outcome has a small error. The same prediction followed by a negative outcome has a large error. Lower Brier loss is better.
+
+**Log loss**, also called cross-entropy loss, uses the logarithm of the probability assigned to the true class. It penalizes confident wrong predictions heavily. Predicting `0.99` for a positive event that fails is far worse than predicting `0.60` for the same failure. Lower log loss is better.
+
+Both are **proper scoring rules**. In expectation, the model receives the best score by reporting honest probabilities. They measure the probability forecast as a whole, including discrimination and calibration. A lower Brier score by itself is therefore weak proof of better calibration.
+
+A **calibration curve**, or reliability diagram, examines calibration more directly. It groups similar predicted probabilities and compares each group's average prediction with its observed positive rate. If 1,000 cases receive scores near `0.80` and only 600 become positive, the model is overconfident in that region.
+
+Probability quality matters if the number is shown to a person, used to price risk, divided into risk bands, or combined with changing decision costs. If the score is used only to order cases and the threshold is continually set by queue capacity, ranking and operating-point quality may matter more. The report should state how the product consumes the output.
+
+## Multiclass Averages Need an Explicit Meaning
+<!-- section-summary: Multiclass precision, recall, and F1 are calculated per class and then combined, so macro, weighted, and micro averages can tell different stories. -->
+
+A binary problem has two classes. A **multiclass** problem chooses one class from three or more options, such as `scratch`, `dent`, `crack`, and `clean`. Precision, recall, and F1 still apply, but each class takes a turn as the positive class while the remaining classes form the comparison group.
+
+This produces one metric value per class. A report may then combine those values:
+
+- **Macro average** gives every class equal weight. The recall of a rare crack class counts as much as the recall of the common clean class. Macro scores help keep infrequent but important classes visible.
+- **Weighted average** weights each class by its support. Common classes contribute more. This summarizes the experience of a typical row in the evaluation set, although strong majority-class performance can hide a weak rare class.
+- **Micro average** pools the true-positive, false-positive, and false-negative counts before calculating the metric. Each sample-class decision contributes to the same total. For ordinary single-label multiclass classification across every class, micro precision, recall, and F1 match accuracy.
+
+```mermaid
+mindmap
+  root((Multiclass report))
+    Per-class metrics
+      Scratch
+      Dent
+      Crack
+      Clean
+    Macro average
+      Equal class weight
+      Highlights rare classes
+    Weighted average
+      Weight by support
+      Reflects common cases
+    Micro average
+      Pool all decisions
+      Often matches accuracy for single-label multiclass
+    Always preserve
+      Support
+      Confusion matrix
+      Important class gates
+```
+
+Imagine 10,000 inspected parts: 8,500 are clean, 1,000 have scratches, 450 have dents, and 50 have cracks. A model can perform extremely well on clean parts and scratches while missing most cracks. Its weighted F1 may remain high because the crack class has little support. Macro F1 will fall more sharply because cracks receive equal class weight.
+
+Neither average decides whether crack detection is acceptable. If a missed crack creates a safety risk, the report needs a separate recall gate for that class. The macro average provides a useful warning; the class-level metric carries the release condition.
+
+**Multilabel** classification is different. One example may have several labels at once, such as an image containing both `helmet_missing` and `restricted_area`. Micro averaging is common because it pools label decisions. A samples average can also summarize quality per example. The report should identify whether the task is multiclass or multilabel because the same word *accuracy* can describe different calculations.
+
+## Segment Evaluation Finds Failures Hidden by the Average
+<!-- section-summary: Segment evaluation repeats the chosen metrics across meaningful populations so strong overall performance cannot conceal a weak device, language, region, or workflow route. -->
+
+Classes describe what the model predicts. **Segments** describe populations or operating conditions inside the evaluation set. A fraud classifier may predict `fraud` and `legitimate`, while its segments include payment type, device, region, customer tenure, and transaction-value band.
+
+Suppose a fraud model has 87 percent recall overall. The same report shows 91 percent recall on desktop traffic and 61 percent on mobile web. The aggregate score is mathematically correct. It is also incomplete for a rollout that includes mobile web.
+
+Segment evaluation follows a disciplined path:
+
+```mermaid
+flowchart TD
+    O["Overall metric and operating point"] --> S["Predefined important segments"] --> C["Check support, label maturity,<br/>coverage, and join quality"] --> P["Compute the same counts and metrics"] --> B["Compare candidate with production<br/>on the same segment"] --> G{"Evidence meets the segment rule?"}
+    G -- "Yes" --> A["Include the supported segment"]
+    G -- "No" --> N["Block, investigate, or narrow scope"]
+    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef analysis fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class O,S evidence
+    class C,P,B analysis
+    class G,A decision
+    class N hold
+```
+
+Support and label quality belong beside every segment metric. A recall of 50 percent based on two positive examples is unstable. A segment with thousands of scored cases and almost no mature labels has a measurement gap. It should not silently inherit the overall result.
+
+Choose segments from the intended use, known harms, product boundaries, incident history, and domain knowledge. For urgent-message triage, language and intake channel may matter. For defect detection, camera station, supplier, material, and lighting regime may matter. For fraud, device, payment rail, geography, and value band may matter.
+
+Searching hundreds of arbitrary segments after seeing the result creates false discoveries and confusing release debates. Predefine the important segments and their rules. Exploratory slicing can still find hypotheses, but a newly discovered weakness needs confirmation on fresh or appropriately held-out evidence.
+
+The comparison should include the production baseline. A candidate with 72 percent recall on a segment may still be an improvement over production at 45 percent. It may also remain below the minimum needed for safe use. Show both the replacement effect and the absolute floor.
+
+## Build a Repeatable Classification Report
+<!-- section-summary: A production evaluation job pins the dataset, positive class, threshold, metric definitions, segments, and model identity, then saves machine-readable evidence for release review. -->
+
+A useful report lets another engineer reproduce the same result. The job should pin the candidate identity, evaluation dataset, label policy, positive class, threshold, and library environment. It should produce machine-readable metrics as well as plots for human review.
+
+Scikit-learn provides the standard metric functions needed for a focused report. The example below expects a scored evaluation frame with a mature binary label in `is_positive` and a predicted probability in `score`. It applies one declared threshold, calculates decision and probability metrics, and prints a JSON-ready dictionary. The visible output contains the raw matrix, per-class report, threshold, average precision, ROC AUC, Brier loss, and log loss.
 
 ```python
-from sklearn.metrics import classification_report
+from sklearn import metrics
 
-print(
-    classification_report(
+threshold = 0.45
+y_true = eval_df["is_positive"].to_numpy()
+y_score = eval_df["score"].to_numpy()
+y_pred = (y_score >= threshold).astype("int8")
+
+report = {
+    "threshold": threshold,
+    "confusion_matrix": metrics.confusion_matrix(
+        y_true, y_pred, labels=[0, 1]
+    ).tolist(),
+    "by_class": metrics.classification_report(
         y_true,
         y_pred,
-        target_names=["legit", "fraud"],
-        digits=3,
+        labels=[0, 1],
+        target_names=["negative", "positive"],
+        output_dict=True,
         zero_division=0,
-    )
-)
+    ),
+    "average_precision": metrics.average_precision_score(y_true, y_score),
+    "roc_auc": metrics.roc_auc_score(y_true, y_score),
+    "brier_loss": metrics.brier_score_loss(y_true, y_score),
+    "log_loss": metrics.log_loss(y_true, y_score),
+}
+print(report)
 ```
 
-Example output:
+The explicit `labels=[0, 1]` and `target_names` keep the class meaning stable. `y_pred` is derived once from the declared threshold, so the confusion matrix and class report describe the same decision. `y_score` remains available for ranking and probability checks.
 
-```bash
-              precision    recall  f1-score   support
+This compact calculation belongs inside a wider evaluation contract. In practice, the job should also:
 
-       legit      0.986     0.953     0.969     76500
-       fraud      0.405     0.700     0.513      3500
+- validate required columns, score range, duplicate identifiers, label maturity, and join coverage;
+- compare the candidate with the current production path on the same rows;
+- compute the threshold table on validation data and evaluate the locked threshold on the holdout;
+- repeat the class metrics for predefined segments and include support counts;
+- save curves, failed examples, environment details, and the metric configuration;
+- fail the release job if required evidence is missing or a declared gate fails.
 
-    accuracy                          0.942     80000
-   macro avg      0.695     0.826     0.741     80000
-weighted avg      0.960     0.942     0.949     80000
-```
+An experiment tracker such as MLflow can store the metrics and artifacts beside the model identity. The calculation should stay understandable outside the tracker. A release reviewer needs to see which data, threshold, class mapping, segment rules, and metric implementation produced the result.
 
-Accuracy is high because most payouts are legit. The fraud row gives the useful product story: the candidate catches 70% of labeled fraud at 40.5% precision. The `support` column shows how many examples each row used, which helps reviewers notice class imbalance.
+Test the evaluation code with small fixtures whose confusion-matrix counts are known. Include a case with no predicted positives to verify the chosen `zero_division` policy. Add a failed segment below its recall floor and confirm that the pipeline blocks. These tests protect the meaning of the report, not just its syntax.
 
-## Ranking Metrics And Threshold Tables
-<!-- section-summary: ROC AUC and average precision inspect ranking across thresholds, while threshold tables choose the actual operating point. -->
+## The Main Idea
+<!-- section-summary: Classification metrics are a connected explanation of scores, decisions, errors, probabilities, classes, and segments, all anchored to the product action. -->
 
-Before choosing a threshold, it helps to know whether the model ranks risky payouts above safe payouts. **ROC AUC** measures how well positive cases tend to score above negative cases across thresholds. A **precision-recall curve** plots precision against recall as the threshold changes, which makes it especially useful when fraud is rare.
+Classification quality cannot be reduced to one universal score. Accuracy summarizes all correct labels. The confusion matrix reveals the four outcomes behind that total. Precision, recall, specificity, F1, and balanced accuracy emphasize different parts of those counts.
 
-Two summaries of that curve often receive the same informal name, **PR AUC**, even though they use different calculations. Scikit-learn's `average_precision_score` computes **average precision (AP)** as a weighted sum of precision values, where each weight is the increase in recall. `auc(recall, precision)` applies trapezoidal interpolation to the plotted points. That interpolation can give a different and sometimes more optimistic result. MarketLane records the exact metric name and implementation as `average_precision_sklearn` so a future report cannot silently compare AP with trapezoidal PR AUC.
+The threshold turns model scores into product actions, so it changes both the metrics and the workload. ROC AUC and average precision describe score ordering across thresholds. Log loss, Brier score, and calibration curves examine probability quality. Macro, weighted, and micro averages combine multiclass results in different ways, while segment reports show whether important populations share the overall result.
 
-For MarketLane, the candidate has stronger ranking metrics than production:
-
-| Metric | Production `v18` | Candidate `v19` |
-|---|---:|---:|
-| ROC AUC | 0.931 | 0.948 |
-| Average precision | 0.428 | 0.497 |
-| Brier score | 0.037 | 0.034 |
-
-These numbers say the candidate ranks fraud better overall. They do not choose the payout review threshold. The threshold table does that:
-
-| Threshold | Fraud recall | Precision | Held payouts | Estimated fraud loss missed | Review capacity |
-|---:|---:|---:|---:|---:|---|
-| 0.45 | 0.82 | 0.29 | 9,890 | $221,000 | Over monthly capacity |
-| 0.55 | 0.75 | 0.35 | 7,520 | $304,000 | Fits surge plan |
-| 0.62 | 0.70 | 0.40 | 6,050 | $366,000 | Fits normal staffing |
-| 0.70 | 0.61 | 0.49 | 4,360 | $511,000 | Too many misses |
-
-![MarketLane ranking and threshold tradeoff](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/ranking-thresholds.png)
-*The ranking metrics say the candidate sorts risky payouts better, while the threshold markers show the staffing decision the team still has to make.*
-
-The release discussion can now focus on a real operating choice. Threshold `0.55` catches more fraud and fits a surge month. Threshold `0.62` catches fewer cases and fits normal staffing. A mature rollout can start at `0.62`, monitor reviewer queues, and lower to `0.55` for known fraud waves if operations approves.
-
-## Calibration And Segment Reports
-<!-- section-summary: Calibration checks score reliability, and segments reveal where aggregate classification metrics hide weak behavior. -->
-
-Fraud reviewers may use scores to sort queues, so probability quality matters. **Calibration** asks whether a score of `0.70` behaves like roughly 70% fraud among similar scored examples. A model can rank cases well while overstating or understating the actual probability.
-
-MarketLane bins candidate scores:
-
-| Score bin | Payouts | Average score | Fraud rate |
-|---|---:|---:|---:|
-| 0.00-0.20 | 61,400 | 0.04 | 0.03 |
-| 0.20-0.40 | 9,600 | 0.29 | 0.18 |
-| 0.40-0.60 | 4,700 | 0.49 | 0.33 |
-| 0.60-0.80 | 2,900 | 0.69 | 0.57 |
-| 0.80-1.00 | 1,400 | 0.88 | 0.82 |
-
-The candidate overstates fraud risk in the middle bins. The team can still use the score for ranking and thresholding, yet the review UI should avoid exact probability language until calibration improves.
-
-Segments complete the classification review:
-
-| Segment | Fraud recall | Precision | Held payouts | Gate |
-|---|---:|---:|---:|---|
-| All payouts | 0.70 | 0.405 | 6,050 | Pass |
-| New sellers | 0.76 | 0.382 | 2,140 | Pass |
-| Established sellers | 0.64 | 0.431 | 3,910 | Review |
-| High-value phones | 0.81 | 0.448 | 1,220 | Pass |
-| Refurbished laptops | 0.52 | 0.332 | 810 | Block |
-
-The laptop segment blocks the release because fraud recall is far below the approved minimum. The team should inspect labels, features, and examples from that category before rollout.
-
-## Automate The Report
-<!-- section-summary: A repeatable classification report should save metrics, plots, segments, thresholds, and pass/fail gates as release artifacts. -->
-
-The report should run from the same repository each time. It should write a JSON file for gates, a human-readable markdown or HTML report for reviewers, and artifacts such as confusion matrices and calibration plots.
-
-MLflow can evaluate a static table of labels and predictions with its classic evaluation API. Evidently can read the same scored table, calculate a visual classification report, and return explicit pass or fail tests. Evidently 0.7 uses a `Dataset` with a `DataDefinition`; the definition prevents the library from guessing which column is the label and which column is the probability.
-
-The threshold must have one owner. A registered classifier's `predict()` method may use `0.5` or another built-in cutoff, while this release decision uses `0.62`. Calling the model through MLflow and passing the probability table to Evidently would therefore evaluate different decisions. MarketLane computes `predicted_label` once from `risk_score >= 0.62`, passes that static label column to MLflow, and passes the probability column plus the same threshold to Evidently.
-
-MarketLane pins MLflow `3.14.0` and Evidently `0.7.21` in the evaluation image. `BinaryClassification` maps the true label to `is_fraud` and the positive-class probability to `risk_score`. The scored-table artifact also carries the model URI, scoring image digest, dataset ID, and threshold so a reviewer can trace how those probabilities were produced:
-
-```python
-import json
-from importlib.metadata import version
-
-import mlflow
-from evidently import BinaryClassification, DataDefinition, Dataset, Report
-from evidently.metrics import Precision, Recall
-from evidently.presets import ClassificationPreset
-from evidently.tests import gte
-
-DECISION_THRESHOLD = 0.62
-scored_eval = eval_df.copy()
-scored_eval["predicted_label"] = (
-    scored_eval["risk_score"] >= DECISION_THRESHOLD
-).astype("int8")
-eval_data = scored_eval[["is_fraud", "predicted_label"]].copy()
-definition = DataDefinition(
-    classification=[BinaryClassification(
-        target="is_fraud",
-        prediction_probas="risk_score",
-        pos_label=1,
-    )],
-    categorical_columns=["is_fraud"],
-    numerical_columns=["risk_score"],
-)
-current_dataset = Dataset.from_pandas(
-    scored_eval,
-    data_definition=definition,
-)
-reference_dataset = Dataset.from_pandas(
-    prod_eval_df,
-    data_definition=definition,
-)
-
-with mlflow.start_run(run_name="payout-risk-v19-evaluation"):
-    mlflow.set_tags({
-        "candidate_model_uri": "models:/marketlane-payout-risk/19",
-        "scoring_image_digest": "sha256:8b25d4f09f61...",
-        "evaluation_dataset": "payout_fraud_holdout_2026_06",
-        "decision_threshold": str(DECISION_THRESHOLD),
-    })
-    result = mlflow.models.evaluate(
-        data=eval_data,
-        predictions="predicted_label",
-        targets="is_fraud",
-        model_type="classifier",
-        evaluator_config={"pos_label": 1},
-    )
-    mlflow_threshold_metrics = {
-        "recall_score": float(result.metrics["recall_score"]),
-        "precision_score": float(result.metrics["precision_score"]),
-    }
-    mlflow.log_dict(
-        mlflow_threshold_metrics,
-        "metrics/mlflow_threshold_metrics.json",
-    )
-
-    evidently_report = Report([
-        ClassificationPreset(probas_threshold=DECISION_THRESHOLD),
-        Recall(probas_threshold=DECISION_THRESHOLD, tests=[gte(0.68)]),
-        Precision(probas_threshold=DECISION_THRESHOLD, tests=[gte(0.39)]),
-    ])
-    snapshot = evidently_report.run(
-        current_data=current_dataset,
-        reference_data=reference_dataset,
-    )
-    payload = json.loads(snapshot.json())
-    failures = [
-        test["name"]
-        for test in payload["tests"]
-        if test["status"] in {"FAIL", "ERROR"}
-    ]
-    metric_key_map = {
-        "Recall": "recall_score",
-        "Precision": "precision_score",
-    }
-    evidently_threshold_metrics = {}
-    for metric in payload["metrics"]:
-        metric_type = metric["config"]["type"].rsplit(":", 1)[-1]
-        if metric["config"].get("tests") and metric_type in metric_key_map:
-            evidently_threshold_metrics[metric_key_map[metric_type]] = float(
-                metric["value"]
-            )
-    for metric_name, mlflow_value in mlflow_threshold_metrics.items():
-        evidently_value = evidently_threshold_metrics[metric_name]
-        if abs(mlflow_value - evidently_value) > 1e-12:
-            raise RuntimeError(
-                f"threshold metric mismatch for {metric_name}: "
-                f"MLflow={mlflow_value}, Evidently={evidently_value}"
-            )
-    if version("mlflow") != "3.14.0":
-        raise RuntimeError("evaluation image must pin mlflow==3.14.0")
-    if version("evidently") != "0.7.21":
-        raise RuntimeError("evaluation image must pin evidently==0.7.21")
-    mlflow.log_dict(
-        payload,
-        "metrics/evidently_classification_snapshot.json",
-    )
-    if failures:
-        raise RuntimeError(f"Evidently classification gate failed: {failures}")
-    print({
-        "mlflow": version("mlflow"),
-        "evidently": version("evidently"),
-        "threshold": DECISION_THRESHOLD,
-        "threshold_metrics": {
-            name: round(value, 3)
-            for name, value in mlflow_threshold_metrics.items()
-        },
-        "evidently_tests": [
-            (test["name"], test["status"])
-            for test in payload["tests"]
-        ],
-    })
-```
-
-The static MLflow call receives `predictions="predicted_label"`, so it never invokes a model-native class threshold. Evidently receives `risk_score` and the same `DECISION_THRESHOLD`. The equality loop turns alignment into a test: both libraries must return identical recall and precision before release validation continues. A passing run for the article's confusion matrix prints output in this shape:
-
-```console
-{'mlflow': '3.14.0', 'evidently': '0.7.21', 'threshold': 0.62, 'threshold_metrics': {'recall_score': 0.7, 'precision_score': 0.405}, 'evidently_tests': [('Recall metric: Greater or Equal 0.680', 'SUCCESS'), ('Precision metric: Greater or Equal 0.390', 'SUCCESS')]}
-```
-
-Changing 71 true-fraud rows from scores above `0.62` to scores below it changes `predicted_label` for both tools and reduces recall from `2450 / 3500 = 0.700` to `2379 / 3500 = 0.6797`. That falls below the `0.68` gate, makes the recall test return `FAIL`, and causes the job to raise `Evidently classification gate failed`. Altering the MLflow label column without changing the Evidently probability table triggers `threshold metric mismatch`, which proves the alignment check catches split decision paths. The report JSON remains useful evidence, so production code writes it to a failure-artifact path before raising. A missing `risk_score` or `is_fraud` column makes report execution fail, which blocks release before a report with guessed roles can be logged.
-
-Current MLflow documentation separates evaluation from threshold validation. Since MLflow 2.18, model validation uses `mlflow.validate_evaluation_results()` rather than an argument on `mlflow.models.evaluate()`. The release job can validate headline metrics there, then run the product-specific segment gate from its own versioned rules:
-
-```python
-from mlflow.models import MetricThreshold
-
-mlflow.validate_evaluation_results(
-    candidate_result=result,
-    validation_thresholds={
-        "recall_score": MetricThreshold(threshold=0.68, greater_is_better=True),
-        "precision_score": MetricThreshold(threshold=0.39, greater_is_better=True),
-    },
-)
-
-failed_segments = segment_metrics.query(
-    "support >= 500 and fraud_recall < recall_floor"
-)
-if not failed_segments.empty:
-    failed_segments.to_csv("blocked_examples_segments.csv", index=False)
-    raise RuntimeError(
-        f"segment release gate failed: {failed_segments.segment.tolist()}"
-    )
-```
-
-MLflow validation and Evidently now check the same threshold decision over the same rows. Their threshold-based recall and precision must agree exactly; the versioned probability table still supplies ranking and calibration metrics that class labels cannot provide. The separate segment rule preserves product-specific floors and support requirements. For the article's numbers, the overall checks pass and `refurbished_laptops` fails. The expected pipeline result is a blocked candidate with the segment table and example IDs attached, rather than a green run with a warning inside one chart.
-
-Test the gate with a fixture confusion matrix whose counts give known precision and recall, then add one failed segment below its floor. This verifies both the metric direction and the release decision. A missing `segment_metrics` artifact must also fail because absence of subgroup evidence cannot produce approval.
-
-The exact report structure should match the team's tooling, but the evidence list should stay stable:
-
-| Artifact | What reviewers use it for |
-|---|---|
-| `confusion_matrix.png` | Raw mistake counts at the chosen threshold |
-| `threshold_table.csv` | Recall, precision, and review load by threshold |
-| `classification_report.json` | Precision, recall, F1, support by class |
-| `calibration_bins.csv` | Score reliability by probability band |
-| `segment_metrics.csv` | Release gates by seller and listing segment |
-| `blocked_examples.csv` | Examples behind failed segment gates |
-
-![MarketLane classification report artifacts](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/report-artifacts.png)
-*The report packet keeps MLflow metrics, Evidently checks, threshold tables, and blocked examples together so every reviewer uses the same evidence.*
-
-That artifact set gives trust-and-safety, operations, and ML platform reviewers the same facts.
-
-## Putting It Together
-<!-- section-summary: Classification evaluation works when raw counts, threshold tradeoffs, ranking metrics, calibration, and segment gates agree with the release decision. -->
-
-Classification metrics explain which categories the model gets right and wrong. Start with the confusion matrix, then read precision, recall, F1, support, ranking metrics, calibration, and segment reports in the context of the product workflow.
-
-For MarketLane, the candidate ranks fraud better than production and offers a workable threshold. The release still pauses because refurbished laptop payouts fail the segment gate. That is a healthy outcome. The metrics did their job because they found a specific risk before the model changed real payout behavior.
+A production report anchors every metric to the decision and its error costs. It preserves raw counts, declares the positive class and threshold, separates decision quality from probability quality, compares against production, and carries class and segment evidence into the release gate.
 
 ## References
 
-- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official guide to classification metrics and scoring.
-- [scikit-learn: classification_report](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.classification_report.html) - Official API reference for precision, recall, F1, and support output.
-- [scikit-learn: average_precision_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.average_precision_score.html) - Official API reference explaining why AP differs from trapezoidal area under a precision-recall curve.
-- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html) - Official guide to reliability diagrams and calibrated probabilities.
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/) - Official guide to classic evaluation and current `mlflow.validate_evaluation_results()` validation.
-- [Evidently Data Definition](https://docs.evidentlyai.com/docs/library/data_definition) - Current `Dataset`, `DataDefinition`, and `BinaryClassification` column-role mapping.
-- [Evidently Tests](https://docs.evidentlyai.com/docs/library/tests) - Current custom `gte` and `lte` conditions and test status behavior.
-- [Evidently Classification Preset](https://docs.evidentlyai.com/metrics/preset_classification) - Official Evidently documentation for classification metrics, plots, and tests.
+- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official definitions for confusion matrices, accuracy, balanced accuracy, precision, recall, F-measures, average precision, ROC AUC, log loss, Brier score, and multiclass averaging.
+- [scikit-learn: Tuning the decision threshold](https://scikit-learn.org/stable/modules/classification_threshold.html) - Official guide to separating probability prediction from product decisions and tuning a threshold after model fitting.
+- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html) - Official guidance for calibration curves, probabilistic classifiers, Brier score, log loss, and calibration methods.
+- [scikit-learn: classification_report](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.classification_report.html) - Official API reference for per-class precision, recall, F1, support, and macro, weighted, micro, and samples averages.
+- [scikit-learn: confusion_matrix](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html) - Official API reference for matrix orientation and label ordering.

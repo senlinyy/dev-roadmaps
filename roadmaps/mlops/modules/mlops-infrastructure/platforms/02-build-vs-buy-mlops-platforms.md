@@ -10,6 +10,22 @@ aliases:
   - child-platforms-03-build-vs-buy-mlops-platforms
 ---
 
+## Table of Contents
+
+1. [Build Versus Buy Decides Who Owns The Platform](#build-versus-buy-decides-who-owns-the-platform)
+2. [Map Responsibilities Before Products](#map-responsibilities-before-products)
+3. [Hard Constraints Remove Invalid Options](#hard-constraints-remove-invalid-options)
+4. [Delivery Models Trade Control For Operating Work](#delivery-models-trade-control-for-operating-work)
+5. [Ownership Includes The Night And Weekend](#ownership-includes-the-night-and-weekend)
+6. [Security And Governance Need End-To-End Evidence](#security-and-governance-need-end-to-end-evidence)
+7. [Three-Year Economics Include Opportunity Cost](#three-year-economics-include-opportunity-cost)
+8. [Proof Of Concept Tests The Riskiest Claims](#proof-of-concept-tests-the-riskiest-claims)
+9. [Adoption Tests The Platform As A Product](#adoption-tests-the-platform-as-a-product)
+10. [Architecture Often Combines Buy And Build](#architecture-often-combines-buy-and-build)
+11. [Exit Strategy Is Part Of The Initial Design](#exit-strategy-is-part-of-the-initial-design)
+12. [The Decision Is An Operating Commitment](#the-decision-is-an-operating-commitment)
+13. [References](#references)
+
 ## Build Versus Buy Decides Who Owns The Platform
 <!-- section-summary: A platform decision assigns responsibilities to a managed vendor, composable services, or an internal engineering team. -->
 

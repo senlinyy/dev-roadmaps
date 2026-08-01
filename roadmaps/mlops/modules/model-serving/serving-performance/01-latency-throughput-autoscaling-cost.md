@@ -7,6 +7,20 @@ order: 1
 id: "article-mlops-model-serving-latency-throughput-autoscaling-cost"
 ---
 
+## Table of Contents
+
+1. [Serving Performance Is a Capacity System](#serving-performance-is-a-capacity-system)
+2. [Define the Workload and Service Contract](#define-the-workload-and-service-contract)
+3. [Decompose Latency Before Optimizing It](#decompose-latency-before-optimizing-it)
+4. [Connect Throughput, Service Time, and Concurrency](#connect-throughput-service-time-and-concurrency)
+5. [Keep Queues Bounded](#keep-queues-bounded)
+6. [Batching Trades Waiting for Efficiency](#batching-trades-waiting-for-efficiency)
+7. [Autoscaling Is a Delayed Control Loop](#autoscaling-is-a-delayed-control-loop)
+8. [Prove Capacity With Load Tests](#prove-capacity-with-load-tests)
+9. [Tie Cost to Accepted Outcomes](#tie-cost-to-accepted-outcomes)
+10. [What a Production Capacity Plan Provides](#what-a-production-capacity-plan-provides)
+11. [References](#references)
+
 ## Serving Performance Is a Capacity System
 
 <!-- section-summary: Inference systems turn finite compute capacity into predictions under latency, reliability, and cost constraints. -->

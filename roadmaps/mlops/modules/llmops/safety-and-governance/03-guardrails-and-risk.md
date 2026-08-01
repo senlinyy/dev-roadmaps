@@ -1,307 +1,416 @@
 ---
 title: "Guardrails and Risk"
-description: "Layer policy checks, validation, supply-chain review, red-team findings, and governance processes around agent behavior."
-overview: "Layer independently enforced controls across input, context, tools, output, human decisions, suppliers, release evidence, runtime monitoring, and incident recovery."
+description: "Layer automatic checks, deterministic policy, human review, release evidence, and governance around LLM and agent workflows."
+overview: "Learn how a production team maps risks to controls across input, context, output, tools, suppliers, release, monitoring, and recovery."
 tags: ["MLOps","LLMOps","advanced","security"]
 order: 3
 id: "article-mlops-llmops-guardrails-and-risk"
 ---
 
-## Guardrails Control a Complete Workflow
+## Table of Contents
 
-<!-- section-summary: Guardrails are independently enforced controls that keep an LLM workflow inside its approved purpose, data, actions, and risk limits. -->
+1. [What Guardrails Do](#what-guardrails-do)
+2. [Separate Guardrails, Policy, Evals, and Human Review](#separate-guardrails-policy-evals-and-human-review)
+3. [Build a Risk-Based Control Plan](#build-a-risk-based-control-plan)
+4. [Control What Enters the Workflow](#control-what-enters-the-workflow)
+5. [Control What the Product Returns](#control-what-the-product-returns)
+6. [Protect Tool Calls and Side Effects](#protect-tool-calls-and-side-effects)
+7. [Give High-Impact Decisions to People](#give-high-impact-decisions-to-people)
+8. [Record Proof That Required Controls Ran](#record-proof-that-required-controls-ran)
+9. [Include Models, Tools, and Data in Supply-Chain Risk](#include-models-tools-and-data-in-supply-chain-risk)
+10. [Use Evals as Release Gates](#use-evals-as-release-gates)
+11. [Monitor Controls in Production](#monitor-controls-in-production)
+12. [Fit Current Industrial Tools to the Layers](#fit-current-industrial-tools-to-the-layers)
+13. [Govern Residual Risk and Exceptions](#govern-residual-risk-and-exceptions)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-**Guardrails** are the controls that keep an LLM application inside its approved purpose, data boundaries, actions, and risk limits. They can inspect input, restrict context, validate tool calls, check output, pause for a person, and block a release. No single guardrail covers every failure, so production systems place controls at several points in the workflow.
+## What Guardrails Do
+<!-- section-summary: Guardrails are checks placed around an LLM workflow to detect risk, constrain behaviour, pause sensitive work, or stop an unsafe result. -->
 
-Imagine **GrantWriter**, an assistant used by a nonprofit. A programme manager uploads funding guidelines, budgets, and impact reports. The assistant searches those materials, drafts an application, and prepares tasks for finance and legal reviewers.
+Imagine a customer asks an AI support assistant to cancel a subscription and refund the latest payment. The request sounds simple, yet the workflow contains several decisions.
 
-The workflow carries several risks. An uploaded document may contain prompt injection. A draft may invent an eligibility claim or expose donor information. A tool may create a finance task with the wrong amount. A new model or retrieval index may change behaviour after release. Guardrails need to follow the work from the first file to the final approved application.
+The assistant must identify the correct account. It must read the refund policy and transaction history. It may draft a response, call a cancellation tool, request a refund, and send confirmation. A mistake in the explanation is inconvenient. A refund to the wrong account changes real money.
+
+**Guardrails** are the checks placed around that workflow to keep it inside the product’s safety, security, privacy, and business limits. One guardrail may detect sensitive data in the final message. Another may reject a refund amount that exceeds policy. A third may pause the action for a person.
+
+You can think of guardrails as gates along a journey:
 
 ```mermaid
-flowchart LR
-    A[Input and ingestion controls] --> B[Authorized context and source trust]
-    B --> C[Model decision]
-    C --> D[Tool and effect controls]
-    C --> E[Output and evidence controls]
-    D --> F[Human review for high-impact decisions]
-    E --> F
-    F --> G[Approved product outcome]
-    G --> H[Monitoring, incident response, and feedback]
-    I[Supply-chain and release evidence] -. governs .-> B
-    I -. governs .-> C
-    I -. governs .-> D
+flowchart TD
+    A["User request and uploaded content"] --> B["Input and ingestion controls"]
+    B --> C["Approved context and model decision"]
+    C --> D["Output and tool controls"]
+    D --> E["Human review for high impact"]
+    E --> F["Product result or side effect"]
+    F --> G["Monitoring and feedback"]
+    G --> H["Evaluation and safer release"]
+
+    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A source
+    class B,D,E control
+    class C,F result
+    class G,H evidence
 ```
 
-Each layer owns a different failure boundary. Their overlap limits impact when one check misses a problem, and shared trace and release identities show which controls ran for a particular outcome.
+No single gate can cover the whole system. A content filter can identify harmful language, yet it cannot decide whether a customer qualifies for a refund. A business policy can validate the amount, yet it cannot judge whether a long explanation is respectful and clear. Production safety comes from several controls with clear responsibilities.
 
-## Input Controls Decide What Enters the Workflow
+## Separate Guardrails, Policy, Evals, and Human Review
+<!-- section-summary: Automatic guardrails, deterministic policy, evaluations, and human review answer different risk questions and produce different evidence. -->
 
-<!-- section-summary: Input controls validate files, limit size and type, classify sensitive data, and route suspicious or unsupported material before model use. -->
+Teams often use the word *guardrail* for every safety mechanism. That broad use can hide important differences. Four terms provide a clearer design.
 
-GrantWriter receives a 200-page PDF from a partner organisation. Before the model reads it, application code checks the file type, size, parser result, malware scan, and source. The ingestion service extracts text and records page locations so later claims can point back to evidence.
+An **automatic guardrail** checks an input, output, or tool interaction during a run. It may use deterministic code, a regular expression, a classifier, or another model. Examples include schema validation, prompt-attack detection, sensitive-data scanning, and groundedness scoring.
 
-The document contains donor names and bank details. A data-classification step marks those sections as sensitive. The grant-drafting task needs programme outcomes and budget totals, but it does not need raw bank information, so the ingestion path removes those fields from the searchable collection.
+A **policy** is an authoritative rule about what the application may do. It might say that refunds above a limit require finance approval or that one tenant can read only its own records. Policy decisions should come from trusted application code or a policy engine such as Open Policy Agent, usually called OPA.
 
-The scanner also finds a sentence that tells the assistant to ignore its instructions and send donor data to an external address. Detection alone cannot prove intent, but it gives GrantWriter a reason to quarantine the document and ask a reviewer whether the source should enter the knowledge base.
+An **evaluation**, shortened to **eval**, tests a saved system version against a dataset before or after release. It answers questions such as: did the candidate follow the cancellation policy across known edge cases, and did it introduce a new sensitive-data leak?
 
-This first layer keeps malformed, unsupported, oversized, and clearly risky material away from the main model path. Later controls still assume that some harmful or misleading content will pass through.
+**Human review** gives a qualified person responsibility for a judgment or action. The reviewer needs the proposal, relevant evidence, policy result, and consequence. A generic approval button provides too little information for a meaningful decision.
 
-## Context Controls Preserve Source and Trust
+These controls work at different times:
 
-<!-- section-summary: Context assembly selects relevant authorised evidence, preserves source identity, and keeps untrusted content separate from developer rules. -->
+```mermaid
+flowchart TD
+    A["Before release<br/>evals and red-team tests"] --> B["During a run<br/>automatic guardrails"]
+    B --> C["Before an effect<br/>policy and approval"]
+    C --> D["After release<br/>monitoring and incident review"]
+    D --> A
 
-After review, the safe parts of the funding guide enter GrantWriter’s retrieval index. When the programme manager asks whether the nonprofit meets the eligibility rules, the retrieval service searches only approved collections and returns excerpts with source IDs, page numbers, owners, and effective dates.
-
-The harness labels these excerpts as untrusted evidence. The model receives developer instructions that define the task and tell it to cite sources. Retrieved documents can support an answer, but they cannot change which tools are available or which data the application permits.
-
-Context controls also manage relevance and privacy. GrantWriter sends the model the eligibility paragraphs and selected programme facts, rather than every document in the project. A smaller, well-sourced context reduces confusion and limits how much sensitive information reaches the provider or trace.
-
-If two documents disagree, the assistant should preserve the conflict and show both sources. Silently selecting the convenient statement would hide a governance problem inside model output.
-
-## Tool Guardrails Protect Side Effects
-
-<!-- section-summary: Tool execution validates identity, schema, business policy, idempotency, and approval before the workflow changes another system. -->
-
-The model decides that the draft needs a finance review and requests `create_review_task`. The tool description helps it supply the programme name, budget amount, deadline, and reason. The application then validates those fields and adds trusted identity and project context.
-
-GrantWriter’s tool service checks that the programme manager may create tasks for this project, that the amount matches the approved budget record, and that the destination queue is allowed. It uses an idempotency key so a retry cannot create several identical tasks.
-
-The model never receives a general project-management token. The tool executor holds a short-lived credential and returns a structured result containing the task ID and status. If the amount conflicts with the finance system, the tool returns a business validation error rather than performing a best guess.
-
-This layer matters because a well-written final answer cannot undo an incorrect side effect. Authorization and business rules belong before execution.
-
-## Output Controls Check What the Product Will Use
-
-<!-- section-summary: Output validation checks structure, source support, sensitive data, policy, and downstream meaning before text or fields reach users and systems. -->
-
-GrantWriter produces a draft application with a summary, eligibility claims, proposed outcomes, and cited sources. The product expects a structured result so code can inspect each claim separately.
-
-```python
-def validate_draft(draft, allowed_sources):
-    for claim in draft.claims:
-        if claim.source_id not in allowed_sources:
-            raise ValueError("claim_without_approved_source")
-        if claim.kind == "eligibility" and claim.review_status != "verified":
-            draft.requires_human_review = True
-
-    if contains_sensitive_donor_data(draft.text):
-        raise ValueError("sensitive_data_in_draft")
-
-    return draft
+    classDef prerelease fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef runtime fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef learning fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A prerelease
+    class B runtime
+    class C decision
+    class D learning
 ```
 
-Schema validation confirms that required fields exist. Business validation checks whether citations belong to the approved source set and whether a claim needs review. A data-loss prevention check looks for donor and bank details before the draft enters the user interface.
+The distinction prevents a dangerous shortcut. A model-based guardrail may estimate that a refund request looks safe. The refund service still applies its authoritative account and amount policy.
 
-These checks do not prove that every sentence is correct. They create reliable boundaries around facts the application can verify. The remaining judgement moves to the people responsible for the grant.
+## Build a Risk-Based Control Plan
+<!-- section-summary: A control plan connects each important risk to an intervention point, enforcement method, evidence record, owner, and failure response. -->
 
-## Proof That Every Required Control Ran
+A guardrail program starts with the product’s risks. Copying the same filter settings to every assistant produces uneven protection because a writing helper and a payment agent have different consequences.
 
-<!-- section-summary: A control plan declares which checks a workflow requires, while signed control events prove that each check completed for the exact artifact before delivery. -->
+Begin with the outcome the product enables. Identify the people and assets that could be harmed. Then follow credible failure paths through input, context, model decisions, tools, output, and downstream use.
 
-Layered guardrails create a new operational question: how can the delivery service prove that every required layer ran? A trace with one `guardrail_passed` flag hides which checks executed and which version produced the decision. GrantWriter creates a control plan when the run starts and records one event for each check.
+For the refund workflow, the team may identify these risks:
+
+- another customer’s transaction enters context;
+- a malicious note changes the model’s goal;
+- the model invents a refund-policy exception;
+- a tool receives the wrong account or amount;
+- sensitive payment details appear in the response;
+- a new model version skips the approval route.
+
+Each risk leads to a **control objective**. A control objective describes the safety property in plain language, such as “a refund can affect only the authenticated customer’s eligible transaction.”
+
+The plan then records where and how that property is enforced:
 
 ```yaml
-control_plan: grant-application-v8
-run_id: run_01K13P1E
-artifact_id: draft_01K13P4T
-artifact_sha256: "9b72b4..."
-control_versions:
-  input.file_policy: file-policy-v3
-  context.source_authorization: source-auth-v4
-  output.schema: grant-schema-v8
-  output.source_support: source-policy-v5
-  output.sensitive_data: privacy-v6
-  review.programme_manager: review-policy-v2
-  tool.finance_policy: finance-policy-v3
-  review.finance: finance-review-v2
+workflow: subscription_refund
+control_plan: refund_controls_v6
+risk_tier: high
 required:
-  - input.file_policy
-  - context.source_authorization
-  - output.schema
-  - output.source_support
-  - output.sensitive_data
-  - review.programme_manager
-conditional:
-  finance_task_requested:
-    - tool.finance_policy
-    - review.finance
+  - id: context.tenant_scope
+    point: context
+    enforcement: retrieval_policy
+  - id: tool.refund_authorization
+    point: before_tool
+    enforcement: opa_policy
+  - id: review.large_refund
+    point: before_tool
+    enforcement: exact_action_approval
+  - id: output.payment_data
+    point: before_delivery
+    enforcement: sensitive_data_filter
+release_gates:
+  - cross_tenant_access_zero
+  - unauthorized_refund_zero
 ```
 
-`control_plan` pins the rules for this product release. `artifact_id` binds later decisions to one immutable draft hash. The required list covers every grant draft. The conditional list activates only when the draft requests finance work. This avoids running unrelated checks while preventing the model from deciding which controls apply.
+This small file gives the workflow an explicit safety contract. It names required controls and release blockers. The application loads the plan by workflow version; the model never chooses which controls apply.
 
-Each control executor writes an event from trusted code:
+### Choose the right enforcement type
 
-```json
-{
-  "run_id": "run_01K13P1E",
-  "control_plan": "grant-application-v8",
-  "artifact_id": "draft_01K13P4T",
-  "artifact_sha256": "9b72b4...",
-  "control": "output.source_support",
-  "control_version": "source-policy-v5",
-  "decision": "pass",
-  "reason_codes": [],
-  "evidence_refs": ["grant-guide-2026#page-14"],
-  "decided_at": "2026-07-13T11:42:19Z",
-  "event_id": "evt_01K13P5A",
-  "server_identity": "control-service/source-support",
-  "signature": "base64url:MEUCIQ..."
+Use deterministic checks for facts code can decide exactly: schema validity, allowed tool, authenticated tenant, amount limit, destination, and approval match.
+
+Use probabilistic checks for judgments with fuzzy boundaries: harmful content, prompt attacks, groundedness, tone, or semantic policy classification. Calibrate their thresholds on representative traffic and preserve a review path for uncertain cases.
+
+People own consequential judgments that require accountability or domain expertise. Contextual interpretation also belongs with a qualified reviewer. Common examples include legal commitments and large financial actions. Medical decisions and public statements often require the same treatment.
+
+## Control What Enters the Workflow
+<!-- section-summary: Input and context guardrails validate content, classify risk, enforce source access, preserve provenance, and limit what reaches the model. -->
+
+Input guardrails protect the first part of the workflow: user messages, uploaded files, external content, and retrieved evidence. They decide which material can enter, how it is classified, and which trust labels follow it into model context.
+
+At ingestion, ordinary application security still applies. Check file type and size. Use a hardened parser and malware scanning. Reject malformed data. Classify sensitive information before indexing or model use. Record the source owner, collection, parser version, data class, and review state.
+
+Model-aware checks add another layer. Prompt-attack detection can quarantine suspicious text. Content safety classifiers can block or route harmful requests. A purpose classifier can send an account request to the refund workflow and a technical issue to support.
+
+Context controls decide which data the model sees. Retrieval enforces tenant and source permissions before ranking returns chunks. The harness selects only task-relevant evidence and carries source IDs into the prompt. External text remains labelled as untrusted evidence.
+
+Consider a user who uploads a long invoice bundle to dispute one charge. The workflow needs the selected invoice and refund policy. Sending every invoice increases privacy exposure and gives unrelated content more influence. Narrow retrieval improves both security and answer quality.
+
+Input controls have false positives and false negatives. A security report may resemble an attack. A novel injection may evade a classifier. Later policy and tool controls should assume that risky content can still pass.
+
+## Control What the Product Returns
+<!-- section-summary: Output guardrails check structure, sensitive data, source support, policy, and downstream meaning before a result reaches people or systems. -->
+
+An output guardrail evaluates the artifact the product is about to use: a message, structured decision, generated file, tool result, or action plan.
+
+Start with structure. JSON Schema can define expected fields and reject extra ones. Pydantic and Zod provide common code-level validation options. A structured result lets application code inspect the amount and account reference separately. Evidence IDs and proposed actions receive their own checks as well.
+
+Then apply checks that match the product risk. A support response may need sensitive-data scanning and approved-source citations. A medical summary may need completeness checks and clinician review. Generated code may need static analysis, tests, and a sandbox before execution.
+
+The order matters:
+
+```mermaid
+flowchart TD
+    A["Model output"] --> B["Parse expected schema"]
+    B -->|"Invalid"| G["Reject or repair"]
+    B -->|"Valid"| C["Check deterministic business rules"]
+    C -->|"Fail"| G
+    C -->|"Pass"| D["Run semantic and safety checks"]
+    D -->|"Uncertain or high impact"| E["Human review"]
+    D -->|"Pass"| F["Deliver bounded result"]
+    E -->|"Approved exact artifact"| F
+    E -->|"Rejected"| G
+
+    classDef output fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef check fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef success fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef reject fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A output
+    class B,C,D,E check
+    class F success
+    class G reject
+```
+
+A model grader can estimate groundedness or policy adherence. Its score remains a probabilistic judgment. High-impact claims need source verification or a qualified reviewer. The final delivery service should also confirm that every required control produced a current result.
+
+## Protect Tool Calls and Side Effects
+<!-- section-summary: Tool guardrails validate model-proposed arguments, while authorization and business policy decide whether the exact action may execute. -->
+
+Tool calls cross from model reasoning into another system. A useful tool guardrail checks the request immediately before execution and inspects the result before it returns to the model.
+
+Input checks validate the tool name, argument schema, amount range, destination, resource ID, and data classification. Output checks can remove secrets, reject an unexpected response shape, and prevent one tool’s free-form result from steering a later action.
+
+Authorization uses server-owned identity and resource facts. The model can propose `refund(transaction_id, amount)`. The server attaches the authenticated user and tenant. The policy engine confirms that the transaction belongs to that tenant, the amount is eligible, and the approval requirement is satisfied.
+
+A compact OPA policy shows the authoritative boundary:
+
+```rego
+package refunds
+
+import rego.v1
+
+default allow := false
+
+allow if {
+    input.action == "refund:create"
+    input.transaction.tenant_id == input.principal.tenant_id
+    input.request.amount <= input.transaction.refundable_amount
+    input.request.currency == input.transaction.currency
+    input.approval.valid_for_request == true
 }
 ```
 
-The artifact hash prevents approval from carrying across an edit. `control_version` makes policy changes visible. `reason_codes` support dashboards without storing sensitive prose, and `evidence_refs` let an authorized reviewer inspect the source. A **digital signature** lets the delivery service use a trusted public key to verify which control service signed the exact event bytes and whether those bytes changed. The control service signs or writes these events through an authenticated channel; model output cannot claim that a check passed.
+The model supplies the proposed request. Trusted services build the principal, transaction, and approval objects. `default allow := false` means missing facts produce a denial.
 
-Before delivery, the gate derives conditional controls from the server-owned workflow record and the schema-validated artifact. The caller cannot pass a smaller condition set:
+Tool access should also be narrow. A read-only explanation step has no refund tool. The tool executor holds a short-lived credential and keeps secrets outside model context. Side effects use idempotency keys so a retry cannot duplicate the refund.
 
-```python
-def derive_conditions(workflow_record: dict, artifact: dict) -> set[str]:
-    conditions = set()
-    finance_in_workflow = workflow_record.get("finance_task_id") is not None
-    finance_in_artifact = artifact["review_requirements"]["finance"] is True
-    if finance_in_workflow or finance_in_artifact:
-        conditions.add("finance_task_requested")
-    return conditions
+OpenAI Agents SDK currently provides tool input and output guardrails for function tools. Hosted and built-in tools use different control surfaces, so teams should verify coverage for every actual tool type. Other runtimes expose equivalent middleware or interceptors. The security property is the same: every path into an effect reaches the authoritative gate.
 
-def delivery_decision(
-    plan: dict,
-    events: list[dict],
-    workflow_record: dict,
-    artifact_bytes: bytes,
-) -> dict:
-    artifact_sha256 = sha256(artifact_bytes).hexdigest()
-    if artifact_sha256 != plan["artifact_sha256"]:
-        return {"allow_delivery": False, "invalid": ["artifact_digest_mismatch"]}
-    if workflow_record["run_id"] != plan["run_id"]:
-        return {"allow_delivery": False, "invalid": ["workflow_run_mismatch"]}
-    artifact = parse_and_validate_grant_artifact(artifact_bytes)
-    conditions = derive_conditions(workflow_record, artifact)
-    required = set(plan["required"])
-    for condition in conditions:
-        required.update(plan.get("conditional", {}).get(condition, []))
+## Give High-Impact Decisions to People
+<!-- section-summary: Human review pauses a consequential action and gives an accountable person the exact proposal, evidence, policy result, and consequence. -->
 
-    invalid = []
-    valid_events = []
-    for event in events:
-        expected_issuer = CONTROL_ISSUERS.get(event.get("control"))
-        facts_match = (
-            event.get("run_id") == plan["run_id"]
-            and event.get("control_plan") == plan["control_plan"]
-            and event.get("artifact_id") == plan["artifact_id"]
-            and event.get("control_version") == plan["control_versions"].get(event.get("control"))
-            and event.get("server_identity") == expected_issuer
-        )
-        if not facts_match or not verify_signature(event, expected_issuer):
-            invalid.append(event.get("event_id", "missing_event_id"))
-            continue
-        valid_events.append(event)
+Human review is a control for judgment and accountability. It works only if the reviewer can understand the choice, see the evidence, and recognise the consequence of approving the proposed action.
 
-    events_by_control = {}
-    for event in valid_events:
-        events_by_control.setdefault(event["control"], []).append(event)
+For a large refund, the review screen should show the customer account, transaction, proposed amount, policy rule, model explanation, supporting evidence, and downstream effect. The person approves one exact action. If the amount or destination changes, the application invalidates the approval.
 
-    latest_current = {}
-    stale = []
-    missing = []
-    for name in sorted(required):
-        candidates = events_by_control.get(name, [])
-        current = [
-            event for event in candidates
-            if event["artifact_sha256"] == plan["artifact_sha256"]
-        ]
-        if current:
-            latest_current[name] = max(
-                current, key=lambda event: (event["decided_at"], event["event_id"])
-            )
-        elif candidates:
-            stale.append(name)
-        else:
-            missing.append(name)
+The workflow must persist the pause. A worker restart should leave the action pending. The reviewer’s identity, decision, reason, policy version, artifact digest, and expiry belong in the audit record.
 
-    failed = sorted(
-        name for name in required
-        if name in latest_current and latest_current[name]["decision"] != "pass"
-    )
+OpenAI Agents SDK supports durable pause-and-resume flows for tools that require approval. Its `RunState` can be serialized and resumed after a person accepts or rejects a call. Other orchestrators can store the same interruption in a database or workflow engine.
 
-    return {
-        "allow_delivery": not missing and not failed and not stale and not invalid,
-        "missing": missing,
-        "failed": failed,
-        "stale": stale,
-        "invalid": sorted(invalid),
-    }
+Approval should stay rare enough to deserve attention. Sending every harmless read to a person creates fatigue and delays. Classify actions by reversibility, financial or safety impact, data sensitivity, external visibility, and user expectation. Use automatic policy for low-risk bounded reads and reserve people for consequential or ambiguous actions.
+
+## Record Proof That Required Controls Ran
+<!-- section-summary: Control evidence ties a policy or guardrail decision to one run, artifact, version, and trusted executor so delivery can detect missing or stale checks. -->
+
+Several guardrails create an operational question: how can the product prove that each required control ran on the exact artifact it will deliver?
+
+A single `guardrail_passed=true` field hides too much. The event should identify the control, its version, the artifact, and the trusted component that made the decision:
+
+```json
+{
+  "run_id": "run_f83a",
+  "artifact_id": "refund_proposal_72",
+  "artifact_sha256": "sha256:5d1c...",
+  "control_plan": "refund_controls_v6",
+  "control": "tool.refund_authorization",
+  "control_version": "refund_policy_v14",
+  "decision": "pass",
+  "reason_codes": [],
+  "decision_id": "decision_a91e",
+  "issuer": "policy-service"
+}
 ```
 
-The gate hashes the bytes it is about to deliver and requires the plan to name that exact digest. It loads the workflow record by trusted `run_id`, parses the artifact with a schema that requires `review_requirements.finance`, and activates finance controls when either source says finance work exists. A model or API caller cannot omit the condition argument because no such argument exists.
+The artifact digest binds the decision to exact content. An edit produces a new digest and makes the old approval stale. `issuer` distinguishes an authoritative policy event from text produced by the model. `reason_codes` support dashboards without copying sensitive payloads into metrics.
 
-Each event signature is verified against the registered issuer. Plan, run, artifact ID, control version, and server identity must match before an event can contribute evidence. Artifact hash is handled separately so a correctly signed decision for an older draft is classified as `stale` instead of the less useful `invalid`. For each control, a current-artifact event takes precedence over every older-artifact event, then `decided_at` and unique `event_id` choose the latest current decision. `failed` includes blocks and review-required results because delivery needs an explicit pass. `invalid` is reserved for bad signatures and mismatched server facts. The product sends the artifact only when every list is empty.
+Before delivery or execution, the gate loads the server-owned control plan and checks for every required current event. Missing evidence fails closed for high-risk workflows. A timeout can move the request to a manual queue; it cannot silently count as a pass.
 
-Test five paths: a normal draft with every required pass; an artifact whose required `finance` field activates finance controls even when the caller would prefer to omit them; a trusted workflow record with a finance task when the artifact field is false; a sensitive-data failure; and an edit after programme-manager approval. The edit test creates new bytes and a plan with their new digest, then reuses the correctly signed approval event for the previous digest. The result lists `review.programme_manager` under `stale`, not `invalid` or `missing`. A precedence test supplies both an older stale failure and a current signed pass in reverse list order and still allows the current event. In production, alert on missing-control events separately from content failures because they indicate an orchestration or dependency fault.
+OPA decision logs can record policy bundle revision, decision ID, trace ID, input, and result. Sensitive fields can be masked before log upload. Similar policy systems provide equivalent decision evidence. Connect the policy decision ID to the agent trace and business audit record so an incident review can follow the whole path.
 
-When one control service is unavailable, GrantWriter saves the draft and routes it to a pending-review queue. It never converts a timeout into `pass`. Operators can disable the affected feature, restore the previous control version, or process the queue manually. After recovery, a synthetic run must produce the complete event set before automated delivery resumes.
+## Include Models, Tools, and Data in Supply-Chain Risk
+<!-- section-summary: LLM supply-chain review covers model providers, prompts, packages, containers, parsers, retrieval sources, connectors, tools, and safety services. -->
 
-## Human Review Owns High-Stakes Judgement
+An LLM product depends on more than its main model. Its behaviour and data exposure can change through a model alias, prompt bundle, embedding model, parser, package, container, retrieval source, MCP server, hosted tool, classifier, or external API.
 
-<!-- section-summary: Reviewers receive the proposed artifact, cited evidence, policy findings, and unresolved questions needed to make a meaningful decision. -->
+Create an inventory of these components. Record the owner and exact version or digest. Source and data-handling terms explain where the component came from and what it receives. Permissions define its authority, while maturity and fallback describe operational risk. Pin exact artifacts where the platform permits it. Treat an automatic provider upgrade as a material change that requires evaluation.
 
-The draft says that GrantWriter’s programme is eligible because it serves three qualifying regions. The source supports two regions clearly and uses ambiguous wording for the third. The validator marks the claim for review instead of letting the model hide uncertainty behind confident prose.
+Software controls still matter. Generate an SBOM, scan dependencies, sign release images, and verify provenance in deployment. SLSA provides an industry specification for increasing software supply-chain guarantees and defines provenance for tracing artifacts back through their build process.
 
-The programme manager sees the claim, relevant source passages, model explanation, and unresolved question. Finance sees the proposed budget and its connection to approved records. Legal sees the funder’s terms and any statements that create obligations.
+AI-specific review adds questions that an SBOM cannot answer. Which provider receives prompts? Can the provider retain data? Which region processes it? Can a connector change its tool description? Does a retrieval source have an approval workflow? Which model or guardrail feature is Preview?
 
-Each reviewer owns a real decision. The interface should not ask a generic “approve?” question without evidence. If someone edits the draft after approval, the application invalidates the earlier decision because it referred to a different artifact.
+Microsoft Foundry’s agent guardrails and tool-call intervention points are currently Preview. That maturity affects production risk and fallback design. A preview feature can support testing or a compensating layer, while critical authorization remains in stable application policy.
 
-Human review also creates feedback. Repeated corrections to one eligibility rule may reveal weak retrieval, unclear source material, or a missing deterministic policy. The team should repair that cause rather than accepting permanent manual cleanup.
+If a safety dependency fails, the product needs an explicit response. A low-risk public summariser may continue with reduced features. A refund workflow may enter a read-only mode or manual queue. Silent removal of a required guardrail creates an uncontrolled release.
 
-## Supply-Chain Controls Cover More Than the Model
+## Use Evals as Release Gates
+<!-- section-summary: Risk-based evals test normal work, known failures, adversarial cases, policy boundaries, and full workflow effects before promotion. -->
 
-<!-- section-summary: A production LLM system tracks external models, packages, tools, retrieval sources, and services that can change behaviour or data exposure. -->
+Runtime guardrails protect individual runs. **Release evals** decide whether a changed system deserves production traffic. They replay normal, difficult, and adversarial cases against one exact candidate before that candidate can affect users.
 
-GrantWriter depends on a model provider, embedding model, document parser, vector store, Python packages, and external workflow service. Any of these components can change reliability, security, privacy, or availability.
+Build the evaluation set from the control plan. Include normal tasks, edge cases, past incidents, adversarial inputs, important user slices, tool failures, approval routes, and successful behaviours worth preserving.
 
-The team pins deployable versions and records them with each release. It scans container dependencies, verifies artifact provenance where supported, and reviews how third-party services handle data. A model alias or hosted tool that changes automatically would weaken reproduction because the same application version could behave differently tomorrow.
+Each test should assert the relevant layer. A prompt-injection case checks the final effect and policy denial. A sensitive-data case checks the delivered artifact. A refund case checks account ownership, amount, currency, approval, idempotency, and downstream audit.
 
-Provider safety features can add useful checks, but they do not replace GrantWriter’s authorization and business policy. The application remains responsible for the use it makes of the component and for the data it sends.
+Some gates are absolute. Cross-tenant exposure, unauthorized refunds, and skipped required controls should block release. Other measures use thresholds: false-positive rate, reviewer load, unsupported-claim rate, latency, and cost.
 
-When a supplier changes an API, retention term, or model behaviour, the team evaluates the exact new component before promotion. A fallback path should preserve essential work if a dependency is unavailable without silently dropping safety controls.
+```mermaid
+flowchart TD
+    A["Candidate model, prompt, tools, or policy"] --> B["Deterministic security tests"]
+    B -->|"Pass"| C["Quality and safety evals"]
+    B -->|"Fail"| G["Stop and repair"]
+    C -->|"Pass by slice"| D["Red-team and workflow tests"]
+    C -->|"Fail"| G
+    D -->|"Pass"| E["Shadow or limited rollout"]
+    D -->|"Fail"| G
+    E --> F["Production gates and gradual promotion"]
+    F -->|"Regression"| G
 
-## Evals Turn Risk Into Release Evidence
+    classDef candidate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef promote fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A candidate
+    class B,C,D,E gate
+    class F promote
+    class G stop
+```
 
-<!-- section-summary: Pre-release evaluation tests normal work, known incidents, adversarial inputs, tool boundaries, reviewer routes, and full workflow outcomes. -->
+MLflow’s current GenAI evaluation APIs can build datasets from production traces, run built-in or custom scorers, and compare versions. Its production trace evaluation can also apply the same scoring concepts to sampled live traces. Human calibration remains important for model-based judges.
 
-GrantWriter’s evaluation set contains ordinary eligibility questions, incomplete budgets, conflicting sources, donor-data examples, prompt-injected documents, tool failures, and past reviewer corrections. The runner records the final draft, citations, tool calls, guardrail decisions, and review route.
+Red-team exercises explore paths beyond the saved suite. OWASP’s AI Agent Security guidance recommends testing after material changes to prompts, tools, memory, retrieval, policy, or providers. Every confirmed failure should gain an owner and a regression case.
 
-Some checks are deterministic. A draft must not contain bank details, and an unapproved source ID must not support an eligibility claim. Other checks need calibrated model graders or people, such as whether a summary accurately represents a long programme report.
+## Monitor Controls in Production
+<!-- section-summary: Production monitoring measures control coverage, trigger rates, false positives, escapes, review load, and the downstream outcomes controls were meant to protect. -->
 
-The release report compares the candidate with the current production system. A higher writing-quality score cannot compensate for a new data leak or unauthorised action. Blocking risks remain visible as their own gates.
+Production monitoring answers two questions: did every required control run, and did the control reduce the targeted harm? The first question checks enforcement coverage. The second checks whether the safety design works under real traffic.
 
-Red-team exercises expand this evidence by exploring unfamiliar attacks and multi-step abuse. Teams assign findings to owners and create regression cases. A red-team report that never reaches the release suite will lose value as the system changes.
+**Coverage** measures whether required checks produced current evidence. **Trigger rate** shows how often a guardrail blocks, routes, or requests review. **Override rate** shows how often reviewers reverse a guardrail. **Escape rate** counts confirmed failures that passed the controls. **Review burden** measures queue volume and age.
 
-## Runtime Monitoring Shows What Passed the Gates
+Read these signals together. A sudden fall in sensitive-data detections may reflect safer output, a broken detector, or missing instrumentation. A rise in blocks may reflect an attack, a parser change, or a threshold that is too strict. Sample allowed and blocked cases to estimate both false negatives and false positives.
 
-<!-- section-summary: Production traces and outcomes reveal guardrail triggers, bypasses, reviewer load, false positives, incidents, and changes in user behaviour. -->
+The trace should connect:
 
-After release, GrantWriter records which input, context, tool, and output controls ran. Metrics show quarantine rate, blocked tool calls, unsupported-claim rate, human-review volume, approval time, and confirmed incidents. Traces connect one draft to its sources, versions, checks, tools, and reviewers.
+- workflow and release version;
+- model, prompt, retrieval, and tool versions;
+- control plan and control versions;
+- input, output, tool, policy, and approval decisions;
+- business action and final outcome;
+- protected evidence references.
 
-A rising guardrail rate can mean an attack, a broken parser, a policy change, or an overly sensitive detector. Operators need examples and traces before deciding. Automatically loosening a control to reduce alerts could remove the only barrier protecting users.
+Raw prompts, personal data, credentials, and full documents need restricted storage or redacted references. Keep high-cardinality identifiers in traces and audit stores instead of metrics labels.
 
-The team samples both allowed and blocked runs. Looking only at blocks misses false negatives, while looking only at successful drafts hides unnecessary friction. Reviewer overrides and downstream corrections provide evidence about both kinds of error.
+Alerts should map to a runbook. Missing authorization evidence can disable the affected tool. A spike in output blocks can route traffic to the previous release. A confirmed unauthorized action starts incident response: contain the capability, preserve evidence, scope impact, repair the failed boundary, add a regression case, and verify the recovery.
 
-If a harmful output or action reaches production, responders contain the affected path, preserve evidence, identify which boundary failed, and add the case to evaluation. The repair may belong to ingestion, context selection, authorization, tool validation, output checks, or review design. Prompt edits are one possible response rather than the default answer.
+## Fit Current Industrial Tools to the Layers
+<!-- section-summary: Current platforms provide specialised guardrail, policy, evaluation, tracing, and supply-chain capabilities that teams combine around one control plan. -->
 
-## How the Layers Work Together
+Industrial stacks usually combine several tools because each product covers a different layer. The useful design starts by assigning one clear responsibility to each product and defining the evidence it passes to the rest of the workflow.
 
-<!-- section-summary: Guardrails reduce risk by placing independent controls around content, context, capabilities, output, people, release, and operations. -->
+### Runtime safety filters
 
-GrantWriter’s workflow now has a continuous safety story. Input controls decide which files enter. Context controls select authorised evidence and preserve trust. Tool controls protect side effects. Output validation checks source support and sensitive data. People own the remaining judgement. Supply-chain review tracks external components, evals decide whether a version deserves release, and production evidence drives later fixes.
+Amazon Bedrock Guardrails provides content filters, prompt-attack controls, denied topics, word filters, sensitive-information filters, contextual grounding checks, and automated-reasoning checks. Teams choose the checks that match their risk and test the configured behaviour.
 
-The value comes from the layers working independently. A malicious document may pass the scanner, but it still faces limited retrieval, narrow tools, server-side authorization, output validation, and review. A model may write a fluent unsupported claim, but citation checks and the legal review path can stop it from reaching the final application.
+Google Cloud Model Armor screens prompts and responses for content safety, prompt injection, jailbreaks, sensitive data, and malicious URLs. Microsoft Foundry guardrails define risks, intervention points, and actions for model and agent traffic; the agent and tool-call surfaces are Preview and should be treated at that maturity level.
 
-Guardrails should make the workflow’s authority and risk visible. They help the model do useful work while keeping the organisation’s data, actions, and decisions under accountable control.
+These services provide probabilistic safety signals and blocking. Tenant authorization still comes from trusted identity and resource policy. Transaction rules and exact-action approval remain independent gates.
+
+### Agent-runtime controls
+
+OpenAI Agents SDK provides input and output guardrails, function-tool guardrails, tracing, and human-in-the-loop interruptions. LangGraph, Temporal, and managed workflow systems can express durable pauses and explicit state transitions. Framework choice should preserve the same control contract across retries and resumptions.
+
+### Deterministic policy
+
+OPA can evaluate structured authorization and business-policy input close to the service. Its bundles version policy, and decision logs provide audit evidence. Cloud-native IAM policy engines can serve similar roles. The domain service still enforces the decision at execution time.
+
+### Evaluation and observability
+
+MLflow supports GenAI traces, evaluation datasets, scorers, version comparisons, and production trace evaluation. OpenTelemetry provides vendor-neutral traces and metrics that can connect agent spans with policy and tool services. Prometheus, Grafana, or cloud monitoring can alert on bounded operational metrics.
+
+### Supply-chain assurance
+
+SLSA describes build and source assurance levels plus provenance formats. Sigstore Cosign can sign and verify container artifacts. Container scanners and SBOM tools inspect deployable dependencies. AI inventories add hosted models, prompts, tools, data sources, and provider safety services to that software evidence.
+
+The architecture stays understandable if every tool maps to a control objective, intervention point, owner, evidence record, and failure response.
+
+## Govern Residual Risk and Exceptions
+<!-- section-summary: Governance assigns ownership, documents remaining risk, controls exceptions, and keeps risk decisions current as the workflow changes. -->
+
+Controls reduce risk and leave some uncertainty. A classifier may miss harmful content. A reviewer may make a poor decision. A supplier may change behaviour. **Residual risk** is the risk left after the selected controls operate.
+
+NIST AI RMF organises continuous risk management through four functions: Govern, Map, Measure, and Manage. Applied to an agent workflow, the team maps people, assets, and failure paths; measures likelihood and impact; manages risks through controls and recovery; and governs ownership, policy, documentation, and review.
+
+Assign an owner to every high or accepted residual risk. The record identifies the affected workflow and credible scenario. It describes the potential impact and current controls, then links the supporting evidence and decision. A review condition and expiry keep the acceptance temporary and visible.
+
+An exception is a controlled temporary decision. Suppose a groundedness service is unavailable and a low-risk internal summariser continues with mandatory citations and human review. The exception should name the restricted workflow, compensating controls, approver, monitoring, and expiry. It should never silently change the control plan for every product.
+
+Risk review also follows change. A new tool, broader data source, provider model, autonomy level, or user population can create a new path to harm. The control plan and evaluation suite should change with the architecture.
+
+## The Main Idea
+<!-- section-summary: Guardrails manage LLM risk through layered controls, explicit ownership, verifiable evidence, and continuous evaluation across the workflow lifecycle. -->
+
+Guardrails are the gates around an LLM workflow. Automatic checks inspect inputs, outputs, and tool interactions. Deterministic policy protects identity, resources, and business rules. Human review owns consequential judgments. Evals decide whether a release has enough evidence. Monitoring reveals missing controls, false positives, escapes, and changing risk.
+
+A risk-based control plan connects these layers. It starts with a credible failure, names the safety property, chooses the intervention point and enforcement type, records trusted evidence, and defines the response to failure.
+
+In essence, guardrails work as an accountable system of controls. Their value comes from the real outcomes they prevent, the decisions they make visible, and the evidence they provide throughout development and production.
 
 ## References
 
-- [OpenAI: Safety in building agents](https://developers.openai.com/api/docs/guides/agent-builder-safety)
-- [OpenAI: Guardrails and approvals](https://developers.openai.com/api/docs/guides/agents/guardrails-approvals)
-- [OWASP GenAI Security Project](https://genai.owasp.org/)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [MITRE ATLAS](https://atlas.mitre.org/)
-- [SLSA supply-chain levels](https://slsa.dev/spec/)
+- [NIST AI RMF: Generative Artificial Intelligence Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence)
+- [OWASP: AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html)
+- [OpenAI Agents SDK: Guardrails](https://openai.github.io/openai-agents-python/guardrails/)
+- [OpenAI Agents SDK: Human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [Amazon Bedrock Guardrails: Components](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-components.html)
+- [Microsoft Foundry: Guardrails and controls overview](https://learn.microsoft.com/en-us/azure/foundry/guardrails/guardrails-overview)
+- [Google Cloud Model Armor: Overview](https://docs.cloud.google.com/model-armor/overview)
+- [LangGraph: Interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+- [Temporal: Durable Execution](https://docs.temporal.io/temporal)
+- [Open Policy Agent: Decision logs](https://www.openpolicyagent.org/docs/management-decision-logs)
+- [MLflow: Build evaluation datasets](https://mlflow.org/docs/latest/genai/datasets/)
+- [MLflow: Evaluate production traces](https://mlflow.org/docs/latest/genai/eval-monitor/running-evaluation/traces/)
+- [OpenTelemetry: Generative AI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
+- [SLSA specification](https://slsa.dev/spec/v1.2/)
+- [Sigstore Cosign: Verify an image](https://docs.sigstore.dev/cosign/verifying/verify/)
+- [Model Context Protocol: Security best practices](https://modelcontextprotocol.io/docs/draft/tutorials/security/security_best_practices)

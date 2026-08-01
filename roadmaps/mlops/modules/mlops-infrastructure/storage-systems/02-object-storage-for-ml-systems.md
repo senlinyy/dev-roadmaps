@@ -7,6 +7,19 @@ order: 2
 id: "article-mlops-mlops-infrastructure-object-storage-for-ml-systems"
 ---
 
+## Table of Contents
+
+1. [Object Storage Holds The Durable Bytes](#object-storage-holds-the-durable-bytes)
+2. [Namespace Gives Every Asset A Stable Address](#namespace-gives-every-asset-a-stable-address)
+3. [Publication Marks A Complete Asset](#publication-marks-a-complete-asset)
+4. [Integrity Connects A Name To Content](#integrity-connects-a-name-to-content)
+5. [Access Follows Workload Responsibilities](#access-follows-workload-responsibilities)
+6. [Versioning And Immutability Protect Different Risks](#versioning-and-immutability-protect-different-risks)
+7. [Lifecycle Policy Follows Operational Meaning](#lifecycle-policy-follows-operational-meaning)
+8. [Recovery Tests The Whole Chain](#recovery-tests-the-whole-chain)
+9. [The Complete Storage Method](#the-complete-storage-method)
+10. [References](#references)
+
 ## Object Storage Holds The Durable Bytes
 <!-- section-summary: Object storage gives independent ML jobs durable network access to datasets and artifacts that outlive any notebook, container, or worker. -->
 

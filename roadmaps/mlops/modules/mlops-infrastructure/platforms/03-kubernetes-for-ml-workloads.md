@@ -10,6 +10,21 @@ aliases:
   - child-platforms-01-kubernetes-for-ml-workloads
 ---
 
+## Table of Contents
+
+1. [Start With The Control Loop](#start-with-the-control-loop)
+2. [Match The Controller To The Workload Lifecycle](#match-the-controller-to-the-workload-lifecycle)
+3. [A Training Job Is An Execution Contract](#a-training-job-is-an-execution-contract)
+4. [Scheduling Is A Resource-Matching Problem](#scheduling-is-a-resource-matching-problem)
+5. [Queues Turn Scarce Compute Into A Policy](#queues-turn-scarce-compute-into-a-policy)
+6. [Serving Uses Availability And Readiness Contracts](#serving-uses-availability-and-readiness-contracts)
+7. [Keep Durable Artifacts Outside Ephemeral Pods](#keep-durable-artifacts-outside-ephemeral-pods)
+8. [Identity And Isolation Follow The Workload](#identity-and-isolation-follow-the-workload)
+9. [Observe The Cluster And The Model](#observe-the-cluster-and-the-model)
+10. [Decide Whether Kubernetes Is The Right Foundation](#decide-whether-kubernetes-is-the-right-foundation)
+11. [The Durable Picture](#the-durable-picture)
+12. [References](#references)
+
 **Kubernetes** is a platform for declaring and operating containerized workloads across a cluster of machines. It can run training jobs, data preparation, batch inference, model APIs, notebook environments, and ML platform services on one programmable control plane.
 
 Kubernetes does not understand model quality, datasets, experiments, or approvals on its own. It understands API objects, containers, resources, scheduling, networking, storage, and desired state. An ML platform adds the domain layer around those primitives: pipeline metadata, artifact identity, model registry, evaluation gates, feature contracts, and prediction monitoring.

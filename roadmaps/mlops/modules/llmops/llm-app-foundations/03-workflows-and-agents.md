@@ -1,7 +1,7 @@
 ---
 title: "Workflows and Agents"
 description: "Understand how deterministic workflows, model-directed agent loops, orchestration, tools, state, approvals, evals, and traces fit together."
-overview: "Workflow and agent design assigns lifecycle and authority to software while giving models bounded responsibility for language judgment and adaptive investigation. This article builds the architecture from a single model call through workflows, agents, and hybrid systems."
+overview: "Workflow and agent design assigns lifecycle and authority to software while giving models bounded responsibility for language judgment and adaptive investigation across model calls, workflows, agent loops, and orchestrated systems."
 tags: ["MLOps","LLMOps","production","llms"]
 order: 3
 id: "article-mlops-llmops-workflows-and-agents"
@@ -10,230 +10,668 @@ aliases:
   - child-llm-app-foundations-02-workflows-and-agents
 ---
 
-A **workflow** follows paths defined by application code. It can branch, retry, wait, and call models or tools, but the allowed transitions are designed ahead of time. An **agent** lets a model decide parts of the path at runtime: what to inspect, which tool to request, whether more evidence is needed, or which specialist should continue.
+## Table of Contents
 
-They are not competing product categories. Most reliable agentic applications combine them. Software owns lifecycle, authority, and irreversible effects; a model handles interpretation and adaptive choices inside those boundaries.
+1. [Control Ownership Defines the Design](#control-ownership-defines-the-design)
+2. [Use the Lowest Sufficient Degree of Autonomy](#use-the-lowest-sufficient-degree-of-autonomy)
+3. [Deterministic Workflows Keep Stable Paths in Code](#deterministic-workflows-keep-stable-paths-in-code)
+4. [A Bounded Agent Loop Handles Adaptive Work](#a-bounded-agent-loop-handles-adaptive-work)
+5. [An Agent Loop Needs an Orchestrator](#an-agent-loop-needs-an-orchestrator)
+6. [The Orchestrator Owns Lifecycle and Authority](#the-orchestrator-owns-lifecycle-and-authority)
+7. [Durable State and Checkpoints Preserve Progress](#durable-state-and-checkpoints-preserve-progress)
+8. [Tools, Effects, Approvals, and Interrupts Need Separate Controls](#tools-effects-approvals-and-interrupts-need-separate-controls)
+9. [Budgets and Stop Conditions Bound Autonomy](#budgets-and-stop-conditions-bound-autonomy)
+10. [Recovery and Reconciliation Protect One Business Outcome](#recovery-and-reconciliation-protect-one-business-outcome)
+11. [Current Runtimes Fit at Different Layers](#current-runtimes-fit-at-different-layers)
+12. [Multi-Agent Design Needs a Real Boundary](#multi-agent-design-needs-a-real-boundary)
+13. [Evaluate Outcomes and Trajectories](#evaluate-outcomes-and-trajectories)
+14. [What to Carry Into Production](#what-to-carry-into-production)
+15. [References](#references)
 
-## Start With The Simplest Control Pattern
-<!-- section-summary: Agentic complexity forms a progression from one model call to fixed workflows and bounded agent loops; each additional control layer needs evidence that it improves the task. -->
+At a high level, workflows and agents are two ways to decide **what happens next** in an LLM application.
 
-Use Harbor Mutual, a home insurer. A customer reports storm damage, uploads photos, and asks what happens next. The company must verify policy status, collect required evidence, route high-risk claims, and preserve an audit trail. The text and documents are messy, so a model can help interpret and summarize them.
+A **workflow** puts that decision in application code. The software knows the allowed steps and moves the run through them. A model can still classify text, extract fields, or draft an answer inside a workflow step.
 
-Several patterns are available:
+An **agent** gives the model some responsibility for choosing the next step. The model may decide which tool to use, which evidence to inspect, whether to continue investigating, or whether it has enough information to answer.
+
+Production systems often combine both. Software owns the business lifecycle, permissions, budgets, and irreversible effects. The model receives bounded freedom inside a particular state. The central design question asks which decisions belong to code and which decisions genuinely need model judgment.
+
+## Control Ownership Defines the Design
+
+<!-- section-summary: Workflow and agent architecture is mainly a decision about who chooses the next transition, who may create effects, and who decides that the run is finished. -->
+
+The word **autonomy** can sound as though an entire application is either autonomous or controlled. Real systems divide control at a much finer level.
+
+A model may choose the next document to inspect while code fixes the surrounding process. It may draft a refund recommendation while policy code decides eligibility. It may propose a deployment rollback while an operator approves the exact version and environment. Each choice has its own owner.
+
+Four questions reveal that ownership:
+
+1. Who chooses the next step?
+2. Who decides which tools are available?
+3. Who authorizes an external effect?
+4. Who decides that the work is complete?
+
+In a deterministic workflow, code answers most of these questions. In a bounded agent loop, the model answers part of the first question from a controlled set of options. The orchestrator still answers the other three.
 
 ```mermaid
-flowchart LR
-    A["One model call"] --> B["Augmented call with retrieval or tools"]
-    B --> C["Fixed model workflow"]
-    C --> D["Router, parallel workers, or evaluator loop"]
-    D --> E["Bounded agent loop"]
-    E --> F["Multi-agent coordination"]
+flowchart TD
+    A["Application receives a task"] --> B{"Who chooses the next step?"}
+    B -->|"Code chooses"| C["Deterministic workflow"]
+    B -->|"Model proposes within limits"| D["Bounded agent loop"]
+    C --> E["Software validates transitions and effects"]
+    D --> E
+    E --> F{"Who authorizes the effect?"}
+    F -->|"Policy or human approval"| G["Trusted runtime executes"]
+    F -->|"Denied or needs review"| H["Pause, reject, or escalate"]
+
+    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef choice fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef code fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A input
+    class B,F choice
+    class C,E,G code
+    class D model
+    class H stop
 ```
 
-Move right only when evaluation shows the simpler pattern cannot meet the task. Extra calls add latency, cost, state, failure paths, and harder evaluation.
+Tool count and autonomy measure different things. A fixed workflow can call many tools in a predefined order. An agent may have only two read tools yet choose between them repeatedly. Autonomy concerns decision ownership.
 
-| Pattern | Control owner | Good fit |
-| --- | --- | --- |
-| Single augmented call | application selects context and tools | one bounded decision or draft |
-| Prompt chain | code fixes the sequence | known stages with validation between them |
-| Router | rules or classifier selects a path | distinct task families or risk classes |
-| Parallel workers | code fans out and combines | independent subtasks or evidence sources |
-| Evaluator–optimizer | code controls a bounded critique loop | measurable refinement with a clear stop rule |
-| Agent loop | model chooses next tool or action proposal | path depends on observations discovered during work |
-| Multi-agent system | coordinator and specialists share work | distinct ownership or context boundaries justify separation |
+The safest place for model judgment is usually a reversible choice with observable feedback. Searching another log source is reversible and produces evidence. Sending money or deleting a resource has a lasting effect and deserves deterministic policy, explicit authorization, and strong recovery controls.
 
-Harbor Mutual can use a fixed workflow for claim intake, a router for claim type, parallel workers to extract independent documents, and a bounded agent loop for evidence investigation. Final coverage and payment remain governed business decisions.
+## Use the Lowest Sufficient Degree of Autonomy
 
-## Workflows Put Business State On Rails
-<!-- section-summary: A workflow defines durable states, permitted transitions, evidence, deadlines, and effects so the process can be inspected and resumed. -->
+<!-- section-summary: LLM application designs progress from a single bounded call to workflows, agent loops, orchestration, and multi-agent systems as the task requires more adaptive control. -->
 
-Before adding an agent, draw the business process. For a storm claim:
+More autonomy creates more possible paths through the system. That can solve tasks whose steps cannot be predicted in advance. It also raises latency, cost, operational state, and the number of behaviours that evaluation must cover.
+
+The practical progression has five levels.
+
+### A single model call handles one bounded judgment
+
+Use one call for a self-contained classification, extraction, rewrite, summary, or structured decision. Application code prepares the context and consumes the output. For example, a help-desk service can ask a model to classify one ticket into a small set of queues, validate the structured result, and route it.
+
+A retrieved context can still belong to one bounded model call. Code runs a known search, attaches the results, and sends the prepared context to the model. The model makes one bounded judgment.
+
+### A deterministic workflow handles a known sequence
+
+Use a workflow if the stages and legal transitions are known. A document process might validate the upload, extract fields, check them against a database, request review, and publish the approved record. Models can perform the language-heavy steps while code owns the sequence.
+
+Routing, parallel workers, prompt chains, and evaluator loops can all remain deterministic workflows. Code decides which branches exist, how outputs join, and how many refinement rounds are allowed.
+
+### A bounded agent loop handles an unknown path
+
+Use a model-directed loop if the next useful action depends on evidence discovered during the run. During incident investigation, the first query may reveal that the failure is isolated to one region. The agent can choose a regional log tool next instead of following a fixed global checklist.
+
+The loop must operate inside a defined tool set, state, budget, and stop policy. “Keep working until solved” gives the system no dependable operating boundary.
+
+### An orchestrator operates the run
+
+The orchestrator is software around the workflow or agent. It assembles context, validates actions, executes tools, records checkpoints, enforces limits, pauses for approval, and handles recovery. No additional model is implied by this operating layer.
+
+### Multiple agents serve real separation
+
+Several agents are justified by distinct permissions, context boundaries, owners, or independently verifiable parallel work. Prompt titles such as “planner,” “researcher,” and “writer” provide no production boundary by themselves.
+
+```mermaid
+flowchart TD
+    A["One bounded judgment"] --> B["Single model call"]
+    B --> C{"Are the stages known?"}
+    C -->|"Yes"| D["Deterministic workflow"]
+    C -->|"No"| E{"Does evidence determine the next action?"}
+    E -->|"Yes"| F["Bounded agent loop"]
+    E -->|"No"| G["Redesign the task or inputs"]
+    D --> H["Orchestrator supplies lifecycle controls"]
+    F --> H
+    H --> I{"Do trust, ownership, or context boundaries require specialists?"}
+    I -->|"Yes"| J["Multi-agent design"]
+    I -->|"No"| K["Keep one workflow or agent"]
+
+    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef simple fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef adaptive fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,D simple
+    class C,E,I question
+    class F,J adaptive
+    class H,K control
+    class G stop
+```
+
+Each step up this progression needs evaluation evidence. If one structured call meets the quality target, a loop adds operating cost without adding product value. If a deterministic workflow repeatedly fails because the required investigation path differs across cases, a bounded agent may be justified.
+
+## Deterministic Workflows Keep Stable Paths in Code
+
+<!-- section-summary: A deterministic workflow defines business states and legal transitions in software while models perform bounded language tasks inside individual steps. -->
+
+A **deterministic workflow** is a process whose possible paths are defined before the run starts. Inputs can still change the chosen branch. The key point is that application code owns the branch logic.
+
+Consider a document-publishing process. The service accepts a file, checks its type and size, extracts structured metadata, validates identifiers, requests human review, and publishes the approved record. A model may extract the title and summary. Code checks the schema, resolves the identifier, and moves the record into review.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Submitted
-    Submitted --> PolicyVerified
-    PolicyVerified --> EvidenceReview
-    EvidenceReview --> WaitingForCustomer: required evidence missing
-    WaitingForCustomer --> EvidenceReview: documents received
-    EvidenceReview --> AdjusterReview: evidence packet complete
-    AdjusterReview --> Approved
-    AdjusterReview --> Denied
-    Approved --> [*]
-    Denied --> [*]
+    [*] --> UploadReceived
+    UploadReceived --> Rejected: file policy fails
+    UploadReceived --> ExtractMetadata: file accepted
+    ExtractMetadata --> ValidateMetadata: structured result produced
+    ValidateMetadata --> ExtractMetadata: correctable contract error
+    ValidateMetadata --> HumanReview: checks pass
+    HumanReview --> Published: reviewer approves
+    HumanReview --> RevisionRequired: reviewer requests changes
+    RevisionRequired --> ExtractMetadata: revised file arrives
+    Published --> [*]
+    Rejected --> [*]
 ```
 
-Each transition should name its preconditions, inputs, owner, timeout, retry policy, effects, and audit evidence. This is stronger than a transcript saying “the agent moved to review.” The workflow store knows the current state and which transitions are legal.
+Every state should have a plain meaning. `HumanReview` means the machine checks have passed and a named reviewer owns the next decision. `Published` means the publishing effect completed and its identifier was recorded. Business state carries these meanings independently of the wording in a model transcript.
 
-Models can participate in nodes without owning the graph. A model may classify documents or propose that evidence is missing. Application code checks the proposal against requirements and changes durable state. Human approval can interrupt the graph and resume it later from a checkpoint.
+Stable rules stay in ordinary code. File limits, required approvals, monetary thresholds, date comparisons, and permission checks are deterministic decisions. Code gives those rules repeatable behaviour and focused tests.
 
-Use ordinary code for deterministic checks. If policy dates are structured fields, compare dates in code. If a claim over a threshold requires licensed review, encode that policy. Asking a model to rediscover a stable rule on every run increases variability without adding judgment.
+Model calls fit inside workflow nodes for tasks that require language or visual judgment. The node should have a typed input and output, a timeout, a failure classification, and a clear transition for unusable results. A model result proposes evidence for the next state; the workflow runtime commits the state transition.
 
-## An Agent Loop Is Observe, Decide, Act, Repeat
-<!-- section-summary: An agent loop repeatedly gives the model current observations and tools, validates its proposal, executes one bounded action, and returns the result until a stop condition. -->
+This pattern provides strong operational visibility. A support engineer can see that a record is waiting in `HumanReview`, identify its owner, inspect the artifact that entered the state, and apply a deadline or escalation. A chat transcript alone lacks that lifecycle.
 
-The basic loop is small:
+## A Bounded Agent Loop Handles Adaptive Work
+
+<!-- section-summary: A bounded agent loop lets the model choose among permitted next actions using environmental feedback, while the runtime validates each proposal and enforces completion limits. -->
+
+An **agent loop** repeats a small cycle: observe the current situation, decide on a next action, perform that action through trusted software, and add the result to the next observation. The model directs the investigation because each tool result can change what should happen next.
+
+Suppose an operations assistant investigates an API latency alert. The assistant first reads service metrics. A regional spike may lead it to deployment history for that region. A database saturation signal may lead it to query traces for slow calls. The useful path depends on evidence that was unavailable at the start.
 
 ```mermaid
-flowchart LR
-    O["Observe goal, state, and recent results"] --> M["Model proposes answer, tool, handoff, or stop"]
-    M --> V{"Runtime validates policy and schema"}
-    V -->|Reject| F["Return typed feedback"]
-    F --> O
-    V -->|Approve| X["Execute bounded action"]
-    X --> C["Checkpoint result and effect"]
-    C --> D{"Done, budget exhausted, or interrupted?"}
-    D -->|Continue| O
-    D -->|Stop| R["Return outcome or escalation"]
+flowchart TD
+    A["Observe goal, state, and recent evidence"] --> B["Model proposes an answer, tool call, or escalation"]
+    B --> C{"Runtime accepts the proposal?"}
+    C -->|"No"| D["Return a typed policy or validation result"]
+    D --> A
+    C -->|"Yes"| E["Execute one bounded action"]
+    E --> F["Record result and update checkpoint"]
+    F --> G{"Completion or stop condition reached?"}
+    G -->|"Continue"| A
+    G -->|"Complete"| H["Return validated outcome"]
+    G -->|"Limit or blocker"| I["Return partial result or escalation"]
+
+    classDef observe fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef action fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,D,F observe
+    class B model
+    class C,G gate
+    class E,H action
+    class I stop
 ```
 
-For Harbor Mutual, the agent sees the evidence-review objective, current document inventory, relevant policy references, and a small tool set. It may open the contractor estimate, search an endorsement, or request roof photos. Each tool returns a typed result. The runtime enforces authorization, idempotency, timeouts, and budgets.
+The observation should contain the task goal, current workflow state, recent evidence, remaining budget, and tools permitted for this step. Dumping the entire run history into every turn increases cost and can bury the facts that matter. The orchestrator should assemble a step-specific view.
 
-The loop alone is not a production architecture. It does not provide durable state after a crash, reconcile a tool call whose outcome is unknown, bind an approval to an exact proposal, prevent duplicate effects, or explain why a run stopped. Those responsibilities belong to the surrounding **orchestrator** or **agent harness**.
+The model produces a **proposal**. A tool call sends a request to trusted runtime code and provides no direct access to the outside world. The runtime validates the schema, caller identity, workflow state, business rules, and approval status before execution.
 
-## The Orchestrator Owns Lifecycle And Authority
-<!-- section-summary: The orchestrator assembles context, invokes models, validates actions, executes tools, checkpoints progress, enforces budgets, handles interruptions, and records traces. -->
+Tool results provide environmental feedback. A typed result such as `dependency_unavailable`, `permission_denied`, or `record_not_found` supports a better next decision than an unstructured error string. The loop may choose another source after a missing record, wait after a dependency failure, or escalate after a permission denial.
 
-The orchestrator is the control layer around the model. It should own:
+Completion also needs a contract. The model can propose that it is done, while deterministic validation checks every required field and resolves the cited evidence. Domain checks confirm that the proposed outcome makes sense for the current state. An incident report, for example, may require a verified affected service and time window. It can finish only after the report also includes evidence links and a safe next action.
 
-- model and prompt selection;
-- step-specific context assembly;
-- tool availability, schemas, and permissions;
-- durable run state and checkpoints;
-- effect IDs and reconciliation;
-- retry, timeout, cancellation, and concurrency;
-- token, tool, time, and cost budgets;
-- human approval and resumption;
-- traces, audit, and final outcome.
+## An Agent Loop Needs an Orchestrator
 
-Frameworks can implement this layer. OpenAI Agents SDK provides agents, tools, handoffs, guardrails, sessions, and tracing. LangGraph provides graph state, checkpoints, interrupts, and durable execution. Other products emphasize managed workflows, multi-agent coordination, or visual design. The framework does not choose the business authority model; it helps implement it.
+<!-- section-summary: The basic model-tool loop lacks durable lifecycle, effect reconciliation, approvals, budgets, and recovery, so production execution needs a software control layer around it. -->
 
-A run contract can express the boundary without embedding framework code in the explanation:
+The loop explains how a model can make progress. Process crashes, day-long approval waits, and uncertain external writes leave lifecycle questions for the surrounding runtime.
+
+Consider an agent that books an appointment. The tool sends the booking request, and the provider creates the appointment. The worker crashes before saving the success result. After restart, a transcript-based loop sees no success message and may send the same request again.
+
+```mermaid
+sequenceDiagram
+    participant M as Model loop
+    participant R as Runtime
+    participant P as Booking provider
+    participant S as Durable state
+
+    M->>R: Propose booking with effect_id
+    R->>P: Create appointment
+    P-->>R: Appointment created
+    R--xS: Worker crashes before checkpoint
+    Note over R,S: Outcome is unknown to the resumed run
+    R->>P: Query by effect_id
+    P-->>R: Return existing appointment
+    R->>S: Record reconciled result
+    S-->>M: Continue with one confirmed effect
+```
+
+The missing capability is **reconciliation**: checking the authoritative system to discover whether an uncertain effect already happened. Reconciliation requires a durable effect identity, a place to store uncertain state, and code that runs before any replay.
+
+The same gap appears with approvals. A chat question such as “Is this okay?” leaves the scope ambiguous. Production approval identifies the exact operation and target resource. It records the values that determine impact, the approver’s identity, the decision, and the expiry. A changed proposal requires a new decision.
+
+Budgets also live outside the loop. A deadline limits elapsed time. Turn and tool-call limits bound repeated work, while token and cost ceilings control consumption.
+
+The normal terminal state is `completed`. Runs can instead end as `needs_input`, `escalated`, `cancelled`, or `budget_exhausted`, and each state records its specific reason.
+
+These responsibilities belong to the **orchestrator**, sometimes called the agent runtime or harness. It turns a sequence of model turns into one governable production run.
+
+## The Orchestrator Owns Lifecycle and Authority
+
+<!-- section-summary: The orchestrator is trusted software that assembles context, controls transitions and tools, enforces authority and budgets, checkpoints progress, and records the run outcome. -->
+
+An **orchestrator** is the software control plane around model calls. In essence, it decides what the model is allowed to see, choose, and affect at each point in the run. This operating layer is trusted application software.
+
+Its first responsibility is **context assembly**. It selects the current objective, trusted application facts, recent evidence, relevant instructions, and permitted tool definitions. This context should come from governed sources and the current workflow state.
+
+Its second responsibility is **transition control**. It checks that the proposed next step is legal from the current state. An agent investigating a failed deployment may read logs and propose a rollback. It cannot move the deployment record to `rolled_back` until trusted execution reports success.
+
+Its third responsibility is **authority**. The orchestrator derives user, tenant, role, and resource permissions from authenticated runtime context. Model arguments cannot grant permission. High-impact operations can interrupt the run for approval.
+
+Its fourth responsibility is **operations**. It enforces deadlines, retries, concurrency, cancellation, tool-call limits, token limits, and cost limits. It stores checkpoints and creates traces that connect model calls, tool calls, approvals, and external effects.
+
+```mermaid
+flowchart TD
+    A["User task and authenticated context"] --> B["Orchestrator"]
+    B --> C["Assemble step-specific context"]
+    C --> D["Model proposes next action"]
+    D --> E["Validate transition, tool schema, policy, and budget"]
+    E --> F{"Approval required?"}
+    F -->|"Yes"| G["Persist interrupt and wait"]
+    F -->|"No"| H["Execute with server-held credentials"]
+    G --> H
+    H --> I["Checkpoint evidence, effect state, and remaining budget"]
+    I --> J{"Continue, complete, or escalate?"}
+    J -->|"Continue"| C
+    J -->|"Finish"| K["Persist final outcome and trace"]
+
+    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef interrupt fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A input
+    class B,C,E,H,I,K control
+    class D model
+    class F,J gate
+    class G interrupt
+```
+
+A concrete run policy keeps the boundary reviewable:
 
 ```yaml
-workflow: storm-claim-evidence-review-v6
-agent_step:
-  objective: produce a cited evidence-gap report
-  allowed_tools: [open_claim_document, search_policy, request_document]
-  forbidden_actions: [approve_claim, deny_claim, issue_payment]
-budgets:
-  model_steps: 8
+run_type: incident-investigation.v3
+objective: produce a cited diagnosis or an explicit escalation
+allowed_tools:
+  - read_service_metrics
+  - search_deployment_history
+  - query_trace_summary
+forbidden_effects:
+  - change_production
+  - rotate_credentials
+limits:
+  model_turns: 8
   tool_calls: 12
-  wall_time: 5m
-interrupts:
-  - customer_input_required
-  - licensed_adjuster_approval
+  deadline_seconds: 240
+  cost_usd: 1.50
 completion:
-  schema: evidence-gap-report-v3
-  required_citations: true
+  output_schema: incident-diagnosis.v2
+  required_evidence_links: 2
 ```
 
-This contract makes clear what the agent may decide and which outcomes the workflow owns.
+This is application policy rather than syntax from a particular framework. A production service can store it with the run version, validate it during deployment, and include its identifier in traces. The policy makes autonomy concrete: the agent may investigate and diagnose; production changes remain outside its authority.
 
-## Design the Run as Explicit Transitions
+## Durable State and Checkpoints Preserve Progress
 
-<!-- section-summary: A durable agent run moves through named states with allowed transitions, entry evidence, exit evidence, and an owner for every pause or failure. -->
+<!-- section-summary: Durable typed state records business progress, evidence, effects, approvals, and remaining limits so another worker can resume the run safely. -->
 
-The orchestrator needs more than a loop counter. It needs a **state machine**, which is a set of named run states and the transitions allowed between them. The state machine keeps business progress separate from the model’s narration. A model may say “the report is complete,” while the workflow stays in `validate_report` until deterministic checks pass.
+**State** is the information the system needs to continue correctly. **Durable state** survives process restarts and long waits. A **checkpoint** is a persisted snapshot of that state at a meaningful point in the run.
 
-For the claim review, a useful state sequence could be `collect_evidence`, `identify_gaps`, `wait_for_customer`, `draft_report`, `validate_report`, and `licensed_review`. Each state defines four things:
+Conversation history is one part of state. It records what was said. Durable workflow state separately records the committed business transition, uncertain effects, pending approvals, and remaining budget.
 
-- the evidence required to enter;
-- the decisions the agent may make there;
-- the tools and effects available there;
-- the conditions that permit each exit.
+A useful checkpoint can include:
 
-The diagram makes recovery paths visible alongside the ordinary path:
+- the run ID and workflow version;
+- the active state and permitted next transitions;
+- trusted input and artifact identifiers;
+- accepted evidence and validation results;
+- completed, rejected, pending, and uncertain effects;
+- pending approval or external input;
+- remaining time, turn, tool, token, and cost budgets;
+- the prompt, model, tool-contract, and policy versions used.
+
+Domain systems remain authoritative for committed facts. A checkpoint may record that appointment `apt_4821` was confirmed, but the booking service owns the appointment itself. Resume logic can verify the reference instead of trusting a copied summary.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CollectEvidence
-    CollectEvidence --> IdentifyGaps: required documents loaded
-    CollectEvidence --> WaitForDependency: source unavailable
-    IdentifyGaps --> WaitForCustomer: material evidence missing
-    IdentifyGaps --> DraftReport: evidence sufficient
-    WaitForCustomer --> CollectEvidence: new document received
-    DraftReport --> ValidateReport: structured draft saved
-    ValidateReport --> DraftReport: correctable validation failure
-    ValidateReport --> LicensedReview: checks pass
-    LicensedReview --> Completed: reviewer accepts
-    LicensedReview --> DraftReport: revision requested
-    WaitForDependency --> CollectEvidence: dependency restored
-    WaitForDependency --> Escalated: deadline exceeded
+    [*] --> GatherEvidence
+    GatherEvidence --> Checkpointed: evidence saved
+    Checkpointed --> AwaitApproval: proposed effect needs review
+    AwaitApproval --> ExecuteEffect: exact proposal approved
+    AwaitApproval --> Cancelled: rejected or expired
+    ExecuteEffect --> Reconcile: response lost or timed out
+    ExecuteEffect --> ValidateOutcome: confirmed result
+    Reconcile --> ValidateOutcome: existing effect found
+    Reconcile --> ExecuteEffect: authoritative system confirms absence
+    ValidateOutcome --> Completed: outcome checks pass
+    ValidateOutcome --> GatherEvidence: more work required
 ```
 
-A transition should store the fact that justified it. `DraftReport -> ValidateReport` might record the artifact ID and schema version. `WaitForCustomer -> CollectEvidence` might record the uploaded document ID. `LicensedReview -> Completed` should record the reviewer, approval scope, and final artifact digest. These facts let another worker resume without asking the model to reconstruct progress from prose.
+Transitions should store the evidence that justified them. `AwaitApproval -> ExecuteEffect` records the approver, decision, proposal digest, and expiry. `Reconcile -> ValidateOutcome` records the authoritative lookup result. Another worker can then resume from facts instead of asking the model to reconstruct the run from prose.
 
-The state machine also limits autonomy in a precise way. During `collect_evidence`, the agent may read approved claim documents. During `wait_for_customer`, it should not continue generating speculative conclusions. During `licensed_review`, it has no authority to mark the claim completed. Tool availability follows state and identity rather than a permanent list attached to an agent persona.
+LangGraph implements thread-scoped checkpoints through a checkpointer. Its production documentation recommends a durable backend such as PostgreSQL rather than an in-memory saver. Interrupts use the checkpoint plus a `thread_id` to pause and resume a graph:
 
-## Give Every Failure an Owner and Recovery Rule
+```python
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command, interrupt
 
-<!-- section-summary: Model, tool, state, policy, and dependency failures require different recovery actions, so the orchestrator classifies them before retrying. -->
+def approval_node(state):
+    decision = interrupt({
+        "proposal_id": state["proposal_id"],
+        "summary": state["proposal_summary"],
+    })
+    return {"approval": decision}
 
-Retries are safe only when the failed operation and its effects are understood. A transient model timeout before any output may allow another attempt. A malformed structured result may allow one correction attempt with the validation error. A policy denial should stop that path. A tool timeout after an external write requires reconciliation because the effect may already exist.
+with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
+    checkpointer.setup()
+    graph = builder.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": run_id}}
 
-Use a small failure taxonomy:
+    graph.invoke(initial_state, config=config)
+    graph.invoke(Command(resume={"approved": True}), config=config)
+```
 
-| Failure class | Example | Orchestrator response |
-| --- | --- | --- |
-| model transport | request timed out before a response | bounded retry or approved route fallback |
-| model behaviour | unsupported claim or invalid plan | correction step, stronger route, or review |
-| tool input | missing document identifier | return typed error to the decision step |
-| tool outcome unknown | booking request lost its response | reconcile by effect ID before any replay |
-| policy | caller lacks permission | reject or request an authorized handoff |
-| dependency | evidence store unavailable | durable wait, deadline, and escalation |
-| budget | step or cost limit reached | save state and return partial or escalated outcome |
+Run database setup and migrations during deployment initialization. The example includes that initialization to keep the snippet complete. A durable pointer identifies the checkpoint, the interrupt carries JSON-serializable review data, and the resume command continues the same thread.
 
-Each retry consumes the run’s shared deadline and budget. If the model layer retries three times and the tool adapter retries three times, one decision can create nine downstream attempts. Put retry ownership at one clear layer and record every attempt under the same effect and trace identity.
+Long-running state also needs a change policy. A checkpoint created under `workflow.v3` may not fit `workflow.v4`. Teams can keep older workers for active runs, migrate compatible state, or route resumed work through an explicit upgrade transition. Silent interpretation by new code is risky.
 
-Recovery paths belong in evaluation. Crash a worker after a tool succeeds and before its result is checkpointed. Resume a run after an approval expires. Deliver the same event twice. Hold a dependency beyond the deadline. These tests show whether the orchestration design preserves one coherent business outcome under failures, which is the reason a production system needs more than the basic agent loop.
+## Tools, Effects, Approvals, and Interrupts Need Separate Controls
 
-## Tools Turn Model Decisions Into Environmental Feedback
-<!-- section-summary: Tools provide observations or side effects through narrow contracts, while the runtime—not the model—owns authentication, validation, idempotency, and execution. -->
+<!-- section-summary: Tool calls are model proposals; trusted runtime code validates them, obtains approval for sensitive effects, and records the authoritative result. -->
 
-A model proposes a tool call from a schema. The runtime validates structure, business rules, caller permissions, workflow state, and approval. It derives trusted context such as tenant and effect identity rather than accepting them from model arguments.
+A **tool** gives the model a named way to request information or propose an action. A tool schema helps the model produce valid arguments. The runtime still owns authentication, authorization, current-state checks, credentials, idempotency, and execution.
 
-Read tools should return concise, source-labelled data. Write tools need idempotency keys and clear result states: committed, rejected, pending, not found, or unknown. A timeout does not prove that a write failed. Query the authoritative service before retrying.
+Read tools and write tools have different risk. A read tool retrieves evidence and should return source-labelled, bounded data. A write tool changes the environment and needs a durable effect identity plus explicit result states such as `committed`, `rejected`, `pending`, and `unknown`.
 
-Tool results enter the observation stream for the next step and stay outside permanent memory unless a governed write policy selects them. Large results should be paged or summarized with references. Tool errors should be typed so the agent can distinguish a user-fixable input problem from a transient dependency failure or a policy denial.
+An **interrupt** pauses a run and persists what it is waiting for. Human approval is one kind of interrupt. Missing customer input, a dependency outage, or a scheduled deadline can use the same lifecycle idea.
 
-High-impact tools often need approval. Bind the approval to a digest of the exact proposal, resource, amount, and expiry. If any material field changes, request approval again.
+```mermaid
+sequenceDiagram
+    participant M as Model
+    participant O as Orchestrator
+    participant A as Approver
+    participant T as Trusted service
+    participant S as Durable state
 
-## State Makes The System Resumable
-<!-- section-summary: Durable typed state records workflow progress, completed effects, pending approvals, budgets, and next transitions; conversation history alone cannot safely resume work. -->
+    M->>O: Propose effect and arguments
+    O->>O: Validate schema, identity, policy, and current state
+    O->>S: Save proposal digest and interrupt
+    O-->>A: Request approval for exact effect
+    A-->>O: Approve, reject, or let expire
+    O->>O: Revalidate policy and proposal digest
+    O->>T: Execute with idempotency key
+    T-->>O: Committed, rejected, pending, or unknown
+    O->>S: Save authoritative result
+    O-->>M: Return typed observation
+```
 
-An agent transcript records communication. It is weak as the only state store. If the system crashes after a repair appointment is booked but before the model sees the result, replaying the transcript may create another booking.
+Approval should bind to the exact proposal. A refund approval can include the order, amount, currency, destination, policy version, and expiry. A material change to any field creates a new proposal and a new approval request.
 
-Typed state records the active workflow node, input and artifact identities, completed and uncertain effects, checkpoint version, pending interrupt, remaining budgets, and next allowed transition. Domain services remain authoritative for committed business facts.
+Revalidation after the pause matters because the world may change while a person decides. The order could already be refunded, the operator’s role could change, or the approval could expire. The runtime checks current state immediately before execution.
 
-Checkpoint after meaningful steps and external effects. On resume, load the latest checkpoint, reconcile uncertain operations, verify that the workflow version can interpret the state, and continue only through a permitted transition. Long-running work may require state migration or pinning to an older workflow definition.
+The OpenAI Agents SDK exposes tool approvals as interruptions. A paused result can be converted to `RunState`, serialized for a later process, approved or rejected, and passed back to the runner. LangGraph interrupts persist graph state through a checkpointer and resume with a command value. Both mechanisms help implement pause and resume; application code still defines which actions need approval and what evidence the approver sees.
 
-## Multi-Agent Design Needs A Real Boundary
-<!-- section-summary: Specialists are justified by capability, context, trust, or ownership boundaries; otherwise one agent with tools is often simpler. -->
+Side effects around checkpoints require idempotency. LangGraph documents that a node can re-run from its start after an interrupt, so an effect before that interrupt may execute again. Separate effectful work into a controlled node or operation, supply an idempotency key, and reconcile uncertain outcomes.
 
-Do not create agents merely to give each prompt a job title. Separate agents when they require different tools or permissions, different context and retention, independent ownership, parallel work, or a meaningful handoff of responsibility.
+## Budgets and Stop Conditions Bound Autonomy
 
-A coordinator can keep control and call specialists as tools. A handoff can transfer active control. A graph can join structured state from parallel branches. Remote agents may use A2A when they are independently operated. Each pattern needs a typed input, output, failure policy, and merge rule.
+<!-- section-summary: A production agent receives explicit limits on turns, tools, time, tokens, cost, and repeated behaviour, plus defined outcomes for completion and escalation. -->
 
-Multi-agent systems add routing errors, duplicated context, conflicting results, larger cost, and harder traces. Compare them with a single capable agent and a well-designed tool set on the same tasks.
+A model-directed loop needs a bounded operating envelope. The model should know the remaining allowance, while trusted software performs the accounting.
 
-## Evaluate Trajectories And Outcomes
-<!-- section-summary: Agent evaluation measures final task success and the path taken: tool choice, evidence, policy, effects, retries, budgets, and escalation. -->
+Use several budgets because no single limit captures the whole risk. A run can stay under eight turns and still issue expensive tools in parallel. It can stay under a token limit and still wait too long for a user. Common limits cover model turns, tool calls, wall-clock time, tokens, cost, parallel actions, and effect count.
 
-Single-turn answer grading is insufficient. Build realistic environments where tools return controlled state and side effects can be checked. Grade the final artifact, domain state, required evidence, forbidden actions, effect count, approval use, latency, cost, and whether escalation occurred when it should.
+The OpenAI Agents SDK runner supports a maximum turn count. Application code should add the other budgets around tool adapters and provider usage. Graph and workflow runtimes can also place limits at particular states, branches, or activities.
 
-Include missing data, ambiguous requests, tool timeouts, duplicate responses, prompt injection in documents, exhausted budgets, interrupted runs, stale approvals, and impossible tasks. A strong agent should sometimes ask, abstain, or hand off.
+Stop conditions need business meaning:
 
-Trace every model, retrieval, tool, guardrail, checkpoint, handoff, and approval step under one run. Turn production failures into replay cases. Release changes to prompts, tools, models, graphs, or routing as versioned system bundles with offline gates, shadow evaluation, canaries, and rollback.
+- **Completed:** the output contract and outcome checks passed.
+- **Needs input:** a named person or system must provide specific information.
+- **Escalated:** the run found a risk, permission boundary, or ambiguous result that requires another owner.
+- **Cancelled:** a user or operator intentionally ended the run.
+- **Budget exhausted:** the run saved a partial result and the exact limit that stopped it.
+- **Failed:** a permanent technical error prevented a valid outcome.
 
-The durable rule is: workflows provide the rails, agent loops provide bounded adaptive judgment, and the orchestrator connects them through state, tools, authority, and evidence. Start simple and add autonomy only when it improves measured task outcomes enough to justify the new operating surface.
+```mermaid
+flowchart TD
+    A["Agent completes one step"] --> B["Update turn, tool, token, time, and cost counters"]
+    B --> C{"Output contract satisfied?"}
+    C -->|"Yes"| D["Validate final outcome"]
+    C -->|"No"| E{"Input, approval, or dependency required?"}
+    E -->|"Yes"| F["Checkpoint and interrupt"]
+    E -->|"No"| G{"Any budget or repetition limit reached?"}
+    G -->|"No"| H["Continue with permitted next actions"]
+    G -->|"Yes"| I["Return partial result or escalation"]
+    D --> J["Complete"]
+
+    classDef step fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef continue fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B step
+    class C,E,G gate
+    class H continue
+    class D,J control
+    class F,I stop
+```
+
+Progress checks catch loops that simple turn counts miss. Repeating the same failed tool call with equivalent arguments, generating unchanged plans, or revisiting the same state without new evidence should trigger correction or escalation. The system should record the reason instead of silently presenting an unfinished answer as success.
+
+Budgets also affect product design. A three-minute interactive assistant and an overnight research run need different deadlines, interruption paths, and user expectations. Define those expectations before selecting a runtime.
+
+## Recovery and Reconciliation Protect One Business Outcome
+
+<!-- section-summary: Recovery classifies failures before retrying, and reconciliation checks authoritative systems so uncertain effects do not turn into duplicates. -->
+
+Recovery has two goals: continue safely after a technical failure and preserve one intended business outcome. The orchestrator first classifies the failed layer, then determines whether the last operation was read-only or may have changed an external system. That second question decides whether the next step is a retry, a correction, a durable wait, a policy stop, or reconciliation.
+
+A provider timeout before any model output is a transport failure. A bounded retry with backoff may be appropriate. An invalid structured result is a model-contract failure and may justify one correction attempt with the validation issues. A policy denial is a completed control decision. Another model call cannot grant the missing permission.
+
+Tool failures need more care. A read timeout can usually be retried under the shared deadline. A write timeout creates an **unknown outcome**: the request may have committed even though the response was lost.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Proposed
+    Proposed --> Rejected: validation or policy fails
+    Proposed --> Executing: effect authorized
+    Executing --> Committed: authoritative success
+    Executing --> Failed: authoritative failure
+    Executing --> Unknown: timeout or connection loss
+    Unknown --> Reconciling
+    Reconciling --> Committed: effect found by idempotency key
+    Reconciling --> Failed: authoritative rejection found
+    Reconciling --> Executing: confirmed absent and retry allowed
+    Reconciling --> Escalated: state cannot be established
+```
+
+An idempotency key gives the external service a stable identity for one intended effect. Reconciliation queries the service using that key or another governed identifier. The runtime retries the write only after the authoritative system confirms absence and policy still allows the effect.
+
+Retry ownership should sit at one clear layer. Three model retries wrapped around three tool-adapter retries can create nine attempts. The orchestrator owns the total attempt count and deadline, while lower layers expose their retry behaviour and return typed results.
+
+Durable workflow engines support this operating model. Temporal, for example, records workflow event history and replays deterministic workflow code after failures. External calls, database queries, and LLM invocations belong in Activities outside the replay path. Temporal recommends idempotent Activities because a failed Activity attempt can run again.
+
+Test recovery deliberately. Crash a worker after an effect commits and before the result checkpoint. Deliver the same event twice. Resume after an approval expires. Hold a dependency beyond the deadline. The expected result is one coherent business outcome with a trace that explains every attempt.
+
+## Current Runtimes Fit at Different Layers
+
+<!-- section-summary: Provider SDKs, agent SDKs, state-graph runtimes, and durable workflow engines solve different parts of the control stack and can be combined. -->
+
+A framework should match the control problem. No single product removes the need to define state, authority, effects, budgets, and outcomes.
+
+### Direct model APIs fit bounded calls and code-owned workflows
+
+Ordinary application code plus a provider SDK is often enough for one bounded transformation or a short sequence. For example, code can classify a request, validate the structured result, and select a known route. The application owns every transition and stores the required state. The team can inspect each prompt, response, and failure directly.
+
+### OpenAI Agents SDK fits model-tool loops
+
+The OpenAI Agents SDK provides a runner that repeatedly calls the model, executes tool calls, follows handoffs, and stops on final output or a maximum turn limit. It also provides tools, guardrails, sessions, tracing, and serializable run state for approval interruptions.
+
+This layer fits a bounded assistant or investigator whose model-directed turns need an SDK runtime. The surrounding application still owns domain state, business permissions, total budgets, effect reconciliation, and release policy. The SDK documentation also describes integrations with durable execution systems for runs that cross long waits or process restarts.
+
+### LangGraph fits explicit state graphs
+
+LangGraph is a low-level orchestration runtime for long-running, stateful agents. It mixes deterministic nodes with model-driven nodes, represents allowed transitions as a graph, and supports checkpoints and interrupts.
+
+This layer fits an application that needs visible branches, loops, resumable state, or human pauses inside an agentic process. A production deployment uses a durable checkpointer and designs nodes with replay and idempotency in mind.
+
+### Durable workflow engines fit long business lifecycles
+
+Temporal and managed cloud workflow services fit processes that may run for hours, days, or months; wait for events; survive worker restarts; enforce timers; and coordinate retries across services. They are especially valuable where the business process exists beyond one conversational turn.
+
+In a Temporal design, deterministic workflow code owns the business lifecycle. An Activity performs the LLM or agent run because model calls are non-deterministic external operations. Another Activity executes an external effect. The workflow records the results and waits for approvals or signals.
+
+```mermaid
+flowchart TD
+    A["Product or business process"] --> B["Durable workflow engine<br/>timers, events, long waits, recovery"]
+    B --> C["Agent orchestration layer<br/>graph state, checkpoints, interrupts"]
+    C --> D["Agent SDK or custom loop<br/>model turns, tools, handoffs"]
+    D --> E["Provider model API"]
+    C --> F["Trusted tool adapters"]
+    F --> G["Domain services and data"]
+    B --> H["Human approval and external events"]
+
+    classDef product fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef durable fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef agent fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef external fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A product
+    class B durable
+    class C,D,E agent
+    class F,G,H external
+```
+
+Most deployments use only the layers their requirements need. A short read-only assistant may need an agent SDK and an application database. A regulated process with week-long approvals may use a durable workflow engine around one or more agent steps. LangGraph can serve as the orchestration layer for explicit agent state, while Temporal owns the larger business lifecycle.
+
+Choose the smallest combination that meets the durability and control requirements. Evaluate failure recovery and operational visibility before committing to a framework, because abstraction alone does not supply a correct business model.
+
+## Multi-Agent Design Needs a Real Boundary
+
+<!-- section-summary: Multiple agents are justified by separate trust, context, ownership, or parallel-work boundaries, and each interaction needs a typed contract and merge policy. -->
+
+A multi-agent system contains more than one model-directed worker or specialist. The separation should correspond to something the production system actually needs.
+
+One specialist may require access to sensitive financial records while the coordinator sees only a redacted summary. Another may run in an isolated coding workspace. Two independent teams may own separate services and release schedules. Parallel specialists may inspect unrelated evidence sources whose results can be joined deterministically.
+
+These are real boundaries: permission, context, execution environment, ownership, or independent work.
+
+```mermaid
+flowchart TD
+    A["Proposed specialist"] --> B{"Different permission or trust boundary?"}
+    B -->|"Yes"| G["Separate agent with least-privilege tools"]
+    B -->|"No"| C{"Different context, retention, or owner?"}
+    C -->|"Yes"| G
+    C -->|"No"| D{"Independent parallel work with a defined merge?"}
+    D -->|"Yes"| G
+    D -->|"No"| E["Keep one agent and use a tool or workflow step"]
+    G --> H{"Who keeps active control?"}
+    H -->|"Coordinator"| I["Call specialist as a bounded tool"]
+    H -->|"Specialist"| J["Use an explicit handoff"]
+    I --> K["Validate typed result and merge"]
+    J --> K
+
+    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef separate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef simple fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A simple
+    class B,C,D,H question
+    class G,I,J separate
+    class E,K control
+```
+
+The OpenAI Agents SDK documents two common coordination patterns. In the manager pattern, a coordinator keeps the user-facing turn and calls a specialist as a tool. A handoff transfers active control to the selected specialist. Use the manager pattern for bounded assistance and synthesis. Use a handoff for a genuine transfer of interaction responsibility.
+
+Every specialist receives a typed input and returns a typed output. Its contract sets a timeout and budget, explains failure handling, and limits the context it may receive. Parallel results need a deterministic merge or a clear conflict route. A coordinator should not silently choose between contradictory high-risk findings.
+
+Multi-agent systems introduce routing errors, duplicated context, conflicting outputs, larger cost, and deeper traces. Compare the design against one capable agent with well-designed tools on the same evaluation set. Separate agents only if the boundary improves measured outcomes or enforces a necessary production constraint.
+
+## Evaluate Outcomes and Trajectories
+
+<!-- section-summary: Agent evaluation measures both the final business result and the sequence of tools, transitions, approvals, retries, and evidence used to reach it. -->
+
+A workflow can produce a polished final answer after taking an unsafe or wasteful path. It can also take a sensible path and escalate because the required evidence is genuinely missing. Evaluation therefore needs two views.
+
+**Outcome evaluation** checks what the system ultimately produced or changed. For an incident investigation, that includes the diagnosis, evidence links, affected service, recommended action, and final workflow state. For a tool-using process, it also checks the authoritative domain state and number of external effects.
+
+**Trajectory evaluation** checks the path. It asks whether the agent selected appropriate tools, respected permissions, used approval, avoided repeated calls, stayed within budgets, and escalated at the right point. OpenAI’s agent-evaluation guidance uses traces and graders for these workflow-level questions.
+
+```yaml
+case_id: regional-latency-with-missing-traces
+environment:
+  metrics: regional_latency_spike
+  trace_service: unavailable
+expected_outcomes:
+  - status: escalated
+  - status: needs_input
+forbidden_effects:
+  - change_production
+trajectory_checks:
+  max_tool_calls: 6
+  must_use: [read_service_metrics]
+  must_not_repeat_failed_call: query_trace_summary
+```
+
+The case permits more than one safe outcome because the missing trace service blocks a fully supported diagnosis. It still forbids a production change and limits repeated work.
+
+```mermaid
+flowchart TD
+    A["Realistic task and controlled environment"] --> B["Versioned workflow, model, tools, and policy"]
+    B --> C["Run with full trace and effect ledger"]
+    C --> D["Outcome graders"]
+    C --> E["Trajectory and policy graders"]
+    C --> F["Latency, token, tool, and cost metrics"]
+    D --> G["Slice report"]
+    E --> G
+    F --> G
+    G --> H{"Release criteria met?"}
+    H -->|"Yes"| I["Canary and monitor"]
+    H -->|"No"| J["Revise control, prompt, tool, model, or runtime"]
+
+    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef grade fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A input
+    class B,C run
+    class D,E,F,G grade
+    class H,I gate
+    class J stop
+```
+
+The evaluation environment should control tool results and inspect side effects. Include ambiguous tasks, missing data, hostile instructions inside retrieved documents, tool timeouts, duplicate responses, expired approvals, budget exhaustion, process crashes, and impossible goals.
+
+Trace model calls, retrieval, tool calls, guardrails, transitions, checkpoints, handoffs, approvals, and effects under one run ID. Keep sensitive content under an explicit retention policy. Production failures should become replay cases in the evaluation set.
+
+Release the full system bundle: model, prompts, tool schemas, orchestration graph, policies, and validators. Offline evaluation, shadow runs, canaries, and rollback protect the interactions among those components.
+
+## What to Carry Into Production
+
+<!-- section-summary: Production design gives models bounded adaptive judgment while trusted software owns state, authority, effects, recovery, budgets, and evaluation. -->
+
+Control ownership is the foundation of workflow and agent design. Use a single model call for one bounded judgment. Use a deterministic workflow for known states and transitions. Add a bounded agent loop for tasks whose next useful action depends on evidence discovered during execution.
+
+Place an orchestrator around every production loop. It assembles context, validates transitions, controls tools and effects, persists checkpoints, handles interrupts, accounts for budgets, reconciles uncertain outcomes, and records the final result.
+
+Use multiple agents for genuine trust, context, execution, ownership, or parallel-work boundaries. Select runtime layers according to the control problem: direct APIs for bounded calls, an agent SDK for model-tool turns, LangGraph for explicit stateful graphs, and durable workflow engines for long business lifecycles.
+
+Evaluate the business outcome and the trajectory that produced it. The final answer, external effects, evidence, approvals, retries, stops, latency, and cost all belong to the quality contract.
 
 ## References
 
 - [Anthropic: building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
-- [OpenAI Agents SDK orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
-- [OpenAI Agents SDK running agents](https://openai.github.io/openai-agents-python/running_agents/)
-- [OpenAI Agents SDK tools](https://openai.github.io/openai-agents-python/tools/)
+- [OpenAI Agents SDK: running agents](https://openai.github.io/openai-agents-python/running_agents/)
+- [OpenAI Agents SDK: agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/)
+- [OpenAI Agents SDK: human-in-the-loop](https://openai.github.io/openai-agents-python/human_in_the_loop/)
+- [OpenAI: evaluate agent workflows](https://developers.openai.com/api/docs/guides/agent-evals)
 - [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview)
 - [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
 - [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+- [Temporal workflow execution](https://docs.temporal.io/workflow-execution)
+- [Temporal workflow definitions and deterministic constraints](https://docs.temporal.io/workflow-definition)
+- [Temporal Activities](https://docs.temporal.io/activities)

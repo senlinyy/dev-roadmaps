@@ -10,6 +10,20 @@ aliases:
   - child-model-monitoring-03-silent-model-failure
 ---
 
+## Table of Contents
+
+1. [A Model Can Fail While the API Stays Healthy](#a-model-can-fail-while-the-api-stays-healthy)
+2. [Find the Boundary Where Reality Diverged](#find-the-boundary-where-reality-diverged)
+3. [One Decision Record Connects the Whole Path](#one-decision-record-connects-the-whole-path)
+4. [Use Early Signals Without Pretending They Are Final Answers](#use-early-signals-without-pretending-they-are-final-answers)
+5. [Combine Signals Around the Same Route and Time](#combine-signals-around-the-same-route-and-time)
+6. [The Monitor Also Needs a Health Check](#the-monitor-also-needs-a-health-check)
+7. [Write Alerts for the Decision That May Be Unsafe](#write-alerts-for-the-decision-that-may-be-unsafe)
+8. [Contain the First Broken Boundary](#contain-the-first-broken-boundary)
+9. [Choose Tools Around the Evidence You Need](#choose-tools-around-the-evidence-you-need)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
+
 ## A Model Can Fail While the API Stays Healthy
 <!-- section-summary: Silent failure happens when a model service keeps returning successful responses while the resulting decisions grow less useful or more harmful. -->
 
@@ -49,36 +63,36 @@ Consider a routing incident. A deployment reports model version 25 as healthy, w
 ## One Decision Record Connects the Whole Path
 <!-- section-summary: A decision record ties one request to the exact model, features, policy, action, and later outcome used during investigation. -->
 
-A **decision record** extends the prediction receipt from the first article. It tells the story of one production decision from request to action. This record lets an investigator move from a fleet-wide alert to representative cases without guessing which versions or fallbacks were involved.
+A **decision record** tells the story of one production decision from request to action. In ordinary terms, it is the case file for that decision: what the model returned, what the product did, and which operating conditions shaped the path. It lets an investigator move from a fleet-wide alert to representative cases without guessing which versions or fallbacks were involved.
 
-A compact record can contain:
+Stable prediction identity, reconciled record delivery, and propagated trace context provide the evidence foundation. Silent-failure response uses that foundation to locate the first broken boundary.
+
+For this investigation, the useful fields are the versions that actually executed, the output and action, input-freshness evidence, fallback state, route or region, and a trace reference when one was retained. Consider a delivery estimate of 34 minutes that became a 35-minute promise. The record also shows that the traffic feature was 22 minutes old and a traffic-cache timeout activated a fallback. Those facts point toward the input and dependency boundaries before the team changes the model.
+
+The corresponding decision record might contain:
 
 ```json
 {
-  "prediction_id": "pred-8f31",
-  "decision_time": "2026-07-18T09:42:00Z",
-  "model_version": "eta-model-24",
-  "feature_version": "delivery-features-19",
-  "policy_version": "promise-policy-7",
-  "prediction": 34,
-  "action": "promise-35-minutes",
-  "feature_age_seconds": 1320,
-  "fallback_reason": "traffic-cache-timeout",
-  "region": "west"
+  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
+  "trace_id": "9f8c4f0c9d9b47f5ad7c5f922cf176a3",
+  "model_version": "eta-v25",
+  "feature_set_version": "traffic-v19",
+  "policy_version": "promise-v6",
+  "route": "west",
+  "input_health": {"traffic_age_seconds": 1320},
+  "prediction": {"eta_minutes": 34},
+  "action": {"promised_minutes": 35},
+  "fallback": {"used": true, "reason": "traffic_cache_timeout"}
 }
 ```
 
-The record shows that the model predicted 34 minutes and the product promised 35. It also shows that the traffic feature was 22 minutes old and came through a fallback. A normal application log that records only the HTTP response would miss the most useful part of this explanation.
+This is a governed case record rather than a Prometheus series. The route and versions can appear as bounded metric dimensions, while the prediction ID and trace ID connect an authorized investigator to request-level evidence. A later delivery outcome joins to the same prediction ID and shows whether the fallback protected the promise.
 
-OpenTelemetry traces can carry bounded identity such as model, feature, and policy versions through the request path. Request-level IDs and full feature values belong in protected logs or inference tables. Prometheus holds low-cardinality aggregates by stable route or region. The warehouse or lakehouse keeps the decision records long enough to join delayed outcomes.
+The responder starts with the affected prediction IDs from a quality cohort or action-rate alert. A governed warehouse or inference-table query groups those records by model, feature, policy, fallback, and route. Representative trace IDs then reveal whether the suspected dependency or branch actually ran slowly. Aggregate Prometheus or cloud metrics show how widely the same condition affected the service. In other words, the record narrows the population, the trace explains selected paths, and the metrics size the incident.
 
-This separation keeps fast monitoring affordable and detailed evidence governed. It also lets the same `prediction_id` connect a trace, a decision record, a reviewer action, and a final outcome when an incident needs deeper analysis.
+If one region reports the old model version in its records, the team checks release routing and confirms the running artifact with a synthetic request. If many bad outcomes share a stale feature age and fallback while baseline and candidate models decline together, the team contains the feature path first. These are uses of existing evidence, rather than a second tracing or logging design.
 
-In practice, the application creates the ID before feature retrieval and carries it through the request context. OpenTelemetry propagation connects spans from the API, feature service, model server, and policy service. Each span records bounded attributes such as model route, artifact version, feature definition version, and fallback state. A separate asynchronous event contains the decision record and lands in protected storage. This design keeps the customer response independent from analytics availability while preserving one identity across both paths.
-
-Capture is verified through reconciliation. The service increments prediction and action counters, the event consumer counts unique decision records, and the warehouse checks duplicates and rejected schemas. A retry can safely write the same prediction twice because the curated table deduplicates by `prediction_id` and record version. A dead-letter queue retains malformed events, and its age and volume are monitored. These controls prevent an observability outage from quietly reducing the population used for model analysis.
-
-Attribute design matters for cost and privacy. Stable values such as `model_route=baseline` or `region=west` fit trace attributes and metric labels. Customer IDs, prediction IDs, free-form errors, and complete feature vectors have high cardinality or sensitive content, so they stay in governed logs and inference tables. An alert links to a filtered investigation view rather than copying raw customer evidence into a paging message.
+The monitoring feed still has to prove its own coverage before the team trusts this analysis. The responder checks the reconciliation and schema-health signals defined in Prediction Logging. A gap there moves the incident to the monitoring boundary and stops a weak dataset from justifying a rollback.
 
 ## Use Early Signals Without Pretending They Are Final Answers
 <!-- section-summary: Leading signals reveal broken assumptions quickly, while lagging outcomes show whether users and the product were actually harmed. -->
@@ -98,6 +112,8 @@ Signal selection starts from a failure the team could act on. A maximum feature 
 Thresholds come from contracts and healthy history. A hard safety invariant can page as soon as a sustained minimum volume crosses the limit. A noisy behavioural measure may require a longer window, a relative change against the approved route, and a minimum sample count. Teams replay proposed alerts over known healthy periods and previous incidents, then test their delivery. The goal is a rule that responds quickly enough for the consequence and quietly enough that responders still trust it.
 
 For example, a loan-decision system may send a case to manual review whenever a required income feature is older than its contract. That path does not wait for default outcomes. A recommendation system seeing a small score-distribution movement may open a ticket, compare segments, and wait for engagement outcomes. Both are monitoring responses; their urgency differs because the decisions and available containment differ.
+
+In the loan example, the inference service increments Prometheus counters for total decisions, stale required features, and manual-review actions by stable route and region. Alertmanager pages when the stale share breaches the reviewed contract and the review queue still has capacity. The service also writes the affected prediction IDs to a governed warehouse table. Weeks later, dbt builds the mature repayment cohort for those IDs and the quality job compares the fallback path with normal decisions. The fast stack activates a safe response; the delayed stack tests whether that response protected the product outcome.
 
 ![Timeline connecting leading signals at prediction time to lagging quality and harm signals after outcomes mature, with containment and recovery confirmation](/content-assets/articles/article-mlops-monitoring-silent-model-failure/signal-timeline.png)
 
@@ -151,6 +167,59 @@ High-volume systems often precompute expensive or repeated expressions as Promet
 
 **Monitoring coverage** asks whether the evidence pipeline can support the claims shown on the dashboard. It protects every other signal because a broken monitor can freeze an old healthy result while production continues to change.
 
+You can think of a green dashboard as a production claim with evidence requirements. The diagram separates the claim from the records and probes used to verify it:
+
+```mermaid
+requirementDiagram
+  accTitle: Evidence Required for a Live Health Claim
+  accDescr: Requirements and evidence used to prove that a monitoring dashboard describes live production
+  direction LR
+
+  requirement live_health_claim {
+    id: R1
+    text: Dashboard describes live production
+    risk: high
+    verifymethod: test
+  }
+
+  functionalRequirement complete_capture {
+    id: R1.1
+    text: Production decisions are captured completely
+    risk: high
+    verifymethod: analysis
+  }
+
+  functionalRequirement fresh_publication {
+    id: R1.2
+    text: Metrics and alerts are current
+    risk: high
+    verifymethod: test
+  }
+
+  element service_counter {
+    type: Independent aggregate
+    docref: Prediction service boundary
+  }
+
+  element decision_records {
+    type: Governed evidence table
+    docref: Durable prediction records
+  }
+
+  element synthetic_probe {
+    type: Controlled test record
+    docref: Monitoring path test
+  }
+
+  live_health_claim - contains -> complete_capture
+  live_health_claim - contains -> fresh_publication
+  service_counter - verifies -> complete_capture
+  decision_records - satisfies -> complete_capture
+  synthetic_probe - verifies -> fresh_publication
+```
+
+The service counter and decision table approach completeness from independent boundaries, so one broken consumer cannot declare itself complete. The synthetic probe checks a different property: whether known evidence can still cross validation, aggregation, dashboard, and notification steps. The health claim is withheld when either requirement fails, even if the last displayed model metric looks good.
+
 The first check compares eligible requests with captured prediction IDs over the same time window. The next check looks for duplicates, missing partitions, rejected schemas, and retention gaps in durable storage. Outcome jobs report mature predictions, joined labels, orphan labels, pending cases, and censoring. Metric jobs publish their last successful run, input window, code version, duration, and rejected rows.
 
 Publication and alert delivery need their own evidence. Every dashboard panel shows the source window or last computed time. A controlled record with a known stale feature should enter storage, increase the violation count, appear on the dashboard, and route a test notification. A small metric fixture checks maturity and denominator logic.
@@ -162,6 +231,12 @@ Teams usually give the monitoring pipeline its own service-level objectives. Exa
 Reconciliation happens between independent sources. API or model-server counters are compared with unique receipts in durable storage. Product action counts are compared with recorded actions. Source outcome counts are compared with mature joined labels. A large gap creates a monitoring incident even if the model metric itself appears stable. Using an independent count is important because a broken consumer can report both its own numerator and denominator as healthy.
 
 Synthetic probes exercise the path with controlled evidence. One record can contain a deliberately stale feature and an expected fallback. Another can represent a known mature outcome for a metric fixture. The probe should reach storage, validation results, the aggregate metric, dashboard, and notification receiver. Teams schedule this test and alert when any checkpoint fails, while clearly separating synthetic IDs from real quality cohorts.
+
+An Airflow monitoring workflow can publish `ml_monitor_last_success_timestamp_seconds` only after capture reconciliation, dbt validation, metric storage, and dashboard publication succeed. Prometheus compares that timestamp with the permitted delay and Alertmanager treats an overdue run as a monitoring incident. When a dbt relationship test fails, stored failure rows preserve the missing prediction IDs for repair. A scheduled synthetic record then confirms that the repaired job reaches the dashboard and the test receiver before the team marks current quality results available again.
+
+![Controlled path probes testing monitoring logic alongside independent production-count reconciliation and full recovery replay](/content-assets/articles/article-mlops-monitoring-silent-model-failure/monitoring-coverage-proof.png)
+
+*The controlled probes test path liveness and metric logic; independent count reconciliation tests production completeness. The chart is trustworthy only when both forms of evidence pass. A failure marks quality unavailable and keeps retraining and promotion frozen until repair and a full replay succeed.*
 
 Dashboards show data time as prominently as render time. “Updated at 10:02” is weak evidence if the underlying cohort ends three days earlier. A useful panel shows the production window, outcome maturity cutoff, last successful job, row coverage, and metric version. This lets a beginner and an incident commander see whether the chart describes current production or an old accepted result.
 
@@ -197,6 +272,8 @@ The platform owner then sends a synthetic request and a small canary through the
 
 Traffic returns in stages. The team first restores a low-risk segment, then expands while queue age, product completion, and fallback quality remain inside their limits. Any breach sends the route back to the last approved control version. Immediate evidence closes the containment phase, while the captured prediction IDs remain grouped for mature outcome analysis.
 
+One common control path connects Alertmanager to an incident runbook while a human responder changes a versioned feature flag or managed endpoint traffic rule. For an artifact-specific failure, the responder sets the candidate route to zero and the approved model to full traffic, then confirms the change through OpenTelemetry route attributes and Prometheus action counts. The repaired image runs against shadow requests, and the release workflow raises its traffic weight in small steps. The previous endpoint configuration remains recorded in Git or the deployment system so every failed canary gate can restore the last approved split.
+
 A model rollback is appropriate when the failure is isolated to a candidate artifact or its preprocessing package. It helps much less when old and new models share the same stale feature or changed policy. Failure-boundary evidence keeps the response attached to the actual mechanism.
 
 Policy incidents need their own control. Suppose a threshold configuration sends twice as many low-risk transactions to review while model scores remain unchanged. The policy owner restores the previous version, verifies action volume and queue age, and replays the proposed threshold on a mature cohort before another canary. Rolling back the model would preserve the same policy error because the broken boundary sits after prediction.
@@ -218,7 +295,7 @@ A small organization does not need every product in that sentence. One service c
 
 A larger real-time fleet has a different operating problem. Streaming capture decouples high request volume from durable storage. OpenTelemetry Collector infrastructure and Prometheus recording rules give several services a consistent fast-signal path. Governed inference tables preserve long histories, and a cross-platform monitoring product can provide one investigation view across teams. Latency, volume, reuse, and organizational boundaries justify those extra components.
 
-Provider services can package parts of this path. As checked on 18 July 2026, Azure Machine Learning supports built-in tabular data drift, prediction drift, and data quality. Its classification, regression, and feature-attribution signals remain in Preview.
+Provider services can package parts of this path. Azure Machine Learning supports built-in tabular data drift, prediction drift, and data quality. Its classification, regression, and feature-attribution signals remain in Preview.
 
 Google now documents Model Monitoring under Gemini Enterprise Agent Platform. Model Monitoring v2 remains Preview and supports tabular models running on the platform or elsewhere. Production teams that need generally available endpoint support should examine Model Monitoring v1 and its narrower scope before choosing a version.
 
@@ -226,7 +303,7 @@ Databricks can capture requests and responses in Unity Catalog Delta inference t
 
 AI Gateway payload logging can arrive less than an hour after a request. That delay suits later analysis and audit, while fast service telemetry still needs a separate path.
 
-Amazon SageMaker Model Monitor remains available to existing customers for data quality, model quality, bias drift, and feature-attribution drift. AWS says new-customer access closes on 30 July 2026 and no new features are planned. Existing customers can continue operating it. A new AWS design should use governed prediction storage, managed processing or the existing data platform, and CloudWatch or another monitoring layer rather than adopting Model Monitor as a new strategic default.
+Amazon SageMaker Model Monitor remains available to existing customers for data quality, model quality, bias drift, and feature-attribution drift. AWS positions the service for existing customers and says no new features are planned. A new AWS design should use governed prediction storage, managed processing or the existing data platform, and CloudWatch or another monitoring layer rather than adopting Model Monitor as a new strategic default.
 
 Specialist platforms such as Arize, Fiddler, and WhyLabs can add fleet views, managed investigations, and governance across several serving platforms. They provide the most value when cross-platform scale justifies another control plane. A smaller team with one data platform may learn more from a well-built warehouse pipeline and clear runbooks.
 
@@ -255,6 +332,8 @@ The monitoring system completes the chain by proving that its own evidence is cu
 - [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
 - [Prometheus operators and vector matching](https://prometheus.io/docs/prometheus/latest/querying/operators/)
 - [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenTelemetry Python instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/)
+- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
 - [Azure Machine Learning model monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/concept-model-monitoring?view=azureml-api-2)
 - [Google Model Monitoring overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-monitoring/overview)
 - [Databricks AI Gateway inference tables](https://docs.databricks.com/aws/en/ai-gateway/inference-tables-serving-endpoints)

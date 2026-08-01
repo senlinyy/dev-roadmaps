@@ -1,205 +1,475 @@
 ---
 title: "Handling Bad Predictions"
-description: "Show how a team contains harmful model decisions, finds the affected traffic, and restores a safe product path."
-overview: "Handling bad predictions is a product-incident discipline that separates user harm from service health, finds the smallest unsafe decision boundary, applies reversible containment, verifies recovery, and repairs the control system."
+description: "Learn how to contain harmful ML decisions, find every affected case, diagnose the failing layer, and repair decisions that already reached users."
+overview: "A bad-prediction incident can hide behind a healthy API. Responders protect users first, verify that their evidence is trustworthy, trace affected decisions across model and policy layers, and match the repair to the real cause."
 tags: ["MLOps", "production", "recovery"]
 order: 2
 id: "article-mlops-deployment-and-release-management-handling-bad-predictions"
 ---
 
-## Treat The Decision As The Incident
-<!-- section-summary: A bad-prediction incident begins when model-driven decisions harm users or operations, whether or not the service itself is failing. -->
+## Table of Contents
 
-A **bad-prediction incident** occurs when a model-driven decision harms users, operations, money, or policy outcomes. The API may remain fast and available because service health only proves that computation completed. Incident response must protect the product decision while preserving evidence about the model, features, policy, and runtime that produced it.
+1. [A Bad Prediction Can Hide Behind HTTP 200](#a-bad-prediction-can-hide-behind-http-200)
+2. [A Symptom Points to a Problem, Not Its Cause](#a-symptom-points-to-a-problem-not-its-cause)
+3. [Protect Users and Preserve Evidence](#protect-users-and-preserve-evidence)
+4. [Check the Evidence Before Blaming the Model](#check-the-evidence-before-blaming-the-model)
+5. [Find Every Decision That May Be Affected](#find-every-decision-that-may-be-affected)
+6. [Turn a Large Incident Into a Bounded Cohort](#turn-a-large-incident-into-a-bounded-cohort)
+7. [Choose Containment That Matches the Evidence](#choose-containment-that-matches-the-evidence)
+8. [Diagnose the Decision Path Layer by Layer](#diagnose-the-decision-path-layer-by-layer)
+9. [Trace One Decision Through the Live System](#trace-one-decision-through-the-live-system)
+10. [Repair the Layer That Actually Failed](#repair-the-layer-that-actually-failed)
+11. [Recover Decisions That Already Happened](#recover-decisions-that-already-happened)
+12. [Prove That Recovery Is Real](#prove-that-recovery-is-real)
+13. [Build the Response Path Before the Incident](#build-the-response-path-before-the-incident)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-The response framework has six stages:
+## A Bad Prediction Can Hide Behind HTTP 200
+<!-- section-summary: A prediction-quality incident can continue while the serving API remains fast, available, and technically successful. -->
 
-| Stage | Question | Failure when skipped |
-|---|---|---|
-| **Impact classification** | Which user action or operational workflow is unsafe, and how severe is it? | The team optimizes a technical symptom while harm continues |
-| **Evidence preservation** | Which model, feature, policy, route, and outcome records describe the event? | Emergency changes erase the path needed for diagnosis |
-| **Boundary discovery** | Which enforceable traffic, segment, action, or dependency contains the failure? | The team disables healthy traffic or leaves the risky slice active |
-| **Reversible containment** | Which guard, fallback, threshold, route, or rollback reduces harm fastest? | A speculative permanent fix expands the incident |
-| **Recovery verification** | Did runtime state, product decisions, and user outcomes return to an acceptable range? | A successful command gets confused with recovered users |
-| **System repair** | Which evaluation, data, policy, release, or monitoring control allowed escape? | Retraining alone leaves the same path open for the next failure |
+At a high level, **handling bad predictions** means protecting people from harmful ML-driven decisions and then discovering which part of the decision system failed. The difficult part is that the serving API may look perfectly healthy. It can return `200 OK`, meet its latency target, and produce a valid JSON response for every request while the product makes increasingly poor choices.
 
-```mermaid
-flowchart LR
-    H["User or workflow harm"] --> I["Classify impact and preserve evidence"]
-    I --> B["Find smallest enforceable unsafe boundary"]
-    B --> C["Apply reversible containment"]
-    C --> V["Verify runtime, decisions, operations, and outcomes"]
-    V --> R["Repair evaluation and control gaps"]
-    V -. "harm continues" .-> E["Escalate containment"]
-    E --> V
-```
+An HTTP success code answers a narrow operational question: *Did the service process the request?* It cannot answer: *Was the score correct? Was the action appropriate? Did the user receive a safe result?* This is why service-health monitoring and decision-quality monitoring serve different purposes.
 
-This loop keeps protection and diagnosis connected. The team can contain a known harmful boundary before it proves the root cause, then widen containment if recovery signals remain outside the acceptable range.
+Consider a credit-risk service that keeps responding in 80 milliseconds. Approval rates suddenly fall for one region because a currency conversion upstream is wrong. The model server is healthy. The resulting decisions are harmful. Restarting the server changes nothing because the fault lives in the input path.
 
-Containment choices carry different costs. A global threshold change acts quickly but can overload a review queue. Segment restriction preserves healthy traffic but requires a stable decision-time boundary. Model rollback helps when the previous artifact remains compatible. A deterministic guard belongs outside the model when the product rule must hold for every version.
-
-Severity comes from consequence and exposure rather than the size of a metric movement. A single unsafe automated action can justify immediate containment in a high-impact workflow. A small quality regression across millions of low-risk decisions can also create large aggregate harm. The incident owner records affected users, decision authority, traffic share, duration, reversibility, and downstream side effects before choosing the response level.
-
-FreshBasket illustrates the framework with a grocery-substitution model. Complaints report vegan orders containing dairy and gluten-free orders receiving ordinary bread while model version 42 returns well-formed scores. The later sections use this incident to show how each response stage works.
-
-## Separate Prediction Error, Decision Error, and Product Harm
-<!-- section-summary: Responders trace the chain from model output through policy and product action because each layer can create or prevent harm. -->
-
-A **prediction** is the model output, such as a substitution score. A **decision policy** turns that output into an action, such as automatic acceptance above a threshold. The product then applies the action inside a workflow where a picker, customer, or downstream system can change the final outcome.
-
-This chain gives the incident several possible failure boundaries. The model can score an unsuitable replacement highly. Product metadata can mark an item incorrectly. A threshold can grant too much automatic authority. A fallback can select an unsafe default after a timeout. A user interface can hide information that a reviewer needs to correct the suggestion.
-
-The response should reconstruct every step:
+The full production path usually looks like this:
 
 ```mermaid
-flowchart LR
-    X["Request-time product facts"] --> F["Feature values and versions"]
-    F --> M["Model score and version"]
-    M --> P["Policy threshold, guard, or fallback"]
-    P --> A["Product action"]
-    A --> O["Human response and later outcome"]
+flowchart TD
+    A["Live request"] --> B["Input validation"]
+    B --> C["Feature retrieval and transformation"]
+    C --> D["Model prediction"]
+    D --> E["Policy and business rules"]
+    E --> F["Product action"]
+    F --> G["Later real-world outcome"]
+
+    H["Service health"] -. "latency, errors, saturation" .-> B
+    I["Decision quality"] -. "actions, outcomes, harm" .-> F
 ```
 
-The distinction changes containment. A reliable hard rule can block dietary conflicts even while the ML team investigates model and feature causes. If the issue comes from corrupt metadata, model rollback may leave the same harmful input in place. If the policy expanded automatic acceptance, restoring the earlier policy may reduce harm faster than replacing the model.
+A useful incident response follows the whole path. The model is one component inside a larger decision system, and any component can produce a bad outcome.
 
-Responders should avoid calling every disagreement a bad prediction. Some examples lack clear ground truth, and some product harms arise from correct predictions used for an unsuitable purpose. The incident definition follows consequence and breached product expectations, while later analysis determines which layer failed.
+## A Symptom Points to a Problem, Not Its Cause
+<!-- section-summary: A visible quality problem is evidence that something changed, while the underlying cause may sit in data, features, models, policies, runtime, outcomes, or releases. -->
 
-## Reconstruct What Changed
-<!-- section-summary: Prediction and decision records connect user harm to model, feature, policy, and release changes. -->
+A **symptom** is the first visible sign of trouble. Examples include a spike in customer complaints, an unusual approval rate, more human overrides, lower measured accuracy, or a sudden change in score distribution. A **cause** is the failure that produced that sign.
 
-The incident owner starts with the affected decisions. Each substitution record includes the ordered item, proposed replacement, model version, feature-set version, score, threshold, policy result, and whether the picker or customer rejected it. Dietary attributes are stored as governed product metadata rather than inferred from customer identity.
+The distinction matters because the same symptom can come from very different causes. Suppose measured precision falls sharply:
 
-Before version 42, FreshBasket automatically accepted 48 percent of substitutions. After release, that rate rose to 61 percent. Picker overrides doubled, customer rejection rose from 7 to 15 percent, and dietary mismatches rose from 0.3 to 2.8 percent. Those numbers show more than a small accuracy regression: the release changed how often the product acted without review.
+- The live population may have changed, leaving the model outside its familiar data range.
+- A feature pipeline may have replaced missing values with zero.
+- A policy threshold may have changed from `0.80` to `0.65`.
+- A serving image may load the wrong preprocessing code.
+- The outcome feed may have dropped successful cases, making quality look worse than it is.
+- A new release may combine individually valid components in an incompatible way.
 
-The team compares four histories around the start of the incident. The model registry shows version 42 entering traffic. The feature catalog shows a new product-embedding source. The policy repository shows an unchanged auto-accept threshold. The serving image did not change. This narrows the investigation without claiming yet whether the model or new feature data caused the behaviour.
+Retraining addresses only a subset of those causes. It will not repair a currency conversion, restore missing labels, revert a threshold, or load the correct feature transformer. In some cases, retraining on corrupted evidence teaches the model the failure.
 
-An incident query can reconstruct those identities for every harmful decision:
+In essence, the initial alert says, “Investigate this decision path.” It has not yet earned the conclusion, “Replace the model.”
+
+```mermaid
+mindmap
+  root((Bad decision symptom))
+    Inputs
+      Schema changed
+      Units changed
+      Values are stale
+    Features
+      Transformation differs
+      Online lookup failed
+      Default value dominates
+    Model
+      Weak segment quality
+      Drift or decay
+      Wrong artifact loaded
+    Policy
+      Threshold changed
+      Guard missing
+      Fallback unsafe
+    Runtime
+      Route mismatch
+      Dependency failure
+      Partial rollout
+    Outcomes
+      Labels delayed
+      Join coverage fell
+      Definition changed
+```
+
+## Protect Users and Preserve Evidence
+<!-- section-summary: The first response reduces immediate harm while keeping enough evidence to reconstruct the affected decision path. -->
+
+The first operational goal is **harm reduction**. If a model can trigger a high-impact action, the team may pause automation, route uncertain cases to human review, restore a known-safe release, or activate a deterministic safety rule. Root-cause analysis can continue after the dangerous path is contained.
+
+The second goal is **evidence preservation**. Emergency changes alter the live system, so responders capture the identities and records needed to understand the earlier state. At minimum, preserve:
+
+- the release identifier and deployment route;
+- the immutable model version from MLflow Model Registry or a managed registry;
+- the feature contract and retrievable feature snapshot reference;
+- the policy version, threshold, guard result, and final action;
+- the decision ID and trace ID;
+- the request time, relevant segment fields, and later outcome join key.
+
+These fields tell a story. The release ID identifies the complete package that entered production. The model version identifies the artifact. The feature and policy versions identify the logic around that artifact. The decision ID ties the technical record to the action the product took.
+
+For example, if a ranking model promotes unsafe items, the team can disable the affected category and preserve its recent decision records. That targeted control protects users while ordinary categories continue serving. The preserved records still show the features, release, model, and policy that produced each promotion.
+
+```mermaid
+flowchart TD
+    A["Quality alert or user report"] --> B["Assess harm and decision authority"]
+    B --> C["Preserve decision and release identities"]
+    C --> D["Apply reversible containment"]
+    D --> E["Validate evidence integrity"]
+    E --> F["Bound the affected cohort"]
+    F --> G["Diagnose the first failing layer"]
+    G --> H["Repair cause and recover past decisions"]
+```
+
+## Check the Evidence Before Blaming the Model
+<!-- section-summary: Responders verify monitoring freshness, schemas, labels, joins, and policy definitions before treating a quality alert as model decay. -->
+
+Prediction quality is often measured through several data pipelines. Predictions are recorded now, outcomes may arrive hours or weeks later, and a join connects the two. A broken measurement path can therefore look exactly like a broken model.
+
+The evidence check follows a practical order:
+
+1. **Monitoring-job freshness:** Did the evaluation job finish, and what event-time window did it process?
+2. **Schema and semantic changes:** Did a field type, unit, category mapping, or outcome definition change?
+3. **Label volume:** Did the expected number of outcomes arrive for each route and segment?
+4. **Join coverage:** What percentage of eligible predictions matched an outcome through the decision ID?
+5. **Policy versions:** Are current and baseline cohorts evaluated under comparable decision rules?
+6. **Only then, model behavior:** Are errors, calibration, or action rates different on trustworthy, comparable evidence?
+
+Here is a concrete scenario. A fraud model appears to lose precision on Friday. The model version, feature distributions, and score distribution are stable. The outcome table contains only chargebacks and is missing ordinary settled transactions because a daily ingestion job failed. The apparent precision collapse comes from an incomplete denominator. Rolling back the model would change live traffic while leaving the measurement failure untouched.
+
+```mermaid
+flowchart TD
+    A["Quality metric changed"] --> B{"Evaluation job fresh?"}
+    B -- "No" --> B1["Repair or rerun monitoring job"]
+    B -- "Yes" --> C{"Schema and definitions stable?"}
+    C -- "No" --> C1["Reconcile contracts and recompute"]
+    C -- "Yes" --> D{"Label volume and join coverage healthy?"}
+    D -- "No" --> D1["Repair outcome feed or joins"]
+    D -- "Yes" --> E{"Cohorts use comparable policies?"}
+    E -- "No" --> E1["Separate policy cohorts"]
+    E -- "Yes" --> F["Investigate model and feature behavior"]
+```
+
+Delta Lake history or Apache Iceberg snapshots help responders reproduce the exact table state used by an evaluation job. A warehouse can provide the same capability through immutable partitions, snapshots, or governed retention. The important property is reproducibility: another engineer should be able to query the evidence window that triggered the alert.
+
+## Find Every Decision That May Be Affected
+<!-- section-summary: A durable decision record connects each product action to its release, model, features, policy, trace, and later outcome. -->
+
+After confirming that the evidence is credible, the team needs a list of potentially affected decisions. This is the **blast radius**: the decisions, users, transactions, or downstream processes exposed to the failure.
+
+Most mature systems create a **decision record** for this purpose. You can think of it as a receipt for an automated choice. It records what the system knew, which logic it used, and which action followed. High-impact applications usually keep these receipts in a governed Delta, Iceberg, or warehouse table with retention and access controls.
+
+A useful record contains stable identities. Mutable labels such as “production model” can move over time. An MLflow alias such as `champion` can later point to another model version. The record therefore captures both the alias and the resolved immutable version or model ID.
 
 ```sql
 SELECT
   d.decision_id,
   d.decided_at,
+  d.release_id,
+  d.model_name,
   d.model_version,
-  d.feature_version,
+  d.feature_contract_version,
   d.policy_version,
-  d.ordered_item_id,
-  d.ordered_dietary_flags,
-  d.replacement_item_id,
-  d.replacement_dietary_flags,
-  d.auto_accepted,
-  o.customer_rejected,
-  o.picker_overrode
-FROM substitution_decisions AS d
-LEFT JOIN substitution_outcomes AS o USING (decision_id)
-WHERE d.decided_at >= TIMESTAMP '2026-07-14 10:00:00+00:00'
-  AND d.decided_at < TIMESTAMP '2026-07-14 12:00:00+00:00'
-  AND d.model_version IN ('41', '42');
+  d.model_route,
+  d.segment_key,
+  d.action,
+  d.trace_id,
+  o.outcome,
+  o.observed_at
+FROM ml_governance.decision_records AS d
+LEFT JOIN ml_governance.outcomes AS o
+  ON d.outcome_join_key = o.outcome_join_key
+WHERE d.decided_at >= :suspected_start
+  AND d.decided_at < :containment_time
+  AND d.model_route = :affected_route;
 ```
 
-The output keeps model, features, and policy separate. If mismatches rise only on version 42 while feature and policy versions stay fixed, model rollback has stronger evidence. If both models fail only when `feature_version='product-embedding-v18'`, feature containment deserves priority. The decision ID lets responders preserve exact examples before routing changes.
+The left join is deliberate. It keeps decisions whose outcomes have not arrived yet. If an inner join were used, recent or missing outcomes would disappear, and the investigation could underestimate the blast radius.
 
-## Find The Smallest Unsafe Boundary
-<!-- section-summary: Segment analysis identifies where the product is unsafe so containment can protect users without disabling healthy traffic. -->
+Sensitive raw inputs rarely belong in general application logs. A secure reference to an approved feature snapshot is often safer. Investigators can retrieve the necessary values under controlled access, while ordinary operators see only the identifiers and non-sensitive fields required for triage.
 
-Global metrics hide the shape of this incident. FreshBasket groups decisions by ordered dietary flag, product category, store region, model version, and whether the new embedding was present. Bakery substitutions for gluten-free orders have a 9.1 percent mismatch rate. Vegan dairy substitutions show 7.4 percent. Ordinary household-item substitutions remain close to baseline.
+## Turn a Large Incident Into a Bounded Cohort
+<!-- section-summary: Cohort analysis narrows the incident by time, release, route, segment, and dependency so responders can contain the unsafe slice. -->
 
-This analysis reveals a boundary the routing system can enforce: dietary-sensitive orders should not be auto-accepted. The team sends those cases to picker review or refund while leaving ordinary substitutions available. That is faster and less disruptive than turning off the entire model.
+A global quality metric tells the team that something moved. **Cohort analysis** tells them where it moved. A cohort is a group of decisions that share a property, such as the same release, region, model route, product category, or feature-source version.
 
-Segment containment is safe only when the segment is reliable at decision time. A vague analytical group such as “users similar to past complainants” would be hard to enforce and easy to misuse. Here, the product already has explicit dietary requirements attached to the ordered item, so the boundary is visible and testable.
+Start with the time window. Find the last known-good period, the first clear divergence, and the containment time. Then compare the affected and healthy periods across identities that can change production behavior:
 
-## Choose A Reversible Containment
-<!-- section-summary: The team selects the quickest reversible action that reduces harm and matches the evidence available. -->
+- complete release ID;
+- model version and traffic route;
+- feature contract, source, and freshness state;
+- policy version and action threshold;
+- region, tenant, product surface, or other reviewed segment;
+- serving image and dependency version.
 
-FreshBasket has several possible controls. Raising the auto-accept threshold would reduce automatic decisions everywhere, but it might still allow a confidently wrong dietary substitution. Rolling back version 42 would restore known model behaviour, but only if version 42 is the cause and version 41 remains compatible with current features. Rolling back the feature feed might help if the new embeddings are corrupt, but other consumers could depend on it.
+Suppose an automated document classifier has a higher rejection rate. The increase appears only in one language, on one model route, after a tokenizer package changed. Other languages and the baseline route remain stable. That pattern supports a narrow response: stop the affected route for that language, preserve examples, and inspect tokenization. A global model rollback would disrupt healthy traffic and could hide the actual compatibility fault.
 
-Containment selection uses three dimensions: **time to reduce harm**, **scope of affected traffic**, and **reversibility**. A product guard can act within minutes and target a known policy boundary. A model rollback may take longer while restoring a reviewed baseline across many segments. A feature rollback can repair several consumers and also create a larger blast radius. The incident owner chooses the control with the strongest evidence and the smallest acceptable secondary cost, then records the next escalation if that control fails.
-
-The incident owner first disables automatic acceptance for dietary-sensitive substitutions. A rules-based guard sends exact dietary conflicts directly to refund and sends uncertain cases to a picker. This action protects the affected customers immediately and does not require the team to settle the model-versus-data question.
-
-The emergency policy is explicit and versioned:
-
-```yaml
-policy_version: substitution-safety-2026-07-14.1
-rules:
-  - when: ordered.dietary_flags intersects [vegan, gluten_free, nut_free]
-    if: replacement.dietary_flags does_not_satisfy ordered.dietary_flags
-    action: refund
-  - when: ordered.dietary_flags intersects [vegan, gluten_free, nut_free]
-    action: picker_review
-  - when: true
-    action: model_policy
-expires_at: 2026-07-16T12:00:00Z
-owner: substitution-incident-commander
+```sql
+SELECT
+  release_id,
+  model_version,
+  feature_contract_version,
+  policy_version,
+  segment_key,
+  COUNT(*) AS decisions,
+  AVG(CASE WHEN action = 'manual_review' THEN 1.0 ELSE 0.0 END) AS review_rate,
+  COUNT(o.outcome_join_key) * 1.0 / COUNT(*) AS outcome_join_coverage,
+  AVG(CASE WHEN o.outcome = 'incorrect' THEN 1.0 ELSE 0.0 END) AS observed_error_rate
+FROM ml_governance.decision_records AS d
+LEFT JOIN ml_governance.outcomes AS o
+  ON d.outcome_join_key = o.outcome_join_key
+WHERE d.decided_at >= :comparison_start
+GROUP BY 1, 2, 3, 4, 5
+HAVING COUNT(*) >= :minimum_cohort_size;
 ```
 
-The exact-conflict rule executes before any model threshold. The second rule catches sensitive cases whose catalog data does not prove compatibility. The expiry forces an owner to review the temporary capacity cost instead of leaving an emergency setting invisible for months.
+The minimum cohort size prevents tiny groups from dominating the investigation through random variation. Join coverage sits beside observed error rate because outcome quality is part of the comparison. A cohort with 20 percent label coverage should not be treated as equivalent to one with 95 percent coverage.
 
-Before activation, the team replays preserved decisions through the policy. Every known dietary mismatch must route to refund or review, while ordinary household substitutions retain their original path. After activation, a query checks that `auto_accepted=true` has zero rows for the protected flags. Any violating row pages the incident owner because the policy and traffic router disagree.
+## Choose Containment That Matches the Evidence
+<!-- section-summary: Containment reduces exposure through a reversible control chosen for the known scope, harm level, and confidence in the current evidence. -->
 
-The team preserves a replayable sample before changing traffic. It records the request-time features, model and policy versions, output, product action, and later outcome under the applicable privacy controls. That sample lets engineers compare candidate causes after containment without relying on a production state that has already changed.
+**Containment** is a temporary production change that reduces harm while investigation continues. It should be fast, observable, reversible, and owned. The best choice depends on the failure boundary already supported by evidence.
 
-The review queue now grows, so containment has an operational cost. Store operations adds reviewers for the afternoon and watches queue age. A control that avoids model harm but leaves orders waiting for hours would create a different product failure.
+If one segment is unsafe, disable automation for that segment or send it to human review. If a new release is strongly associated with harm, shift traffic to the known-good release. If a feature feed is stale across every model version, switch to a validated fallback or pause decisions that require that feature. If a hard product rule was violated, enforce the rule outside the learned model.
 
-After replaying recent decisions, the ML team finds that version 42 relies too strongly on the new embedding when product metadata is sparse. Version 41 performs better on the affected slice and is compatible with the current request schema. The release owner rolls model traffic back to version 41 while keeping the dietary guard active.
+The choices form an escalation ladder:
 
-## Keep Humans In A Real Decision Role
-<!-- section-summary: Human review helps only when reviewers have sufficient context, clear authority, and a path to disagree with the model. -->
+```mermaid
+flowchart TD
+    A["Affected decision path identified"] --> B{"Reliable segment boundary?"}
+    B -- "Yes" --> C["Restrict segment or route to review"]
+    B -- "No" --> D{"Known-good release remains compatible?"}
+    D -- "Yes" --> E["Shift traffic to known-good release"]
+    D -- "No" --> F{"Safe deterministic fallback exists?"}
+    F -- "Yes" --> G["Activate fallback or abstention"]
+    F -- "No" --> H["Pause automated decisions"]
 
-During containment, the picker interface shows the ordered item, proposed replacement, dietary facts, price difference, and stock alternatives. It does not present the model score as proof that the suggestion is correct. The reviewer can choose a different item, refund the order, or flag incorrect catalog metadata.
-
-These outcomes are valuable evidence, but they are not automatically perfect labels. A hurried picker may accept the first option, stores may interpret policy differently, and some customer preferences are absent from the catalog. FreshBasket separates the reviewer's action from the later customer acceptance and from any adjudicated dietary-policy label.
-
-This separation prevents the retraining pipeline from teaching the next model that every emergency reviewer action was ground truth. The feedback team samples disagreements and sends ambiguous cases to a senior catalog specialist before using them for model repair.
-
-## Verify Recovery In The Product
-<!-- section-summary: Recovery is demonstrated by safer decisions, healthy review operations, and confirmed runtime state rather than a successful rollback command. -->
-
-The deployment system reports that the rollback completed, but FreshBasket verifies the running path. Prediction telemetry shows version 41 receiving traffic. The dietary policy reports that automatic acceptance is disabled for the protected segment. Picker queue wait remains within the temporary staffing target.
-
-Over the next hour, new dietary mismatches fall below the team's incident threshold. Customer rejection and picker override rates move back toward their previous ranges. Support reports fewer new cases. These signals cover model state, policy state, operational load, and user impact; any one of them alone would give an incomplete picture.
-
-Recovery evidence is recorded as one result rather than scattered screenshots. The `picker_queue_p95_minutes` field is the 95th-percentile wait: 95 percent of picker tasks waited that long or less.
-
-```json
-{
-  "incident": "SUB-2841",
-  "traffic_model_version": "41",
-  "dietary_auto_accept_violations": 0,
-  "dietary_mismatch_rate_60m": 0.0021,
-  "picker_queue_p95_minutes": 6.4,
-  "new_customer_reports_30m": 1,
-  "fixture_replay": "48/48 passed",
-  "state": "contained_monitoring"
-}
+    C --> I["Measure exposure and secondary effects"]
+    E --> I
+    G --> I
+    H --> I
 ```
 
-The state remains `contained_monitoring` while customer outcomes continue to arrive. Runtime identity and policy violations can recover immediately; outcome evidence takes longer. The incident closes only after the reviewed window passes and the temporary guard receives an explicit keep, replace, or remove decision.
+Containment can create a second operational problem. Human review may overload a queue. A conservative threshold may reject too many valid cases. A stale-feature fallback may reduce accuracy for every user. The incident owner therefore watches both the original harm signal and the cost of the temporary control.
 
-FreshBasket keeps the guard after version 41 returns until enough reviewed outcomes confirm that the product is stable. It also records the time and owner for the later decision, so a temporary emergency control cannot quietly remain as permanent behaviour.
+For example, a recommendation system starts promoting out-of-stock products in one country. Routing that country to a simpler popularity baseline may restore a useful experience while the inventory join is repaired. Turning off recommendations globally would remove value from unaffected countries. Retraining would consume time and leave the broken inventory feed active.
 
-Delayed and irreversible effects need their own recovery work. A harmful recommendation can trigger a purchase, denial, message, or queue change before the system rolls back. Restoring the previous model protects future decisions while leaving earlier effects in place. The incident plan should identify affected decision IDs, notify the team that owns remediation, and record which actions can be reversed.
+## Diagnose the Decision Path Layer by Layer
+<!-- section-summary: A layered investigation finds the first point where the affected path differs from a known-good path. -->
 
-Some products can automatically cancel or recompute decisions. Others need customer support, refunds, corrected notifications, or human review. High-impact workflows may require a preserved list of affected people under strict access controls. Recovery evidence should report both the current safe state and the backlog of prior harm still being repaired.
+After traffic is safer, compare an affected decision with a known-good decision and look for the **first meaningful divergence**. This keeps the investigation grounded in evidence instead of jumping between unrelated dashboards.
 
-## Repair The System That Allowed The Failure
-<!-- section-summary: The permanent fix addresses model evaluation, feature contracts, and release safeguards revealed by the incident. -->
+### Input and feature layer
 
-The investigation shows that offline evaluation had one broad “grocery substitutions” result but no meaningful dietary slices. Sparse product metadata was replaced with a neutral embedding without a visible missingness feature. The canary dashboard tracked acceptance and latency, but not dietary mismatch or picker override by model version.
+Check schema, units, allowed ranges, freshness, missingness, category mappings, and online-versus-offline transformation parity. Feature lineage can connect a served feature to its source table and transformation job. Databricks Feature Store, SageMaker Feature Store, managed cloud catalogs, and OpenLineage-compatible pipelines offer different ways to capture this ancestry.
 
-The repair therefore spans more than retraining. The catalog pipeline validates required dietary metadata. The model receives an explicit missingness signal. Evaluation adds policy-relevant slices and replays the incident examples. Release monitoring compares picker override, customer rejection, and dietary mismatch during canaries. The guarded product rule remains independent of the learned model because some constraints should be enforced directly.
+A common scenario is a unit change. A source sends income in cents while the model expects whole currency units. Values remain numeric and pass basic schema checks, yet the scale is wrong. Range tests, distribution monitoring, and source lineage point toward the data contract; model retraining would absorb corrupted semantics.
 
-The team trains a new candidate only after these changes are in place. It compares the candidate with version 41 on the original holdout, recent production feedback, and the incident set. A model that fixes the headline slice while damaging ordinary substitutions does not pass.
+### Model layer
 
-## A Safe Response Narrows Uncertainty
-<!-- section-summary: Effective bad-prediction response protects users first, then uses connected evidence to identify and repair the failing layer. -->
+Confirm the immutable model identity running on each route. Then inspect segment metrics, calibration, prediction distribution, and distance from the training domain. Compare the deployed version with the known-good version on the same preserved inputs.
 
-FreshBasket first addressed the product decision that was harming customers, found the smallest enforceable unsafe segment, and applied a reversible control. It then used versioned prediction, feature, policy, and outcome records to select a rollback and verify recovery.
+Model decay is a credible cause if evidence is healthy, serving logic is unchanged, and the relationship between inputs and outcomes has shifted. That evidence answers the first question: the learned relationship needs attention.
 
-That sequence is useful across ML products. Contain the decision, preserve the evidence, verify the running system, and repair the conditions that let the failure escape. A model rollback is one tool inside that response, not the definition of the response itself.
+The second question is whether a replacement model is ready for production. Train it on current, representative data and evaluate it with leakage-safe splits. Check important segments and calibration, then use the normal release gates before sending it live traffic.
+
+### Policy and action layer
+
+The policy layer turns scores into actions. Check thresholds, ranking cutoffs, fallback rules, abstention logic, and human-review routing. A model can produce the same scores as yesterday while a threshold change doubles automatic approvals.
+
+For example, a risk score of `0.72` may be accurate enough as an estimate. If a release changes the approval threshold from `0.80` to `0.70`, the product now grants the model more authority. Restoring the policy can reduce harm immediately without changing the artifact.
+
+### Runtime and serving layer
+
+Inspect traffic routing, preprocessing packages, model-loading logs, dependency timeouts, hardware-specific paths, and fallback behavior. Confirm runtime state directly from the endpoint. Deployment-controller status describes the intended control-plane state; the endpoint reveals what actually loaded and served.
+
+A partial rollout may send one replica to model version 18 and another to version 17. The registry can be correct while live routing is mixed. Per-route release metrics and traces expose this mismatch.
+
+### Outcome and evaluation layer
+
+Review label arrival delay, join keys, duplicate outcomes, eligibility rules, and policy definitions. Compare event time with processing time. A current quality window may contain mostly fast-arriving negative outcomes while positive outcomes mature later.
+
+The repair could involve replaying an ingestion job, deduplicating outcomes, restoring a join key, or recomputing historical metrics. The live model may need no change at all.
+
+### Release and configuration layer
+
+Treat the production release as a bundle: model, preprocessing, feature contract, policy, image, dependencies, and infrastructure configuration. Check which pieces changed together and which combinations were actually served.
+
+MLflow or a managed registry gives the model artifact an identity. The deployment manifest gives the complete release an identity. Both belong in the decision record because a model version alone cannot explain a changed tokenizer, policy file, or container image.
+
+## Trace One Decision Through the Live System
+<!-- section-summary: OpenTelemetry traces and correlated logs explain the runtime path of one decision, while the governed decision record preserves its durable business evidence. -->
+
+After cohort analysis finds an affected decision ID, distributed tracing helps answer a concrete question: *Which runtime operations produced this decision?*
+
+OpenTelemetry provides a vendor-neutral way to emit traces, metrics, and logs. A **trace** represents the end-to-end path of one request. A **span** represents one operation inside that path, such as loading features, running inference, or applying a policy. Every span in the same path shares a trace ID, and each span has its own span ID.
+
+```mermaid
+sequenceDiagram
+    participant API as Decision API
+    participant FS as Feature Service
+    participant MS as Model Server
+    participant PE as Policy Engine
+    participant DR as Decision Record
+
+    API->>FS: load features
+    FS-->>API: values + feature version
+    API->>MS: predict with model route
+    MS-->>API: score + model version
+    API->>PE: evaluate score and context
+    PE-->>API: action + policy version
+    API->>DR: persist decision_id + trace_id + identities
+    API-->>API: return product action
+```
+
+Instrumentation needs a few ML-specific attributes. Keep values bounded so the telemetry backend can aggregate them safely:
+
+```python
+with tracer.start_as_current_span("ml.decision") as span:
+    span.set_attribute("ml.model.name", model_name)
+    span.set_attribute("ml.model.version", model_version)
+    span.set_attribute("ml.release.id", release_id)
+    span.set_attribute("ml.policy.version", policy_version)
+    span.set_attribute("ml.route", model_route)
+
+    result = decision_engine.decide(features)
+    logger.info(
+        "decision completed",
+        extra={"decision_id": result.decision_id, "action": result.action},
+    )
+```
+
+OpenTelemetry can correlate the log with the active trace through trace and span IDs. The decision ID then links that runtime evidence to the governed decision table and later outcome.
+
+Decision IDs, customer IDs, and trace IDs have extremely high cardinality, so they belong in logs, traces, or analytical records. Prometheus labels should describe bounded groups such as model route, release, action, or region. A metric series for every decision would create large operational cost and poor query performance.
+
+Traces are often sampled. A sampled trace provides rich runtime detail for investigation; it should not serve as the sole audit record for a high-impact decision. The durable decision record covers that responsibility.
+
+## Repair the Layer That Actually Failed
+<!-- section-summary: Permanent repair follows the proven cause and includes a test or control that would catch the same failure earlier. -->
+
+Permanent repair removes the proven cause and adds a control that can catch the same class of failure earlier. The work is specific to the layer that failed. A generic model refresh can create new behavior while the original data, policy, runtime, or measurement fault remains active.
+
+Root-cause evidence guides both parts of the repair:
+
+- A schema or unit failure leads to contract validation, producer coordination, backfill, and replay.
+- Online/offline feature skew leads to shared transformation logic, feature freshness controls, and parity tests.
+- A policy mistake leads to a reviewed policy change, simulation against preserved decisions, and an approval gate.
+- A runtime mismatch leads to a corrected image or deployment manifest plus runtime identity checks.
+- A broken outcome feed leads to pipeline repair, metric recomputation, and join-coverage alerts.
+- Real model decay leads to new training data, retraining, segment evaluation, calibration review, and a controlled release.
+
+Each fix should include a **recurrence control**. A recurrence control is the automated or procedural guard that catches the same class of failure earlier. Examples include unit-aware data contracts, a minimum join-coverage gate, a canary comparison by release ID, a policy fixture for protected actions, or an endpoint that reports the loaded model digest.
+
+Suppose a model performs poorly because a new category arrives with no training examples. Retraining may be appropriate after the team collects representative data and defines safe behavior for unknown categories. Until then, an explicit “unknown” route or human review path protects users. The temporary control and permanent model improvement solve different time horizons.
+
+## Recover Decisions That Already Happened
+<!-- section-summary: Restoring safe production protects future traffic, while previously consumed decisions need a separate and carefully controlled recovery process. -->
+
+Containment changes future decisions. It cannot undo actions that already reached users or downstream systems. A recovery plan therefore treats the affected cohort as work that still needs resolution.
+
+First, freeze the cohort definition using decision IDs and the evidence window. Next, classify the side effects:
+
+- **Recomputable:** a score, ranking, forecast, or recommendation can be generated again with a corrected release.
+- **Reversible:** a queued action can be cancelled, an allocation can be restored, or an incorrect notification can be replaced.
+- **Reviewable:** a person can inspect the original evidence and choose the proper action.
+- **Irreversible or regulated:** the case needs product, legal, compliance, safety, or customer-support ownership.
+
+Replay requires special care. A prediction is usually safe to recompute. A side effect such as sending a message, issuing a payment, or changing account status must be idempotent. **Idempotent** means repeating the recovery command produces the same final state instead of applying the action twice.
+
+```mermaid
+flowchart TD
+    A["Frozen affected decision cohort"] --> B{"Did the decision create a side effect?"}
+    B -- "No" --> C["Recompute with corrected release"]
+    B -- "Yes" --> D{"Can the side effect be reversed safely?"}
+    D -- "Yes" --> E["Reverse, recompute, and record new decision"]
+    D -- "No" --> F{"Human or regulated review available?"}
+    F -- "Yes" --> G["Send case with evidence to review"]
+    F -- "No" --> H["Escalate to product, safety, or compliance owner"]
+
+    C --> I["Keep old and corrected records linked"]
+    E --> I
+    G --> I
+    H --> I
+```
+
+Keep the original record. Append a corrected decision with a link to the original, the recovery reason, the release used, the actor, and the final disposition. Rewriting history removes the evidence needed for audits and post-incident learning.
+
+For example, an incorrect ranking can be recomputed and published again. An automated account restriction may require a controlled reversal, customer communication, and a review of downstream systems that consumed the restriction event. Both started with a bad prediction, yet their recovery obligations are very different.
+
+## Prove That Recovery Is Real
+<!-- section-summary: Recovery evidence covers live release identity, decision behavior, operations, outcome quality, and the backlog of earlier harm. -->
+
+A successful deployment command proves that the control plane accepted a change. Recovery requires evidence from the running system and the product.
+
+Verify five views:
+
+1. **Runtime identity:** Which model, image, feature contract, and policy are actually serving each route?
+2. **Service operation:** Are latency, errors, queue age, and resource use inside the temporary operating range?
+3. **Decision behavior:** Have action rates, score distributions, abstentions, and rule violations returned to expected ranges?
+4. **Outcome quality:** As labels mature, do accuracy, calibration, cost, or policy outcomes recover for important cohorts?
+5. **Past-decision recovery:** How many affected decisions remain unrepaired, under review, or impossible to reverse?
+
+Prometheus or cloud monitoring can cover bounded operational and decision signals. The following query compares manual-review pressure by release without placing individual decision IDs in labels:
+
+```promql
+sum by (release_id, model_route) (
+  rate(ml_decisions_total{action="manual_review"}[5m])
+)
+/
+sum by (release_id, model_route) (
+  rate(ml_decisions_total[5m])
+)
+```
+
+This ratio detects an operational shift quickly. It still needs context. A rise may reflect a safety control working as intended, a model producing more uncertain scores, or a policy configuration error. Decision records and traces explain the individual cases; matured outcomes establish whether quality recovered.
+
+Close the incident after the safe release is verified, the temporary controls have explicit owners, the affected-decision backlog has a disposition, and delayed outcome windows contain enough evidence. Immediate runtime recovery and delayed quality recovery can occur at different times.
+
+## Build the Response Path Before the Incident
+<!-- section-summary: Teams respond faster if release identity, decision records, containment controls, and recovery ownership already exist. -->
+
+A production-ready ML system includes a prepared path from a harmful decision to its evidence, containment control, repair owner, and recovery process. This path reduces guesswork during an incident because the team already knows where identities live and which actions are safe to reverse.
+
+The supporting capabilities include:
+
+- immutable model and release identities visible from the serving path;
+- versioned feature and policy contracts;
+- a governed decision record with outcome join keys;
+- OpenTelemetry traces and correlated structured logs;
+- bounded Prometheus or cloud metrics by release, route, action, and reviewed segment;
+- reproducible Delta, Iceberg, or warehouse evidence windows;
+- tested traffic rollback, abstention, deterministic fallback, and human-review controls;
+- an idempotent process for replaying or repairing consumed decisions;
+- named owners for incident command, model diagnosis, data pipelines, product operations, and regulated remediation.
+
+A short game day can test the whole path. Inject a stale feature into a non-production environment, confirm that the quality signal changes, identify the affected decisions, route them to a safe fallback, verify runtime identity, and replay the cohort after repair. This exercise tests the connections between tools, which is where many real incidents slow down.
+
+## The Main Idea
+<!-- section-summary: Effective response follows the decision from evidence to action and gives each failure layer the repair it needs. -->
+
+A bad-prediction incident is a decision incident. The API can stay healthy while features, models, policies, runtime routes, or outcome feeds push the product away from reality.
+
+Protect users first. Preserve the identities that explain each decision. Verify that labels and joins are trustworthy. Bound the affected cohort, compare it with a healthy path, and find the first failing layer. Then repair that layer and account for decisions that already reached the world.
+
+Retraining is valuable for genuine model decay. Data, policy, runtime, and measurement failures need their own repairs. A mature MLOps system makes those distinctions visible before an incident forces the team to guess.
 
 ## References
 
 - [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/)
-- [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-- [MLflow model aliases](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenTelemetry: Log correlation](https://opentelemetry.io/docs/specs/otel/logs/)
+- [Prometheus: Instrumentation practices](https://prometheus.io/docs/practices/instrumentation/)
+- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [Delta Lake: Table history](https://docs.delta.io/delta-utility/)
+- [Apache Iceberg: Spark queries and time travel](https://iceberg.apache.org/docs/latest/spark-queries/)
+- [OpenLineage documentation](https://openlineage.io/docs/)
+- [Databricks Feature Store](https://docs.databricks.com/aws/en/machine-learning/feature-store)
+- [Amazon SageMaker Feature Store](https://docs.aws.amazon.com/sagemaker/latest/dg/feature-store.html)

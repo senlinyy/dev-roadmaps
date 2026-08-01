@@ -7,6 +7,20 @@ order: 1
 id: "article-mlops-governance-and-responsible-ai-privacy-risks-in-ml-systems"
 ---
 
+## Table of Contents
+
+1. [Privacy Risk Lives Across The Whole ML Workflow](#privacy-risk-lives-across-the-whole-ml-workflow)
+2. [A Patient Risk Score As A Supporting Example](#a-patient-risk-score-as-a-supporting-example)
+3. [Classify The Data Before You Train](#classify-the-data-before-you-train)
+4. [Minimize Features And Logs](#minimize-features-and-logs)
+5. [Test Privacy Risk In The Model](#test-privacy-risk-in-the-model)
+6. [Protect Access To Sensitive Data](#protect-access-to-sensitive-data)
+7. [Review Access Logs And Retention](#review-access-logs-and-retention)
+8. [Connect Privacy Controls To Review Evidence](#connect-privacy-controls-to-review-evidence)
+9. [Validate The Design And Diagnose Failures](#validate-the-design-and-diagnose-failures)
+10. [Privacy Controls Follow The Data Lifecycle](#privacy-controls-follow-the-data-lifecycle)
+11. [References](#references)
+
 ## Privacy Risk Lives Across The Whole ML Workflow
 <!-- section-summary: ML privacy risk is the chance that a model workflow exposes, misuses, retains, or reveals sensitive information through data, predictions, logs, or access paths. -->
 

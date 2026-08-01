@@ -1,308 +1,383 @@
 ---
 title: "Model Registries"
 description: "Explain model registries as controlled catalogs that link model versions to artifacts, run evidence, approval metadata, ownership, and deployment readiness."
-overview: "A model registry is a control-plane catalog for candidate identity, artifact integrity, lineage, evaluation evidence, ownership, approval, movable aliases, and deployment links. A marketplace ranking model illustrates the framework."
+overview: "A model registry gives each reviewed model version a durable identity, connects it to its artifacts and lineage, records release evidence and ownership, and expresses which version automation may deploy."
 tags: ["MLOps", "production", "registry"]
 order: 2
 id: "article-mlops-experiments-and-reproducibility-model-registries-explained"
 ---
 
-## What A Model Registry Stores
-<!-- section-summary: A model registry stores controlled model versions, artifact links, run evidence, approvals, aliases, ownership, and deployment readiness metadata. -->
+## Table of Contents
 
-A **model registry** is the controlled catalog for model versions that may be tested, deployed, audited, or rolled back. It gives a model a stable name, a version number, a link to the actual artifact, and the evidence that explains why the version exists. It also records who owns the model, which approvals it has, and which deployment alias or stage points to it.
+1. [A Folder of Model Files Cannot Answer a Release Question](#a-folder-of-model-files-cannot-answer-a-release-question)
+2. [Where the Registry Fits](#where-the-registry-fits)
+3. [Give the Model, Version, and Artifact Separate Identities](#give-the-model-version-and-artifact-separate-identities)
+4. [Connect Every Version to Its Lineage](#connect-every-version-to-its-lineage)
+5. [Store the Interface and Validation Evidence](#store-the-interface-and-validation-evidence)
+6. [Use Aliases and Tags Without Losing Version Identity](#use-aliases-and-tags-without-losing-version-identity)
+7. [Make Ownership, Permissions, and Approval Explicit](#make-ownership-permissions-and-approval-explicit)
+8. [Treat Promotion as Release Intent](#treat-promotion-as-release-intent)
+9. [Retain Enough Evidence for Audit and Rollback](#retain-enough-evidence-for-audit-and-rollback)
+10. [Keep the Registry Separate From Deployment](#keep-the-registry-separate-from-deployment)
+11. [Implement the Pattern With MLflow 3](#implement-the-pattern-with-mlflow-3)
+12. [Understand Managed Registry Semantics](#understand-managed-registry-semantics)
+13. [Let a Release Gate Read the Registry Record](#let-a-release-gate-read-the-registry-record)
+14. [The Main Idea](#the-main-idea)
+15. [References](#references)
 
-The registry sits between experiment tracking and serving. Experiment tracking may contain hundreds of runs from training and tuning. Serving systems need a smaller set of reviewed versions with clear release state. The registry is the handoff point where a promising run receives a production identity such as `trailmarket-search-ranker:42`.
+## A Folder of Model Files Cannot Answer a Release Question
+<!-- section-summary: A registry gives an incident or release team a trusted identity and evidence trail for the exact model version under discussion. -->
 
-The beginner-friendly version is this: the artifact store keeps the files, and the registry explains the files. The registry tells the team that a specific model file came from a specific run, trained on a specific dataset version, passed specific checks, and has a specific release status. When a deployment reads `models:/trailmarket-search-ranker@production`, it should land on the exact version that the team approved.
+Imagine an on-call engineer responding to a prediction-quality alert after a new fraud model reaches production. The endpoint reports `fraud-model-v34`, while object storage contains `model.pkl`, `model-final.pkl`, and `model-final-2.pkl` from several training jobs. A deployment file points to a path ending in `latest`.
 
-A registry is a control-plane system with several separate responsibilities:
+The engineer needs to decide whether to roll back before the payment-review queue grows. That decision requires precise answers. Which bytes are running? Which data and code produced them? Which input schema does the model expect? Which tests passed? Who approved the release? Which previous version can still run with the current feature pipeline?
 
-| Responsibility | Stable record | Why it exists |
-|---|---|---|
-| **Candidate identity** | Model name and immutable version | Gives every reviewed candidate one durable subject |
-| **Artifact integrity** | Artifact location, digest, signature, input example | Proves which exact bytes and interface the version contains |
-| **Lineage** | Training run, code, data, config, environment | Explains how the candidate was produced |
-| **Evaluation evidence** | Metrics, slices, robustness, latency, limitations | Shows which release claims reviewers checked |
-| **Ownership and approval** | Owner, approvers, policy result, decision time | Makes authority and accountability explicit |
-| **Movable intent** | Aliases such as `candidate` or `champion` | Lets automation express current intent without changing version identity |
-| **Deployment links** | Environments and release records using the version | Connects registry state to real runtime state without pretending the registry routes traffic |
+A folder of files cannot answer those questions consistently. A **model registry** can. At a high level, a model registry is a controlled catalog that gives each reviewed model version a durable identity and connects that identity to the evidence needed for release, audit, and recovery.
 
-The boundaries matter. Object storage owns large bytes. Experiment tracking owns the full history of attempts. The registry owns the smaller set of governed candidates. Deployment systems own traffic, environment configuration, and rollback execution.
+You can think of the registry as the model system's control desk. It rarely stores every large model byte in its own database. It records which artifact is version 34, where that artifact lives, how it was produced, what interface it exposes, which checks it passed, and what the organization currently intends to do with it.
+
+The visible outcome during the incident is a dependable rollback subject: an immutable version such as `fraud-risk/33`, plus the artifact digest, feature contract, serving environment, and approval history required to restore it safely.
+
+## Where the Registry Fits
+<!-- section-summary: The registry narrows many experimental outputs into governed model versions and hands exact release intent to deployment automation. -->
+
+Model development produces many runs, checkpoints, and evaluation reports. Production systems need a smaller set of candidates with stable identities and reviewed evidence. The registry sits between those two worlds.
+
+Experiment tracking answers, “What happened during this run?” Artifact storage answers, “Where are the files?” The registry answers, “Which reviewed model version do these files represent, and what may happen to that version next?” Deployment automation then turns approved intent into a real endpoint, batch job, or edge release.
 
 ```mermaid
-flowchart LR
-    Runs["Experiment runs and logged models"] --> Select["Candidate selection"]
-    Select --> Registry["Immutable registry version"]
-    Artifact["Artifact store and digest"] --> Registry
-    Registry --> Evidence["Lineage, evaluation, ownership, approval"]
-    Evidence --> Alias["Movable candidate or champion alias"]
-    Evidence --> Release["Pinned deployment request"]
-    Release --> Runtime["Traffic and loaded-version evidence"]
-    Runtime --> Registry
+flowchart TD
+    R["Training and evaluation<br/>(many runs and checkpoints)"] --> S["Candidate selection<br/>(model chosen for review)"]
+    S --> G["Model registry<br/>(identity, evidence, and intent)"]
+    A["Artifact storage<br/>(model bytes and supporting files)"] --> G
+    G --> D["Deployment controller<br/>(resolve and pin exact version)"]
+    D --> P["Production runtime<br/>(endpoint, batch job, or device)"]
+    P --> O["Runtime evidence<br/>(actual version and health)"]
+    O --> G
 ```
 
-The registry is the control-plane bridge in the middle. It connects a smaller set of candidates with their durable artifacts and evidence. Aliases help discovery, while deployment pins a concrete version and reports actual runtime state back to operations.
+This boundary keeps each system honest. A registry entry may say that version 34 is approved for canary traffic. The deployment controller still has to create or update the runtime, assign traffic, verify health, and record which version is actually serving. Approval and deployment are related states with different owners and failure modes.
 
-## Apply The Registry Framework To Marketplace Ranking
-<!-- section-summary: A marketplace ranking model needs a registry because many training runs produce only a few reviewed candidates for search traffic. -->
+## Give the Model, Version, and Artifact Separate Identities
+<!-- section-summary: A registered model names the product capability, a version identifies one governed candidate, and an artifact points to the exact deployable bytes. -->
 
-TrailMarket is a marketplace for outdoor gear. Users search for tents, packs, stoves, and used climbing equipment. The ranking model decides which listings appear near the top of the results page. If the model over-promotes stale listings or hides trusted sellers, buyers leave and sellers complain about lost traffic.
+At a high level, the registry separates the identity of a model capability from one candidate and from the files that implement it. This prevents a storage path, release label, and product name from being treated as the same thing. Three terms form that foundation.
 
-The ranking team trains a model named `trailmarket-search-ranker`. It uses a dataset called `ranking_training_clicks_2026_06_29`, which joins search impressions, clicks, add-to-cart events, seller quality signals, listing freshness, price bands, and moderation status. The model artifact includes an XGBoost ranker, a feature order file, a preprocessing pipeline, and an evaluation report.
+A **registered model** is the stable logical name for one prediction capability, such as `fraud-risk`, `delivery-time-forecast`, or `support-ticket-router`. It groups candidates that solve the same operational task and share an ownership boundary.
 
-The team may train many runs in MLflow or W&B. Only one candidate should move to release review. The registry entry for that candidate needs to answer practical questions:
+A **model version** is one numbered entry beneath that name. Version 34 should identify one fixed candidate. Its model bytes, inference interface, and source lineage stay stable. Descriptions, tags, and approval evidence may accumulate as reviewers work, though a change to the deployable artifact should create version 35.
 
-| Question | Registry evidence |
-|---|---|
-| Which model is this? | `trailmarket-search-ranker`, version `42` |
-| Where did it come from? | Tracking run `mlflow-run-20260703-1842` |
-| Which data trained it? | `ranking_training_clicks_2026_06_29`, label cutoff `2026-06-22` |
-| What files deploy? | Model artifact uniform resource identifier (URI) plus feature and dependency files |
-| Why is it trusted? | Offline metrics, segment checks, latency test, risk review |
-| Who approved it? | Ranking owner, marketplace product owner, trust-and-safety reviewer |
-| What can use it? | Alias `candidate`, later `shadow`, `canary`, or `production` |
-
-That evidence helps both humans and automation. Humans can review the candidate. CI/CD can read the approved alias. Incident responders can find the previous production version if a release hurts search quality.
-
-![TrailMarket registry record for version 42 surrounded by artifact, source run, data version, approvals, and rollback evidence.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/trailmarket-registry-record.png)
-*A registry record gives TrailMarket version 42 a production identity and keeps the key release evidence in one place.*
-
-## Model Name, Version, And Artifact
-<!-- section-summary: The registry gives a model version a stable identity while artifact storage keeps the deployable files. -->
-
-The first registry job is identity. A registered model name groups versions of the same task. A version is one immutable release candidate under that name. The artifact URI points to the files that training produced and serving will load.
-
-A practical registry record for TrailMarket might look like this:
+The **artifact** is the file or directory that a runtime can load. It may contain learned weights, preprocessing logic, an MLflow `MLmodel` file, a tokenizer, dependency metadata, or a serving container reference. Large artifacts usually live in object storage or a managed artifact repository. The registry stores a durable pointer and, where the platform allows, a digest or equivalent integrity record.
 
 ```yaml
-registered_model:
-  name: trailmarket-search-ranker
-  version: 42
-  task: marketplace_search_ranking
-  owner: search-ml-platform
-  source_run:
-    tracker: mlflow
-    experiment: marketplace-ranking
-    run_id: mlflow-run-20260703-1842
-  artifact:
-    uri: s3://trailmarket-ml-artifacts/search-ranker/42/model/
-    files:
-      - model.xgb
-      - feature_order.json
-      - preprocessing_pipeline.pkl
-      - requirements.lock
-      - evaluation/segment_metrics.csv
-  aliases:
-    - candidate
-  created_by: ci-train-ranking
-  created_at: 2026-07-03T18:42:11Z
-```
-
-The registry record should be small enough to search and stable enough to trust. It should avoid storing giant model binaries directly in the registry database. The binary files belong in object storage or a managed artifact store. The registry keeps names, versions, links, tags, aliases, and review metadata.
-
-This split matters during deployment. The ranking service may receive a model URI such as `models:/trailmarket-search-ranker@candidate`. The registry resolves that alias to version `42`. The artifact URI then tells the service where to download `model.xgb`, `feature_order.json`, and the preprocessing files. A stable registry identity keeps deployment code from hardcoding object storage paths.
-
-## Run Evidence And Lineage
-<!-- section-summary: A registry version should point back to the training run, data version, metrics, artifact digest, and evaluation files that justify the candidate. -->
-
-Lineage means you can trace a model version back to the work that produced it. For TrailMarket, lineage should connect version `42` to the training run, dataset snapshot, feature code, metrics, and review files. Without lineage, the registry is just a list of files with nice names.
-
-The ranking team cares about several metrics. Overall NDCG tells the team whether the ranked list improved. Query coverage shows whether the model can score enough searches. Seller exposure checks whether small sellers lose too much visibility. Moderation leakage checks whether flagged listings rise in ranking. Latency checks whether the model can run inside the search request budget.
-
-```yaml
+registered_model: fraud-risk
+version: 34
+artifact:
+  uri: s3://ml-artifacts/fraud-risk/34/model/
+  digest: sha256:8f7a2c...
+interface:
+  signature: artifact://fraud-risk/34/signature.json
 lineage:
-  model: trailmarket-search-ranker
-  version: 42
-  training:
-    run_id: mlflow-run-20260703-1842
-    git_sha: 51de8f0
-    image: ghcr.io/trailmarket/ranking-train@sha256:ef42c4cf4fc8b506248cd65738eb108cc2f6897dddc38b4073a99f98fb1ec86f
-    feature_pipeline: ranking_features_v9
-    training_table: warehouse.ml.ranking_training_clicks_2026_06_29
-    label_cutoff: 2026-06-22
-  metrics:
-    ndcg_at_10: 0.421
-    click_through_rate_lift_offline: 0.018
-    small_seller_exposure_delta: -0.006
-    moderation_leakage_rate: 0.0008
-    p95_score_latency_ms: 34
-  evidence_files:
-    - s3://trailmarket-ml-reviews/search-ranker/42/model_card.md
-    - s3://trailmarket-ml-reviews/search-ranker/42/segment_metrics.csv
-    - s3://trailmarket-ml-reviews/search-ranker/42/offline_replay.sql
+  source_run: run-91fd
+  data_snapshot: transactions_features@1842
+  code_revision: 2e7c819
+  image_digest: sha256:41ac0b...
+owner: fraud-ml
+validation_status: pending_review
 ```
 
-This record gives the reviewer a path. If small seller exposure drops too far, the reviewer can open `segment_metrics.csv`. If moderation leakage rises, the trust-and-safety reviewer can open the replay query and flagged listing examples. If latency breaches the request budget, the platform owner can compare model file size and feature count against the current production version.
+The version number is an identity inside one registry namespace. It is never a quality score. Version 35 can perform worse than version 34, and two different registries can assign different version numbers to equivalent artifacts. The artifact digest gives the release system a stronger byte-level comparison where the packaging format supports stable hashing.
 
-Lineage also helps with audits and incidents. If the marketplace team later sees a search-quality regression for used climbing gear, the registry version should point to the exact run and dataset. The response should start from recorded evidence rather than guesses about which notebook produced the artifact.
+### Why Immutability Matters
 
-![TrailMarket lineage chain from training data and feature code to tracking run, evaluation files, registry version, and search service.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/trailmarket-lineage.png)
-*Lineage lets TrailMarket trace the search ranker from version 42 back through data, code, run evidence, and evaluation files.*
+Suppose a model engineer replaces the weights behind version 34 after a latency test. The approval record still refers to “version 34,” yet reviewers evaluated different bytes. An incident team can no longer reconstruct the decision. Creating a new version preserves both histories: version 34 remains the reviewed candidate, and version 35 represents the changed artifact.
 
-## Approval Metadata
-<!-- section-summary: Approval metadata records the review decision, approvers, gates, risk notes, and next allowed deployment step. -->
+Azure Machine Learning enforces this idea for model assets by allowing updates to description and tags while keeping the other model-version properties immutable. MLflow and other registries express the same operational pattern through versioned model records. Platform teams should also protect the underlying artifact path from overwrite and deletion.
 
-Approval metadata tells the organization what a model version is allowed to do. A model can be registered as a candidate after offline evaluation, approved for shadow testing after review, approved for canary after live replay, and approved for production after release checks. Teams can use different names, yet the registry should record both the current decision and the evidence behind it.
+## Connect Every Version to Its Lineage
+<!-- section-summary: Lineage connects a registry version to the run, logged model, data, code, configuration, and environment that produced it. -->
 
-For TrailMarket, approval includes more than model quality. Search ranking affects seller visibility, buyer experience, and trust-and-safety exposure. The candidate needs approval from the ranking model owner, marketplace product owner, and trust-and-safety reviewer before it receives live traffic.
+**Lineage** is the evidence chain that explains where a model version came from. In essence, it lets a reviewer walk backward from a production identity to the exact training process and inputs that created it.
+
+Useful lineage includes the source run or job, the selected logged model or checkpoint, the training-data snapshot, feature definitions, label policy, code revision, resolved training configuration, dependency lock, container image, and evaluation artifacts. A registry can store some fields directly and link to the rest. The important property is navigability: a reviewer should move from version to evidence without guessing across unrelated systems.
+
+MLflow 3 makes the **logged model** a first-class tracked object with its own model ID. One run can produce several checkpoints, and metrics can be associated with specific logged models and datasets. Registering the selected logged model creates a governed model version while preserving the link back to that richer training history.
+
+```mermaid
+flowchart TD
+    DA["Data snapshot<br/>(rows available at training time)"] --> RU["Training run<br/>(code and resolved configuration)"]
+    CO["Code and environment<br/>(revision, packages, and image)"] --> RU
+    RU --> LM["Logged model<br/>(selected checkpoint and model ID)"]
+    LM --> EV["Evaluation evidence<br/>(metrics, slices, and limitations)"]
+    EV --> MV["Registry version<br/>(governed production identity)"]
+```
+
+Consider a demand forecast that starts underestimating holiday volume. The model owner opens the deployed version and follows its lineage to the training snapshot. The snapshot ends before a late holiday-promotion update, while the feature pipeline revision already expects that promotion field. This concrete mismatch gives the owner a defensible recovery plan: restore the previous compatible version and rebuild the candidate from a corrected snapshot.
+
+Lineage has limits. A link to `main` or an unversioned table gives a location, though it cannot recreate historical state. Strong lineage uses immutable commits, dataset versions or manifests, pinned environments, and stable artifact identifiers.
+
+## Store the Interface and Validation Evidence
+<!-- section-summary: A deployable registry version needs an input-output contract and the evidence that supports its release claims. -->
+
+A model file can load successfully and still be unusable by its service. The service may send strings where training expected floats, omit a required feature, change column order, or interpret an output incorrectly. A registry therefore needs an **interface contract** alongside the artifact.
+
+In MLflow, a **model signature** describes the expected model inputs, parameters, and outputs. You can think of it as the boundary agreement between the model and its caller. It covers interface compatibility; prediction quality requires separate evaluation evidence. The signature gives validation and serving systems a structured way to catch incompatible requests and outputs.
+
+For example, a credit-risk model expects `income` as a double, `account_age_days` as a long, and `country_code` as a string. The candidate's service integration test sends a null `account_age_days` and receives a schema error before deployment. The API owner can correct the feature contract while the release is still in staging. Without that check, the visible production outcome could be a stream of failed or misinterpreted predictions.
+
+```mermaid
+flowchart TD
+    I["Input signature<br/>(names, types, and required fields)"] --> V["Contract validation<br/>(request checked before scoring)"]
+    M["Registered artifact<br/>(model and preprocessing logic)"] --> V
+    V --> P["Prediction<br/>(declared output shape and type)"]
+    P --> C["Caller integration<br/>(service interprets output correctly)"]
+```
+
+The registry version also needs **validation evidence**. This is the material supporting the claim that the candidate is suitable for its next release step.
+
+Quality evidence compares the candidate with its baseline. The primary metric and uncertainty describe the overall result. Slice, calibration, and robustness reports expose weaknesses hidden by that aggregate. Operational evidence covers latency and memory. Governance evidence links security results and known limitations to the model card or evaluation report.
+
+The registry database is a poor home for a large report. Store compact decision fields as version metadata and link immutable reports as artifacts. The trust behind a tag such as `validation_status=passed` comes from its links to the policy version, evaluator, report, and exact model version.
+
+## Use Aliases and Tags Without Losing Version Identity
+<!-- section-summary: Versions stay fixed, aliases provide movable names, and tags describe review or lifecycle state without rewriting model identity. -->
+
+An **alias** is a movable name that points to one immutable version. You can think of `candidate`, `champion`, or `rollback` as labeled pointers. Version 34 remains version 34, while the `champion` alias may move from version 33 to version 34 after approval.
+
+A **tag** is descriptive key-value metadata. Tags can record `validation_status=passed`, `risk_tier=high`, or `training_region=eu`. Aliases answer “Which version currently has this role?” Tags answer “What do we know about this version?”
+
+```mermaid
+flowchart TD
+    V33["Version 33<br/>(immutable previous candidate)"]
+    V34["Version 34<br/>(immutable approved candidate)"]
+    V35["Version 35<br/>(immutable candidate in review)"]
+    CH["Champion alias<br/>(current release intent)"] --> V34
+    RB["Rollback alias<br/>(approved recovery target)"] --> V33
+    CA["Candidate alias<br/>(version under review)"] --> V35
+```
+
+MLflow's fixed model stages are deprecated. Current MLflow workflows use model-version tags for status and aliases for named references. Unity Catalog models also use aliases and tags; fixed stages are unsupported there. This shift matters because real release workflows need more than a universal `Staging` or `Production` label. One version may be a batch champion, a regional canary, and a rollback target at the same time.
+
+Mutable aliases require care. A batch job that loads `models:/fraud-risk@champion` at the start of every run will follow the newest alias assignment. An online deployment controller should usually resolve that alias to version 34, update the endpoint with the exact version, and record version 34 in the release. If the alias moves again during a rollout, the running endpoint remains attributable to the version it actually loaded.
+
+## Make Ownership, Permissions, and Approval Explicit
+<!-- section-summary: Registry governance defines who owns a model, who may create versions, who may approve release intent, and which evidence supported that decision. -->
+
+A production model needs an accountable **owner**. The owner maintains the model's purpose, evaluation policy, operational contacts, and retirement plan. Ownership may belong to a team instead of an individual so responsibility survives staff changes.
+
+Permissions turn that ownership model into enforceable actions. Mature registries distinguish reading a model, creating a version, editing metadata, assigning aliases, approving a release, and deleting history. The training service account may create candidate versions. A validation role may attach evaluation results. A release role may move a protected alias after approval. Very few principals should delete versions or artifacts.
+
+An **approval** is a recorded decision that the available evidence satisfies a declared policy for a specific next step. Its subject identifies the actor, exact model version, and target release phase. Its basis identifies the policy version and evidence links. Its outcome records the decision plus any expiry or conditions. A free-form comment can add context, though automation needs structured fields.
 
 ```yaml
-approval_packet:
-  model: trailmarket-search-ranker
-  version: 42
-  requested_stage: shadow
-  requested_by: maya.chen@trailmarket.example
+approval:
+  model: clinical-coding-assistant
+  version: 12
+  requested_intent: shadow
+  policy: clinical-model-shadow-v4
+  evidence:
+    evaluation_report: artifact://clinical-coding/12/evaluation.json
+    interface_test: artifact://clinical-coding/12/contract-test.json
+    security_scan: artifact://clinical-coding/12/security.json
+  decisions:
+    clinical-validation: approved
+    privacy-review: approved
+    platform-readiness: approved
+  rollback_version: 11
+```
+
+Suppose the clinical validator finds a large error increase for rare procedure codes before the shadow window. The aggregate metric passes, while the required slice gate fails. The validator records a rejection against version 12 and links the slice report. The deployment role cannot assign the protected `shadow` intent. The visible outcome is a blocked release with a specific remediation path, instead of an unexplained permission error.
+
+Provider capabilities vary. Open-source MLflow supplies registry APIs and metadata; access control depends on MLflow Authentication or the surrounding managed platform. Unity Catalog adds centralized privileges, ownership, auditing, and cross-workspace governance. SageMaker uses IAM and resource policies around model package groups and versions. The organization's approval policy should remain explicit even where the provider offers a convenient status field.
+
+## Treat Promotion as Release Intent
+<!-- section-summary: Promotion records that a reviewed version may enter a release phase, while deployment automation performs the runtime change. -->
+
+**Promotion** means the organization has advanced a model version to a new release intent. For example, version 34 moves from “candidate” to “approved for shadow,” and later to “approved for canary.” The artifact often stays at the same immutable location. The registry changes the reviewed status, protected alias, or environment-specific record that automation consumes.
+
+This is why promotion should preserve a decision trail. Before the scheduled canary window, the model owner submits version 34. The risk reviewer approves the evidence. The release role assigns the canary intent. The deployment controller resolves that intent to version 34 and creates a runtime revision. If endpoint health fails, the controller restores version 33. Each step has a separate actor and timestamp in the audit log.
+
+```mermaid
+flowchart TD
+    C["Candidate version<br/>(immutable artifact and lineage)"] --> G["Approval gate<br/>(policy and evidence review)"]
+    G --> I["Release intent<br/>(alias, status, or promoted asset)"]
+    I --> R["Deployment request<br/>(exact version and runtime config)"]
+    R --> H{"Runtime healthy?<br/>(service checks and model signals)"}
+    H -- Yes --> K["Continue rollout<br/>(record actual deployed version)"]
+    H -- No --> B["Restore rollback version<br/>(deployment controller action)"]
+```
+
+Some organizations separate development and production with different accounts, projects, workspaces, catalogs, or registries. Their promotion process may copy a model version into a production-governed namespace. MLflow and Unity Catalog provide version-copy workflows, while Azure Machine Learning registries can publish assets for use across workspaces. In these designs, promotion must preserve the source identity, digest, lineage, and approval evidence so the copied version remains traceable.
+
+Promoting code can be safer than moving a trained artifact across environments. A production training pipeline can run approved code against production-governed data and register a new production version. The right choice depends on retraining cost, data boundaries, regulatory requirements, and reproducibility. The registry records the resulting identity either way.
+
+## Retain Enough Evidence for Audit and Rollback
+<!-- section-summary: Retention preserves active versions, recovery targets, lineage, approvals, and compatible runtime assets for the required operational and audit window. -->
+
+Registry history has operational value. A previous model version may be the fastest recovery path during an incident. An old approval packet may be required for an audit. A data or code lineage record may explain a slow quality decline months after release.
+
+A retention policy should cover more than model weights. The executable package needs the artifact, serving image, and dependencies. Compatibility depends on the feature contract, runtime configuration, and access to the expected features. Policy evidence explains why the version remains an approved recovery target. Keeping version 33 while deleting its tokenizer or container image creates a rollback label with no executable recovery path.
+
+Archiving usually changes discoverability or lifecycle state while leaving a model version available to referenced workflows. Deletion removes evidence or bytes and deserves stronger controls. Azure Machine Learning, for example, allows archived model assets to remain referenceable. Each team should verify its provider's archive and deletion behavior before automating cleanup.
+
+Consider a ranking model whose current version depends on a new feature-service schema. The incident commander chooses the older rollback alias, yet version 33 expects a field that the feature service has removed. The deployment succeeds and predictions fail. A registry-backed rollback plan would record compatibility requirements and pair the model version with the matching feature and serving release.
+
+The audit trail should capture version creation, metadata changes, approval decisions, alias movements, copies across environments, deployment requests, archive actions, and deletions. These events let reviewers reconstruct what the organization knew and intended at each point.
+
+## Keep the Registry Separate From Deployment
+<!-- section-summary: The registry records approved identity and intent, while deployment and orchestration systems change compute, traffic, schedules, and runtime state. -->
+
+The registry is a control-plane catalog. The deployment system owns runtime changes. For an online endpoint, deployment creates model servers, configures CPU or GPU resources, attaches secrets and networking, runs health checks, and shifts traffic. For batch inference, orchestration schedules jobs, resolves input data, retries failures, and writes outputs.
+
+Moving an alias changes registry intent. Traffic changes only after a deployment system updates the endpoint or a workload deliberately resolves that alias on its next run. This distinction prevents dashboards from claiming that version 34 is live solely because `champion` points to it.
+
+```mermaid
+flowchart TD
+    RI["Registry intent<br/>(version approved for release)"] --> DC["Deployment controller<br/>(resolve, pin, and apply)"]
+    DC --> RT["Runtime state<br/>(version actually loaded)"]
+    RT --> TE["Telemetry<br/>(health, traffic, and model signals)"]
+    TE --> RC["Reconciliation<br/>(compare intended and actual state)"]
+    RC --> DC
+    RC --> AU["Audit record<br/>(release or rollback result)"]
+```
+
+The same separation applies to rollback. The registry identifies the approved recovery version and its evidence. The deployment controller restores it, verifies runtime health, and records the outcome. Airflow, Dagster, Argo Workflows, GitHub Actions, cloud pipelines, or a managed deployment service may perform that work. The registry remains the source of governed model identity across those execution choices.
+
+## Implement the Pattern With MLflow 3
+<!-- section-summary: MLflow 3 tracks models as first-class objects and registers selected logged models as governed versions with signatures, aliases, and tags. -->
+
+MLflow 3 separates the rich tracking identity of a **logged model** from the governed release identity of a **registered model version**. A logged model receives a unique model ID, can represent a checkpoint within a run, and can carry model-specific parameters and metrics. Registration places the selected model under a stable registered-model name and version.
+
+The training job for a fraud classifier can infer its input-output signature, log the candidate, and register that logged model. The registry version starts in review; later automation attaches validation evidence and assigns a protected alias.
+
+```python
+import mlflow
+import mlflow.sklearn
+from mlflow import MlflowClient
+from mlflow.models import infer_signature
+
+with mlflow.start_run():
+    signature = infer_signature(
+        X_valid,
+        classifier.predict_proba(X_valid),
+    )
+
+    logged = mlflow.sklearn.log_model(
+        sk_model=classifier,
+        name="fraud_classifier",
+        signature=signature,
+        input_example=X_valid.head(3),
+    )
+
+registered = mlflow.register_model(
+    model_uri=f"models:/{logged.model_id}",
+    name="fraud-risk",
+)
+
+client = MlflowClient()
+client.set_model_version_tag(
+    name="fraud-risk",
+    version=registered.version,
+    key="validation_status",
+    value="pending",
+)
+```
+
+After review, a release role can assign an alias to the exact approved version:
+
+```python
+client.set_registered_model_alias(
+    name="fraud-risk",
+    alias="candidate",
+    version=registered.version,
+)
+
+resolved = client.get_model_version_by_alias("fraud-risk", "candidate")
+release_version = resolved.version
+```
+
+The deployment request should carry `release_version`, the exact artifact identity, and the runtime configuration. That preserves attribution if the alias later moves. Open-source MLflow registries need a database-backed backend store, and production access controls need MLflow Authentication or a governed managed backend.
+
+## Understand Managed Registry Semantics
+<!-- section-summary: Managed registries implement the shared identity-and-evidence pattern through different resources, permissions, aliases, and deployment integrations. -->
+
+Managed registries share broad goals, though their objects and lifecycle rules differ. A portable release process maps the organization's contract onto each platform instead of assuming identical APIs.
+
+### Databricks Models in Unity Catalog
+
+Databricks provides a hosted MLflow Model Registry in Unity Catalog. Models use a three-level name such as `prod.risk.fraud_model`. New model versions require a model signature. Unity Catalog adds centralized ownership, privileges, lineage, auditing, and access across attached workspaces. It uses aliases and tags for lifecycle workflows; fixed model stages are unsupported.
+
+The catalog and schema can express an environment boundary with separate permissions. The enclosing `prod` catalog says where governance applies, while an alias such as `Champion` expresses deployment intent. A serving or batch deployment job resolves the alias and updates the runtime. Databricks recommends Models in Unity Catalog over the legacy Workspace Model Registry for governed lifecycle management.
+
+### Amazon SageMaker Model Registry
+
+SageMaker groups versions in a **Model Package Group**. Each **model package** is a versioned model record containing artifact and inference information. A package can carry metrics, lineage, model-card information, and an approval status such as `PendingManualApproval`, `Approved`, or `Rejected`.
+
+An `Approved` status expresses eligibility for deployment. A SageMaker Project or EventBridge-driven workflow may react to that status, yet the status change and endpoint update remain distinct operations. Deployment creates a SageMaker model and endpoint configuration, then creates or updates an endpoint. IAM and model-package-group resource policies govern who can register, approve, share, and deploy versions.
+
+### Vertex AI Model Registry
+
+Vertex AI Model Registry organizes several versions beneath one model resource. Version aliases are mutable within that model, and one version carries the required `default` alias. Custom aliases can express roles such as a stable or candidate version. A model version can also carry description, labels, and evaluation information.
+
+The runtime object is separate. Vertex AI deploys a selected model version into an Endpoint as a DeployedModel, and the endpoint owns the traffic split. A deployment request can name a version ID or alias; omitting both selects the default version. Release automation should still record the concrete version that the endpoint loaded.
+
+### Azure Machine Learning Registries
+
+Azure Machine Learning represents a registered model as a versioned model asset. For a model version, description and tags are mutable while the remaining properties are immutable. An exact registry asset URI includes registry name, model name, and version.
+
+Azure Machine Learning registries also share models, environments, components, and data assets across workspaces. This makes the registry useful for development, test, and production workspaces that live in separate subscriptions or regions. A model can be published to the registry and deployed from that asset into an endpoint in another workspace. Azure's versioned asset and archive semantics differ from MLflow's alias-centered workflow, so release code should use Azure's native identifiers and permissions.
+
+## Let a Release Gate Read the Registry Record
+<!-- section-summary: A release gate converts registry evidence into a clear allow or deny decision for one exact version and target release phase. -->
+
+A registry provides the evidence source for an automated release gate. The gate evaluates one immutable version against a versioned policy. It should resolve aliases once, inspect the exact version record, verify evidence links and permissions, and emit a decision that a human can understand.
+
+```yaml
+release_request:
+  model: fraud-risk
+  version: 34
+  target: canary
+required_evidence:
+  signature: present
+  artifact_digest: present
+  lineage: complete
+  evaluation_policy: fraud-canary-v6
+  evaluation_status: passed
+  latency_status: passed
+  security_status: passed
   approvers:
-    - name: Luis Ortega
-      role: ranking-ml-owner
-      decision: approved
-      checked:
-        - ndcg_at_10 >= 0.415
-        - p95_score_latency_ms <= 40
-    - name: Priya Raman
-      role: marketplace-product-owner
-      decision: approved
-      checked:
-        - small_seller_exposure_delta >= -0.010
-        - category_coverage >= 0.985
-    - name: Hana Volk
-      role: trust-and-safety-reviewer
-      decision: approved
-      checked:
-        - moderation_leakage_rate <= 0.001
-        - flagged_listing_examples_reviewed
-  risk_notes:
-    - Watch used-climbing-gear queries during shadow replay.
-    - Roll back to trailmarket-search-ranker:41 if category coverage drops below 0.980.
+    - fraud-model-owner
+    - risk-reviewer
+    - serving-owner
+  rollback_version: 33
+decision_output:
+  deployment_subject: fraud-risk/34
+  result: allow
 ```
 
-This packet teaches the registry how to serve both people and automation. People can read the decision. Automation can enforce that version `42` has the required approvals before a deployment pipeline assigns the `shadow` or `canary` alias. Audit teams can see who approved the release and which checks they reviewed.
+Suppose the model owner requests the canary before the release window. The gate finds complete offline evidence and approval, then discovers that the rollback version's container image has expired from the registry. The request fails with `rollback runtime unavailable`. The serving owner can restore the image or choose another validated recovery version. The visible error identifies the operational gap before traffic changes.
 
-In managed registries, this metadata may appear as tags, custom metadata, approval status fields, model cards, or linked artifacts. The exact field names vary by platform. The engineering standard should stay consistent inside the company: every promoted version needs owner, evidence, approvers, target stage, rollback target, and decision time.
+The gate should never infer approval from a high metric alone. It reads the policy, model signature, lineage, evaluation report, ownership, and rollback evidence as separate requirements. The deployment system then consumes the allowed exact version and reports the real runtime result.
 
-## Registry Versus Artifact Storage
-<!-- section-summary: Artifact storage holds the model files, while the registry stores identity, lifecycle state, metadata, aliases, and review history. -->
+## The Main Idea
+<!-- section-summary: A registry turns a model artifact into a governed version whose origin, interface, evidence, ownership, release intent, and recovery path remain traceable. -->
 
-Teams often confuse the registry with artifact storage because both systems mention model files. The difference is practical. Artifact storage holds bytes. The registry holds meaning around those bytes.
+A model registry gives production meaning to model artifacts. The registered-model name identifies the capability. The immutable version identifies one reviewed candidate. The artifact pointer and digest identify the deployable bytes. Lineage explains how those bytes were produced, while the model signature explains how callers interact with them.
 
-For TrailMarket, the artifact store might contain this folder:
+Aliases and tags express current intent and status without changing version identity. Permissions define who may create, review, promote, archive, or delete. Approval evidence explains why a version may enter a release phase. Retention keeps the artifact, environment, policy, and rollback path available for the required operational and audit window.
 
-```yaml
-s3://trailmarket-ml-artifacts/search-ranker/42/model:
-  model.xgb: "sha256:3a1c..."
-  feature_order.json: "sha256:9bf2..."
-  preprocessing_pipeline.pkl: "sha256:f82d..."
-  requirements.lock: "sha256:77c0..."
-  evaluation/segment_metrics.csv: "sha256:2dd4..."
-```
-
-The registry record points to that folder and adds release context:
-
-```yaml
-registry_state:
-  name: trailmarket-search-ranker
-  version: 42
-  artifact_uri: s3://trailmarket-ml-artifacts/search-ranker/42/model/
-  artifact_digest: sha256:81a0e1f42d8a
-  source_run: mlflow-run-20260703-1842
-  approval_status: approved_for_shadow
-  aliases:
-    candidate: 42
-    production: 41
-  rollback_target: 41
-```
-
-The artifact store should be durable and locked down. The registry should be searchable and reviewable. If a serving service can download artifacts directly from object storage without checking registry state, it can accidentally load an unapproved model. A clean production path makes the registry the source for allowed model versions.
-
-## Where Managed Registries Fit
-<!-- section-summary: Managed registries provide model version catalogs inside cloud or platform workflows, with different strengths around lineage, approval, deployment, and sharing. -->
-
-The registry idea shows up in several platforms. You can understand the workflow before memorizing every product. Start from the questions: where does the model version live, which metadata travels with it, how do approvals work, and how does deployment find the approved version?
-
-| Registry surface | Where it often fits | Useful capability to understand |
-|---|---|---|
-| MLflow Model Registry | Teams using MLflow tracking, Databricks, or an open ML platform | Registered models, versions, aliases, tags, and model URIs |
-| W&B Registry | Teams using W&B artifacts and collaborative model review | Artifact versions, collections, aliases, governance, and automation hooks |
-| SageMaker Model Registry | AWS teams using SageMaker training, pipelines, model packages, and endpoints | Model package groups, model versions, approval status, lineage, model cards |
-| Vertex AI Model Registry | Google Cloud teams using Vertex AI training, BigQuery ML, endpoints, and model metadata | Central model catalog, versions, evaluation, deployment to endpoints |
-| Azure ML registries | Azure teams sharing models, environments, and components across workspaces | Cross-workspace asset sharing and promotion across environments |
-| Databricks Unity Catalog models | Databricks teams governing MLflow models with data and AI assets | Three-level names, permissions, aliases, lineage, audit, and serving integration |
-
-TrailMarket might train in Databricks, track runs with MLflow, store the registered model in Unity Catalog, and deploy the `production` alias to a model serving endpoint. Another team might use SageMaker Pipelines and SageMaker Model Registry so a pipeline condition updates approval status. Another team might use W&B for experiment collaboration and link the winning artifact into W&B Registry before CI pushes the artifact to a separate serving platform.
-
-The product names matter less than the release contract. A registry should give every model version a name, version, artifact link, lineage, approval state, owner, and deployment reference. The serving platform should read that contract rather than hunting through raw training outputs.
-
-For Databricks specifically, use Unity Catalog as the default modern model-governance surface. Workspace Model Registry exists for older workflows, yet Databricks documents it as legacy for new accounts and points lifecycle management toward Unity Catalog models, aliases, permissions, lineage, and deployment jobs.
-
-## Release Checks From A Registry Record
-<!-- section-summary: A registry record should give release automation enough evidence to block unsafe deployment and enough context for humans to review failures. -->
-
-A useful registry record can drive release checks. Before assigning `shadow`, `canary`, or `production`, a pipeline can read registry metadata and verify required evidence. This keeps deployment from treating every uploaded model file as release-ready.
-
-Here is a simplified release check for TrailMarket:
-
-```yaml
-release_check:
-  model: trailmarket-search-ranker
-  requested_alias: shadow
-  version: 42
-  required:
-    source_run_present: true
-    artifact_digest_present: true
-    model_signature_present: true
-    offline_metrics:
-      ndcg_at_10: ">= 0.415"
-      moderation_leakage_rate: "<= 0.001"
-      p95_score_latency_ms: "<= 40"
-    approvals:
-      - ranking-ml-owner
-      - marketplace-product-owner
-      - trust-and-safety-reviewer
-    rollback_target: 41
-```
-
-A CI job can check these fields through the registry API before it changes aliases:
-
-```bash
-python scripts/check_registry_release.py \
-  --model trailmarket-search-ranker \
-  --version 42 \
-  --target-alias shadow \
-  --policy policies/search-ranker-shadow.yml
-```
-
-Example output should be direct and reviewable:
-
-```console
-model=trailmarket-search-ranker version=42 target_alias=shadow
-source_run=mlflow-run-20260703-1842
-artifact_digest=sha256:81a0e1f42d8a
-approvals=ranking-ml-owner,marketplace-product-owner,trust-and-safety-reviewer
-rollback_target=41
-decision=pass
-```
-
-If the check fails, the error should name the missing evidence. A message such as `missing trust-and-safety approval` helps the team fix the review packet. A message such as `release denied` wastes time because the owner has to inspect many systems to find the missing field.
-
-![TrailMarket release gate reading registry evidence before assigning the shadow alias.](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/trailmarket-release-gate.png)
-*Release automation can read registry evidence, pass the complete checks, and block a move when an approval is missing.*
-
-## Putting It Together
-<!-- section-summary: A model registry turns a promising experiment into a reviewed, traceable, deployable model version. -->
-
-A model registry gives production identity to reviewed model versions. It stores model names, versions, artifact links, run evidence, metrics, approvals, aliases, owners, and rollback targets. It helps people review releases and helps automation find the version that is allowed to move forward.
-
-For TrailMarket, the registry connects `trailmarket-search-ranker:42` to the exact run, dataset, metrics, artifacts, approvers, and rollback target. The search team can promote the model with evidence, and the serving platform can load an approved alias instead of a raw object storage path. The next article builds on this by showing how a registered version moves through candidate, shadow, canary, production, archive, and rollback steps.
+The registry records identity and intent. Deployment automation changes endpoints, jobs, devices, and traffic. Keeping that boundary explicit gives release teams, incident responders, auditors, and platform automation one dependable answer to the same question: which exact model version are we talking about, and why is it allowed to run?
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official MLflow guide for registered models, model versions, aliases, tags, and metadata.
-- [W&B Registry](https://docs.wandb.ai/models/registry) - Official W&B guide for registry collections, artifact versions, aliases, governance, and automation.
-- [Amazon SageMaker Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html) - Official SageMaker guide for cataloging models, versions, metadata, approval status, lineage, model cards, and lifecycle stages.
-- [Update the Approval Status of a Model in SageMaker](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html) - Official SageMaker guide for changing model version approval status.
-- [Vertex AI Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction) - Official Google Cloud guide for central model lifecycle management, versions, evaluation, and deployment.
-- [Azure Machine Learning registries for MLOps](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2) - Official Azure guide for using registries across development, testing, and production environments.
-- [Register and work with models in Azure Machine Learning](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-models?view=azureml-api-2) - Official Azure guide for registering model assets with the CLI and SDK.
-- [Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/) - Official Databricks guide for registered models, versions, aliases, permissions, and lifecycle management.
-- [Databricks Workspace Model Registry legacy guide](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/workspace-model-registry) - Official Databricks legacy registry page that explains Workspace Model Registry status for newer workspaces.
+- [MLflow: Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) - Official concepts for registered models, versions, aliases, tags, lineage, signatures, and MLflow 3 model registration.
+- [MLflow: Model Registry Workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Official API workflow and guidance for aliases, tags, environment promotion, and deprecated stages.
+- [MLflow: Experiment Tracking](https://mlflow.org/docs/latest/tracking) - Official MLflow 3 logged-model identity, checkpoint, metric, parameter, and dataset tracking concepts.
+- [Databricks: Manage Model Lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/) - Official guidance for three-level names, required signatures, privileges, aliases, tags, lineage, and deployment jobs.
+- [Amazon SageMaker AI: Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html) - Official model package group, version, metadata, lineage, approval, and deployment overview.
+- [Amazon SageMaker AI: Register a Model Version](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-version.html) - Official model-package registration and approval-status fields.
+- [Amazon SageMaker AI: Deploy a Model From the Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-deploy.html) - Official separation between an approved model package and endpoint deployment.
+- [Vertex AI: Use Model Version Aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias) - Official model-version alias, required default alias, and upload semantics.
+- [Vertex AI: Endpoint and DeployedModel API](https://docs.cloud.google.com/vertex-ai/docs/reference/rpc/google.cloud.aiplatform.v1) - Official runtime resources, version references, and endpoint traffic split semantics.
+- [Azure Machine Learning: Work With Registered Models](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-models?view=azureml-api-2) - Official model-version immutability, archive behavior, asset URIs, and CLI or SDK lifecycle operations.
+- [Azure Machine Learning: Registries for MLOps](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2) - Official cross-workspace registry pattern for models, environments, components, and data assets.

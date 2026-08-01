@@ -10,6 +10,19 @@ aliases:
   - child-security-02-secrets-credentials-in-ml-pipelines
 ---
 
+## Table of Contents
+
+1. [Separate Identity, Credential, Secret, And Permission](#separate-identity-credential-secret-and-permission)
+2. [Prefer Federated, Short-Lived Workload Identity](#prefer-federated-short-lived-workload-identity)
+3. [Split Pipeline Stages by Authority](#split-pipeline-stages-by-authority)
+4. [Use A Secret Manager For Unavoidable Values](#use-a-secret-manager-for-unavoidable-values)
+5. [Deliver Credentials With A Clear Lifetime](#deliver-credentials-with-a-clear-lifetime)
+6. [Design Rotation Before The First Incident](#design-rotation-before-the-first-incident)
+7. [Prevent And Detect Leakage Before Runtime](#prevent-and-detect-leakage-before-runtime)
+8. [Respond By Credential, Identity, And Effect](#respond-by-credential-identity-and-effect)
+9. [Reduce Secrets, Then Govern The Remainder](#reduce-secrets-then-govern-the-remainder)
+10. [References](#references)
+
 An ML pipeline reads warehouses and object stores, pulls container images, writes experiment artifacts, registers models, and deploys services. Each connection needs an identity and permission. Some also need a sensitive value such as an API key, password, private key, or signing secret.
 
 The safest credential is the one the pipeline never stores. Modern cloud and CI platforms can often exchange a verified workload identity for a short-lived token. When a target system still requires a secret value, keep it outside source code and pipeline definitions, deliver only the needed value at runtime, and make rotation and revocation ordinary operations.

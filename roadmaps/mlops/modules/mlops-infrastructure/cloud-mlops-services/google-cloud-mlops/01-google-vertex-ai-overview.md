@@ -3,9 +3,25 @@ title: "Google Cloud Vertex AI"
 description: "Understand Vertex AI as a managed Google Cloud lifecycle for training, pipelines, model registration, prediction, identity, and operations."
 overview: "Vertex AI connects managed execution, ML metadata, Model Registry, and prediction resources. This article explains the architecture and ownership boundaries before using one compact release record to connect the pieces."
 tags: ["MLOps", "advanced", "cloud"]
-order: 3
+order: 1
 id: "article-mlops-mlops-infrastructure-google-vertex-ai-overview"
+aliases:
+  - roadmaps/mlops/modules/mlops-infrastructure/cloud-mlops-services/03-google-vertex-ai-overview.md
 ---
+
+## Table of Contents
+
+1. [Follow The Evidence Chain](#follow-the-evidence-chain)
+2. [Separate Managed Resources From Team Decisions](#separate-managed-resources-from-team-decisions)
+3. [Custom Training Creates A Managed Run Boundary](#custom-training-creates-a-managed-run-boundary)
+4. [Pipelines Coordinate Contracts, Not Arbitrary Scripts](#pipelines-coordinate-contracts-not-arbitrary-scripts)
+5. [Model Registry Is The Release Handoff](#model-registry-is-the-release-handoff)
+6. [Batch And Online Prediction Solve Different Problems](#batch-and-online-prediction-solve-different-problems)
+7. [Monitoring Must Join Cloud Signals With Product Outcomes](#monitoring-must-join-cloud-signals-with-product-outcomes)
+8. [Design Recovery Across Managed Resource Boundaries](#design-recovery-across-managed-resource-boundaries)
+9. [Decide Whether Vertex AI Is The Right Weight](#decide-whether-vertex-ai-is-the-right-weight)
+10. [The Durable Picture](#the-durable-picture)
+11. [References](#references)
 
 **Vertex AI** is Google Cloud's managed platform for training and deploying ML models and AI applications. For predictive ML, its main production resources include custom training jobs, pipeline jobs, experiment and metadata records, Model Registry versions, batch prediction jobs, and online endpoints.
 

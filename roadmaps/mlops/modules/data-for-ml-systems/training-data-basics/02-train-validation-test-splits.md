@@ -1,230 +1,479 @@
 ---
 title: "Dataset Splits"
-description: "Show how teams split data to develop, tune, and judge models."
-overview: "Dataset splits separate model training, tuning, and final evaluation. This article explains train, validation, and test sets, then shows why production teams often use time-based splits for real product decisions."
+description: "Design train, validation, and protected test evidence that matches the model's real deployment claim."
+overview: "Dataset splitting gives model learning, model selection, and final release evaluation different evidence. Learn how production teams protect those roles across repeated tuning, entities, time, sites, rare events, cross-validation, versioned manifests, and release gates."
 tags: ["MLOps", "core", "datasets"]
 order: 2
 id: "article-mlops-data-for-ml-systems-train-validation-test-splits"
 ---
 
-## Dataset Splits Separate Learning From Judgment
-<!-- section-summary: A dataset split gives the model one part of history for learning, one part for tuning, and one untouched part for final judgment. -->
+## Table of Contents
 
-**Dataset splits** divide historical examples into groups with different jobs. The training set teaches the model, the validation set helps the team choose settings and candidates, and the test set gives a final evaluation on data the team held back from tuning decisions.
+1. [Three Questions Need Three Kinds Of Evidence](#three-questions-need-three-kinds-of-evidence)
+2. [Train, Validation, And Test Have Different Roles](#train-validation-and-test-have-different-roles)
+3. [Repeated Tuning Can Contaminate Evaluation](#repeated-tuning-can-contaminate-evaluation)
+4. [Split The Unit That Can Repeat](#split-the-unit-that-can-repeat)
+5. [Use Time To Rehearse Future Deployment](#use-time-to-rehearse-future-deployment)
+6. [Use Groups To Test Unseen Entities Or Sites](#use-groups-to-test-unseen-entities-or-sites)
+7. [Protect Class, Segment, And Rare-Event Coverage](#protect-class-segment-and-rare-event-coverage)
+8. [Use Cross-Validation Inside Development](#use-cross-validation-inside-development)
+9. [Turn The Design Into A Split Contract And Manifest](#turn-the-design-into-a-split-contract-and-manifest)
+10. [Implement The Boundary With Industrial Tooling](#implement-the-boundary-with-industrial-tooling)
+11. [Gate The Release And Verify The Evidence](#gate-the-release-and-verify-the-evidence)
+12. [The Main Idea](#the-main-idea)
+13. [References](#references)
 
-This matters because a model can memorize patterns that only exist in the data it has already seen. If you judge the model on the same rows used for learning and tuning, the score can sound impressive while production performance disappoints the team. A split gives the review a fairer question: how does the model handle examples outside the data used to shape it?
+## Three Questions Need Three Kinds Of Evidence
+<!-- section-summary: Training, model selection, and final release evaluation answer different questions, so they need evidence with different exposure to the development process. -->
 
-The previous article defined examples, features, labels, targets, and prediction time. Splits use those same pieces. You split examples, preserve target meaning, respect label maturity, and keep the prediction timestamp at the center of the design.
+A team trains a classifier, measures it on held-back data, and gets a promising score. The team then changes the features and checks the same held-back data again. It adjusts the model family, threshold, class weights, and missing-value policy, checking that same score after every change. The reported result improves after dozens of iterations.
 
-A split design has five decisions. **Partition purpose** separates fitting, tuning, and final judgement. **Boundary shape** decides whether rows separate randomly, by entity, site, or time. **Label maturity** prevents incomplete outcomes from entering supervised evaluation. **Contamination control** keeps duplicates, preprocessing knowledge, and future facts from crossing the boundary. **Coverage and uncertainty** test whether each partition can support the product claim. The familiar train-validation-test names describe only the first decision.
+Production performance can still disappoint them. The model never directly fitted those held-back labels, yet the development process did. Every decision moved toward what worked on that particular sample. The score now describes both the model and the team’s repeated exposure to the data.
 
-These decisions depend on the deployment claim. A random split can estimate performance on new independent rows from a stable population. It cannot establish performance in a future time period when market conditions change, or at a new hospital when patients from each hospital appear on both sides. The split is therefore part of the evaluation design, not a generic preprocessing step.
+Dataset splitting controls that exposure. At a high level, the model needs three genuinely different questions answered:
+
+1. **Can the algorithm learn useful patterns from the available history?**
+2. **Which candidate and operating policy should the team choose?**
+3. **How well does the frozen choice support the claimed deployment scenario?**
+
+The training set answers the first question. Validation evidence guides the second. A protected test set answers the third after the candidate and decision policy are frozen.
 
 ```mermaid
-flowchart LR
-    Claim["Production generalization claim"] --> Shape["Random, time, entity, or site boundary"]
-    Shape --> Train["Training: fit parameters"]
-    Shape --> Validation["Validation: choose design and thresholds"]
-    Shape --> Test["Protected test: final judgment"]
-    Maturity["Label maturity and prediction time"] --> Shape
-    Contamination["Duplicate, entity, and preprocessing controls"] --> Shape
-    Test --> Decision["Release evidence with coverage and uncertainty"]
+flowchart TD
+    D["Eligible historical examples<br/>with mature labels"] --> B["Split boundary<br/>matching the deployment claim"]
+    B --> T["Training evidence<br/>fit model parameters"]
+    B --> V["Validation evidence<br/>choose model and policy"]
+    B --> E["Protected test evidence<br/>judge the frozen choice"]
+    T --> C["Candidate development"]
+    V --> C
+    C --> F["Freeze features, preprocessing,<br/>model, threshold, and scope"]
+    F --> E
+    E --> R["Release, restrict,<br/>or return to development"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef pink fill:#FB7185,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class D,B yellow;
+    class T,V teal;
+    class C,F blue;
+    class E,R pink;
 ```
 
-The production claim selects the boundary shape. Label maturity decides which examples are eligible. Contamination controls protect the separation, and each partition receives one role. The protected test evidence can then support the same claim the deployed model must satisfy.
+The word **held back** is only part of the design. A random row split may separate files while allowing records from the same patient, customer, device, document, or future period onto both sides. The resulting score can answer a much narrower question than the product team intends.
 
-## A Loan-Risk Split As A Supporting Example
-<!-- section-summary: A loan-risk example shows how delayed labels, changing conditions, and borrower groups constrain split design. -->
+The right boundary follows the **generalization claim**. A support model may need to handle future tickets from known customers. A medical model may need to work at hospitals absent from development data. A vision model may need to inspect new components from machines already represented in training. Those claims call for different splits.
 
-Imagine **Cedar Credit**, a lender that offers small-business working-capital loans. The model predicts whether a new loan application has a high risk of serious delinquency within 90 days after funding. The score helps underwriters decide which applications need extra review.
+## Train, Validation, And Test Have Different Roles
+<!-- section-summary: The three partitions differ by how the development process may use them, rather than by a universal percentage allocation. -->
 
-The dataset has one example per funded application. Features include business age, requested amount, industry code, bank-account cash-flow summaries, prior repayment history, and application channel. The label arrives later because the team needs to wait 90 days after funding to know whether serious delinquency happened.
+The familiar three-way split is easiest to understand as a separation of responsibilities. The percentages can vary. The roles should remain clear.
 
-This delayed label changes the split design. A loan funded last week cannot join supervised training yet because the 90-day outcome is immature. A random split across all rows can also hide time changes, such as a new marketing channel, a recession month, or a policy change that affects future applicants.
+### Training evidence fits learned parameters
 
-## Train, Validation, And Test Sets
-<!-- section-summary: Train, validation, and test sets each serve one review purpose, so their boundaries should stay clear. -->
+The **training set** is the data used by the estimator’s fitting process. A linear model learns coefficients from it. A decision tree chooses splits from it. A neural network updates weights from it. Oversampling, data augmentation, and class weighting belong inside this development path.
 
-The **training set** is the data the algorithm directly learns from. Cedar Credit may train on applications funded from January through March after those labels mature. The model uses those examples to learn relationships between borrower signals and future delinquency.
+Preprocessing that learns from data also fits on training evidence. This includes imputation values, scaling statistics, category vocabularies, target encodings, feature selection, dimensionality reduction, and learned embeddings. In scikit-learn, a `Pipeline` helps keep those fitted transformations inside each training fold.
 
-The **validation set** supports model design choices. The team may compare feature groups, thresholds, regularization values, and model types on April applications. The validation score guides iteration, so the validation set participates in decision-making even though the model training call may avoid fitting on those rows.
+### Validation evidence chooses the system
 
-The **test set** supports the final release review. Cedar Credit can hold back May applications and only evaluate on them after the team chooses the candidate. This gives reviewers a cleaner estimate of future behavior because the team avoided tuning decisions against that set.
+The **validation set** guides choices around the fitted model. Those choices include the model family, hyperparameters, feature groups, preprocessing design, loss, calibration method, decision threshold, fallback policy, and product scope.
 
-| Split | Cedar Credit window | Main use | Who reviews it |
-|---|---|---|---|
-| Train | Funded Jan 1 to Mar 31, labels matured | Fit model parameters | ML engineer |
-| Validation | Funded Apr 1 to Apr 30, labels matured | Choose features, thresholds, candidate | ML engineer and risk analyst |
-| Test | Funded May 1 to May 31, labels matured | Final release evidence | Model review board |
+Suppose an alerting model produces probabilities. The team may choose a threshold that keeps review volume within staffing capacity while preserving a required recall. That threshold is part of the released system, so choosing it consumes validation evidence.
 
-Many tutorials start with a random `train_test_split`, and scikit-learn documents that utility clearly. Production teams still need to ask whether random splitting matches the product question. For Cedar Credit, the product question asks about future applications, so a time-based holdout gives the review a stronger signal.
+A model can be refitted on combined training and validation data after selection. That decision needs a reproducible procedure. The final test still evaluates the refitted candidate only after its features, preprocessing, hyperparameters, and threshold are fixed.
 
-![Cedar Credit split lanes showing loan applications divided into train, validation, and protected test sets](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/train-validation-test-lanes.png)
+### Test evidence judges the frozen choice
 
-*Train, validation, and test sets answer different review questions, so the held-back test lane stays protected from tuning decisions.*
+The **test set** estimates performance for the release claim. The team should avoid using it to choose features, thresholds, hyperparameters, exclusions, or the best candidate. The evaluation run records the frozen candidate and produces overall, segment, uncertainty, and operational metrics.
 
-## Choose The Split Shape
-<!-- section-summary: The deployment question determines whether examples should split randomly, by class, by entity, by time, by site, or through cross-validation. -->
+A failed test is useful evidence. It may reveal drift, weak segment coverage, or a brittle modeling choice. The result returns the work to development. Repeatedly modifying the system and rerunning the same test turns that test into another validation set. A later final review needs newly protected evidence, commonly from a later period or a separately governed holdout.
 
-Train, validation, and test describe what each partition does. A **split shape** describes which examples are allowed to enter each partition. The right shape follows the prediction claim. A random split can support a claim about new independent examples from the same population. It gives weak evidence when the same customer, device, patient, location, or future time period appears on both sides of the boundary.
+There is no universal 70/15/15 rule. Large datasets can reserve a smaller fraction and still retain strong test precision. Rare outcomes may require a longer test period. A costly site holdout may contain far more than 20% of the rows. Split size follows the uncertainty and coverage needed for the release decision.
 
-Use this decision map before writing split code:
+## Repeated Tuning Can Contaminate Evaluation
+<!-- section-summary: Any dataset that repeatedly influences model choices participates in tuning, even if no training function directly fits on its labels. -->
 
-| Production question | Useful split shape | Boundary to protect |
-|---|---|---|
-| New independent rows from a stable population | Random split, often stratified by target | Preserve class balance without copying duplicate examples across partitions |
-| New events for entities already seen in history | Time split, with an entity-overlap report | Later events stay outside earlier training windows |
-| New customers, patients, devices, or sellers | Group split by entity | One entity stays in one partition |
-| New hospitals, stores, regions, or factories | Group or site holdout | One operating site stays outside training |
-| Forecasting future periods | Blocked time split or rolling evaluation | Training time always precedes evaluation time |
-| Small independent dataset | Cross-validation, with stratified or grouped folds as needed | Every fold follows the same leakage rules |
+Evaluation contamination is often described too narrowly as “training on the test set.” The deeper issue is adaptive decision-making. A human or automated search observes a result and changes the system in response.
 
-**Stratification** preserves an important distribution, usually the target class ratio, across partitions. **Group splitting** keeps every row for one entity or site together. **Blocked time splitting** gives each partition a continuous time window. **Rolling evaluation** repeats training and evaluation across several historical cutoffs so reviewers can see whether the model survives more than one period. These controls can combine. A fraud model may use time blocks and also report merchant overlap, while a medical model may hold out entire hospitals and preserve outcome balance inside the remaining folds.
+### The best score can overfit the validation sample
 
-Cross-validation supports model selection when one holdout would waste too much data. The team still needs a final protected test set when repeated tuning decisions use the folds. For grouped or time-dependent data, use a splitter that preserves those boundaries instead of default random K-fold validation. The chosen split shape, group key, cutoff time, and exclusion rules belong in the dataset manifest so later runs use the same judgment boundary.
+Imagine testing one hundred feature and hyperparameter combinations on one validation set. Some candidates will score unusually well through sample noise. Selecting the highest score favors both real signal and good luck. More searching increases the chance of choosing a candidate that exploits peculiarities in that validation period.
 
-## Why Time Often Drives Production Splits
-<!-- section-summary: Time-based splits match production questions when labels mature later and future data can differ from past data. -->
+Validation remains valuable because development needs feedback. The response is to measure uncertainty, limit unprincipled search, use cross-validation where appropriate, and keep final evidence outside the loop. A tuning log should record which dataset influenced each decision.
 
-A **time-based split** uses the prediction timestamp to separate older examples from later examples. Cedar Credit trains on older funded applications and evaluates on later funded applications. This mirrors the production pattern where the model trains from past loans and scores new applicants.
+```mermaid
+sequenceDiagram
+    participant Dev as Development process
+    participant Val as Validation evidence
+    participant Test as Protected test
+    participant Gate as Release gate
 
-Time splits also help the team notice drift. If validation works well for April and test drops in May, the review can inspect May-specific changes: new marketing campaigns, different industries, updated underwriting policy, or a delayed bank-data provider feed. A random split would mix those changes across train and test, hiding the calendar story.
-
-The label maturity window needs its own rule. If the target is 90-day delinquency, the team should only include applications at least 90 days old, plus any operational buffer needed for payment processing. The dataset builder can enforce that with SQL:
-
-```sql
-SELECT
-  application_id,
-  business_id_hash,
-  funded_ts AS prediction_ts,
-  requested_amount_usd,
-  business_age_months,
-  avg_daily_balance_90d,
-  overdraft_count_90d,
-  industry_code,
-  application_channel,
-  delinquent_90d
-FROM ml_curated.loan_risk_examples
-WHERE funded_ts < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 97 DAY);
+    Dev->>Val: Compare candidate A
+    Val-->>Dev: Metrics and segment results
+    Dev->>Val: Compare revised candidate B
+    Val-->>Dev: Metrics and segment results
+    Dev->>Val: Choose threshold and scope
+    Val-->>Dev: Operating-point evidence
+    Dev->>Gate: Freeze candidate and policy
+    Gate->>Test: Run one governed evaluation
+    Test-->>Gate: Final release evidence
 ```
 
-The `97 DAY` cutoff gives the label 90 days to mature and adds a seven-day buffer for late payment events. That buffer should appear in the split contract so reviewers understand which rows were eligible.
+### Looking at the test changes its role
 
-![Time-based Cedar Credit split timeline with January through March train, April validation, May test, and a 90-day label maturity window plus seven-day buffer](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/time-based-split-label-maturity.png)
+The test set can be opened for the governed final evaluation. Its metrics then inform the release decision. That exposure should be recorded. If reviewers investigate individual test errors and redesign the system around them, the data has supplied development knowledge.
 
-*A time-based split uses the prediction timestamp for the train, validation, and test windows, then waits until delayed labels are mature enough to review.*
+The old test data remains useful for later development and regression testing. It no longer supplies an untouched estimate for the revised candidate. The team protects a new final set or waits for a sufficiently independent future evaluation window.
 
-## Write The Split Contract
-<!-- section-summary: A split contract makes the split windows, label maturity rule, stratification needs, and exclusions reviewable. -->
+Automated model selection follows the same rule. A CI pipeline that promotes whichever candidate wins on the test set is tuning on that set. The label “test” in a filename cannot preserve independence; only the data’s actual use can.
 
-A **split contract** is a small config that records how the dataset was divided. It should travel with the training run because split choices influence every metric. When someone asks why a model passed review, the team should find the exact windows and exclusions rather than reconstructing them from notebook cells.
+## Split The Unit That Can Repeat
+<!-- section-summary: The split unit should contain all rows that share information capable of making evaluation examples too familiar. -->
+
+A row is often smaller than the real independent unit. One customer can create many transactions. One patient can have many visits. One device can emit thousands of sensor windows. One original photograph can produce many crops. Random row splitting can place near-duplicates or related observations into every partition.
+
+### Entity overlap can make recognition look like generalization
+
+Suppose a model predicts whether a machine will fail. Each machine contributes hourly windows. A random row split lets the model learn the vibration baseline of machine `M42` from training and receive later windows from the same machine in test. That may be valid if deployment scores future windows from known machines. It gives weak evidence for a claim about entirely new machines.
+
+The **split unit** is the smallest group that must stay together to support the claim. It may be a customer, patient, device, seller, household, source document, image session, or site. Every derived row and duplicate belonging to that unit follows the same assignment.
+
+```mermaid
+mindmap
+  root((Choose the split unit))
+    Repeated entities
+      Customer
+      Patient
+      Device
+      Seller
+    Shared origin
+      Source document
+      Image session
+      Recording
+    Shared operations
+      Hospital
+      Store
+      Factory
+      Region
+    Time dependence
+      Earlier event
+      Later event
+      Label window
+```
+
+Duplicate control runs before and after assignment. Exact duplicate IDs should not cross partitions. Near-duplicate text, perceptual image hashes, repeated sensor windows, or records copied through reconciliation may need domain-specific detection. Removing only exact rows can leave almost identical evidence on both sides.
+
+### The split unit and metric unit can differ
+
+A patient-level split can still report visit-level predictions. The uncertainty calculation should account for correlated visits, often through patient-level bootstrap sampling or aggregation. Treating every visit as independent can produce confidence intervals that look more precise than the evidence supports.
+
+The same reasoning applies to users with many interactions and devices with many windows. Split membership protects independence across partitions. Metric estimation must also respect the dependency structure inside each partition.
+
+## Use Time To Rehearse Future Deployment
+<!-- section-summary: Time-based splits train on earlier decisions and evaluate on later ones, preserving label maturity and realistic gaps between feature and outcome windows. -->
+
+Many production models learn from the past and score later events. A time-based split rehearses that direction: training precedes validation, and validation precedes the protected test period.
+
+### Prediction time controls the boundary
+
+Use the timestamp of the real prediction opportunity. Order fulfillment time is too late for a model that scores at checkout. Diagnosis completion is too late for a model that assists triage. The split timestamp should match the decision moment defined by the dataset contract.
+
+For a delayed outcome, recent rows may lack mature labels. A churn label defined over the next 30 days needs at least 30 days of outcome observation, plus an operational buffer for late events. Immature examples stay outside supervised evaluation.
+
+```mermaid
+flowchart TD
+    H["Historical prediction opportunities"] --> M["Remove rows without<br/>mature outcome windows"]
+    M --> T["Earlier block<br/>training"]
+    T --> G1["Optional gap<br/>for overlapping windows"]
+    G1 --> V["Later block<br/>validation"]
+    V --> G2["Freeze candidate<br/>and preserve final boundary"]
+    G2 --> E["Latest mature block<br/>protected test"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef pink fill:#FB7185,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class H,M yellow;
+    class T teal;
+    class G1,G2 blue;
+    class V,E pink;
+```
+
+A **gap** or **embargo** can protect boundaries where examples use overlapping history or future label windows. For example, a feature may summarize 14 days of device activity and a label may observe failure over the next seven days. Rows immediately beside a boundary can share much of the same raw evidence. The gap length follows those windows and the leakage threat.
+
+### One future period may give a fragile answer
+
+A single time holdout can be unusually calm, seasonal, or affected by one incident. Rolling-origin evaluation repeats the historical rehearsal across several cutoffs. Each fold trains on earlier data and evaluates on its next period. Reviewers can see average performance, variability, and sensitivity to specific regimes.
+
+scikit-learn’s `TimeSeriesSplit` provides expanding time-ordered folds with optional `gap`, `test_size`, and `max_train_size`. Its documentation notes that equally spaced samples are needed for comparable fold durations. Event datasets with irregular spacing, multiple entities, or complex label windows often need a custom splitter or a SQL-built manifest.
+
+The latest mature period can remain outside rolling development as the final test. Cross-validation over earlier periods supports selection; the final period tests the frozen procedure against the most recent eligible evidence.
+
+## Use Groups To Test Unseen Entities Or Sites
+<!-- section-summary: Group-aware splits keep related rows together and can hold out whole entities, organizations, devices, or sites that deployment must generalize to. -->
+
+Group-based splits answer a different question from ordinary time splits. A time split can include the same entities in earlier and later periods. A group split asks how the model behaves on groups absent from fitting.
+
+### Match the group to the deployment claim
+
+A medical model deployed to new hospitals should hold out hospitals, rather than only patients. A personalization model that serves returning users may allow user overlap across time. Its cold-start claim needs a separate user-held-out evaluation. A quality model expected to move to a new factory needs factory-level evidence even if each factory contains many machines.
+
+GroupKFold keeps every group in one fold. GroupShuffleSplit creates randomized group-level holdouts. StratifiedGroupKFold attempts to preserve class proportions while keeping groups separate. scikit-learn describes stratification here as an engineering aid for workable folds; it cannot guarantee a perfect class balance under restrictive group structures.
+
+### Time and groups sometimes need one combined rule
+
+A model may need to score future events for both established and new customers. One evaluation can contain two cohorts:
+
+- later events from entities represented in the training period;
+- later events from entities first observed after the training cutoff.
+
+The overall score answers the mixed production workload. Separate cohort metrics reveal whether cold-start behavior is weaker. Another design may reserve entire sites across every time period and perform rolling evaluation inside the remaining sites.
+
+There is no universal library call for every combination. Large platforms often build assignments in SQL, Spark, or a dataset pipeline from explicit entity, site, and time rules. The resulting manifest is then consumed by training libraries instead of recreating the split inside each experiment.
+
+## Protect Class, Segment, And Rare-Event Coverage
+<!-- section-summary: A structurally correct boundary still needs enough outcomes and product segments to support the metrics used in a release decision. -->
+
+A clean split can still produce weak evidence. A fraud test set with five confirmed positives cannot support a stable recall claim. A medical holdout containing one small hospital cannot establish broad site performance. Coverage design asks whether each partition contains enough of the cases the product decision cares about.
+
+### Stratification preserves prevalence only where the boundary allows it
+
+**Stratification** tries to preserve a class distribution across partitions or folds. It is useful for independent rows with an imbalanced target. It should not break the more important entity or time boundary. A perfectly balanced random split can still leak users or future information.
+
+For time splits, natural prevalence changes are often part of the deployment challenge. Forcing every period to have the same rate can erase the shift the evaluation is meant to reveal. Record the observed prevalence and choose metrics that remain meaningful under imbalance.
+
+Training data may use oversampling, undersampling, or synthetic examples. Validation and test sets should preserve the evaluation population. Artificially balancing the test set changes predictive values and hides operational workload unless the metrics are reweighted back to deployment prevalence.
+
+### Rare events require more independent observation
+
+Rare outcomes often require a longer evaluation window, several rolling periods, or broader governed data access. Reviewers should see the number of positives and negatives behind each metric.
+
+The metric should match the decision. Precision-recall curves and average precision describe ranking under class imbalance. Recall at a fixed review workload describes an operating point. Calibration metrics show whether predicted probabilities support risk-based action.
+
+Uncertainty should accompany the estimate. Bootstrap intervals can resample the independent unit, such as customers or hospitals. Very small counts may need exact binomial intervals for simple rates. A wide interval is a truthful result; suppressing it only hides uncertainty.
+
+### Segment claims need segment evidence
+
+Required segments come from product scope, risk analysis, geography, device type, channel, and policy obligations. For each split, record row count, independent-unit count, positive count, label rate, missingness, and key feature coverage. Intersectional segments may reveal failures hidden in one-dimensional reports.
+
+If a required segment lacks evidence, the release can wait for more data, narrow its supported scope, add human review, or launch with an explicit monitoring gate. A global metric supports only the populations represented by adequate evidence.
+
+## Use Cross-Validation Inside Development
+<!-- section-summary: Cross-validation reuses development data across structured folds, while a separately protected test remains outside model and policy selection. -->
+
+Cross-validation helps a team learn from limited data. It rotates which development examples act as validation evidence and summarizes performance across folds. Its value comes from making better use of development evidence; the folds still need a boundary that matches the deployment claim.
+
+### Fold design carries the same leakage rules
+
+Ordinary K-fold validation assumes rows can be exchanged across folds. GroupKFold protects repeated entities. StratifiedGroupKFold also tries to preserve class proportions. TimeSeriesSplit preserves order. Custom folds may be needed for sites, overlapping windows, spatial dependence, or combined entity-time constraints.
+
+Every fitted transformation belongs inside each fold. If a scaler, imputer, vocabulary, or feature selector is fitted once on the full development dataset before cross-validation, validation folds influence the transform. A pipeline should fit those components on the training portion of each fold.
+
+### Nested cross-validation estimates a tuning procedure
+
+Repeated hyperparameter search can overfit cross-validation results. **Nested cross-validation** adds an inner loop for model selection and an outer loop for evaluation. The outer score estimates the whole selection procedure rather than the single best inner-fold result.
+
+```mermaid
+flowchart TD
+    D["Development data"] --> O["Outer fold"]
+    O --> I["Inner training and validation folds"]
+    I --> S["Choose hyperparameters<br/>and preprocessing"]
+    S --> P["Evaluate chosen procedure<br/>on outer holdout"]
+    P --> A["Aggregate outer-fold<br/>performance and variability"]
+    A --> F["Freeze final procedure"]
+    F --> T["Evaluate once on<br/>protected test data"]
+
+    classDef yellow fill:#FFE04F,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef teal fill:#2DD4BF,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef blue fill:#93C5FD,stroke:#536A9A,color:#111827,stroke-width:2px;
+    classDef pink fill:#FB7185,stroke:#536A9A,color:#111827,stroke-width:2px;
+    class D,O yellow;
+    class I,S teal;
+    class P,A blue;
+    class F,T pink;
+```
+
+Nested CV costs more computation and can be unnecessary for large datasets with strong, representative holdouts. It is useful for small datasets, extensive tuning, and situations where selection bias materially affects the claim.
+
+### The final test stays outside cross-validation
+
+The protected test estimates the frozen development procedure on evidence untouched by inner and outer selection. For a future-deployment claim, it can be the latest mature time block. For a new-site claim, it can be separately held-out sites. Its design should remain consistent with the same grouping, time, and label-maturity rules.
+
+## Turn The Design Into A Split Contract And Manifest
+<!-- section-summary: A split contract records the intended boundary, while a versioned manifest records the exact membership produced by that boundary. -->
+
+A seed and a percentage leave important details unresolved. Source rows can arrive in a different order, duplicates can be corrected, labels can mature, and library algorithms can evolve. Reproduction needs both the rule and the exact data version.
+
+### The contract records intent
+
+A **split contract** explains the deployment claim, unit, clocks, label maturity, boundaries, exclusions, coverage requirements, and allowed use of each partition.
 
 ```yaml
-dataset: cedar_credit_loan_risk_examples
-target: delinquent_90d
-prediction_timestamp: funded_ts
-label_maturity:
-  outcome_window_days: 90
-  processing_buffer_days: 7
-splits:
-  train:
-    funded_ts: "2026-01-01T00:00:00Z..2026-03-31T23:59:59Z"
-  validation:
-    funded_ts: "2026-04-01T00:00:00Z..2026-04-30T23:59:59Z"
-  test:
-    funded_ts: "2026-05-01T00:00:00Z..2026-05-31T23:59:59Z"
-exclude:
-  - applications_with_manual_fraud_hold
-  - applications_missing_required_bank_feed
-review_segments:
-  - industry_code
-  - application_channel
-  - requested_amount_band
-  - state
+split_contract:
+  version: 4
+  claim: future events for known and newly arriving accounts
+
+  source:
+    dataset: governed.risk_examples
+    snapshot: ${TABLE_SNAPSHOT}
+    example_id: decision_id
+
+  boundary:
+    prediction_time: decision_at
+    group_key: account_id
+    order: time
+    train: earliest_12_periods
+    validation: next_2_periods
+    test: final_2_mature_periods
+    embargo_days: 7
+
+  label_maturity:
+    outcome_window_days: 30
+    late_event_buffer_days: 3
+
+  allowed_use:
+    train: fit transforms and model parameters
+    validation: select candidate, threshold, and release scope
+    test: one governed evaluation after candidate freeze
+
+  required_reports:
+    - overall
+    - returning_accounts
+    - new_accounts
+    - required_product_segments
 ```
 
-The contract names the target, timestamp, windows, exclusions, and review segments. It also helps later rebuild work because the dataset version can point to the same config. If the team changes the window, the model review should treat it as a new evaluation setup.
+Relative period names keep the contract reusable. The materialized manifest resolves them to precise cutoffs for one dataset release. The source snapshot may be a Delta version, Iceberg snapshot, warehouse snapshot, immutable object prefix, lakeFS commit, or DVC-tracked revision.
 
-You can implement a simple split assignment in SQL:
+### The manifest records exact membership
 
-```sql
-SELECT
-  *,
-  CASE
-    WHEN funded_ts >= TIMESTAMP '2026-01-01 00:00:00 UTC'
-     AND funded_ts < TIMESTAMP '2026-04-01 00:00:00 UTC' THEN 'train'
-    WHEN funded_ts >= TIMESTAMP '2026-04-01 00:00:00 UTC'
-     AND funded_ts < TIMESTAMP '2026-05-01 00:00:00 UTC' THEN 'validation'
-    WHEN funded_ts >= TIMESTAMP '2026-05-01 00:00:00 UTC'
-     AND funded_ts < TIMESTAMP '2026-06-01 00:00:00 UTC' THEN 'test'
-    ELSE 'excluded'
-  END AS split_name
-FROM ml_curated.loan_risk_examples
-WHERE funded_ts < TIMESTAMP '2026-06-01 00:00:00 UTC';
+The **split manifest** is a small, durable dataset that maps each immutable example ID to `train`, `validation`, `test`, `gap`, or `excluded`. It also records the contract version, source snapshot, assignment reason, group ID or hash, prediction time, and label-maturity status.
+
+Storing the manifest as Parquet or a governed table scales better than copying the full dataset into three folders. Training jobs join against it. Review queries can prove that an entity or example appears in only one protected partition. A checksum or digest detects accidental changes.
+
+Randomized assignments still record a seed, splitter name, library version, and source ordering policy. Hash-based assignment can remain stable as data grows. Hash the protected unit itself: `account_id` keeps the account together, while `transaction_id` can scatter one account across partitions.
+
+## Implement The Boundary With Industrial Tooling
+<!-- section-summary: Production stacks build a versioned assignment once, validate it in the data platform, and pass the same membership to training and evaluation tools. -->
+
+The implementation can stay small after the boundary is well defined. The important design choice is to produce one authoritative assignment rather than letting every notebook invent its own split.
+
+### Use library splitters for local and moderate-size data
+
+scikit-learn provides `train_test_split` for independent random rows, GroupShuffleSplit for group holdouts, StratifiedGroupKFold for class-aware grouped folds, and TimeSeriesSplit for ordered folds. This group-aware three-way split keeps each account in one partition:
+
+```python
+from sklearn.model_selection import GroupShuffleSplit
+
+outer = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=17)
+development_idx, test_idx = next(
+    outer.split(rows, labels, groups=rows["account_id"])
+)
+
+inner = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=29)
+train_local, validation_local = next(
+    inner.split(
+        rows.iloc[development_idx],
+        labels.iloc[development_idx],
+        groups=rows.iloc[development_idx]["account_id"],
+    )
+)
+
+train_idx = development_idx[train_local]
+validation_idx = development_idx[validation_local]
 ```
 
-This dataset release has an evaluation as-of time of `2026-09-06T00:00:00Z`. Subtracting the 90-day outcome window and seven-day processing buffer gives a latest eligible funding time of `2026-06-01T00:00:00Z`. The query uses that eligibility cutoff, rather than the evaluation date itself, so every May test label has had time to mature.
+The second 25% split applies only to the 80% development portion, producing an approximate 60/20/20 allocation. Group counts, row counts, and class balance will vary. CI should verify coverage rather than assuming the requested fractions guarantee it.
 
-The split column should be stored with the dataset or reproduced from a versioned query. A training script should read the split assignment instead of inventing a fresh split every time.
+### Build large or combined splits in the data platform
 
-## Check Segment Coverage
-<!-- section-summary: Segment checks confirm that each split has enough examples and label coverage for important groups. -->
+SQL, dbt, Spark, Databricks, BigQuery, Snowflake, or another governed data platform is often a better place for large time-and-group assignments. The job reads a pinned snapshot, filters mature labels, assigns periods and groups, writes the manifest, and runs data tests.
 
-A split can satisfy the date windows and still fail the review. Cedar Credit needs enough examples for important borrower groups, because one summary AUC can hide weak behavior for new businesses, high loan amounts, or a specific application channel.
+dbt tests or equivalent checks can enforce unique example IDs, accepted split names, non-null group keys, and referential coverage. Custom queries verify zero forbidden group overlap, chronological ordering, gaps, positive counts, and segment coverage. Delta Lake or Iceberg preserves the physical data version used to create the manifest.
 
-Segment checks give the model review a practical view of coverage. They should report row count, positive label rate, and missing-feature rate by split and segment. Small groups may still appear in the data, yet reviewers should see when a metric lacks enough examples for a confident decision.
+DVC fits file-oriented projects that need data references versioned alongside Git. lakeFS can provide Git-like commits over object-store data. These tools solve data-version identification and reproduction; the split contract still defines the statistical boundary.
 
-```sql
-SELECT
-  split_name,
-  application_channel,
-  COUNT(*) AS rows,
-  AVG(delinquent_90d) AS delinquency_rate,
-  COUNTIF(avg_daily_balance_90d IS NULL) / COUNT(*) AS missing_balance_rate
-FROM ml_curated.loan_risk_split_examples
-GROUP BY split_name, application_channel
-ORDER BY application_channel, split_name;
+### Track the evidence with the model run
+
+MLflow datasets can record a name, source, digest, schema, profile, and target. Each partition can be logged with a distinct context:
+
+```python
+for name, frame in split_frames.items():
+    dataset = mlflow.data.from_pandas(
+        frame,
+        source=manifest_uri,
+        name=f"risk_examples_{name}",
+        targets="label",
+    )
+    mlflow.log_input(dataset, context=name)
 ```
 
-A review packet can use simple thresholds:
+The manifest URI, source snapshot, contract version, and tuning-history reference should also be run tags or artifacts. Tracking metadata improves traceability. The governed table or versioned object remains the source needed to rebuild the rows.
 
-| Check | Release threshold | Response |
-|---|---|---|
-| Test rows | At least 10,000 rows overall | Extend test window or reduce scope |
-| Positive labels | At least 400 positives overall | Wait for more mature labels |
-| Segment rows | At least 500 rows for required segments | Mark metric as directional and keep monitoring |
-| Missing bank-feed rate | Within 2 percentage points across splits | Inspect ingestion or exclude affected rows |
+Managed training systems such as SageMaker, Vertex AI, Azure Machine Learning, and Databricks can consume explicit channels, tables, queries, or files for each split. Their experiment trackers and registries help retain evidence. None can infer the correct entity, time, site, or label boundary from generic train and test filenames.
 
-These checks stop the team from over-reading weak evidence. If the May test set has almost no loans from a new partner channel, the release can still proceed for existing channels while the partner channel gets a separate monitoring gate.
+## Gate The Release And Verify The Evidence
+<!-- section-summary: Release gates prove partition integrity, candidate independence, coverage, and reproducibility before anyone relies on the final metric. -->
 
-## Runbook For Split Problems
-<!-- section-summary: A split runbook tells the team what to do when labels are immature, segments are thin, or validation and test disagree. -->
+A trustworthy split produces testable facts about membership, timing, coverage, and process independence. The data pipeline verifies the data-boundary facts before training. The release workflow then verifies that model selection and final evaluation used each partition only for its assigned purpose.
 
-Split failures should create a response path, not a vague debate. Cedar Credit can use a short runbook that names the owner, evidence, and next action. This keeps pressure from pushing an under-reviewed model into production.
+### Verify membership and boundary integrity
 
-| Problem | Evidence | Owner | Action |
-|---|---|---|---|
-| Labels are immature | Recent rows fail the maturity cutoff | Data engineering | Rebuild after the maturity date, then rerun validation |
-| Test set is too small | Row or positive-label threshold fails | ML lead | Extend holdout window or narrow release scope |
-| Segment missing | Required segment has weak coverage | Risk analyst | Add segment-specific monitoring and avoid broad claims |
-| Validation passes and test fails | Metric gap exceeds review threshold | ML engineer | Inspect drift, data quality, and feature changes before release |
+Every eligible example receives exactly one assignment. Train, validation, and test example IDs are disjoint. Forbidden group overlap is zero. Time windows follow the required order. Embargo rows stay outside adjacent partitions. Every supervised row has a mature label.
 
-This runbook matters because split design touches both science and operations. The data team owns maturity and eligibility, the ML team owns modeling decisions, and the risk team owns whether the evidence supports the business action.
+The job also detects duplicate and near-duplicate leakage using domain-appropriate identifiers. Preprocessing pipelines are fitted from training evidence inside each fold. A feature-availability audit checks that each example uses information available at its prediction time.
 
-## Putting It Together
-<!-- section-summary: Dataset splits turn one historical table into a fairer release review by separating learning, tuning, and final evidence. -->
+### Verify evidence strength
 
-Cedar Credit uses the prediction timestamp and label maturity rule to split funded loan applications into train, validation, and test sets. The train set teaches the model, the validation set guides iteration, and the test set supports the final release decision.
+Each partition reports total examples, independent units, target prevalence, positive count, missingness, and required segment coverage. Evaluation metrics include uncertainty and operational context. A threshold metric should state its workload, such as recall at a maximum review rate.
 
-The split contract gives the team a reproducible setup. Segment checks then prove the splits have enough examples for the groups the business cares about. This prepares you for the next topic: leakage, where the biggest risk is letting information cross the boundary that the split was supposed to protect.
+For a time claim, rolling results reveal stability across periods. For a new-site claim, site-level results reveal whether one large site dominates the aggregate. For rare outcomes, the gate can require a minimum event count or narrow the release scope.
 
-![Split contract review packet showing split windows, maturity rules, exclusions, segments, row counts, label rates, and missing rates](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/split-contract-review-packet.png)
+### Verify process independence and reproducibility
 
-*The split contract and coverage checks turn a historical table into fairer release evidence instead of a one-number model score.*
+The release record identifies every candidate compared on validation evidence and confirms that the test remained outside those choices. It pins code, parameters, feature definitions, source snapshot, split contract, manifest digest, model artifact, and metric implementation.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Built
+    Built --> Rejected: membership or maturity check fails
+    Built --> Development: integrity and coverage pass
+    Development --> Frozen: candidate and policy approved
+    Frozen --> Tested: governed test run completes
+    Tested --> Released: evidence and scope pass
+    Tested --> Restricted: only supported segments pass
+    Tested --> Rework: evidence fails
+    Rework --> Development: test joins development evidence
+    Restricted --> Released: new evidence expands scope
+    Rejected --> Built: source or contract repaired
+```
+
+A failing test should preserve the failure rather than overwrite it with another “final” run. The team diagnoses the cause, updates the model or scope, and returns to validation. A newly protected test window supports the revised release.
+
+Reproducibility verification reruns the manifest job against the pinned snapshot and contract. It compares membership counts and digest with the released manifest. The model evaluation then reruns from the frozen artifact and metric code. Matching results leave a reproducible audit record tied to the released manifest and model artifact.
+
+## The Main Idea
+<!-- section-summary: A good split protects independent answers to learning, selection, and final release questions while matching the real deployment boundary. -->
+
+Train, validation, and test describe how evidence may influence development. The split shape describes which examples belong together. Both parts matter.
+
+Random stratification can suit independent rows from a stable population. Time blocks rehearse future deployment. Group holdouts test unseen entities or sites. Rolling and nested cross-validation strengthen development evidence under limited data. A final protected test judges the frozen procedure and product scope.
+
+The practical standard is clear: state the deployment claim, protect the unit that can repeat, respect prediction time and label maturity, verify rare outcomes and segments, record exact membership, and preserve the data and code versions behind the result. A model score deserves trust only if the team can explain what question its split actually answered.
 
 ## References
 
-- [scikit-learn train_test_split documentation](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html)
-- [scikit-learn TimeSeriesSplit documentation](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html)
-- [scikit-learn common pitfalls: data leakage](https://scikit-learn.org/stable/common_pitfalls.html#data-leakage)
-- [dbt data tests documentation](https://docs.getdbt.com/docs/build/data-tests)
+- [scikit-learn cross-validation guide](https://scikit-learn.org/stable/modules/cross_validation.html)
+- [scikit-learn train_test_split](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.train_test_split.html)
+- [scikit-learn GroupShuffleSplit](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupShuffleSplit.html)
+- [scikit-learn StratifiedGroupKFold](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedGroupKFold.html)
+- [scikit-learn TimeSeriesSplit](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html)
+- [scikit-learn nested versus non-nested cross-validation](https://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html)
+- [scikit-learn common pitfalls and data leakage](https://scikit-learn.org/stable/common_pitfalls.html)
+- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [Delta Lake table history](https://docs.delta.io/delta-utility/)
+- [Apache Iceberg Spark queries](https://iceberg.apache.org/docs/latest/spark-queries/)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/dataset/)
+- [DVC data and pipeline versioning](https://dvc.org/doc/user-guide)
+- [lakeFS data versioning concepts](https://docs.lakefs.io/latest/understand/model/)

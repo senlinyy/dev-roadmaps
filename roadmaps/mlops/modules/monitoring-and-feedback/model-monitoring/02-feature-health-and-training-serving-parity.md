@@ -9,6 +9,19 @@ aliases:
   - roadmaps/mlops/modules/monitoring-and-feedback/model-monitoring/04-feature-health-and-training-serving-parity.md
 ---
 
+## Table of Contents
+
+1. [The Model Only Knows the Values It Receives](#the-model-only-knows-the-values-it-receives)
+2. [A Feature Contract Explains What a Value Means](#a-feature-contract-explains-what-a-value-means)
+3. [Follow the Value and Its Timestamps](#follow-the-value-and-its-timestamps)
+4. [Health Checks Ask Several Different Questions](#health-checks-ask-several-different-questions)
+5. [Parity Means Replaying the Same Case](#parity-means-replaying-the-same-case)
+6. [Historical Features Must Stop at the Prediction Time](#historical-features-must-stop-at-the-prediction-time)
+7. [A Small Production Stack Can Cover the Important Boundaries](#a-small-production-stack-can-cover-the-important-boundaries)
+8. [Recover the Failing Feature Path](#recover-the-failing-feature-path)
+9. [The Main Idea](#the-main-idea)
+10. [References](#references)
+
 ## The Model Only Knows the Values It Receives
 <!-- section-summary: Feature health checks whether live model inputs still carry the same meaning and timing as the data used during training. -->
 
@@ -56,13 +69,53 @@ Three timestamps help explain that journey. **Event time** says when the real-wo
 
 Suppose `current_inventory` has a five-minute freshness limit. One region starts serving values that are forty minutes old after a materialization job stalls. Every request still contains an integer inside the expected range. A `feature_age_seconds` field exposes the failure, and a `fallback_reason` shows whether the service used an older cached value after a timeout.
 
+A protected feature observation for one prediction can look like this:
+
+```json
+{
+  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
+  "feature_name": "current_inventory",
+  "feature_version": "inventory-v7",
+  "value": 42,
+  "unit": "items",
+  "source_event_time": "<RFC 3339 timestamp>",
+  "materialized_at": "<RFC 3339 timestamp>",
+  "feature_age_seconds": 2412,
+  "primary_source": "redis-eu",
+  "serving_source": "fallback-cache-eu",
+  "fallback_reason": "online_store_timeout"
+}
+```
+
+The row preserves the value and timestamps needed for replay. `primary_source` names the intended online store that timed out, while `serving_source` names the cache that actually supplied the value. Prometheus receives only bounded aggregates such as stale share by feature, route, and region. This division keeps request identity and feature values inside governed storage while still giving responders a fast alert.
+
 Request-level values usually belong in a protected inference table with a retention and sampling policy. Fast aggregates such as stale-value share, missing-value rate, and fallback rate fit Prometheus or the cloud monitor. The metrics tell the on-call engineer that a route is unhealthy. The request records provide the feature versions and timestamps needed to explain why.
 
 Freshness is usually written as a service-level objective for the feature path. The contract may say that 99% of `current_inventory` values must be no more than five minutes old over a ten-minute window. The monitor calculates age from the source timestamp that travelled with the value, rather than the time the inference service read it. Reading an old cache entry right now does not make the underlying fact current.
 
 Streaming systems add a **watermark**, which is the platform's estimate of how far event-time processing has progressed. If the source is producing events at 10:30 while the feature job's watermark remains at 10:05, the pipeline is twenty-five minutes behind even if workers are busy. Consumer lag, watermark delay, materialization age, and request-time feature age describe different parts of the same path. Keeping them separate helps the responder locate whether events stopped at the source, stream processor, online store, or client cache.
 
+The timeline below follows one inventory value through those clocks so you can see where age accumulates. Its times are relative because the important idea is the age of the fact, not a particular date:
+
+```mermaid
+timeline
+  title One Feature Across Four Clocks
+  T0 source : Inventory changes to 42 : Event time recorded
+  T1 min stream : Record processed : Watermark advances
+  T2 min store : Value materialized : Store time recorded
+  T3 min inference : Service reads 42 : Age is 3 minutes
+  T15 min no update : Same value served : Freshness objective breached
+```
+
+At the fourth step, both the value and the serving system can look healthy. The last step reveals the actual failure: the same valid integer has outlived its five-minute freshness objective. Comparing event time, watermark progress, materialization time, and request-time age tells the responder which handoff stopped moving.
+
 For example, source events can arrive on time while one regional online store stops accepting writes. The global stream lag remains healthy, and a warehouse profile still sees current values. Request records from that region show rising feature age and a fallback to cached data. The product owner applies the approved regional fallback, while the platform owner repairs replication. A warehouse-only freshness check would miss the exact boundary that affected decisions.
+
+Consider a Kafka-to-Flink pipeline that materializes `current_inventory` into Redis. Every stored value carries its source event time and materialization time. The inference service calculates feature age from the source time, then increments bounded Prometheus counters for total and stale observations by feature, route, and region. The platform dashboard keeps Kafka consumer lag, the Flink watermark, Redis write failures, and request-time stale share on the same timeline. Healthy Kafka lag with a delayed Flink watermark points toward processing; healthy stream progress with stale values in one region points toward the online store or its replication path.
+
+![Feature telemetry across Kafka, Flink, Redis, inference, governed records, and Prometheus](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-telemetry-production-path.png)
+
+*Following one feature across the production path turns a generic stale-value alert into a boundary diagnosis. Stream lag, watermark delay, store-write health, request-time age, and fallback evidence each describe a different handoff.*
 
 ## Health Checks Ask Several Different Questions
 <!-- section-summary: Feature checks cover structure, completeness, validity, freshness, relationships, and population movement because each failure has a different cause. -->
@@ -87,6 +140,10 @@ Consider a supplier that changes parcel weight from kilograms to grams without c
 
 Recovery requires evidence at every affected boundary. The candidate table passes the contract suite, representative parcels match their source records after conversion, and a parity replay reconstructs decisions from the incident window. The model owner then recomputes prediction and action distributions to see whether any bad values reached production. If they did, the product owner identifies decisions that need correction or customer follow-up. Fixing the column alone would leave the incident only partly handled.
 
+Great Expectations fits this kind of Python or Spark pipeline when the rules need to run outside the warehouse. One expectation verifies that the unit field contains kilograms. Another checks the reviewed weight range, and a third checks that every parcel key exists before shipping cost is calculated. A Validation Definition groups these expectations for the candidate partition so the result describes one specific batch.
+
+A Checkpoint runs that definition and triggers configured actions from the result. In this incident, the orchestrator keeps the candidate partition private when the Checkpoint fails and stores the failed rows for investigation. The publish task runs only after the corrected adapter passes the same suite. When the feature table already lives in a SQL warehouse, dbt data tests can enforce the same publication boundary with less additional infrastructure.
+
 ## Parity Means Replaying the Same Case
 <!-- section-summary: Row-level parity reconstructs a live feature with the training logic for the same entity and time, then explains every meaningful mismatch. -->
 
@@ -109,6 +166,8 @@ A production parity job normally produces a mismatch table rather than one perce
 Sampling should cover the routes most likely to differ. Teams include recent releases, fallbacks, important segments, and a stable random sample of normal traffic. A canary may replay every prediction because its volume is small. A mature high-volume route may use a few thousand cases per day plus any request involved in an alert. The sampling configuration is versioned so a sudden improvement cannot come from quietly dropping the difficult route.
 
 The parity result can guard releases as well as monitor production. Before promotion, the candidate serving image processes a fixture of historical requests while the offline transformation reconstructs the same cases. After deployment, shadow traffic exercises live sources without changing the product action. The release gate checks mismatch rate, unavailable reconstructions, latency, and feature age. This sequence catches packaged-code drift before user outcomes have time to arrive.
+
+In a lakehouse stack, sampled prediction records can land in a Delta table and trigger a Spark parity job. The job loads the same versioned Python wheel used by training, reconstructs features from the offline history, and writes row-level mismatches back to a governed table. Airflow runs that job for every canary image and blocks promotion when the mismatch or unavailable-reconstruction limits fail. The serving team sees the affected prediction IDs and mismatch categories, while Prometheus receives only the aggregate rate used by the release gate.
 
 ## Historical Features Must Stop at the Prediction Time
 <!-- section-summary: Point-in-time joins build each training row from information that was genuinely available when the historical decision would have happened. -->
@@ -136,6 +195,26 @@ The support message happened before the prediction, while the model service coul
 Discovering leakage after training creates a data and release incident. The model owner freezes promotion from the affected dataset, and the data owner uses lineage to find the feature versions, snapshots, and registered models that consumed the faulty join. The team preserves the old dataset and marks it as affected, which stops another pipeline from treating its inflated evaluation as valid.
 
 The replacement dataset is built separately. A warehouse can use an as-of join over the entity key and availability timestamp. Feast or a managed feature platform can perform point-in-time historical retrieval when the organization already operates that layer. The clean build publishes the relevant timestamps, runs the boundary fixtures, and reconciles entity and segment counts with the affected snapshot.
+
+With Feast, the prediction rows provide the entity key and the historical decision timestamp. The feature service selects the reviewed feature set for the model version. The retrieval call is small:
+
+```python
+from feast import FeatureStore
+
+store = FeatureStore(repo_path=".")
+feature_service = store.get_feature_service("returns_model_v3")
+
+training_df = store.get_historical_features(
+    entity_df=prediction_rows[["customer_id", "event_timestamp"]],
+    features=feature_service,
+).to_df()
+```
+
+Feast scans backward from each row's `event_timestamp` and applies the feature view's time-to-live limit. This protects the event-time boundary inside the history exposed to Feast: a feature whose event time is later than the prediction time cannot enter that training row.
+
+Availability time remains a separate data-platform responsibility. Suppose a source event happened at 09:30, reached the warehouse at 10:20, and the model made its decision at 10:00. Its event time looks safe even though the production system could not have used it. The offline source must therefore expose only data available at the historical cutoff. Common implementations query a versioned warehouse or lakehouse snapshot as of 10:00, or filter a captured `available_at` field with `available_at <= decision_time`, before Feast performs the entity and event-time join.
+
+The returned training rows still need boundary fixtures and coverage checks. One fixture should place an event on each side of the decision time; another should place a late-arriving record before the decision in event time but after it in availability time. This example earns its place when a team already needs a feature registry and repeated historical retrieval. A warehouse as-of join remains the smaller solution for one batch table.
 
 Every model trained on the contaminated data is evaluated again. If a production model earned approval from leaked results, the release owner can route traffic to the last approved artifact trained on clean data. A replacement model then passes segment evaluation, shadow traffic, and a canary before taking the full route. Historical reports receive a corrected revision, and the registry records which approvals changed. Recovery includes the dataset, the affected artifacts, and every downstream consumer of the old evidence.
 
@@ -171,7 +250,7 @@ A feature platform earns its operating cost when many models reuse the same defi
 
 The platform gives the organization a shared place for feature definitions and access. Data producers still own source correctness. The serving application still enforces request-time safety, and the model team still decides which changes matter to quality. Clear boundaries keep the feature platform from turning into an assumed owner for every data problem.
 
-Current managed monitoring can automate parts of the work. As checked on 18 July 2026, Azure Machine Learning provides built-in signals for tabular data drift, prediction drift, and data quality. Its feature-attribution and model-performance signals remain in Preview.
+Current managed monitoring can automate parts of the work. Azure Machine Learning provides built-in signals for tabular data drift, prediction drift, and data quality. Its feature-attribution and model-performance signals remain in Preview.
 
 Google now documents Model Monitoring under Gemini Enterprise Agent Platform. Model Monitoring v2 remains Preview, supports tabular models, and can monitor models served outside the platform. Databricks data profiling can work over governed Delta tables, while its newer Unity AI Gateway experience is Beta.
 
@@ -193,6 +272,8 @@ The response follows the first failed boundary. A renamed source column belongs 
 Suppose two model versions lose quality at the same time and both show a sharp rise in `feature_age_seconds`. Rolling back the candidate model would leave both versions reading the same stale online value. The product owner activates a reviewed fallback only for the affected region, and the platform owner stops the damaged materializer so it cannot continue publishing old values.
 
 The data owner restores the last confirmed checkpoint and replays missing events into a shadow namespace. Entity counts, source timestamps, and representative values are compared with the offline table. Once the shadow target reaches the current source watermark, the parity job reconstructs prediction IDs from the incident window.
+
+For a Kafka, Flink, and Redis path, the platform owner can restore the last reviewed Flink savepoint and replay the missing Kafka offsets into a separate Redis key prefix. The production reader continues using the approved fallback while the shadow prefix catches up. A comparison job checks entity coverage, source timestamps, and sampled values between the shadow prefix and the offline table. Switching a small canary route to the shadow prefix makes the repair observable without replacing the healthy regions or erasing the old values needed for rollback.
 
 A small share of traffic then moves to the repaired namespace. Freshness and row-level replay confirm that the values are current and correct. Lookup errors and latency show whether the repaired path can serve production safely. Fallback share confirms that normal retrieval has resumed.
 

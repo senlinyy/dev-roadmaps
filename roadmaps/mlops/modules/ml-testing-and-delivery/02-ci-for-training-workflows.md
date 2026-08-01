@@ -11,6 +11,22 @@ aliases:
   - child-ci-cd-for-ml-02-ci-for-training-workflows
 ---
 
+## Table of Contents
+
+1. [What Training CI Is Trying To Protect](#what-training-ci-is-trying-to-protect)
+2. [Split Checks By Cost](#split-checks-by-cost)
+3. [Make Configs Testable](#make-configs-testable)
+4. [Use A Tiny Dataset For Smoke Runs](#use-a-tiny-dataset-for-smoke-runs)
+5. [Check Data Access Without Pulling The Whole Warehouse](#check-data-access-without-pulling-the-whole-warehouse)
+6. [Check The Training Image](#check-the-training-image)
+7. [A GitHub Actions Shape For Training CI](#a-github-actions-shape-for-training-ci)
+8. [Compare Against The Current Champion](#compare-against-the-current-champion)
+9. [Make Failures Easy To Act On](#make-failures-easy-to-act-on)
+10. [Keep Expensive Jobs Intentional](#keep-expensive-jobs-intentional)
+11. [What Good Training CI Feels Like](#what-good-training-ci-feels-like)
+12. [Decide Whether Training CI Covers The Risk](#decide-whether-training-ci-covers-the-risk)
+13. [References](#references)
+
 ## What Training CI Is Trying To Protect
 <!-- section-summary: Training CI catches code, configuration, dependency, data-access, and smoke-run failures before expensive jobs start. -->
 

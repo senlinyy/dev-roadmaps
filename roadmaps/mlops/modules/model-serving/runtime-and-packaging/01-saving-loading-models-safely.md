@@ -7,6 +7,20 @@ order: 1
 id: "article-mlops-model-serving-saving-loading-models-safely"
 ---
 
+## Table of Contents
+
+1. [A Saved Model Is A Serving Contract](#a-saved-model-is-a-serving-contract)
+2. [Define What The Loadable Unit Contains](#define-what-the-loadable-unit-contains)
+3. [Serialization Sets Portability And Security](#serialization-sets-portability-and-security)
+4. [Signature And Examples Make The Boundary Testable](#signature-and-examples-make-the-boundary-testable)
+5. [Dependencies And Lineage Explain How To Recreate The Runtime](#dependencies-and-lineage-explain-how-to-recreate-the-runtime)
+6. [Loading Is A Controlled Lifecycle](#loading-is-a-controlled-lifecycle)
+7. [Smoke Tests Prove The Running Artifact](#smoke-tests-prove-the-running-artifact)
+8. [Artifact Trust Continues After Release](#artifact-trust-continues-after-release)
+9. [Rollback Restores A Complete Known Release](#rollback-restores-a-complete-known-release)
+10. [Safe Saving Creates A Durable Prediction Boundary](#safe-saving-creates-a-durable-prediction-boundary)
+11. [References](#references)
+
 ## A Saved Model Is A Serving Contract
 <!-- section-summary: A production artifact connects model computation with preprocessing, schema, dependencies, identity, and verification. -->
 

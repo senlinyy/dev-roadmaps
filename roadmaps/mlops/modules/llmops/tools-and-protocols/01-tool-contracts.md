@@ -7,230 +7,364 @@ order: 1
 id: "article-mlops-llmops-tool-contracts"
 ---
 
-## A Tool Call Is a Proposal, Not Permission
+## Table of Contents
 
-<!-- section-summary: A model can propose a structured action, while trusted application code decides whether and how that action runs. -->
+1. [A Tool Call Starts As An Untrusted Proposal](#a-tool-call-starts-as-an-untrusted-proposal)
+2. [The Contract Has Two Connected Halves](#the-contract-has-two-connected-halves)
+3. [Choose One Bounded Business Operation](#choose-one-bounded-business-operation)
+4. [Use The Schema To Shape The Proposal](#use-the-schema-to-shape-the-proposal)
+5. [Disclose Only The Tools Eligible For This Step](#disclose-only-the-tools-eligible-for-this-step)
+6. [Trusted Context Proves Identity And Authority](#trusted-context-proves-identity-and-authority)
+7. [Approval Must Cover The Exact Action](#approval-must-cover-the-exact-action)
+8. [Idempotency Protects Side Effects](#idempotency-protects-side-effects)
+9. [Results Need Stable Operational Meaning](#results-need-stable-operational-meaning)
+10. [Version And Release The Whole Boundary](#version-and-release-the-whole-boundary)
+11. [Test And Observe Every Layer](#test-and-observe-every-layer)
+12. [The Complete Production Boundary](#the-complete-production-boundary)
+13. [References](#references)
 
-An LLM tool exposes a capability such as searching documents, reading an account, running a query, creating a ticket, or issuing a refund. The model chooses a tool and supplies arguments, but its output is still untrusted input. A syntactically correct call does not prove that the user is allowed to perform the action, that the requested state exists, or that the action is safe to repeat.
+## A Tool Call Starts As An Untrusted Proposal
 
-A **tool contract** is the complete agreement at this boundary. It includes what the model sees—name, purpose, and argument schema—and what the runtime must enforce: identity, authorization, approval, business rules, retry semantics, result shape, version compatibility, and audit evidence.
+<!-- section-summary: A model can suggest a structured action, while trusted application code decides whether that action is allowed and how it reaches the real system. -->
+
+An LLM can read a request and suggest an action such as searching a knowledge base, creating a ticket, issuing a refund, or starting a deployment. The suggestion may arrive as tidy JSON with the correct tool name and every required field. Real authority still lives in the application and the service that owns the data.
+
+Consider one complete tool call. A user reports a duplicate charge and asks for the second payment to be refunded. The model selects `propose_refund` and supplies the payment ID, amount, currency, and reason. The application then performs a series of checks:
+
+1. the fields match the tool schema;
+2. the authenticated user owns the payment;
+3. the support operator has the required scope;
+4. the payment service confirms that the charge is settled and still refundable;
+5. the user approves the exact payment and amount;
+6. the payment service receives a durable idempotency key;
+7. the runtime records one outcome and returns a safe result.
+
+The visible result is a single refund reference, or a clear rejection that explains the next valid step. If the network breaks after the payment service accepts the request, the runtime checks the existing operation before it attempts anything else. The model never receives payment credentials and never decides that the caller has permission.
+
+A **tool** is the capability exposed to the model. A **tool call** is the model's proposed use of that capability. A **tool contract** is the complete agreement that carries the proposal into trusted software. It covers the model-visible name and schema, the runtime controls around execution, the meaning of each result, and the evidence needed for release and investigation.
 
 ![A tool call moving from an untrusted model proposal through runtime governance, controlled execution, and a stable result](/content-assets/articles/article-mlops-llmops-tool-contracts/tool-call-controlled-effect.png)
 
-*A tool call crosses four distinct stages: the model proposes, trusted code governs, the server executes with durable controls, and the workflow receives a stable result.*
+*The model proposes a bounded operation. Trusted software validates the proposal, applies authority and safety controls, executes through server-held credentials, and returns a stable result.*
 
-This separation is the foundation of safe tool use. The model can help decide what should happen. The application remains responsible for whether it may happen and for preserving the rules of the real system.
+A production tool has five responsibilities: describe one operation, restrict what enters execution, prove authority, protect the effect, and report what happened. The input schema defines the proposed operation at the execution boundary. Trusted runtime controls carry the authority, effect-safety, and reporting responsibilities.
 
-## The Contract Has Two Audiences
+## The Contract Has Two Connected Halves
 
-<!-- section-summary: The model needs a small, precise interface, while the runtime needs a wider operational and security contract. -->
+<!-- section-summary: The model-facing definition helps the model form a proposal, while the runtime contract governs whether and how the proposal runs. -->
 
-The **model-facing contract** should be narrow. It describes when to use the tool and defines arguments with JSON Schema: types, required fields, enums, ranges, formats, and whether extra properties are forbidden. Clear field descriptions reduce ambiguity and help the model ask for missing information instead of inventing it.
+The model needs a compact interface it can understand during one decision. Trusted software needs a wider agreement that covers security, reliability, and operations. Keeping these two views connected prevents the short model definition from being mistaken for the complete production boundary.
 
-The **runtime contract** is larger. It defines:
+The **model-facing definition** usually contains a stable name, a plain description, and an input schema. Some providers also support an output schema or behavioural annotations. This definition should tell the model which business operation the tool represents, which information it must supply, and which important precondition may require another question.
 
-- which authenticated identities and scopes may invoke the tool;
-- which facts must come from trusted session or workflow state;
-- whether a person must approve the exact proposed action;
-- which business invariants must hold at execution time;
-- how duplicate requests and unknown outcomes are handled;
-- which result states the caller can receive;
-- what is logged, redacted, measured, and retained;
-- which versions are compatible and how rollback works.
-
-The model should not be allowed to assert trusted facts in its arguments. Fields such as `user_id`, `is_admin`, `customer_approved`, or a spending limit should normally come from authenticated application context. Otherwise, the model may copy an instruction from untrusted content or simply infer a value that the server mistakenly treats as authority.
-
-## Discovery Determines Which Contracts Enter Context
-
-<!-- section-summary: A tool catalogue stores operational truth, while a disclosure policy exposes only the eligible model-facing definitions for the current step. -->
-
-Production systems may own hundreds of tools, yet one model step usually needs only a few. Passing the entire catalogue increases token use, creates overlapping choices, and exposes capabilities unrelated to the task. The runtime should separate the **tool catalogue** from the **disclosed tool set**.
-
-The catalogue is an application record. It stores owner, purpose, contract version, effect class, required identity and scopes, data classification, supported environments, timeout, idempotency and reconciliation support, approval policy, health, and deprecation status. Most of that metadata never needs to enter model context.
-
-The disclosure policy uses trusted workflow facts to choose eligible tools. A customer-support answer step may receive `search_policy` and `read_case`. A later refund-proposal state may add `propose_refund` when the authenticated user, tenant, case status, and product policy allow it. The model sees a concise name, description, and schema for each eligible tool. The runtime retains the wider policy evidence.
+The **runtime contract** starts after the model returns a call. It identifies the implementation version, trusted caller context, required scopes, approval policy, current-state checks, downstream credentials, timeout, retry rules, idempotency behavior, result states, redaction policy, telemetry, and owner. Most of this information stays outside the model context.
 
 ```mermaid
-flowchart LR
-    A[Versioned tool catalogue] --> B[Environment and health filter]
-    C[User identity and scopes] --> D[Authorization filter]
-    E[Workflow state and task] --> F[Relevance and effect filter]
-    B --> D
-    D --> F
-    F --> G[Small disclosed tool set]
-    G --> H[Model proposes one call]
-    H --> I[Full runtime contract gates]
+flowchart TD
+    A["Model-facing definition"] --> B["Name and purpose"]
+    A --> C["Input schema"]
+    A --> D["Selection guidance"]
+
+    E["Runtime contract"] --> F["Identity and authorization"]
+    E --> G["Approval and business rules"]
+    E --> H["Execution and recovery"]
+    E --> I["Results, audit, and versions"]
+
+    B --> J["Proposed tool call"]
+    C --> J
+    D --> J
+    J --> E
+
+    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef runtime fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef call fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,B,C,D model
+    class E,F,G,H,I runtime
+    class J call
 ```
 
-Tool search and deferred loading can help when the candidate set remains large. The model or host first searches compact tool metadata, then loads selected definitions. This is a context-management technique. The search result still passes the same eligibility and authorization filters; discovering a tool never grants permission to call it.
+The boundary also has two audiences among engineers. Agent developers evaluate whether the model selects the right tool and fills its fields from evidence. Service owners verify permissions, invariants, effects, and recovery. A tool can perform well for one audience and fail badly for the other. Separating those test results leads an incident to the right owner.
 
-Descriptions shape selection behaviour and therefore belong under version control and evaluation. A vague pair such as `lookup_record` and `get_record` encourages arbitrary choices. State the business operation, required preconditions, important limitations, and whether the tool reads or proposes an effect. Keep descriptions short enough to compare. Put detailed policy enforcement in trusted code rather than asking the model to interpret several pages of tool documentation.
+## Choose One Bounded Business Operation
 
-Evaluate disclosure separately from argument generation. For each workflow state, verify which tool identities should be present and absent. Then test whether the model selects correctly among the eligible definitions. A failure where a dangerous tool appeared too early belongs to disclosure policy; a failure where the model ignored the correct disclosed tool belongs to selection behaviour. Combining them under “wrong tool call” hides the owner.
+<!-- section-summary: A strong tool represents one operation with a clear owner, effect, success condition, and recovery path. -->
 
-## Design Tools Around One Business Operation
+Tool design starts with the operation, before any JSON is written. A useful operation has one purpose that the receiving service can validate and observe. `create_support_ticket` describes a specific effect. `handle_customer_problem` hides investigation, policy, drafting, and ticket creation inside one vague instruction.
 
-<!-- section-summary: A good tool performs one bounded operation with a clear success condition and ownership boundary. -->
+The right size follows the business boundary. A tool may combine several low-level API requests if they form one atomic operation owned by one service. Reserving stock and creating a short-lived hold may belong together if the booking service guarantees one result. Searching policies and sending a customer email usually belong in separate tools because they use different permissions, evidence, and failure rules.
 
-Tool design begins before the schema. Choose an operation that the application can validate and observe. `create_support_ticket` is usually clearer than `handle_customer_problem`; `get_invoice` is clearer than `manage_billing`. A broad tool forces the model to hide several business decisions inside free-form arguments and makes permissions difficult to express.
+Four questions expose an unclear boundary:
 
-A useful tool definition answers four questions:
+1. Which system owns the authoritative state?
+2. What single outcome should exist after success?
+3. Which failures can the caller recover from safely?
+4. Which permission and approval protect the operation?
 
-1. What single capability does it expose?
-2. When should and should not the model call it?
-3. What information must the model provide?
-4. What constitutes a successful, rejected, or uncertain outcome?
+The effect class matters as well. A read-only lookup can often use a bounded retry after a timeout. A payment, deletion, message send, or production change needs durable duplicate protection and a plan for an uncertain outcome. A long-running operation may return a job handle rather than hold one request open. These choices belong in the contract because the orchestrator needs them to control the run.
 
-Read-only tools and side-effecting tools deserve different treatment. A document search can often be retried safely. A payment, deployment, deletion, or message send can create damage when repeated. The contract must classify the effect because approval and recovery policy depend on it.
+Descriptions should state the real boundary in ordinary language. “Create a ticket in the approved project after the required evidence has been collected” guides selection better than “Manage tickets.” The detailed permission logic still runs in trusted code; a description informs model behavior and never grants authority.
 
-## Schema Validation Is Only the First Gate
+## Use The Schema To Shape The Proposal
 
-<!-- section-summary: JSON Schema validates the shape of a proposal; server-side policy validates its meaning and authority. -->
+<!-- section-summary: JSON Schema constrains the fields a model may propose, while semantic and business checks establish whether those values make sense. -->
 
-Consider a tool that places a temporary hold on an already quoted booking. The model-facing schema can be compact:
+The schema turns free-form model output into an object that application code can validate. In essence, it defines the shape of the request: field names, types, required values, allowed enums, numeric bounds, and whether unknown properties are accepted.
+
+Suppose the refund workflow has already established the payment and amount shown to the user. The model-facing tool needs only the fields the model can legitimately propose:
 
 ```json
 {
-  "name": "create_booking_hold",
-  "description": "Place a 15-minute hold on one option from an existing quote after the user approves it.",
-  "strict": true,
-  "parameters": {
+  "name": "propose_refund",
+  "description": "Propose a refund for one settled payment after the user confirms the payment, amount, and reason.",
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "quote_id": { "type": "string" },
-      "option_id": { "type": "string" },
-      "traveler_count": { "type": "integer", "minimum": 1, "maximum": 6 }
+      "payment_id": {
+        "type": "string",
+        "description": "The settled payment selected from the trusted payment lookup."
+      },
+      "amount_minor": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Refund amount in the currency's minor unit, such as cents."
+      },
+      "currency": {
+        "type": "string",
+        "enum": ["GBP", "EUR", "USD"]
+      },
+      "reason": {
+        "type": "string",
+        "enum": ["duplicate", "service_not_received", "other"]
+      }
     },
-    "required": ["quote_id", "option_id", "traveler_count"]
+    "required": ["payment_id", "amount_minor", "currency", "reason"]
   }
 }
 ```
 
-Strict structured output can ensure that these fields are present and correctly typed. It cannot prove that the quote belongs to the current user, that its price is unchanged, that the option is still available, that the caller has booking permission, or that approval covers this exact proposal. Those are **business invariants** and must be checked against authoritative data immediately before execution.
+`additionalProperties: false` catches accidental fields such as `approved_by` or `is_admin`. The integer amount avoids ambiguous decimal handling. The enum keeps the reason inside the downstream policy vocabulary. Field descriptions explain where values should come from instead of inviting the model to invent them.
 
-The trusted runtime should also attach the active user, tenant, trace, policy version, credentials, and approval evidence. Secrets should never be exposed in model-visible arguments. The tool adapter receives them from a secret manager or workload identity after authorization succeeds.
+Schema validation answers structural questions. It can confirm that `amount_minor` is a positive integer and `currency` is supported. It cannot establish that the payment belongs to this user, that the remaining refundable balance covers the amount, or that the user approved the current proposal. Those checks need authoritative records.
+
+Most model providers expose tools through a name, description, and JSON-Schema-like input definition, yet supported schema features and strict modes vary. Validate the schema with the exact model API and SDK used in production. Keep a server-side validator even if the provider constrains generation, because calls can arrive from older clients, tests, queues, or a compromised caller.
+
+## Disclose Only The Tools Eligible For This Step
+
+<!-- section-summary: A governed catalogue records every tool, while a disclosure policy selects the small eligible set shown to the model for one step. -->
+
+A production platform may own hundreds of tools. A single model step usually needs a handful. Sending the entire collection consumes context, creates overlapping choices, and exposes capabilities unrelated to the current task.
+
+The **tool catalogue** stores operational truth: owner, purpose, contract version, effect class, required scopes, supported environments, data classification, timeout, idempotency support, approval policy, health, and deprecation state. The **disclosed tool set** is the smaller collection whose model-facing definitions enter the current context.
+
+For a support conversation, the first step may expose `search_policy` and `read_case`. The refund tool appears only after trusted workflow state contains an authenticated account, a settled payment returned by the payment service, and a case type eligible for refund review. Disclosure narrows the model's choices. The runtime repeats authorization at execution because workflow state can be stale or corrupted.
 
 ```mermaid
 flowchart TD
-    A[Structured arguments] --> B{Schema valid?}
-    B -->|no| X[Reject: invalid arguments]
-    B -->|yes| C{Caller has required scope?}
-    C -->|no| Y[Reject: forbidden]
-    C -->|yes| D{Approval matches exact action?}
-    D -->|no| Z[Pause for approval]
-    D -->|yes| E{Current business state still valid?}
-    E -->|no| W[Reject with corrective next step]
-    E -->|yes| F[Execute with server-held credentials]
+    A["Versioned tool catalogue"] --> B["Environment and health"]
+    C["Authenticated identity and scopes"] --> D["Eligibility policy"]
+    E["Current workflow state"] --> D
+    B --> D
+    D --> F["Small disclosed set"]
+    F --> G["Model proposes one call"]
+    G --> H["Runtime repeats all gates"]
+
+    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    class A,C,E source
+    class B,D,F,H control
+    class G action
 ```
 
-Ordering matters. Cheap structural checks should happen before network calls. Authorization should happen before sensitive data is loaded or a side effect is attempted. Business validation should use current state, because a price, record status, or deployment target may have changed since the model saw it.
+Large catalogues can use tool search or deferred loading. That is a context-management mechanism. The search index should contain only capabilities the caller is allowed to discover, and every loaded tool still passes disclosure and execution policy. Discovery supplies candidates; it never creates permission.
 
-## Approval Must Bind to the Exact Action
+Evaluate disclosure separately from model selection. One test should assert which tool IDs are present for each workflow state. Another should check whether the model selects correctly among those tools. This distinction reveals whether a dangerous capability appeared too early or the model chose poorly from a correct set.
 
-<!-- section-summary: Human approval is meaningful only when it identifies the operation and values that will actually be executed. -->
+## Trusted Context Proves Identity And Authority
 
-An approval such as "yes" is weak if the underlying proposal can change afterward. For high-impact tools, show the person a normalized summary: operation, target, important values, and expected effect. Store approval evidence against a stable fingerprint of that proposal. If the amount, target, or other protected field changes, the fingerprint changes and the runtime requires approval again.
+<!-- section-summary: The runtime combines authenticated context, least-privilege credentials, current domain state, and policy before execution. -->
 
-Approval is also not the same as authorization. A user may approve a refund but lack permission to issue it. Conversely, an authorized operator may still need a second person to approve a production deletion. The contract should state both rules and identify which system supplies their evidence.
+The model may mention a user, tenant, role, or approval in its arguments. Those values remain ordinary text. The runtime obtains trusted identity from the authenticated request, workload identity, signed workflow state, or another verified control-plane source.
 
-Some tools do not need human approval. Read-only, low-risk operations may run automatically within narrow scopes. The goal is proportional control, not adding a confirmation dialog to every call.
+### Authentication and authorization answer different questions
+
+Authentication answers who is calling. Authorization answers which operation that identity may perform on which resource. A remote service commonly uses OAuth or workload identity with a token restricted to the intended audience and scopes. A local service may use an operating-system identity or short-lived service credential. In both cases, the downstream service performs the final resource-level authorization.
+
+The runtime also checks **business invariants**, which are rules that must hold at execution time. For the refund proposal, it loads the payment through the trusted account relationship, verifies the currency and remaining refundable amount, checks case policy, and confirms that no conflicting operation has completed. This fresh read closes the gap between what the model saw and what is currently true.
+
+```mermaid
+flowchart TD
+    A["Model-supplied arguments"] --> B{"Schema valid?"}
+    B -->|No| X["Return invalid_arguments"]
+    B -->|Yes| C["Attach trusted user, tenant, and workflow"]
+    C --> D{"Scope and resource allowed?"}
+    D -->|No| Y["Return forbidden"]
+    D -->|Yes| E{"Current business state valid?"}
+    E -->|No| Z["Return rejected with next step"]
+    E -->|Yes| F{"Exact approval required?"}
+    F -->|Yes, missing| W["Pause with approval summary"]
+    F -->|No or present| G["Execute using server-held credential"]
+
+    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,C input
+    class B,D,E,F gate
+    class X,Y,Z,W stop
+    class G run
+```
+
+Secrets stay outside model-visible arguments and results. The adapter obtains them from a secret manager, workload identity, or managed credential after authorization succeeds. Tool traces should record credential type and policy decision, while token values remain absent.
+
+A policy engine such as Open Policy Agent or Cedar can help an organization centralize complex authorization rules. A small application may keep the same rules in reviewed service code. The essential property is a deterministic, testable decision using trusted inputs and a recorded policy version.
+
+## Approval Must Cover The Exact Action
+
+<!-- section-summary: A useful approval names the operation, target, important values, and effect that trusted code will execute. -->
+
+Approval protects the point where a proposed action can create a meaningful effect. A generic “yes” carries little value if the payment, amount, destination, or environment can change afterward.
+
+The runtime should normalize the protected fields and present a concise summary: operation, target, amount or configuration, expected effect, and any irreversible consequence. It stores approval evidence against a digest of that normalized proposal. A change to any protected field produces a different digest and sends the workflow back for review.
+
+Authorization and approval answer different questions. Authorization establishes that the caller is allowed to request a refund. Approval records that the responsible person accepted this exact refund. Some operations also require separation of duties, where one identity prepares a production change and another approves it.
+
+Controls should match the effect. A low-risk read may run automatically inside a narrow scope. A production deletion, external message, payment, or privilege change usually deserves explicit review. Repeated confirmation boxes on harmless reads train users to click through them, so policy should classify operations rather than apply one prompt to every tool.
+
+Approval expires as business state changes. A quote accepted yesterday may no longer match today's price. Before execution, the service compares the approved digest and rechecks the authoritative record. Recovery evidence should identify the approver, proposal digest, policy version, execution time, and final effect.
 
 ## Idempotency Protects Side Effects
 
-<!-- section-summary: Idempotency lets repeated delivery of one intended operation return one outcome instead of creating duplicate effects. -->
+<!-- section-summary: A durable operation identity lets retries recover one intended effect without creating duplicates. -->
 
-Distributed systems cannot assume exactly-once delivery. A tool may complete in the downstream service while its response is lost. The agent runtime sees a timeout and may retry. Without protection, one intended refund can create two refunds.
+Networks can fail after the receiving service has accepted an action. The caller sees a timeout and cannot tell whether the effect happened. Blindly repeating a refund, ticket creation, or deployment can create a second effect.
 
-An **idempotency key** identifies one intended operation. Trusted application code derives or assigns it; the model should not choose it. The service stores the key with a fingerprint of the normalized request and the current state:
+### One intended operation needs one durable identity
 
-- `started`: one worker owns execution;
-- `succeeded`: replay the stored safe result;
-- `failed_safe`: the service knows no effect occurred and policy may allow another attempt;
-- `indeterminate`: the downstream effect may have happened and must be reconciled.
+An **idempotency key** identifies one intended operation. Trusted application code creates it from the durable workflow operation; the model does not choose it. The server stores the key together with a digest of the normalized request and a state such as:
 
-If the same key arrives with different arguments, return an idempotency conflict. If two workers receive the same request concurrently, only one should acquire execution; the other observes the existing record. When the downstream API supports idempotency, forward the same key across that boundary.
+- `started`: one worker owns the attempt;
+- `succeeded`: return the stored safe result;
+- `failed_safe`: evidence proves that no effect occurred;
+- `indeterminate`: the downstream system may have committed the effect.
 
-The difficult case is an **unknown outcome**. If a deployment API accepted a request and then the connection broke, automatically trying again may be unsafe. The runtime should query the downstream system by operation ID or idempotency key. If no reconciliation interface exists, stop automatic retries and route the case to a person or compensating workflow. Calling such an outcome "failed" would be a dangerous guess.
+The same key with different protected arguments is a conflict. Concurrent requests for the same key need one atomic claim, often implemented with a unique database constraint or conditional write. If the downstream provider supports its own idempotency token, the adapter forwards the same operation identity through that boundary.
+
+### An unknown outcome needs reconciliation
+
+An indeterminate result requires **reconciliation**, which means checking the downstream system before choosing the next action. The runtime first queries by idempotency key or provider operation ID. Some services instead require a lookup by the expected resource identity, such as the refund reference attached to a payment.
+
+A completed refund turns the operation into `succeeded`, and the runtime returns the existing reference. Evidence that no effect occurred may permit a new attempt under policy. If the provider offers no reliable lookup, automation stops and routes the case to an operator. This branch preserves uncertainty instead of guessing that a timeout means failure.
 
 ![Exact approval, durable idempotency states, and reconciliation of an unknown tool outcome](/content-assets/articles/article-mlops-llmops-tool-contracts/safe-side-effects-durable-identity.png)
 
-*Approval binds to the exact action, while the idempotency record tells the runtime whether to replay, retry, reconcile, or stop when delivery becomes uncertain.*
+*Approval identifies the accepted action. The idempotency record tells the runtime whether to replay a stored result, retry safely, reconcile an uncertain effect, or stop.*
 
-Idempotency does not make every tool retryable. It gives the service enough state to decide whether replay, rejection, reconciliation, or a new attempt is correct.
+Provider idempotency windows have limits. Stripe and several AWS APIs, for example, retain keys for bounded periods and reject a reused key with changed parameters. The application contract should record the provider's scope and retention, preserve its own operation record for the required audit period, and avoid promising stronger duplicate protection than the downstream system can supply.
 
-## Return Meaning, Not Raw Provider Output
+Idempotency gives the runtime evidence for a safe decision. It cannot reverse an already completed effect. Compensation, such as creating a corrective payment or rolling back a deployment, is a separate governed operation with its own approval and identity.
 
-<!-- section-summary: A result envelope gives the workflow stable states and safe next actions without exposing internal provider responses. -->
+## Results Need Stable Operational Meaning
 
-Raw downstream responses are poor tool results. They change across providers, may contain sensitive data, and force the model to interpret infrastructure errors. A **result envelope** translates them into stable application semantics.
+<!-- section-summary: A result envelope translates provider-specific responses into states the orchestrator can handle safely. -->
 
-A useful envelope distinguishes:
+The workflow needs to know what happened and which next action is allowed. A raw HTTP status, stack trace, or provider payload rarely answers that reliably. Provider formats change, internal messages may reveal sensitive data, and a `500` cannot distinguish a safe retry from an unknown effect.
 
-- `success`: the requested operation completed;
-- `rejected`: the request was understood but violates a rule or current state;
-- `retryable_error`: no effect occurred and a bounded retry is allowed;
-- `indeterminate`: the effect may have occurred, so automatic retry is blocked;
-- `failed`: the operation did not complete and another route or human action is required.
+### The envelope describes the next safe transition
 
-It should include a safe data payload, a machine-readable error code, a short corrective action, trace identity, tool version, and explicit retry guidance. For example:
+A **result envelope** maps downstream behavior into stable application states. A compact contract may use:
+
+- `success`: the operation completed and includes a durable reference;
+- `rejected`: current policy or domain state prevents the operation;
+- `retryable_error`: evidence proves that no effect occurred and a bounded retry is allowed;
+- `indeterminate`: the effect may exist and reconciliation is required;
+- `failed`: the operation ended without a valid automatic recovery.
 
 ```json
 {
   "status": "rejected",
-  "tool": "create_booking_hold",
-  "version": "2026-07-01",
-  "trace_id": "trc_01J...",
+  "tool": "propose_refund",
+  "contract_version": "refund-v4",
+  "operation_id": "op_01K...",
+  "trace_id": "trc_01K...",
   "data": null,
   "error": {
-    "code": "price_changed",
-    "message": "The quoted total changed.",
-    "next_action": "Show the new total and request approval again."
+    "code": "amount_exceeds_refundable_balance",
+    "message": "The requested amount is above the remaining refundable balance.",
+    "next_action": "Read the current balance and ask the user to confirm a valid amount."
   },
   "automatic_retry_allowed": false
 }
 ```
 
-The message guides the workflow without exposing a partner error code or stack trace. Detailed diagnostics belong in protected logs linked by the trace ID. The envelope is part of the public contract and needs compatibility tests just like the input schema.
+The model receives the safe message and next action. Protected logs retain the detailed provider response under the trace and operation IDs. An output schema can help clients validate the envelope, while service code still decides which provider failures map to each state.
 
-## Version the Whole Boundary
+### Protocol failures and business outcomes stay separate
 
-<!-- section-summary: A tool version represents input, policy, effect, and result semantics—not only a JSON schema file. -->
+Keep protocol errors separate from tool outcomes. A malformed request, unsupported contract version, or failed authentication means the call never reached normal business execution. A valid request rejected because the refund window closed is a business result. That distinction shapes retry behavior, monitoring, and user messaging.
 
-A change can be breaking even when JSON still validates. Renaming a field is obviously incompatible, but changing the meaning of "cancel," adding a mandatory approval, or making an operation asynchronous also changes the contract. Version the model definition, runtime validation, result semantics, and relevant policy as one release unit.
+## Version And Release The Whole Boundary
 
-Prefer additive optional fields when their absence has an unambiguous meaning. Use a new version when required inputs, permissions, effects, or result states change. During migration, the registry can expose both versions while telemetry shows which agents still call the old one. Define a deprecation window and a rollback path before removing it.
+<!-- section-summary: Contract versions cover input, meaning, authority, effects, results, and compatibility rather than only the JSON schema. -->
 
-A tool registry should record owner, effect class, active versions, required scopes, approval policy, timeout, idempotency support, data classification, and support contact. This is operational metadata, not model context; the orchestrator can disclose only the portion the model needs.
+A tool can change behavior while its input still validates. A cancellation may gain a non-refundable fee. A workflow may require a second approver. A synchronous operation may move to a background job. Each change alters the contract because the effect or the caller's obligations changed.
 
-## Test the Boundary in Layers
+Version the model-facing definition, runtime validator, policy expectations, implementation, result envelope, and evaluation set as one release unit. Record the deployed combination so a trace can identify the exact behavior behind a call.
 
-<!-- section-summary: Contract tests cover syntax, policy, effects, recovery, and compatibility as separate responsibilities. -->
+An additive optional field is compatible only if existing consumers have one clear behavior in its absence. A new required field or changed enum meaning usually needs a new contract version. The same applies to a broader effect, tighter permission, or different retry guarantee.
 
-Schema tests should accept valid examples and reject missing, extra, mistyped, and out-of-range fields. Policy tests should verify identity, tenant isolation, scopes, approval binding, and current business rules. Effect tests should show that concurrent duplicates create one downstream action and that a reused key with changed arguments is rejected.
+During migration, the catalogue can expose both versions to selected workflows. Telemetry then shows which agent runs still use the older contract.
 
-Recovery tests are especially important. Simulate a downstream success followed by a lost response, then prove that reconciliation finds the existing effect rather than creating another one. Test each result state and confirm that raw secrets or personal data never enter the model-visible envelope. Compatibility tests run supported agent and tool versions together.
+Treat descriptions as behavior-bearing code. A wording change can alter tool selection even if the schema is identical. Run tool-choice and argument-generation evaluations before production disclosure. Release first to tests, then shadow or canary traffic, compare selection and outcome metrics, and retain the previous implementation and catalogue policy for rollback.
 
-In evaluation, measure more than whether the model chose the correct tool. Check whether it asked for missing information, avoided tools when no action was needed, selected arguments supported by the conversation, responded correctly to rejection, and stopped when the outcome was indeterminate.
+Deprecation needs an owner, usage evidence, a removal condition, and a compatibility window. If old agent runs can resume from checkpoints, their contract version must remain executable or migrate through an explicit state transition.
 
-## What a Production Tool Contract Provides
+## Test And Observe Every Layer
 
-<!-- section-summary: A mature tool contract makes every transition from proposal to real-world effect explicit and reviewable. -->
+<!-- section-summary: Production evidence separates model selection, structural validation, policy, effects, recovery, and compatibility. -->
 
-A production tool has one bounded purpose, a strict model-facing schema, trusted runtime context, least-privilege authorization, explicit approval rules, current-state validation, and an effect-aware retry policy. Side effects use durable idempotency and reconciliation. Results use a stable envelope. Versions, owners, traces, redaction, and tests are part of the same contract.
+Testing a tool means proving each control at the boundary, rather than checking only that one example returned success. A complete test plan follows the same path as a real call: model selection, schema, authority, approval, effect, recovery, and final evidence. This structure tells the team which guarantee failed and which owner should respond.
 
-The central idea is that structured output solves only the first few metres of the boundary. The difficult engineering lies between valid JSON and a safe real-world effect. Keeping those layers visible helps beginners understand why a function definition is not the tool runtime, and helps production teams review exactly where authority and responsibility live.
+### Contract tests prove deterministic controls
+
+Schema tests cover missing, extra, mistyped, and out-of-range fields. Semantic tests use valid JSON with invalid relationships, such as a refund amount above the payment total. Authorization tests cross users, tenants, roles, and environments. Approval tests mutate one protected field after review. Effect tests submit concurrent duplicates. Recovery tests simulate downstream success followed by a lost response and verify that reconciliation finds the original effect.
+
+### Agent evaluations prove model behavior
+
+Agent evaluations answer a different set of questions. Does the model select the correct eligible tool? Does it ask for information that is genuinely missing? Are arguments supported by retrieved evidence? Does it recover after a rejection? Does it stop and escalate after an indeterminate outcome? Keep these scores separate from server contract tests so a schema-perfect model cannot hide a broken authorization path.
+
+### Telemetry connects decisions to effects
+
+OpenTelemetry traces can connect the model decision, policy checks, tool execution, downstream call, and result. Useful fields include tool and contract version, operation ID, effect class, policy decision, approval presence, sanitized result state, latency, retry count, and downstream status class. W3C Trace Context carries correlation across services.
+
+Raw prompts, access tokens, complete payment objects, and unrestricted exception text should stay out of ordinary telemetry. Use allowlisted attributes, controlled evidence references, access and retention policy, and an explicit opt-in path for sensitive debugging. Metrics should track selection errors, policy rejections, approval waits, execution latency, duplicate replays, indeterminate outcomes, reconciliation age, and failures by contract version.
+
+An operational test should prove the recovery path itself. Create an allowed test operation, interrupt the response after downstream acceptance, resume the workflow, and verify one durable effect, one reconciled result, and one complete audit chain.
+
+## The Complete Production Boundary
+
+<!-- section-summary: A mature tool contract connects a small model interface to deterministic authority, safe execution, recovery, evidence, and controlled change. -->
+
+A production tool represents one bounded operation. The model sees a precise description and schema. The runtime supplies trusted identity, current domain state, policy, approval, credentials, and a durable operation ID. The service protects side effects with idempotency and reconciliation. A stable envelope tells the orchestrator which transitions are safe. Versioned releases, layered tests, traces, and recovery exercises keep the boundary dependable as models and services change.
+
+The main design question is therefore larger than “Can the model produce valid arguments?” The team must also answer who may request the operation, which current facts make it valid, how one intended effect survives retries, how uncertainty is reconciled, and which evidence proves the final outcome.
 
 ![Complete production tool contract with model-facing definitions, runtime controls, release evidence, and layered tests](/content-assets/articles/article-mlops-llmops-tool-contracts/production-tool-contract-summary.png)
 
-*The complete contract joins the small interface the model sees with the larger runtime, evidence, release, and testing responsibilities that make an effect safe.*
+*The model-facing definition is intentionally small. The production contract continues through authorization, execution, recovery, observability, testing, and release control.*
 
 ## References
 
-- [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
-- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [OpenAI tools guide](https://developers.openai.com/api/docs/guides/tools)
-- [OpenAI Agents SDK tools](https://openai.github.io/openai-agents-python/tools/)
-- [JSON Schema documentation](https://json-schema.org/learn/getting-started-step-by-step)
-- [OWASP API Security Top 10](https://owasp.org/API-Security/)
-- [OpenTelemetry GenAI semantic conventions repository](https://github.com/open-telemetry/semantic-conventions-genai)
+- [JSON Schema specification](https://json-schema.org/specification)
+- [JSON Schema object reference](https://json-schema.org/understanding-json-schema/reference/object)
+- [OpenAI function calling](https://platform.openai.com/docs/guides/function-calling)
+- [Anthropic tool use](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use)
+- [Stripe idempotent requests](https://docs.stripe.com/api/idempotent_requests)
+- [AWS guidance for idempotent API design](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_prevent_interaction_failure_idempotent.html)
+- [OAuth 2.0 Resource Indicators](https://www.rfc-editor.org/rfc/rfc8707.html)
+- [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/)
+- [Cedar policy language documentation](https://docs.cedarpolicy.com/)
+- [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/)

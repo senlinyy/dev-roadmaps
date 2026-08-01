@@ -7,6 +7,18 @@ order: 3
 id: "article-mlops-monitoring-and-feedback-retraining-from-production-feedback"
 ---
 
+## Table of Contents
+
+1. [Feedback Does Not Train The Model By Itself](#feedback-does-not-train-the-model-by-itself)
+2. [The Old Model Shapes The Data You Collect](#the-old-model-shapes-the-data-you-collect)
+3. [Wait For Labels To Mature](#wait-for-labels-to-mature)
+4. [Build A Dataset That Can Be Challenged](#build-a-dataset-that-can-be-challenged)
+5. [A Trigger Opens A Training Cycle](#a-trigger-opens-a-training-cycle)
+6. [The Candidate Must Beat More Than The New Cases](#the-candidate-must-beat-more-than-the-new-cases)
+7. [Release Closes The Loop Carefully](#release-closes-the-loop-carefully)
+8. [A Feedback Loop Needs Friction](#a-feedback-loop-needs-friction)
+9. [References](#references)
+
 ## Feedback Does Not Train The Model By Itself
 <!-- section-summary: Production feedback is useful only after it is matured, validated, versioned, and evaluated through a new training cycle. -->
 

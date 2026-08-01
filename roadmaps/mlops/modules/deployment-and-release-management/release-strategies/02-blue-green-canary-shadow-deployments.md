@@ -1,7 +1,7 @@
 ---
 title: "Model Release Strategies"
-description: "Use blue-green, canary, and shadow releases to move model changes into production with controlled traffic, observable decision points, and a clear stop path."
-overview: "Model release strategies control how a new model version reaches real traffic. A supporting example follows a product search ranking service through blue-green stacks, canary traffic, shadow evaluation, Argo Rollouts analysis, Istio mirroring, Prometheus signals, and MLflow or Databricks aliases."
+description: "Learn how blue-green, canary, shadow, and rolling releases control production exposure, evidence collection, capacity, and recovery for ML systems."
+overview: "A candidate can run in production before its output controls real decisions. Release strategies define how traffic authority grows, which evidence supports each step, and how the system returns to a compatible release."
 tags: ["MLOps", "production", "delivery"]
 order: 2
 id: "article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments"
@@ -10,280 +10,380 @@ aliases:
   - child-release-strategies-01-blue-green-canary-shadow-deployments
 ---
 
+## Table of Contents
 
-## Release Strategies Control The Blast Radius
-<!-- section-summary: A model release strategy controls how much real traffic reaches a new model version while the team gathers evidence. -->
+1. [A Deployment Can Exist Before It Controls Decisions](#a-deployment-can-exist-before-it-controls-decisions)
+2. [Every Strategy Needs the Same Foundation](#every-strategy-needs-the-same-foundation)
+3. [Blue-Green Controls the Production Switch](#blue-green-controls-the-production-switch)
+4. [Canary Controls the Size of Live Exposure](#canary-controls-the-size-of-live-exposure)
+5. [Shadow Controls Observational Risk](#shadow-controls-observational-risk)
+6. [Rolling Deployment Controls Replacement Capacity](#rolling-deployment-controls-replacement-capacity)
+7. [Percentage Routing and Stable Cohorts Solve Different Problems](#percentage-routing-and-stable-cohorts-solve-different-problems)
+8. [Mixed Versions Require Compatible Boundaries](#mixed-versions-require-compatible-boundaries)
+9. [Release Gates Turn Evidence Into a Decision](#release-gates-turn-evidence-into-a-decision)
+10. [Automatic Rollback Needs Candidate-Specific Evidence](#automatic-rollback-needs-candidate-specific-evidence)
+11. [Industrial Platforms Implement the Same Control Ideas](#industrial-platforms-implement-the-same-control-ideas)
+12. [Choose and Combine Strategies by Risk](#choose-and-combine-strategies-by-risk)
+13. [The Main Idea](#the-main-idea)
+14. [References](#references)
 
-A **model release strategy** is the traffic plan for moving a new model version into production. It answers a simple release question early: how many users should see the candidate model before the team has enough production evidence to trust it? For ML systems, that question matters because a model can pass offline evaluation and still hurt production through slow inference, missing features, skewed predictions, or surprising product behavior.
+## A Deployment Can Exist Before It Controls Decisions
+<!-- section-summary: Release strategies separate the presence of a candidate in production from the authority of its output over real decisions. -->
 
-In the previous release-basics articles, you saw model artifacts, version labels, environments, and registry aliases. This article uses those pieces to control real traffic. A release strategy sits between "the candidate passed review" and "every request now uses the candidate." It gives the team a small first step, a way to compare behavior, and a ready stop path.
+At a high level, a **release strategy** controls how a candidate moves from “running in production” to “trusted with production decisions.” Those are two different states. A model service can be fully deployed, healthy, and receiving copied requests while every user still receives the current release's answer.
 
-The three common strategies in model releases are **blue-green**, **canary**, and **shadow**. Blue-green keeps two complete serving stacks and switches traffic after the candidate stack passes checks. Canary sends a small percentage of production traffic to the candidate, then widens that slice after the signals stay healthy. Shadow copies production requests to the candidate while users still receive the old model's answer, which helps the team inspect candidate behavior before it affects the product.
+This distinction gives a team room to gather evidence before granting wider authority. The candidate can prove that it loads on production hardware, accepts live request shapes, reaches the feature source, meets its latency budget, and produces plausible outputs. Real user exposure can then grow in reviewed steps.
 
-![CedarCart model release paths](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/cedarcart-release-paths.png)
+ML systems benefit from this separation because several failures appear only after deployment. A model can pass offline evaluation and still encounter missing live features, unseen categories, numerical differences, slow inference, or a decision-policy mismatch. A new runtime image can also regress while the model remains unchanged.
 
-*CedarCart can choose a full-stack switch, a staged canary, or a shadow path for `product-ranker:v38`, while rollback and metrics stay attached to each path.*
+Four common strategies control different risks:
 
-## A Supporting Example: Search Ranking Release
-<!-- section-summary: A supporting example follows an ecommerce ranking model where poor release control can harm search results and revenue. -->
+- **Blue-green** prepares two complete serving stacks and controls the switch between them.
+- **Canary** gives the candidate a limited share of live decision traffic.
+- **Shadow** copies live requests to the candidate while the current release controls the product response.
+- **Rolling deployment** replaces serving instances in bounded batches to preserve capacity.
 
-Imagine **CedarCart**, an ecommerce marketplace. Customers search for products such as "running shoes," "coffee grinder," and "portable monitor." A model called `product-ranker` orders the search results. The current production model is `product-ranker:v37`, and the candidate is `product-ranker:v38`.
+These strategies can overlap. SageMaker AI, for example, implements canary traffic shifting as a mode of blue-green endpoint deployment. Kubernetes teams may use a blue-green or canary controller around workloads whose Pods still update in controlled ReplicaSets. The important question concerns which risk each mechanism controls.
 
-The ML team trained `v38` with fresher click and purchase data. Offline ranking metrics improved, especially for long-tail searches. That sounds promising, yet the release risk is real. If the model pushes out-of-stock items to the top, conversion drops. If it over-favors one seller segment, marketplace operations gets complaints. If inference latency rises, search pages load slowly and users leave before seeing the results.
-
-CedarCart uses this stack:
-
-| Piece | CedarCart example | Why it matters |
-|---|---|---|
-| Registry | MLflow or Databricks Unity Catalog model `prod_ml.search.product_ranker` | Stores model versions, aliases, tags, lineage, and review evidence |
-| Serving runtime | `ranker-api` in Kubernetes | Handles `/rank` requests from the search backend |
-| Release controller | Argo Rollouts | Declares canary or blue-green steps and pauses |
-| Traffic layer | Istio or another supported router | Splits or mirrors traffic by percentage or route |
-| Observability | Prometheus, Grafana, OpenTelemetry traces, warehouse logs | Shows latency, errors, traffic share, and model behavior |
-| Rollback control | Registry alias, rollout abort, GitOps revert | Returns traffic to `v37` if the candidate fails |
-
-The model release should connect all of these. A traffic percentage alone only tells you where requests go. The release is useful when that traffic percentage links to model version labels, health checks, product metrics, and a clear action if the numbers cross a threshold.
-
-## Blue-Green Gives You Two Complete Stacks
-<!-- section-summary: Blue-green releases run the old and new stacks side by side, then switch the active route after the new stack passes checks. -->
-
-**Blue-green release** means you keep two production-ready stacks. The blue stack serves real traffic now. The green stack runs the candidate version with the same request contract, similar capacity, and the same observability labels. The release team tests green first, then switches the active route when the evidence is strong enough.
-
-For CedarCart, blue is `ranker-api` serving `product-ranker:v37`. Green is another `ranker-api` stack serving `product-ranker:v38`. Search traffic still goes to blue while the platform team checks green with synthetic requests, replayed production queries, and a small internal preview route. If green passes, the active Service or traffic route moves from blue to green.
-
-Argo Rollouts supports a blue-green strategy with an active Service and a preview Service. The active Service receives normal application traffic. The preview Service sends test traffic to the new ReplicaSet before promotion. A simplified manifest can look like this:
-
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
-metadata:
-  name: ranker-api
-spec:
-  replicas: 10
-  selector:
-    matchLabels:
-      app: ranker-api
-  strategy:
-    blueGreen:
-      activeService: ranker-api-active
-      previewService: ranker-api-preview
-      autoPromotionEnabled: false
-      prePromotionAnalysis:
-        templates:
-          - templateName: ranker-preview-checks
-  template:
-    metadata:
-      labels:
-        app: ranker-api
-    spec:
-      containers:
-        - name: api
-          image: ghcr.io/cedarcart/ranker-api@sha256:72a9c...
-          env:
-            - name: MODEL_URI
-              value: models:/prod_ml.search.product_ranker/38
-            - name: MODEL_VERSION
-              value: "38"
+```mermaid
+flowchart TB
+    A["Candidate is deployed"] --> B["Candidate has zero decision authority"]
+    B --> C["Collect safe production evidence"]
+    C --> D["Grant a limited traffic scope"]
+    D --> E["Evaluate candidate-specific gates"]
+    E -->|"gates pass"| F["Increase authority"]
+    E -->|"unsafe or uncertain"| G["Stop exposure and restore safe route"]
+    F --> H["Candidate is accepted as current release"]
 ```
 
-The useful detail is `autoPromotionEnabled: false`. The controller can prepare the green stack, but a person or automation gate still has to promote it after the analysis passes. That fits ML releases because final approval often needs model-specific evidence, not only Pod readiness.
+## Every Strategy Needs the Same Foundation
+<!-- section-summary: Current and candidate releases need a stable router, comparable telemetry, predefined gates, and a retained recovery path before traffic changes. -->
 
-Blue-green works well when the team wants a clean switch between full stacks. It also gives a fast fallback if the green stack fails soon after promotion because the old stack can stay warm for a short window. The tradeoff is cost and capacity. Running two complete stacks for a large model service can double GPU or CPU demand during the release window, so the plan should state how long the old stack stays active.
+A release strategy starts before the first routing change. The team needs a current release that can continue serving, a candidate release with immutable identity, and a stable routing layer in front of both. Callers use the stable endpoint while the router changes the destination behind it.
 
-## Canary Sends A Small Slice First
-<!-- section-summary: A canary release sends a small percentage of live traffic to the candidate and expands only after the release signals pass. -->
+### Identify the complete releases
 
-**Canary release** means a small slice of production traffic goes to the candidate first. The team watches the candidate against the current model, then widens the slice in planned steps. Canary is usually the daily release pattern for online model services because it limits harm while still collecting real production behavior.
+The current and candidate labels should resolve to complete, compatible release units. Each unit includes the model, serving image, preprocessing, feature contract, API contract, decision policy, and runtime configuration. A label such as `candidate` is useful for people; an immutable version or digest is required for evidence and recovery.
 
-CedarCart chooses canary for `v38` because search traffic is high enough to compare quickly. The release starts with 2 percent of search requests for 30 minutes, then 10 percent for one hour, then 25 percent through a normal shopping peak. Each step has a decision: continue, pause for investigation, or abort.
+Every request, prediction event, trace, and relevant metric should carry the resolved release ID. During mixed traffic, endpoint-level averages can hide a failing candidate because the healthy current release produces most of the data. Candidate and baseline views must remain separable.
 
-An Argo Rollouts canary can express those steps:
+### Keep routing independent from model loading
 
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
-metadata:
-  name: ranker-api
-spec:
-  replicas: 10
-  strategy:
-    canary:
-      stableService: ranker-api-stable
-      canaryService: ranker-api-canary
-      trafficRouting:
-        istio:
-          virtualService:
-            name: ranker-api
-            routes:
-              - primary
-      steps:
-        - setWeight: 2
-        - pause:
-            duration: 30m
-        - analysis:
-            templates:
-              - templateName: ranker-canary-prometheus
-        - setWeight: 10
-        - pause:
-            duration: 1h
-        - setWeight: 25
-        - pause:
-            duration: 2h
-        - setWeight: 100
+The router can be a managed ML endpoint, gateway, service mesh, load balancer, application assignment layer, or Kubernetes Service controlled by a rollout controller. Its job is to send a defined request scope to each ready release. The serving process still verifies which model it loaded and reports that identity.
+
+Routing state also needs an observed view. A desired 10% canary is only an instruction. Operators should verify actual request counts by release, ready capacity behind each route, and the release identity returned through telemetry.
+
+### Define gates before exposure
+
+A gate states which evidence permits the next traffic step and which condition stops the rollout. It names an owner, an observation window, minimum sample coverage, and a recovery action. Missing telemetry should pause the release because an unobserved candidate is an unknown candidate.
+
+### Retain a recovery path
+
+The current release needs enough capacity to receive full traffic again. Its image, model, feature access, policy, and caller compatibility must remain valid. Scaling the current stack down too early saves money and lengthens recovery.
+
+```mermaid
+flowchart TB
+    R["Stable production endpoint"] --> T["Routing layer"]
+    T --> A["Current release"]
+    T --> B["Candidate release"]
+    A --> O["Telemetry labelled by release"]
+    B --> O
+    O --> G["Predefined release gates"]
+    G -->|"promote"| T
+    G -->|"stop"| X["Route all authority to retained release"]
 ```
 
-The `setWeight` fields describe the traffic share. The pause fields give the team time to gather evidence. The analysis step lets the rollout query a metric system such as Prometheus and stop the release if the candidate crosses a failure condition.
+## Blue-Green Controls the Production Switch
+<!-- section-summary: Blue-green keeps current and candidate stacks ready side by side so routing can switch between complete environments. -->
 
-With a traffic manager such as Istio, the traffic percentage can stay separate from Pod counts. That matters for model serving because one candidate Pod might need more memory or GPU capacity than one stable Pod. The release team should size the candidate stack for the traffic it will receive and keep the stable stack ready to handle full traffic if the candidate is aborted.
+**Blue-green deployment** runs two complete production-capable stacks. Blue is the current release behind the stable route. Green is the candidate stack. The candidate first receives preview, synthetic, or replay traffic through an isolated route. Promotion switches the active route to green.
 
-## Shadow Runs The Candidate Beside Production
-<!-- section-summary: Shadow release copies live requests to the candidate so the team can inspect behavior before candidate responses reach users. -->
+You can think of blue-green as preparing a replacement stage before moving the audience. It controls switch risk and recovery time. It provides less live decision evidence before the switch unless the team adds mirroring or weighted traffic.
 
-**Shadow release** means live production requests are copied to the candidate model, while users still receive the current production answer. Shadow traffic helps the team answer, "How would the candidate respond to real requests?" without using those answers in the product yet.
+### Traffic path and evidence
 
-For CedarCart, the search backend sends the real request to `v37` and receives the ranking that customers see. The traffic layer also sends a copy to `v38`. The candidate response is logged and dropped. Nobody sees it in the product, but the team can compare rank distributions, missing feature behavior, latency, and seller segment exposure.
+Before promotion, real decision traffic stays on blue. Green can receive health probes, golden requests, internal traffic, or governed replays. That evidence verifies loading, contracts, feature access, security, performance, and telemetry. A routing switch then gives green full authority, or a separate traffic manager can introduce a smaller share first.
 
-Istio supports traffic mirroring through a route rule. A simplified VirtualService can mirror a portion of traffic to a candidate service:
+Users usually receive a response from one complete stack. During router propagation, a short overlap can occur, so both releases need compatible caller and downstream contracts. Session state should live outside the replicas or remain readable by both versions.
 
-```yaml
-apiVersion: networking.istio.io/v1
-kind: VirtualService
-metadata:
-  name: ranker-api
-spec:
-  hosts:
-    - ranker-api.cedarcart.svc.cluster.local
-  http:
-    - route:
-        - destination:
-            host: ranker-api-stable
-            subset: v37
-          weight: 100
-      mirror:
-        host: ranker-api-shadow
-        subset: v38
-      mirrorPercentage:
-        value: 20
-```
+### Recovery and resource cost
 
-Shadow traffic is powerful, but it needs guardrails. Candidate calls still consume CPU, memory, GPUs, downstream feature store reads, and log volume. Shadow also needs privacy review because the candidate receives real request data. CedarCart keeps shadow results out of customer responses, writes them to a separate table, and samples enough traffic to compare behavior without accidentally doubling the whole production workload.
+Recovery sends the stable route back to blue. This can be fast if blue stays warm and retains full capacity. The team then verifies actual routing and the release ID behind new requests.
 
-Shadow fits models whose labels or product outcomes arrive later. A search ranking team can compare candidate rank position, availability, price bands, and latency on day one. Purchase conversion takes longer, so shadow cannot answer every product question alone. It gives the canary a cleaner start.
+The main tradeoff is capacity. Running two full GPU fleets can be expensive or impossible under quota. A preview stack can start smaller, then scale before promotion. That lowers idle cost and adds scale-up time to the release path.
 
-## Connect Traffic To Model Aliases And Evidence
-<!-- section-summary: Release traffic should point to approved model identities and every request should record the resolved model version. -->
+### Common failure
 
-Traffic control tells the platform where to send requests. Model identity tells the team what served those requests. CedarCart needs both. If the rollout says "canary service," the canary service must still load a known model version, record the resolved version, and connect that version to registry evidence.
+A green stack can pass readiness while using the wrong feature view or policy version. Health probes prove service availability; release verification proves semantic identity. Another common failure is a shared, incompatible database or event-schema migration that removes blue's ability to resume. Blue-green recovery depends on backward-compatible shared dependencies.
 
-MLflow Model Registry supports versions and aliases such as `champion` or `candidate`. Current MLflow docs recommend aliases for deployment-style pointers, and model stages are deprecated. In Databricks, Unity Catalog models are the governed model lifecycle surface for modern workspaces, with access control, audit, lineage, discovery, and compatibility with the open-source MLflow client.
+Argo Rollouts implements blue-green on Kubernetes through an active Service and an optional preview Service. It changes Service selectors to point at the chosen ReplicaSet and supports pre-promotion analysis. Its documentation also calls out routing propagation delay and a specific downtime risk for blue-green with ALB Ingress, so the selected traffic integration needs its own verification.
 
-CedarCart keeps production stable on the `champion` alias and points the canary runtime at the explicit version under review:
+## Canary Controls the Size of Live Exposure
+<!-- section-summary: Canary routing lets a candidate control a bounded share of real decisions while the current release serves the remainder. -->
 
-```yaml
-stable:
-  model_uri: models:/prod_ml.search.product_ranker@champion
-  expected_resolved_version: "37"
+A **canary release** gives the candidate a small share of live traffic, evaluates it, and expands the share through planned steps. Candidate responses reach users in that share. The strategy therefore gathers real product evidence while limiting the number of affected decisions.
 
-canary:
-  model_uri: models:/prod_ml.search.product_ranker/38
-  release_candidate: true
-  review_packet: s3://cedarcart-ml-reviews/product-ranker/v38/review.yaml
-```
+### Traffic path and evidence
 
-Every prediction log should record both the requested pointer and the resolved version:
+The stable endpoint routes each eligible request to the current or candidate release. A plan might use 1%, 5%, 25%, and 100% steps, with evidence windows between them. The useful step size depends on request volume, risk, segment coverage, and label delay.
+
+Canary traffic can measure service latency, errors, feature health, output distributions, immediate product signals, and eventually ground-truth quality. Candidate metrics must be compared with the current release over the same period. Traffic volume alone is insufficient if the canary misses an important device, geography, or customer segment.
+
+### User experience and stable assignment
+
+A request-level percentage can send the same user to different releases on consecutive calls. That may be acceptable for independent predictions. A ranking or recommendation path often depends on earlier responses. Conversational sessions and cached decisions also carry state across calls. Workflows with retries may need to reproduce the original decision. The routing layer can hash an account or session key, or the application can pass a reviewed route choice.
+
+### Recovery and resource cost
+
+Abort sets candidate decision traffic to zero and sends eligible work back to the current release. The current stack should retain capacity for that return. The candidate stack needs enough resources for its assigned share plus headroom, while the baseline may continue at full capacity for fast recovery. Cost sits between a small extra fleet and near-blue-green duplication as traffic grows.
+
+### Common failure
+
+Aggregated metrics often hide a bad canary. A 1% candidate with a 20% error rate adds only a small amount to an endpoint-wide average. Release labels and candidate-scoped queries prevent that masking. Another failure is early promotion from too few requests or poor segment coverage. The gate should require both time and evidence volume.
+
+Databricks Model Serving can route one endpoint across served entities. A focused configuration can assign 90% to the current entity and 10% to the candidate:
 
 ```json
 {
-  "event": "ranker_prediction",
-  "query_id": "q_881923",
-  "traffic_group": "canary",
-  "model_name": "prod_ml.search.product_ranker",
-  "model_pointer": "version:38",
-  "model_version": "38",
-  "request_latency_ms": 44,
-  "result_count": 48,
-  "out_of_stock_top10": 1
+  "traffic_config": {
+    "routes": [
+      {"served_model_name": "current", "traffic_percentage": "90"},
+      {"served_model_name": "candidate", "traffic_percentage": "10"}
+    ]
+  }
 }
 ```
 
-This record makes the release auditable. If support reports bad search results at 18:20 UTC, the team can query by `traffic_group`, `model_version`, and query segment. If rollback happens, the failed model version stays in the registry with its metrics and logs, so the team can fix the release rather than guessing from memory.
+The endpoint configuration also defines each served entity and its immutable model version. Direct invocation of an individual served model bypasses the traffic setting, which is useful for explicit smoke tests and needs separate access control.
 
-## Use Signals To Promote, Pause, Or Stop
-<!-- section-summary: Release decisions should use service health, model behavior, and product guardrails instead of traffic percentages alone. -->
+## Shadow Controls Observational Risk
+<!-- section-summary: Shadow traffic lets a candidate process live requests without allowing its response or side effects to control the product. -->
 
-A release strategy needs decision signals. Kubernetes readiness can tell you the Pod accepted traffic, but it cannot tell you whether the ranking model is harming search quality. CedarCart watches signals in three layers: service health, model behavior, and product guardrails.
+A **shadow release** copies selected live requests to the candidate. The current release still produces the response used by the product. Candidate output is recorded for comparison or discarded.
 
-| Layer | Signal | Example stop rule |
-|---|---|---|
-| Service health | 5xx rate, 95th-percentile (p95) latency, timeout rate | Stop if canary p95 stays above 150 ms for 10 minutes |
-| Input health | missing features, unknown category rate, feature store errors | Stop if feature lookup errors exceed 0.5 percent |
-| Prediction behavior | empty result rate, out-of-stock top results, score distribution | Stop if out-of-stock items in top 10 double from baseline |
-| Product guardrail | add-to-cart rate, zero-result searches, support contacts | Pause if add-to-cart drops by more than the reviewed threshold |
+The defining rule is clear: shadow output has zero decision authority. Sending 10% of requests to a candidate and returning those answers is canary traffic. Copying 10% while returning only current-release answers is shadow traffic.
 
-Prometheus can hold the fast service metrics. The product and model signals may come from logs or warehouse tables. Argo Rollouts can run Prometheus analysis during canary:
+### Traffic path and evidence
+
+The router sends the original request to the current release and a copy to the candidate. A correlation ID connects the two results. The team can compare request compatibility, feature retrieval, errors, latency, resource use, prediction distribution, and per-request output differences.
+
+Shadowing gives limited evidence for product impact because users never act on candidate output. A candidate ranking can be compared with the current ranking, while candidate-driven clicks and purchases are absent. Delayed ground truth can still score both predictions for tasks whose labels are independent of the action, though many product outcomes are influenced by what the user saw.
+
+### User experience and recovery
+
+Users receive the current response, so candidate quality has no direct product effect. Recovery stops request copying and removes or scales down the candidate. The baseline route stays unchanged.
+
+### Resource and privacy cost
+
+Shadow execution consumes compute, feature-store reads, network bandwidth, and telemetry capacity. Mirroring all traffic can nearly double inference load. A sampled shadow often provides enough coverage at lower cost.
+
+The candidate receives real request data, so privacy controls still apply. Raw payloads and candidate outputs need an approved purpose, access, and retention. Hiding the response from users leaves the sensitivity of production data unchanged.
+
+### Common failure
+
+Copied requests can repeat side effects. A shadow service must avoid charges, messages, writes, queue publication, and feedback events that belong to the production decision. Use read-only dependencies, a shadow execution flag enforced by downstream services, isolated output stores, or a pure scoring boundary.
+
+SageMaker AI shadow variants copy a portion of requests, return only the production-variant response, and can log shadow responses for comparison. SageMaker shadow tests exclude several endpoint types, including serverless inference, asynchronous inference, multi-model endpoints, multiple-container endpoints, Marketplace containers, and Inf1 endpoints. Azure managed online endpoints also support mirroring. Its current managed-endpoint path mirrors to one deployment, caps the mirrored share at 50%, and excludes Kubernetes online endpoints.
+
+## Rolling Deployment Controls Replacement Capacity
+<!-- section-summary: Rolling deployment replaces serving instances in bounded batches to preserve availability and limit temporary capacity. -->
+
+A **rolling deployment** gradually replaces old instances with new ones. It primarily controls availability and capacity during replacement. It offers weaker traffic isolation than a canary driven by a dedicated router.
+
+### Traffic path and evidence
+
+In a Kubernetes Deployment, a new ReplicaSet scales up while the old ReplicaSet scales down. The Service sends traffic to ready Pods across both sets during the mixed period. `maxUnavailable` limits how much desired capacity can be absent, and `maxSurge` limits extra Pods above the desired count.
 
 ```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: AnalysisTemplate
-metadata:
-  name: ranker-canary-prometheus
-spec:
-  metrics:
-    - name: canary-error-rate
-      interval: 2m
-      count: 5
-      successCondition: result[0] < 0.01
-      provider:
-        prometheus:
-          address: http://prometheus.monitoring.svc:9090
-          query: |
-            sum(rate(http_requests_total{app="ranker-api",traffic_group="canary",status=~"5.."}[5m]))
-            /
-            sum(rate(http_requests_total{app="ranker-api",traffic_group="canary"}[5m]))
-    - name: canary-p95-latency
-      interval: 2m
-      count: 5
-      successCondition: result[0] < 0.15
-      provider:
-        prometheus:
-          address: http://prometheus.monitoring.svc:9090
-          query: |
-            histogram_quantile(
-              0.95,
-              sum by (le) (
-                rate(http_request_duration_seconds_bucket{app="ranker-api",traffic_group="canary"}[5m])
-              )
-            )
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 25%
 ```
 
-The first query checks server errors. The second checks p95 latency. Both use labels that the service must emit consistently. OpenTelemetry semantic conventions help teams use common HTTP metric names and attributes, while Prometheus alerting and recording rules help turn repeated queries into shared release checks.
+This configuration keeps desired capacity available and permits temporary surge capacity. Readiness gates whether a new Pod joins service. Kubernetes tracks rollout progress and revisions, while application-specific prediction gates require additional telemetry and automation.
 
-The practical habit is to write the stop rules before the release starts. During a tense rollout, people can talk themselves into waiting "five more minutes." A written threshold gives the incident commander and release owner a calmer decision path.
+### User experience and compatibility
 
-![Canary gates for product-ranker v38](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/canary-gates-product-ranker-v38.png)
+Users may reach either release during the update. Consecutive requests and retries can cross versions. The API, feature path, policy, shared state, and downstream events must support that mixed period. Workloads requiring stable assignment need a routing layer above the native Deployment.
 
-*The canary widens from 2 percent to 25 percent only after service, feature, prediction, and product signals stay inside the reviewed thresholds.*
+### Recovery and resource cost
 
-## Putting It Together
-<!-- section-summary: Blue-green, canary, and shadow releases work best when traffic control, model identity, signals, and rollback are planned together. -->
+Rolling replacement uses less peak capacity than two full stacks. It can still exceed the desired replica count through `maxSurge`, and terminating Pods may temporarily increase observed resource use. Rollback reverses the Pod template revision and then replaces candidate Pods. Recovery can take longer than a route flip.
 
-Model release strategies give CedarCart a safe path from approved artifact to production traffic. Blue-green prepares a complete candidate stack and switches after checks. Canary sends a small live slice first, then widens only after signals pass. Shadow copies real requests to the candidate so the team can study behavior before users receive candidate predictions.
+Kubernetes revision rollback restores the Deployment Pod template. External model aliases, feature versions, secrets, and policies need their own restoration path. A complete ML release identity should keep those dependencies tied to the image or desired-state record.
 
-The release strategy works because it connects traffic to model identity and evidence. The serving runtime records model versions. The registry keeps aliases and review packets. Argo Rollouts and Istio control the route. Prometheus, OpenTelemetry, logs, and warehouse checks show whether the candidate is healthy enough to continue.
+### Common failure
 
-![Release evidence loop](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/release-evidence-loop.png)
+A shallow readiness check can admit a candidate Pod that listens on a port before its model or critical assets are ready. Another failure appears if the old and new versions cannot share requests, state, or events. Rolling updates assume mixed-version compatibility.
 
-*A useful release loop ties the registry alias, rollout step, live signals, decision record, and rollback path to the same candidate version.*
+Argo Rollouts adds a separate custom resource and controller for canary and blue-green strategies. With an integrated traffic manager, `setWeight` controls request traffic independently from replica count. Without that integration, Argo Rollouts approximates canary weight through whole Pod counts, which limits precision for small fleets. Unsuccessful analysis can abort the rollout.
 
-For ML systems, release control is product safety. A good plan says which version is live, who approved it, which traffic slice sees it, which signals decide the next step, and how the team stops the release if the model harms users.
+## Percentage Routing and Stable Cohorts Solve Different Problems
+<!-- section-summary: Weighted routing controls aggregate exposure, while stable cohort assignment preserves a consistent release for related requests. -->
+
+**Percentage routing** asks the router to send an aggregate share of requests to each release. It is effective for limiting load and decision volume. The exact request choice may vary from call to call according to the platform's routing behaviour.
+
+**Stable cohort assignment** selects a release from a durable key such as user, account, device, tenant, or session. Related requests stay on the same release for the assignment period. This protects consistency and keeps each user's outcomes associated with one release.
+
+Consider a recommendation service. The first call builds a candidate-specific cache entry, and a retry reaches the current release. The response can conflict with the cached state. Stable assignment keeps both calls on one release. A stateless image classifier with independent requests may need only weighted routing.
+
+```mermaid
+flowchart TB
+    A["Eligible request"] --> B{"Does consistency across requests matter?"}
+    B -->|"No"| C["Weighted request routing"]
+    B -->|"Yes"| D["Choose stable assignment key"]
+    D --> E["Hash or look up cohort"]
+    E --> F["Route all related requests to assigned release"]
+    F --> G["Persist release ID with decision and retry token"]
+```
+
+Retries also need idempotency. The decision record can preserve the original release and result so a repeated request returns a consistent answer without repeating an external action. Stateful services should keep session state in a version-compatible store or route the complete session to one release.
+
+Some managed endpoints support explicit targeting alongside weighted traffic. SageMaker AI `TargetVariant` selects a production variant and overrides random distribution. Azure callers can target an online deployment with the `azureml-model-deployment` header. These controls can implement internal tests or application-managed assignment, provided caller permissions and routing policy prevent arbitrary public selection.
+
+## Mixed Versions Require Compatible Boundaries
+<!-- section-summary: Any strategy with overlapping releases depends on compatible caller contracts, features, policy, state, and downstream events. -->
+
+Blue-green has a short propagation overlap. Canary and rolling releases intentionally run mixed versions. Shadowing sends the same request through two paths. All four strategies therefore need a compatibility plan.
+
+### Preserve API compatibility
+
+Both releases should accept every caller version expected during the rollout. Additive request fields with safe defaults support gradual migration. Removing a field, changing its meaning, or changing response semantics needs a versioned contract and an ordered caller migration.
+
+A response may also enter a cache, queue, database, or downstream API. Those consumers need to understand outputs from both releases during the overlap. Versioned events and tolerant readers help preserve that boundary.
+
+### Preserve feature compatibility
+
+The current and candidate models may expect different feature sets. The serving layer can retrieve both versions explicitly, or the feature platform can keep a backward-compatible view during the release. A mutable feature name that changes meaning under both models creates an unsafe mixed state.
+
+Online and training semantics remain important. Each prediction event should record the resolved feature version and freshness status so candidate evidence can be separated from feature-path drift.
+
+### Preserve policy and state compatibility
+
+Policy turns a model score into a product action. Candidate and current releases may use different thresholds or fallback rules, so the policy version belongs in telemetry and recovery. Shared databases and caches need migrations that both releases can use. The same compatibility rule applies to session stores and queues.
+
+An expand-and-contract migration is common: add the new field or event form, teach both releases to coexist, move traffic, and remove the old form after the recovery window. Destructive migration before full promotion can eliminate the retained release's ability to resume.
+
+## Release Gates Turn Evidence Into a Decision
+<!-- section-summary: Release gates combine fast operational signals with ML behaviour, segment coverage, and product evidence appropriate to the current traffic scope. -->
+
+A release gate converts evidence into one of three actions: promote, hold, or stop. Strong gates compare candidate and current behaviour and state how much data is enough for the decision.
+
+### Service gates answer whether the candidate can serve
+
+Service evidence includes request count, error rate, timeout rate, latency percentiles, saturation, queue depth, restart rate, and dependency failures. These signals arrive quickly and support automatic stops. They should use candidate release or deployment labels.
+
+### Feature and input gates answer whether the request still means the same thing
+
+Input evidence covers schema failures, missing values, unseen categories, feature-source errors, fallback rate, and freshness. A healthy API can produce harmful predictions from stale or incompatible features. Compare candidate and baseline over the same traffic segments.
+
+### Prediction gates catch behavioural shifts before labels mature
+
+Prediction evidence includes score or class distribution, output bounds, uncertainty where defined, action rate, and candidate-baseline disagreement. These are diagnostic signals. A changed distribution can be expected after a deliberate model improvement, so reviewed bounds and segment context matter.
+
+### Segment coverage prevents false confidence
+
+A global sample count can hide empty or tiny subgroups. The gate should name important regions, device types, model routes, risk tiers, or customer groups and require enough observations from each. Unsupported segments can stay on the current release until their path is validated.
+
+### Product evidence arrives at different speeds
+
+Immediate product signals come from events close to the decision. A manual override can reveal operator disagreement, while a failed workflow or downstream rejection can reveal an unusable output. Empty results and support events provide other early warnings. Ground-truth quality can arrive hours, days, or months later. Fast signals can stop obvious harm. Delayed labels may require a longer limited release. Teams can also use retrospective evaluation or require another approval before full authority.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Limited
+    Limited --> Hold: evidence missing or ambiguous
+    Limited --> Stopped: stop gate fails
+    Limited --> Expanded: gates pass
+    Hold --> Limited: investigation resolves concern
+    Hold --> Stopped: concern confirmed
+    Expanded --> Hold: later signal weakens
+    Expanded --> Active: final evidence accepted
+    Stopped --> [*]
+    Active --> [*]
+```
+
+## Automatic Rollback Needs Candidate-Specific Evidence
+<!-- section-summary: Automatic rollback can contain fast, measurable failures only if alarms isolate the candidate and the retained release is complete. -->
+
+**Automatic rollback** connects a measurable stop condition to a recovery action. It is effective for fast, objective failures such as high error rate, excessive latency, failed readiness, or feature-source errors. Ambiguous product movement and delayed labels often need a hold plus human review.
+
+### Scope alarms to the candidate
+
+An endpoint-wide alarm can miss a small broken canary. Candidate metrics need a release, variant, deployment, or route dimension. The query should also verify that expected candidate traffic and telemetry are present. Zero errors from zero candidate requests provide no safety evidence.
+
+SageMaker AI deployment guardrails connect CloudWatch alarms to canary, linear, blue-green, or rolling updates for supported endpoint types. The new endpoint configuration can be selected in alarm dimensions, and a tripped alarm during the monitoring period initiates rollback. Feature exclusions apply, so the deployment plan should verify endpoint support.
+
+Argo Rollouts AnalysisRuns can query providers such as Prometheus. An unsuccessful analysis aborts the rollout. Accurate labels and queries remain the team's responsibility; a controller cannot repair mixed or missing telemetry semantics.
+
+### Restore the complete compatible release
+
+Routing traffic away from the candidate is the first recovery step. The current release needs its original model and image. Its feature contract and decision policy must still resolve, and its secrets must still be accessible. Enough capacity must be ready for returning traffic. A registry alias change alone may leave candidate serving code or policy active.
+
+After rollback, verify the route, actual request counts, active release IDs, feature health, and product recovery. Preserve candidate evidence for investigation.
+
+### Account for decisions already made
+
+Rollback stops new candidate decisions. Earlier actions remain. A declined application may need review, a sent notification may need follow-up, and a published batch may need a corrected version. Decision IDs connect affected outcomes to remediation.
+
+Automatic recovery should also have a failure path. If the current stack cannot regain capacity or the router update fails, incident handling needs a fallback such as a safe rule, delayed response, manual queue, or controlled service stop.
+
+## Industrial Platforms Implement the Same Control Ideas
+<!-- section-summary: Managed ML endpoints and Kubernetes controllers provide different combinations of routing, mirroring, rollout automation, and recovery. -->
+
+Industrial platforms use different resource names while implementing the same broad controls. A useful comparison starts with four capabilities: how the platform keeps current and candidate releases separate, how it routes or copies requests, how it labels candidate evidence, and how it restores traffic.
+
+Similar strategy names can describe different mechanics. SageMaker AI canary traffic shifting operates inside its blue-green deployment guardrails. Azure documentation uses blue-green for multiple deployments with percentage allocation. Native Kubernetes rolling updates replace ready Pods and provide no model-aware release gate. Teams should verify the actual traffic and recovery semantics of the selected platform.
+
+Amazon SageMaker AI endpoints support weighted production variants and explicit `TargetVariant` routing. Deployment guardrails provide blue-green all-at-once, canary, and linear modes, plus rolling updates and alarm-driven rollback for supported real-time and asynchronous endpoint configurations. Shadow variants copy requests and hide candidate responses, subject to documented endpoint exclusions.
+
+Vertex AI endpoints hold multiple deployed models and a `traffic_split` map whose percentages add to 100. A model absent from that map receives zero endpoint traffic. This supplies weighted routing; the release pipeline still owns staged gates, cohort semantics, and complete-release recovery.
+
+Azure Machine Learning managed online endpoints place multiple deployments behind a stable endpoint. They support percentage traffic allocation, direct deployment targeting, and mirrored traffic. Mirroring currently has a 50% cap, targets one deployment, and is unavailable for Kubernetes online endpoints.
+
+Databricks Model Serving uses served entities and `traffic_config` routes. The endpoint can split traffic across models or versions, and callers can invoke a named served model directly. The application still needs release-labelled telemetry and a stable-assignment layer if related requests must stay together.
+
+Native Kubernetes Deployments provide rolling replacement through ReplicaSets. `maxSurge` and `maxUnavailable` control capacity, readiness controls traffic admission, and rollout status reports progress. Revision history supports Pod-template rollback. Model-aware gates, shadow traffic, and precise weighted canaries sit outside the native Deployment controller. Argo Rollouts is an additional progressive-delivery controller. It adds blue-green and canary steps, plus analysis and traffic-manager integrations. Without a traffic manager, canary weights are approximated through replica counts.
+
+## Choose and Combine Strategies by Risk
+<!-- section-summary: The best strategy follows the failure to control, the evidence required, available capacity, and the speed of recovery. -->
+
+Choose **blue-green** where a complete environment switch and fast route reversal matter most. It fits major runtime changes, isolated stacks, and releases whose full capacity can run in parallel. Budget and quota need room for overlap. Add a preview route, shadow copy, or small traffic split if real-input evidence is required before the switch.
+
+Choose **canary** where the candidate needs real user and product evidence under a bounded blast radius. It works best with enough traffic for timely comparison, release-specific telemetry, representative segment coverage, and a baseline ready to recover full load.
+
+Choose **shadow** where live inputs are valuable and candidate decisions are still too risky. It is especially useful for contract, latency, resource, and output-comparison evidence. It cannot establish the causal product effect of candidate decisions, and side effects must stay isolated.
+
+Choose **rolling deployment** where availability and capacity efficiency during instance replacement are the main concerns. It suits compatible stateless services with strong readiness checks. Add a progressive-delivery controller or managed routing layer if the release needs candidate-specific traffic steps and gates.
+
+Strategies often form one release path. A team can shadow a candidate to validate live compatibility, admit a stable internal cohort, start a small canary, expand through gates, and retain a blue stack for rapid recovery. The underlying instances may use rolling replacement inside each stack. Each layer should have one clear responsibility so recovery remains understandable.
+
+The smallest useful design is usually best. A low-risk batch scorer may need versioned outputs and a publication gate instead of an online traffic router. A high-impact, low-latency decision service may justify shadowing, stable cohorts, canary analysis, and a warm blue recovery fleet.
+
+## The Main Idea
+<!-- section-summary: Release strategies control how a deployed candidate gains decision authority and how quickly the system can return to a compatible release. -->
+
+A deployed candidate can remain harmless until routing grants its output authority. Blue-green controls the switch between complete stacks. Canary controls how many live decisions use the candidate. Shadow collects live-input evidence while the baseline controls the product. Rolling deployment controls capacity and availability during instance replacement.
+
+Every strategy depends on immutable current and candidate releases behind a stable route. Release-labelled telemetry feeds predefined gates. Compatible mixed-version boundaries keep both paths usable, and a retained recovery release provides the stop path. Percentage exposure also needs stable assignment where users, sessions, and retries require consistent behaviour.
+
+Strong release decisions combine service, feature, prediction, segment, and product evidence. Automatic rollback contains fast measurable failures after candidate-specific alarms fire. Complete recovery restores the whole decision path and follows up on actions already taken.
 
 ## References
 
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
-- [Argo Rollouts: BlueGreen Deployment Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/)
-- [Argo Rollouts: Canary Deployment Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)
-- [Argo Rollouts: Analysis and Progressive Delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
-- [Istio: Traffic Mirroring](https://istio.io/latest/docs/tasks/traffic-management/mirroring/)
-- [Prometheus: Alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
-- [OpenTelemetry: HTTP metrics semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
+- [Amazon SageMaker AI Deployment Guardrails](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails.html)
+- [Amazon SageMaker AI Production Variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-ab-testing.html)
+- [Amazon SageMaker AI Shadow Variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-validation.html)
+- [Amazon SageMaker AI Shadow Test Exclusions](https://docs.aws.amazon.com/sagemaker/latest/dg/shadow-tests.html)
+- [Vertex AI Endpoint API](https://docs.cloud.google.com/vertex-ai/docs/reference/rpc/google.cloud.aiplatform.v1#endpoint)
+- [Azure Machine Learning Online Endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
+- [Azure Machine Learning Safe Online Rollout](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-safely-rollout-online-endpoints?view=azureml-api-2)
+- [Databricks Model Serving Traffic Splits](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)
+- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+- [Kubernetes Rolling Update](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/)
+- [Argo Rollouts Canary Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/canary/)
+- [Argo Rollouts Blue-Green Strategy](https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/)
+- [Argo Rollouts Analysis](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)
+- [Argo Rollouts Traffic Management](https://argo-rollouts.readthedocs.io/en/stable/features/traffic-management/)

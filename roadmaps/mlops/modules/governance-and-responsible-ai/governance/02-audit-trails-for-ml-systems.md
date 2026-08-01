@@ -7,6 +7,18 @@ order: 2
 id: "article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems"
 ---
 
+## Table of Contents
+
+1. [What an ML Audit Trail Is](#what-an-ml-audit-trail-is)
+2. [The Trace You Need for One Prediction](#the-trace-you-need-for-one-prediction)
+3. [Logging Prediction Events](#logging-prediction-events)
+4. [Connecting Releases to Training Evidence](#connecting-releases-to-training-evidence)
+5. [Auditing Data and Access Changes](#auditing-data-and-access-changes)
+6. [Investigation Runbook](#investigation-runbook)
+7. [Retention and Security](#retention-and-security)
+8. [Failure Modes](#failure-modes)
+9. [Putting It Together](#putting-it-together)
+10. [References](#references)
 
 ## What an ML Audit Trail Is
 <!-- section-summary: An audit trail connects model decisions to durable records across serving, training, data, approval, and access systems. -->

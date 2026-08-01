@@ -7,6 +7,18 @@ order: 1
 id: "article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores"
 ---
 
+## Table of Contents
+
+1. [Why ML Needs Several Storage Responsibilities](#why-ml-needs-several-storage-responsibilities)
+2. [Separate Bytes From Records](#separate-bytes-from-records)
+3. [Give Each Fact One Owner](#give-each-fact-one-owner)
+4. [Build A Small Asset Catalog](#build-a-small-asset-catalog)
+5. [Implement And Test The Evidence Graph](#implement-and-test-the-evidence-graph)
+6. [Record Runs And Model Packages With MLflow](#record-runs-and-model-packages-with-mlflow)
+7. [Identify Dataset Snapshots And Lineage](#identify-dataset-snapshots-and-lineage)
+8. [Operate The Evidence Graph](#operate-the-evidence-graph)
+9. [References](#references)
+
 ## Why ML Needs Several Storage Responsibilities
 <!-- section-summary: Production ML stores large immutable files, structured lifecycle records, searchable ownership data, and links that connect one model version to its evidence. -->
 

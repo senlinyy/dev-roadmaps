@@ -3,9 +3,25 @@ title: "Azure Machine Learning"
 description: "Understand Azure Machine Learning through its workspace, asset, execution, registry, deployment, identity, and operations boundaries."
 overview: "Azure Machine Learning is an Azure-native platform for predictive-ML training and operations. This article builds the big picture first, then explains how versioned assets, managed jobs, registries, endpoints, and Azure controls form a release path."
 tags: ["MLOps", "advanced", "cloud"]
-order: 2
+order: 1
 id: "article-mlops-mlops-infrastructure-azure-machine-learning-overview"
+aliases:
+  - roadmaps/mlops/modules/mlops-infrastructure/cloud-mlops-services/02-azure-machine-learning-overview.md
 ---
+
+## Table of Contents
+
+1. [See The Platform As Four Connected Planes](#see-the-platform-as-four-connected-planes)
+2. [The Workspace Defines A Collaboration Boundary](#the-workspace-defines-a-collaboration-boundary)
+3. [Assets Give Moving Data And Code Stable Identities](#assets-give-moving-data-and-code-stable-identities)
+4. [Jobs And Pipelines Create Repeatable Executions](#jobs-and-pipelines-create-repeatable-executions)
+5. [Registry And Environments Separate Creation From Release](#registry-and-environments-separate-creation-from-release)
+6. [Choose The Prediction Boundary From The Workload](#choose-the-prediction-boundary-from-the-workload)
+7. [Identity, Networking, And Observability Complete The System](#identity-networking-and-observability-complete-the-system)
+8. [Trace One Release Across The Planes](#trace-one-release-across-the-planes)
+9. [Decide Whether Azure ML Fits The Organisation](#decide-whether-azure-ml-fits-the-organisation)
+10. [The Durable Picture](#the-durable-picture)
+11. [References](#references)
 
 **Azure Machine Learning** is Microsoft's managed platform for building, training, registering, deploying, and operating machine-learning models on Azure. It provides a control plane around model development: workspaces, versioned assets, managed jobs, pipeline components, registries, endpoints, identities, and monitoring integrations.
 

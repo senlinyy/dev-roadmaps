@@ -1,273 +1,394 @@
 ---
 title: "Choosing Evaluation Metrics"
-description: "Choose evaluation metrics by connecting model errors to product risk, human workflow, thresholds, segments, and release gates."
-overview: "Evaluation metrics turn model predictions into release evidence. A supporting example follows a hospital triage team as they choose recall, precision, calibration, segment checks, and operating thresholds for a patient-risk model before anyone ships it."
+description: "Choose evaluation metrics by connecting the model output to the product decision, mistake costs, operating rule, guardrails, and evidence limits."
+overview: "An evaluation metric summarizes model behaviour for a particular question. Useful choices connect the prediction task to the product decision, mistake costs, operating rule, guardrails, and evidence limits."
 tags: ["MLOps", "core", "metrics"]
 order: 1
 id: "article-mlops-model-evaluation-choosing-evaluation-metric"
 ---
 
-## Metrics Connect Model Output To Product Risk
-<!-- section-summary: An evaluation metric is the measurement that turns model predictions into evidence for a product decision. -->
+## Table of Contents
 
-An **evaluation metric** is the number you use to judge whether a model is helping the product safely enough. It might measure how many important cases the model catches, how many alerts it wastes, how far a forecast misses, or how well predicted probabilities match real outcomes. The metric matters because a model can score well on one number and still create the wrong product behavior.
+1. [An Evaluation Metric Summarizes One Question About a Model](#an-evaluation-metric-summarizes-one-question-about-a-model)
+2. [Start With the Task, Decision, Cost, and Operating Rule](#start-with-the-task-decision-cost-and-operating-rule)
+3. [Match the Metric to What the Model Predicts](#match-the-metric-to-what-the-model-predicts)
+4. [Use One Primary Metric With Protective Guardrails](#use-one-primary-metric-with-protective-guardrails)
+5. [Choose the Operating Point Before Judging the Decision](#choose-the-operating-point-before-judging-the-decision)
+6. [Check Probability Quality if the Score Carries Meaning](#check-probability-quality-if-the-score-carries-meaning)
+7. [Connect Offline Metrics to Production Outcomes](#connect-offline-metrics-to-production-outcomes)
+8. [Add Baselines, Segments, and Uncertainty](#add-baselines-segments-and-uncertainty)
+9. [Turn the Choice Into a Repeatable Metric Contract](#turn-the-choice-into-a-repeatable-metric-contract)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
-The title answer is simple: **choose evaluation metrics by starting with the decision the model supports, naming the cost of each mistake, and selecting metrics that expose those mistakes before release**. Accuracy, recall, precision, RMSE, and calibration are useful only after you connect them to a real workflow.
+## An Evaluation Metric Summarizes One Question About a Model
+<!-- section-summary: An evaluation metric turns predictions and known outcomes into a number that answers one defined question about model behaviour. -->
 
-The selection framework has an order. First define the intended decision, population, outcome label, and evaluation window. Then choose a metric family that matches the output: classification errors, numeric forecast error, ranking quality, probability quality, or another task-specific measure. Add product utility and capacity constraints, quantify uncertainty, and inspect important segments before writing the release rule. Later articles teach the calculations for classification, regression, ranking, and paired comparisons.
+Imagine a model that selects urgent cases for a review queue. Out of 1,000 cases, 50 are truly urgent. The model catches 45 of them and sends 150 cases to reviewers.
 
-| Framework step | Question | Evidence |
-|---|---|---|
-| Intended use | Which decision will consume the prediction? | Product workflow and owner |
-| Evaluation protocol | Which population, time window, labels, and split answer that question? | Dataset manifest and label definition |
-| Metric family | Does the model classify, estimate a number, rank, retrieve, or estimate probability? | Task metric report |
-| Decision rule | Which threshold, top-k cutoff, or interval changes the product action? | Operating-point table |
-| Utility and constraints | Which mistakes cost users, money, or human capacity? | Primary metric and guardrails |
-| Reliability | How uncertain is the result, and where can averages hide failure? | Confidence interval, paired comparison, and segment report |
+Several descriptions of that same result are true:
+
+- It gets 890 of the 1,000 cases correct, so accuracy is 89 percent.
+- It catches 45 of 50 urgent cases, so recall is 90 percent.
+- It sends 45 useful cases among 150 alerts, so precision is 30 percent.
+- It creates 150 reviews, which may fit the team's capacity or overwhelm it.
+
+No number is universally correct. Accuracy answers how often the predicted class matches the label. Recall answers how much urgent work the model found. Precision answers how concentrated the alerts are. Alert volume describes the workload created by the chosen threshold.
+
+An **evaluation metric** is a rule that summarizes predictions and known outcomes for a particular question. The metric may count correct decisions, measure numeric error, reward useful ranking positions, or judge probability estimates. Its value comes from the question it represents.
+
+At a high level, **choosing a metric is a product-decision problem expressed through measurement**. The team first defines what the model predicts and how the product uses that output. It then identifies the costly mistakes and the operating rule that turns predictions into action. Only then can a metric show whether the model supports the intended decision.
+
+You can think of metric selection through five connected layers:
+
+1. **Task:** What output does the model produce, and what outcome should it predict?
+2. **Decision:** Which user, workflow, or system action consumes that output?
+3. **Cost:** Which errors or missed benefits matter most?
+4. **Operating rule:** Which threshold, top-k cutoff, quantile, or interval creates the action?
+5. **Evidence:** Which primary metric, guardrails, segments, baselines, and uncertainty checks can support the claim?
 
 ```mermaid
-flowchart LR
-    D["Intended decision"] --> P["Population, label, and time window"]
-    P --> E["Cost of each error"]
-    E --> M["Metric family"]
-    M --> O["Threshold, top-k, or interval"]
-    O --> G["Capacity and safety guardrails"]
-    G --> S["Segments and uncertainty"]
-    S --> R["Release rule"]
+flowchart TD
+    T["Task<br/>What is predicted?"] --> D["Decision<br/>What action follows?"]
+    D --> C["Cost<br/>Which mistakes matter?"]
+    C --> O["Operating rule<br/>Threshold, top-k, quantile, or interval"]
+    O --> M["Metric set<br/>Primary measure and guardrails"]
+    M --> E["Evidence limits<br/>Baseline, segments, uncertainty"]
+    E --> R["Release question"]
+
+    classDef purpose fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    class T,D,C purpose
+    class O,M mechanism
+    class E,R decision
 ```
 
-The order prevents a familiar mistake: selecting a convenient metric and then inventing a product story around it. Every later choice should be traceable to the decision and its costs.
+The order matters. Starting with a familiar metric can lead a team to optimize what is convenient to calculate. Starting with the decision lets the team choose evidence that represents the real benefit and harm.
 
-Think about a model that flags patients who may need a nurse review within the next hour. A missed high-risk patient is dangerous. A false alert still matters because it pulls nurses away from other work, yet it carries a different cost. If the team optimizes plain accuracy, the model may look strong because most patients are stable. If the team optimizes recall without watching false alerts, nurses may drown in alerts and start ignoring them. The metric choice shapes the behavior.
+![The metric-selection path connects a product decision to mistakes, an operating rule, guardrails, and release evidence](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-choice-flow.png)
 
-This article applies the framework to one binary-classification review. You will see how the team picks primary and guardrail metrics, chooses a threshold, checks calibration, slices results by patient segment, and writes release gates that a reviewer can actually use. The clinical names and numbers are illustrative; a real clinical system needs domain validation, governance, safety review, and evidence for its exact intended use.
+*A metric gains meaning from the task, product action, cost of mistakes, and operating rule around it.*
 
-Metric selection has six layers. Start with the **decision** the product makes, then describe the **cost of each error**, choose a **measurement family** that represents that cost, define the **operating point** or threshold, inspect **calibration and segments**, and finally encode a **release rule** with uncertainty and comparison data. Starting with a familiar metric reverses this logic: the team optimizes what is easy to calculate and only later asks whether it represents the product.
+## Start With the Task, Decision, Cost, and Operating Rule
+<!-- section-summary: A useful metric contract starts from the prediction target and follows the output through the product action and its consequences. -->
 
-The layers interact. Changing a threshold changes precision and recall. Segment prevalence changes how those rates translate into workload and harm. Calibration affects whether a score can support a risk-based policy. A release gate needs the candidate-baseline difference and its uncertainty, not a single isolated score. The sections below deepen each layer before combining them into a metric contract.
+A list of metric names gives little guidance until the reader can picture the decision being measured. Start with one complete use of the prediction: the outcome, the action, the people or system affected, and the practical limits around that action.
 
-## A Triage Model As A Supporting Example
-<!-- section-summary: A supporting example uses a patient triage model where missed risk and alert overload both have real consequences. -->
+Suppose a model estimates the chance that an account will miss a payment in the next thirty days. The product sends high-risk cases to a support team that can contact 2,000 accounts each day. A missed high-risk account loses the chance for early help. An unnecessary contact uses staff time and may frustrate a customer.
 
-Imagine **HarborCare Clinics**, a regional urgent-care network. The data science team trains a model called `triage-escalation-risk` that predicts whether a patient may need urgent nurse escalation during the next hour. The model returns a probability from `0.0` to `1.0`. The triage app turns that score into an alert when the probability crosses a chosen threshold.
+This short description reveals four different objects:
 
-The evaluation dataset is `triage_holdout_2026_06`, built from 42,000 visits. Each row has the patient visit ID, age band, clinic site, arrival channel, symptoms, vital signs, model score, and the final label. The label is `1` when a nurse escalation happened within one hour and `0` otherwise. The clinical operations lead cares most about catching high-risk patients, and the nursing manager cares about the number of alerts each shift can handle.
+- The **task** is probability prediction for a defined outcome and time horizon.
+- The **decision** is whether an account enters the contact queue.
+- The **costs** include missed high-risk accounts, unnecessary contact, and staff workload.
+- The **operating rule** selects accounts from the scores while respecting capacity.
 
-Here is the shape of the evaluation table:
+The metric set can now answer a real question. Recall can measure the share of missed-payment cases found. Precision can show how many selected contacts were useful. Recall among the top 2,000 scores can measure performance at the queue's actual daily capacity. Calibration can test whether risk bands behave like the probabilities shown to planners.
 
-| Field | Example | Why it matters |
+### Define the outcome before measuring it
+
+A target label needs a precise meaning. “Churn,” “fraud,” “urgent,” and “successful recommendation” can each hide several definitions.
+
+For the payment case, the team should specify:
+
+- what event counts as a missed payment;
+- the population eligible for scoring;
+- the thirty-day prediction horizon;
+- the time after which the label is considered mature;
+- exclusions such as closed or disputed accounts.
+
+A metric cannot repair a label that describes the wrong event. If the product wants to prevent missed payments and the label records only account closure, the evaluation measures another problem.
+
+### Describe error costs in ordinary language
+
+Teams often say that false negatives are “more expensive” than false positives. The useful next step is to explain the expense.
+
+A false negative might mean lost revenue, delayed care, missed fraud, or an urgent ticket buried in a queue. A false positive might mean a blocked payment, unnecessary review, intrusive contact, or wasted inventory. The cost may differ by segment, amount, or time.
+
+Exact money values are helpful if they are trustworthy. Many teams lack a single reliable cost. In that case, a primary metric plus explicit guardrails communicates the trade-off more honestly than an invented weighted score.
+
+### Name the action rule
+
+Models often emit a score or ordered list, while products take discrete actions. A classifier may alert above a threshold. A search system may display ten results. A forecast may drive stock for the predicted median or a high quantile. A risk system may assign different actions to several probability bands.
+
+The operating rule belongs in evaluation because it changes the delivered behaviour. The same model can produce high recall and heavy workload at one threshold, then lower recall and lighter workload at another.
+
+## Match the Metric to What the Model Predicts
+<!-- section-summary: Classification, regression, ranking, and probability metrics answer different questions because their outputs and target properties differ. -->
+
+The product question tells the team what matters, and the model output determines how that behaviour can be measured. A class label, numeric forecast, ordered list, and probability preserve different information. Their metrics therefore answer different kinds of questions.
+
+### Class labels and decisions
+
+A classification decision assigns one or more categories. The confusion matrix counts true positives, false positives, false negatives, and true negatives. Accuracy, precision, recall, specificity, balanced accuracy, and F-scores summarize different relationships among those counts.
+
+Use these metrics to judge decisions at a defined threshold or rule. Accuracy can work if classes and mistake costs are reasonably balanced. It can mislead on rare events: a model that predicts “ordinary” for every transaction may exceed 99 percent accuracy and catch no fraud.
+
+A confusion-matrix report should preserve the underlying counts because each rate highlights a different mistake. At selection time, the key question is which error count maps to the product harm and which second metric protects the competing cost.
+
+### Numeric predictions
+
+A regression model predicts a number such as demand, arrival time, energy use, or claim amount.
+
+**Mean absolute error (MAE)** reports the average absolute miss in the target's units. An MAE of 8 minutes has an immediate operational meaning. **Mean squared error (MSE)** and its square root, RMSE, give large misses more influence because error is squared. That can fit a product where a few large errors carry serious cost.
+
+The choice also relates to what the model is trying to estimate. Absolute error is aligned with the conditional median, while squared error is aligned with the conditional mean. Quantile loss evaluates a chosen quantile, which is useful if overprediction and underprediction have different consequences.
+
+Suppose a stock planner wants enough inventory for unusually high demand. An average forecast may be the wrong target. A high-quantile forecast and quantile loss can represent the asymmetric cost of running out. The prediction target determines the metric. Choosing it only for reporting would separate evaluation from the operational goal.
+
+### Ordered results
+
+A ranking or retrieval system produces an ordered list. The user sees the first few positions, so ordinary classification accuracy loses the ordering information.
+
+**Precision at k** asks how many of the first `k` results are relevant. **Recall at k** asks how much of the available relevant set appears there. **Mean reciprocal rank (MRR)** rewards placing the first relevant result early. **Normalized discounted cumulative gain (NDCG)** can reward several graded-relevance results and discounts lower positions.
+
+The product layout determines `k`. A search page showing ten results needs a different cutoff from a recommender displaying three cards. The report should preserve the query groups, relevance labels, and cutoff because all three change the meaning of the score.
+
+### Probabilities and distributions
+
+Some products use the probability itself. Risk bands may control staffing, pricing, human review, or communication. Metrics that judge only the final class can miss poor probability quality.
+
+Log loss and Brier loss are **proper scoring rules**: in expectation, they reward honest probability estimates. Calibration curves compare predicted risk with observed frequency. The loss measures the quality of probabilities across individual cases, while calibration groups similar predictions and checks whether their observed frequency matches the stated risk. For example, roughly 70 out of 100 cases assigned a probability near 0.70 should produce the outcome. Teams inspect both because one summary loss can hide a poorly calibrated range that drives an important product decision.
+
+A compact map helps summarize the choice after the theory is understood:
+
+| Model output | Typical product question | Useful metric family |
 |---|---|---|
-| `visit_id` | `visit_80231` | Lets reviewers trace predictions to cases |
-| `clinic_id` | `harbor-west` | Supports segment checks by site |
-| `age_band` | `65_plus` | Supports safety review for older patients |
-| `arrival_channel` | `walk_in` | Shows whether phone intake and walk-ins behave differently |
-| `symptom_group` | `chest_pain` | Helps inspect clinically important slices |
-| `risk_score` | `0.74` | The probability used for thresholding |
-| `label_escalated_1h` | `1` | The ground truth for offline evaluation |
+| Class decision | Which mistakes occur at this operating point? | Confusion-matrix metrics |
+| Numeric point | How large are errors, and how should large misses count? | MAE, MSE/RMSE, quantile loss |
+| Ordered list | Are useful items placed inside the visible positions? | Precision@k, recall@k, MRR, NDCG |
+| Probability | Do scores reward good probability estimates and match observed risk? | Log loss, Brier loss, calibration curve |
 
-![HarborCare triage metric choice flow](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-choice-flow.png)
-*The metric choice starts with the clinical decision, then follows the feared error through recall, guardrails, and a release gate the review team can defend.*
+## Use One Primary Metric With Protective Guardrails
+<!-- section-summary: A primary metric represents the main intended benefit, while guardrails keep other harms, constraints, and important populations visible. -->
 
-The important part is the workflow around the score. The model never acts alone. It creates a cue for a nurse. That means the metric contract must respect two realities: missing an urgent patient is costly, and alert volume must fit real staffing.
+Production decisions rarely have one consequence. A model may find more valuable cases and create more customer friction at the same time. Compressing both effects into one unexplained number hides the trade-off that reviewers need to judge.
 
-## Name The Error You Fear Most
-<!-- section-summary: Metric choice starts by naming false negatives, false positives, and the product cost attached to each one. -->
+A **primary metric** represents the main improvement the model is expected to deliver. **Guardrail metrics** protect other outcomes that must stay inside limits.
 
-A classification model creates two kinds of mistakes. A **false negative** is a risky patient the model misses. A **false positive** is a stable patient the model sends to nurse review. Both are errors, and they create different operational problems.
+For a fraud-review queue, recall of fraudulent value might be primary. Precision and reviews per day protect customer friction and analyst capacity. For an arrival-time model, MAE might be primary while p95 absolute error and late-underestimation rate protect the tail. For search, NDCG@10 might be primary while zero-result rate and latency act as guardrails.
 
-For HarborCare, the team writes the mistake costs in plain language before choosing metrics:
+This pattern helps reviewers interpret mixed results. If the primary metric improves and a workload guardrail fails, the candidate has found more useful cases through an unaffordable workflow. The team can adjust the operating rule, add capacity, narrow the scope, or reject the release.
 
-| Error | Triage example | Product cost | Metric that exposes it |
-|---|---|---|---|
-| False negative | Patient needed escalation, no alert fired | Possible delayed care | Recall, false negative count |
-| False positive | Patient was stable, alert fired | Nurse workload and alert fatigue | Precision, alerts per 100 visits |
-| Poor ranking | High-risk patients score below lower-risk patients | Weak queue ordering | ROC AUC, average precision |
-| Poor probability | A score near `0.80` means real risk near `0.50` | Bad staffing and threshold planning | Calibration curve, Brier score |
+### Use a utility score only if its weights have real meaning
 
-**Recall** answers: out of the visits that truly needed escalation, how many did the model catch? **Precision** answers: out of the visits the model alerted, how many truly needed escalation? **Average precision** summarizes precision and recall across thresholds, and it helps when positive cases are rare. **Calibration** checks whether a probability means what it says.
+A utility or cost function can combine outcomes if the organization understands their relative value. For example:
 
-Here is a first metric report at threshold `0.50`:
+`utility = recovered fraud value - review cost - customer friction cost`
 
-| Metric | Current production | Candidate |
-|---|---:|---:|
-| Recall for escalation | 0.78 | 0.88 |
-| Precision for alerts | 0.41 | 0.36 |
-| Alerts per 100 visits | 8.9 | 12.7 |
-| Average precision | 0.46 | 0.52 |
-| Brier score | 0.071 | 0.064 |
+This measure connects directly to a business decision if each term comes from defensible evidence. Weak estimates can make a precise-looking score fragile. Keep the underlying outcomes visible beside the total so reviewers can see what changed.
 
-The candidate catches more urgent cases, which is good. It also creates more alerts, which may break the shift workflow. This is exactly why a metric table needs more than one number. The team now has to choose an operating threshold instead of accepting the default.
+### Avoid optimizing the guardrail away
 
-## Turn Scores Into Decisions With Thresholds
-<!-- section-summary: A threshold turns a probability score into an action, so the threshold must match the real cost and capacity of the workflow. -->
+If one metric selects the model and every other metric is reviewed casually, teams tend to accept regressions after investing in a candidate. Write primary and guardrail limits before the final holdout result appears. The same rule should apply to each candidate in the review round.
 
-A **threshold** is the cutoff that turns a score into a decision. If the triage threshold is `0.50`, a visit with score `0.51` gets an alert and a visit with score `0.49` does not. The model score may stay the same while the product behavior changes a lot.
+Composite leaderboards can still support exploration. Release evidence needs the actual decision dimensions: benefit, harm, capacity, segments, and uncertainty.
 
-For HarborCare, the review team evaluates thresholds from `0.30` to `0.70`. They choose thresholds on a validation set, then keep a separate final holdout for the release packet. This separation matters because a threshold can overfit just like model parameters can.
+## Choose the Operating Point Before Judging the Decision
+<!-- section-summary: A threshold or cutoff turns model outputs into product actions and determines the precision, recall, workload, and harm users experience. -->
 
-| Threshold | Recall | Precision | Alerts / 100 visits | Missed escalations / 1,000 visits | Nurse review load |
-|---:|---:|---:|---:|---:|---|
-| 0.30 | 0.94 | 0.24 | 23.8 | 2.9 | Too high for current staffing |
-| 0.40 | 0.91 | 0.30 | 17.4 | 4.4 | High, possible on staffed days |
-| 0.50 | 0.88 | 0.36 | 12.7 | 5.8 | Within surge plan |
-| 0.60 | 0.82 | 0.44 | 9.4 | 8.7 | Normal staffing |
-| 0.70 | 0.73 | 0.53 | 6.7 | 13.1 | Quiet, misses too many cases |
+A binary classifier often emits a score between zero and one. The threshold turns that score into an action. Lowering it usually selects more cases, which often raises recall and alert volume while reducing precision. Raising it usually selects fewer cases and risks more false negatives.
 
-![HarborCare threshold tradeoff chart](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/threshold-tradeoff.png)
-*The threshold panel makes the release choice concrete: threshold `0.50` catches more urgent cases while keeping alert volume inside the pilot staffing plan.*
+The default `0.5` threshold has no automatic product meaning. It may be inherited from a library's `predict()` method even though the workflow can handle only a fixed number of cases.
 
-The threshold table gives the product owner and clinical lead a shared choice. If the clinics can handle around 13 alerts per 100 visits during the pilot, threshold `0.50` may fit. A staffing change cannot silently change a clinical operating threshold because the new cutoff changes both missed cases and alert volume. Any threshold change needs the same domain, safety, capacity, and validation review as the original operating point. The release gate should name the planned threshold and any separately approved fallback policy.
+Consider a review team with room for 2,000 cases each day. It receives 20,000 scored cases. The product question is: which threshold captures the most positive cases while keeping selections inside that capacity?
 
-You can compute this table with scikit-learn metrics in a repeatable evaluation job:
+The following code assumes `labels` contains mature binary outcomes and `scores` contains candidate probabilities from a validation set. It evaluates several thresholds, reports the resulting recall, precision, and review volume, then selects the highest-recall row inside capacity. The visible output is a threshold table plus one chosen operating point; the final holdout remains untouched for unbiased release evaluation.
 
 ```python
 import pandas as pd
-from sklearn.metrics import precision_score, recall_score, brier_score_loss
+from sklearn.metrics import precision_score, recall_score
 
-def threshold_report(df: pd.DataFrame, thresholds: list[float]) -> pd.DataFrame:
-    rows = []
-    y_true = df["label_escalated_1h"].to_numpy()
-    scores = df["risk_score"].to_numpy()
+rows = []
+for threshold in [0.20, 0.35, 0.50, 0.65, 0.80]:
+    selected = scores >= threshold
+    rows.append({
+        "threshold": threshold,
+        "recall": recall_score(labels, selected),
+        "precision": precision_score(labels, selected, zero_division=0),
+        "reviews": int(selected.sum()),
+    })
 
-    for threshold in thresholds:
-        y_pred = scores >= threshold
-        alerts = y_pred.sum()
-        missed = ((y_true == 1) & (y_pred == 0)).sum()
-        rows.append(
-            {
-                "threshold": threshold,
-                "recall": recall_score(y_true, y_pred),
-                "precision": precision_score(y_true, y_pred, zero_division=0),
-                "alerts_per_100_visits": alerts / len(df) * 100,
-                "missed_escalations_per_1000": missed / len(df) * 1000,
-                "brier_score": brier_score_loss(y_true, scores),
-            }
-        )
+report = pd.DataFrame(rows)
+feasible = report.loc[report["reviews"] <= 2_000]
+chosen = feasible.sort_values("recall", ascending=False).iloc[0]
 
-    return pd.DataFrame(rows)
+print(report)
+print({"chosen_operating_point": chosen.to_dict()})
 ```
 
-This code keeps the operating decision visible. The output is a review artifact, not a notebook side effect. The release packet should attach the table, the dataset version, and the chosen threshold.
+The important output is the relationship among quality and workload. A threshold with excellent recall and 8,000 reviews is infeasible for the current system. A feasible threshold with poor recall may show that the model or workflow provides too little value.
 
-## Check Calibration Before Trusting Risk Scores
-<!-- section-summary: Calibration checks whether predicted probabilities line up with observed outcome rates. -->
+![Threshold selection compares recall and precision against the real review capacity](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/threshold-tradeoff.png)
 
-**Calibration** asks whether a predicted probability can be interpreted as a real-world risk estimate. If 100 visits receive scores around `0.80`, a well-calibrated triage model should see close to 80 of those visits escalate. This matters when people use the score for staffing, urgency queues, or risk communication.
+*The operating point should expose the trade-off among found cases, wasted reviews, and the capacity available to act.*
 
-HarborCare bins scores into groups and compares the average predicted risk with the observed escalation rate:
+### Tune on validation data and report on untouched data
 
-| Score bin | Visits | Average predicted risk | Observed escalation rate |
-|---|---:|---:|---:|
-| 0.00-0.20 | 28,400 | 0.07 | 0.06 |
-| 0.20-0.40 | 7,900 | 0.29 | 0.24 |
-| 0.40-0.60 | 3,600 | 0.50 | 0.42 |
-| 0.60-0.80 | 1,500 | 0.69 | 0.63 |
-| 0.80-1.00 | 600 | 0.87 | 0.79 |
+Threshold selection is part of model selection. Repeatedly choosing a threshold on the final holdout adapts the decision to that dataset and makes the reported result optimistic.
 
-The model ranks patients well enough to help triage, yet it overstates risk in the middle and high score bands. That does not automatically kill the release. It changes how the team explains and uses the score. The UI can say "review recommended" instead of "87% risk" until calibration improves. The staffing forecast should use observed rates from calibration bins rather than raw scores.
+Use validation data or cross-validation to choose the threshold. Then freeze the rule and evaluate it once on the release holdout. Scikit-learn's `TunedThresholdClassifierCV` can tune a binary classification threshold against a scorer with internal cross-validation. A custom threshold table remains useful if the decision includes hard capacity, segment, or policy constraints that one scorer cannot express clearly.
 
-The Brier score is useful as one calibration-related loss, and a reliability table or calibration plot gives the reviewer the practical picture. For release, HarborCare sets a gate: the candidate Brier score must improve over production, and no high-risk bin may overstate observed risk by more than the approved tolerance.
+Top-k ranking and quantile forecasts have equivalent operating choices. The team should select `k` from the visible product surface and choose a forecast quantile from the asymmetric business cost.
 
-## Add Segments And Release Gates
-<!-- section-summary: Aggregate metrics need segment checks and explicit pass/fail gates before the team can trust a candidate. -->
+## Check Probability Quality if the Score Carries Meaning
+<!-- section-summary: Probability evaluation checks whether scores reward honest estimates and whether groups of similar scores occur at the predicted rate. -->
 
-The overall metric table can hide harm in small groups. HarborCare therefore checks key segments before the release meeting. The team does not add segments randomly. They choose groups tied to clinical workflow, data coverage, and known risk: clinic site, age band, arrival channel, symptom group, and language.
+Suppose 100 cases receive scores near `0.8`. If the score is presented as an 80 percent risk, roughly 80 comparable cases should eventually show the outcome. **Calibration** describes this agreement between predicted probability and observed frequency.
 
-| Segment | Recall | Precision | Alerts / 100 visits | Gate |
-|---|---:|---:|---:|---|
-| All visits | 0.88 | 0.36 | 12.7 | Pass |
-| `65_plus` | 0.91 | 0.34 | 15.2 | Pass |
-| `under_18` | 0.76 | 0.31 | 8.1 | Review |
-| `phone_intake` | 0.84 | 0.39 | 10.4 | Pass |
-| `walk_in` | 0.90 | 0.35 | 13.5 | Pass |
-| `limited_english` | 0.72 | 0.28 | 9.7 | Block |
+Calibration matters if scores create risk bands, staffing forecasts, prices, or explanations. A model can rank high-risk cases ahead of low-risk cases and still overstate every probability. Its ordering may support a queue, while the displayed risk value would mislead users.
 
-This table changes the decision. The candidate looked ready on overall recall. The `limited_english` segment shows weaker recall and lower precision, which means the model misses more urgent cases while also wasting more reviews when it does alert. The team should block release, inspect input quality, improve interpreter-note handling, and rerun evaluation.
+A **calibration curve**, also called a reliability diagram, groups predictions into bins. For each bin, it compares the average predicted probability with the observed positive rate. The count in each bin matters because a point based on twenty cases carries less evidence than a point based on ten thousand.
 
-Release gates should be written as code or configuration so every candidate receives the same review:
+Log loss and Brier loss assess the full probability prediction. They combine several aspects of quality. Scikit-learn's calibration guidance warns that a lower Brier loss can arise from stronger discrimination even if calibration itself is worse. Use a calibration curve alongside the scalar loss if probability interpretation matters.
+
+### Calibration needs independent data
+
+Fitting a calibrator on the same data used to train the classifier produces optimistic probabilities. Use independent calibration data or a cross-validation approach such as `CalibratedClassifierCV`. Keep the final evaluation set separate.
+
+Calibration can also vary across time and segments. A globally calibrated risk model may overstate risk for one region and understate it for another. Segment calibration and support counts belong in the report if probability meaning influences a consequential action.
+
+## Connect Offline Metrics to Production Outcomes
+<!-- section-summary: Offline metrics measure behaviour on labelled examples, while production outcomes also depend on data freshness, workflow adoption, system reliability, and user response. -->
+
+Offline evaluation asks how predictions compare with known outcomes under a recorded protocol. Production asks whether the complete system improves a real workflow under current data and user behaviour.
+
+The two questions are connected and distinct.
+
+A recommender can improve NDCG on historical relevance labels and reduce user satisfaction after release because the labels favour popular items and hide novelty. A support classifier can improve recall and slow the queue because alert volume rises. A forecast can reduce MAE and increase stockouts if underprediction during peaks carries most of the cost.
+
+Offline metrics are valuable because they provide controlled, repeatable evidence before exposing users. They need a credible path to the production outcome:
+
+```mermaid
+flowchart TD
+    L["Label and evaluation population"] --> P["Offline prediction"]
+    P --> M["Offline metric"]
+    M --> R["Operating rule"]
+    R --> W["Product workflow"]
+    W --> O["Production outcome"]
+
+    D["Data freshness and drift"] --> W
+    S["Service reliability"] --> W
+    H["Human and user response"] --> O
+
+    classDef offline fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef production fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class L,P,M offline
+    class R,W decision
+    class O,D,S,H production
+```
+
+The diagram shows the assumptions between a metric and product value. Labels must represent the intended outcome. The operating rule must match the evaluated one. The workflow must have capacity to act. The service must deliver predictions. Users and staff may respond in ways absent from historical data.
+
+Production verification therefore adds service health, input and feature health, decision rates, workload, delayed labels, and product outcomes. A controlled online experiment may be needed to estimate causal product impact. An offline gain remains release evidence, and it should never be presented as proof of an unmeasured business outcome.
+
+### Watch for feedback loops
+
+A production action can change the label later observed. Fraud reviews stop some fraud. Recommendations change which items receive clicks. Human triage changes response time. Historical labels then reflect the old policy and intervention.
+
+Record the policy and treatment that produced the outcome. Where possible, preserve randomized or otherwise defensible evidence for causal questions. Metric selection should acknowledge which outcomes the model can influence and which labels become selective after deployment.
+
+## Add Baselines, Segments, and Uncertainty
+<!-- section-summary: A metric value supports a decision only after comparison with meaningful baselines, important segments, and the uncertainty created by finite data. -->
+
+A score in isolation provides little context. An MAE of 12 may beat a naive forecast and lose to the production system. A recall of 0.85 may be useful with 100 alerts and unusable with 100,000.
+
+Use several baselines for different questions:
+
+- A simple heuristic or dummy model shows whether the data and metric reward anything beyond a trivial rule.
+- The current production decision shows whether replacement creates useful change.
+- A policy-only or human baseline reveals whether the model improves the actual workflow.
+
+The comparison should use the same eligible examples, label policy, operating rule, and metric implementation. Candidate-versus-production decisions work best with paired predictions for the same units.
+
+### Segment reports limit broad claims
+
+Overall averages can hide a failing language, region, device, class, horizon, or workflow route. Choose segments from known harms, product boundaries, incident history, and domain knowledge.
+
+Each segment needs its sample size, candidate and baseline values, coverage, and uncertainty. Sparse evidence should narrow the release claim or trigger targeted collection. Removing the segment from the report would turn missing knowledge into confidence.
+
+### Point estimates need uncertainty
+
+Evaluation data is a sample from the population the team cares about. Another valid sample would produce a different metric. Confidence intervals and paired comparisons show the precision of the estimate.
+
+The resampling or statistical unit should follow the real dependence. Many rows from one patient, user, query, store, or day may need grouped analysis. Treating them as independent can make uncertainty look too small.
+
+The interval should answer a release question: is the improvement large enough to matter, and is the harmful end still acceptable? Multiple metrics and many segment searches also need care because some apparent gains occur by chance.
+
+## Turn the Choice Into a Repeatable Metric Contract
+<!-- section-summary: A metric contract records the target, population, operating rule, primary measure, guardrails, baselines, segments, uncertainty, and release interpretation before final results appear. -->
+
+A **metric contract** is the versioned agreement that tells the evaluation job and reviewers how a candidate will be judged. It keeps the product reasoning beside the code that calculates the evidence.
+
+The contract should include:
+
+- intended decision, population, target, horizon, and label maturity;
+- model output and operating rule;
+- primary metric with its practical improvement margin;
+- guardrails for harm, capacity, probability quality, and service cost;
+- baselines, segments, and minimum evidence;
+- uncertainty method and grouping unit;
+- owners and allowed release outcomes.
+
+The following example continues the review-queue situation. It assumes the team has already justified recall as the primary benefit and review volume as a hard operating constraint. The evaluation job reads this configuration, calculates the same report for every candidate, and produces a visible pass, hold, or insufficient-evidence result with the failed rule IDs.
 
 ```yaml
-metric_gates:
-  model: triage-escalation-risk
-  evaluation_dataset: triage_holdout_2026_06
-  threshold: 0.50
-  primary:
-    recall:
-      min: 0.86
-  guardrails:
-    precision:
-      min: 0.34
-    alerts_per_100_visits:
-      max: 14.0
-    brier_score:
-      max: 0.068
-  segments:
-    - column: age_band
-      recall_min: 0.80
-      support_min: 400
-    - column: arrival_channel
-      recall_min: 0.82
-      support_min: 400
-    - column: language_access
-      recall_min: 0.80
-      support_min: 250
+decision: prioritize_accounts_for_support_review
+population: eligible_accounts_scored_daily
+target:
+  event: missed_payment
+  horizon_days: 30
+  maturity_days: 30
+operating_rule:
+  type: score_threshold
+  max_reviews_per_day: 2000
+primary_metric:
+  name: recall_at_capacity
+  minimum_improvement_vs_production: 0.03
+guardrails:
+  precision_at_capacity_min: 0.30
+  feature_coverage_min: 0.995
+segments:
+  - account_age_band
+  - region
+uncertainty:
+  method: paired_bootstrap
+  grouping_unit: account_id
 ```
 
-A gate like this helps the team avoid moving thresholds during a meeting. The reviewer can still use judgment, especially for small segments, but the default path is clear: pass the agreed checks, document exceptions, or hold the model.
+The example stays focused on the decision. It avoids dozens of library options and records the facts that change interpretation. A real contract also carries dataset, code, policy, and candidate identities in the release evidence.
 
-## Write The Metric Contract
-<!-- section-summary: The final metric contract names the dataset, threshold, metrics, segments, owners, and blocked-release conditions. -->
+![A metric contract connects the primary benefit and guardrails to an explicit release interpretation](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-contract-gates.png)
 
-A **metric contract** is the short agreement that says how the model will be judged. It belongs beside the evaluation code and inside the release packet. For HarborCare, it should name the dataset, label definition, threshold, metrics, segment gates, owners, and rollback plan.
+*The contract preserves why each metric exists and which product boundary it protects.*
 
-Here is a practical contract:
+### Automate calculation without outsourcing judgement
 
-```yaml
-evaluation_contract:
-  model: triage-escalation-risk
-  owner: clinical-ml-platform
-  reviewer_groups:
-    - nursing-operations
-    - clinical-safety
-    - ml-platform
-  label:
-    name: label_escalated_1h
-    definition: nurse escalation recorded within one hour of triage start
-  datasets:
-    threshold_selection: triage_validation_2026_06
-    release_holdout: triage_holdout_2026_06
-  chosen_threshold: 0.50
-  primary_metric:
-    name: recall
-    reason: missed escalations carry the highest clinical risk
-  guardrail_metrics:
-    - precision
-    - alerts_per_100_visits
-    - brier_score
-  blocked_release_conditions:
-    - recall below 0.86 overall
-    - any approved safety segment below 0.80 recall with support at least 250
-    - alerts above 14 per 100 visits without staffing approval
-    - high-score calibration bin overstates observed escalation by more than 0.10
-```
+Scikit-learn provides metric functions and scoring interfaces for model selection. Be explicit about `scoring`; estimator defaults are commonly accuracy for classifiers and R² for regressors, which may have little connection to the product decision.
 
-![HarborCare metric contract release gates](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-contract-gates.png)
-*The contract turns the metric review into a release decision: the candidate can improve recall overall and still pause when a safety segment fails.*
+MLflow's classic model evaluation can calculate common classification and regression metrics and produce diagnostic artifacts. `mlflow.validate_evaluation_results()` can apply declared thresholds. Product utility, capacity, segments, and policy-specific outcomes still need explicit metrics and checks.
 
-The contract gives beginners a useful habit: write the metric logic before the leaderboard appears. The team can still learn from the results and revise the contract for the next cycle, yet every candidate in one review round should face the same rules.
+Teams may use Weights & Biases or cloud-native evaluation and registry tools for the same responsibility. The platform should preserve the dataset and release identity, metrics, tables, plots, code revision, and gate result. Tool choice does not choose the metric logic.
 
-## Putting It Together
-<!-- section-summary: Metric choice works when the team connects errors, thresholds, calibration, segments, and gates to the real release decision. -->
+Run the contract in CI or the managed training pipeline, write the evidence to the experiment tracker and governed artifact store, and pass only the exact candidate result into release review. A calculation failure or missing metric should produce an unknown gate result instead of silently passing.
 
-Evaluation metrics are release evidence. Start with the product decision, write down the mistakes that matter, choose primary and guardrail metrics, inspect threshold tradeoffs, check calibration, slice important segments, and turn the result into a metric contract.
+## The Main Idea
+<!-- section-summary: Metric choice starts from the product decision and uses task-appropriate measurements, guardrails, operating rules, and evidence limits to support a release claim. -->
 
-For HarborCare, recall matters because missed escalations are dangerous. Precision and alert volume matter because nurses have finite time. Calibration matters because the score may influence staffing and urgency. Segment gates matter because one weak group can hide behind a strong aggregate. A model ships only when the metric contract says the candidate helps the workflow safely enough.
+An evaluation metric summarizes one question about predictions and outcomes. Its meaning comes from the task, the product action, the cost of mistakes, and the operating rule.
+
+Choose a primary metric for the intended benefit. Add guardrails for competing harms, capacity, probability quality, and cost. Evaluate the threshold, top-k cutoff, quantile, or interval that production will use. Then compare with meaningful baselines across important segments and report uncertainty.
+
+Offline metrics provide controlled release evidence. Production outcomes also depend on current data, reliable delivery, workflow capacity, and human response. A versioned metric contract keeps those assumptions visible and makes each candidate face the same decision.
 
 ## References
 
-- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html) - Official guide to classification and regression metrics.
-- [scikit-learn: Tuning the decision threshold](https://scikit-learn.org/stable/modules/classification_threshold.html) - Official guide to post-training threshold selection and `TunedThresholdClassifierCV`.
-- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html) - Official guide to calibration curves and probability interpretation.
-- [scikit-learn: Brier score loss](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.brier_score_loss.html) - Official API reference for probabilistic scoring.
-- [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/) - Official guide to classic `mlflow.models.evaluate()` for classification and regression.
-- [NIST AI Risk Management Framework 1.0](https://nvlpubs.nist.gov/nistpubs/ai/nist.ai.100-1.pdf) - Primary source for trustworthy AI characteristics and risk management functions.
+- [scikit-learn: Metrics and scoring](https://scikit-learn.org/stable/modules/model_evaluation.html)
+- [scikit-learn: Tuning the decision threshold](https://scikit-learn.org/stable/modules/classification_threshold.html)
+- [scikit-learn: Probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
+- [scikit-learn: Brier score loss](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.brier_score_loss.html)
+- [MLflow: Model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
+- [MLflow: Model evaluation API](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.models.html)
+- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)

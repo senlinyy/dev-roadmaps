@@ -1,7 +1,7 @@
 ---
 title: "ML A/B Testing"
 description: "Compare model versions with controlled product experiments, stable assignment, guardrail metrics, delayed labels, and clear analysis before widening traffic."
-overview: "ML A/B testing compares model behavior through user impact, not only offline scores. A supporting example follows a subscription music recommendation model through experiment design, assignment, metrics, SQL analysis, guardrails, delayed labels, and release decisions."
+overview: "ML A/B testing estimates whether a model-driven product change caused a meaningful improvement. It connects random assignment, real exposure, outcome data, statistical evidence, and release decisions."
 tags: ["MLOps", "production", "delivery"]
 order: 3
 id: "article-mlops-deployment-and-release-management-ab-testing-for-ml-products"
@@ -10,397 +10,414 @@ aliases:
   - child-release-strategies-02-ab-testing-for-ml-products
 ---
 
+## Table of Contents
 
-## A/B Testing Answers A Product Question
-<!-- section-summary: ML A/B testing compares model versions by measuring user and business outcomes under controlled assignment. -->
+1. [A/B Testing Answers a Causal Product Question](#ab-testing-answers-a-causal-product-question)
+2. [A Rollout and an Experiment Answer Different Questions](#a-rollout-and-an-experiment-answer-different-questions)
+3. [Learn the Language of a Controlled Experiment](#learn-the-language-of-a-controlled-experiment)
+4. [Choose the Unit That Receives the Experience](#choose-the-unit-that-receives-the-experience)
+5. [Separate Assignment, Exposure, and Outcome](#separate-assignment-exposure-and-outcome)
+6. [Turn the Hypothesis Into Decision Metrics](#turn-the-hypothesis-into-decision-metrics)
+7. [Handle Delayed Outcomes and Decision Policies](#handle-delayed-outcomes-and-decision-policies)
+8. [Plan Sample Size, Power, and Duration](#plan-sample-size-power-and-duration)
+9. [Analyze the Population You Randomized](#analyze-the-population-you-randomized)
+10. [Check the Evidence Before Reading the Lift](#check-the-evidence-before-reading-the-lift)
+11. [Protect the Result From Time and Repeated Testing](#protect-the-result-from-time-and-repeated-testing)
+12. [Recognize Interference and Feedback Loops](#recognize-interference-and-feedback-loops)
+13. [Build the Experiment as a Production Data System](#build-the-experiment-as-a-production-data-system)
+14. [Write the Decision Rules Before Launch](#write-the-decision-rules-before-launch)
+15. [Know Where Randomized Testing Is Inappropriate](#know-where-randomized-testing-is-inappropriate)
+16. [The Main Idea](#the-main-idea)
+17. [References](#references)
 
-**ML A/B testing** is a controlled experiment that sends eligible users or requests to different model versions, then compares the outcomes that matter to the product. A canary mainly protects the service while a release is underway. An A/B test asks whether the candidate model improves the product for real users without breaking guardrails.
+## A/B Testing Answers a Causal Product Question
+<!-- section-summary: An ML A/B test estimates whether a model-driven product change caused a meaningful change in user or business outcomes. -->
 
-The title answer is direct: A/B testing for ML products helps a team decide whether a model change should ship, roll back, or stay in research. Offline evaluation can say that a model scored better on historical data. A/B testing checks how users respond when the model changes the live product. That matters because recommendation, ranking, fraud, pricing, and personalization models influence behavior. Users may click differently, wait longer, complain, ignore prompts, or buy more.
+At a high level, an **A/B test** is a fair comparison between two product experiences. Eligible users, accounts, devices, or other units are randomly placed into groups. One group receives the current experience and another receives the candidate. The team then compares outcomes such as purchases, successful searches, resolved support cases, or harmful actions.
 
-This article builds on the release strategy article. Blue-green, canary, and shadow control traffic. A/B testing adds experiment design and product analysis. The model version still needs stable labels, logs, alerts, and rollback. The new piece is the experiment record: who was eligible, which variant they received, which metrics counted, and how the team made the decision.
+The word **causal** matters here. A causal question asks whether the candidate experience produced the observed change. A dashboard may show that users served by a new ranking model purchased more items. That pattern alone leaves several other explanations open: those users may come from a higher-spending region, the comparison may span different days, or a marketing campaign may have reached one group first. Random assignment gives every eligible unit the same chance of entering either group, so these background differences tend to balance.
 
-## A Supporting Example: Recommendation Experiment
-<!-- section-summary: A supporting example follows a music recommendation model where click gains can hide retention or fairness problems. -->
+Consider a candidate search-ranking model with a higher offline relevance score. The product decision is still unresolved. Users may find answers faster, scroll through more irrelevant results, abandon the page, or receive slower responses. A useful experiment turns that uncertainty into a precise question.
 
-Imagine **SoundGarden**, a subscription music app. The home page has a "Because you listened to" rail. The current model, `home-rec:v12`, mixes familiar artists, new releases, and discovery picks. The candidate, `home-rec:v13`, uses a new sequence model trained on recent listening sessions.
+**Experiment question:** Does the candidate ranker increase successful searches per eligible user while search abandonment, harmful-result reports, and response latency remain inside agreed limits?
 
-Offline ranking metrics improved for `v13`. In replay, users would have received more songs from artists they have never played before. Product likes that because discovery drives long-term retention. The team still worries about a few risks. A more adventurous model could reduce immediate plays. It could over-recommend one genre to new users. It could increase skips, which annoys listeners and weakens the training signal for the next model.
+The model is one part of the change. The experiment evaluates the experience created by the model, its features, serving path, thresholds, fallbacks, and surrounding product policy.
 
-SoundGarden wants to answer one product question:
-
-| Experiment question | Candidate success signal |
-|---|---|
-| Should `home-rec:v13` replace `v12` on the home page discovery rail? | Increase seven-day saved-track rate without raising skips, app exits, latency, or complaint rate |
-
-That question is narrower than "is the model better?" A real A/B test needs one clear product decision. If the decision is vague, every metric can tell a different story and the team can spend days arguing after the experiment ends.
-
-![SoundGarden experiment design](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/soundgarden-experiment-design.png)
-
-*SoundGarden splits eligible listeners into stable control and treatment groups, then reads product and service guardrails from the same experiment logs.*
-
-## Define The Unit, Variants, And Eligibility
-<!-- section-summary: A useful experiment names the assignment unit, the model variants, and the users or requests that can safely enter. -->
-
-The **assignment unit** is the thing that gets placed into a variant. For SoundGarden, the unit should be the user account, not a single page view. If the same listener sees `v12` in the morning and `v13` in the evening, their behavior mixes both experiences. A stable user-level assignment keeps the comparison cleaner.
-
-The **variants** are the experiences being compared. SoundGarden has a control and a treatment:
-
-| Variant | Model | Experience |
-|---|---|---|
-| Control | `home-rec:v12` | Current production recommendation rail |
-| Treatment | `home-rec:v13` | Candidate sequence model with the same API contract |
-
-The **eligibility rules** decide who can enter the experiment. SoundGarden excludes child accounts, users in regions where recommendation consent has a different policy, and accounts with fewer than three listening sessions. Those exclusions should live in the experiment config because they affect the analysis. The team also keeps paid and trial users in separate segments, because trial users may react differently to discovery.
-
-An experiment config can be simple and reviewable:
-
-```yaml
-experiment:
-  key: home_rec_v13_discovery
-  owner: recommendations@soundgarden.example
-  start_after_utc: "2026-07-08T10:00:00Z"
-  assignment_unit: user_id
-  allocation:
-    control:
-      model_uri: models:/prod_ml.music.home_rec/12
-      traffic_percent: 50
-    treatment:
-      model_uri: models:/prod_ml.music.home_rec/13
-      traffic_percent: 50
-  eligibility:
-    min_listening_sessions: 3
-    exclude_account_types:
-      - child
-    included_regions:
-      - US
-      - CA
-      - GB
-  segments:
-    - plan_type
-    - region
-    - signup_age_bucket
-    - primary_genre
+```mermaid
+flowchart TD
+    Q["Product question"] --> H["Testable hypothesis"]
+    H --> R["Random assignment"]
+    R --> C["Control experience"]
+    R --> T["Treatment experience"]
+    C --> O["Comparable outcome measurement"]
+    T --> O
+    O --> D["Ship, stop, iterate, or rerun"]
 ```
 
-The model **Uniform Resource Identifier (URI)** gives each variant a concrete artifact location or registry reference. The assignment unit tells engineering how to route users. The segments tell analysis which cuts must be reviewed before the decision. This config should ship through code review like a deployment manifest.
+## A Rollout and an Experiment Answer Different Questions
+<!-- section-summary: A rollout limits release risk, while a controlled experiment estimates product impact. -->
 
-## Assign Users And Keep The Assignment Stable
-<!-- section-summary: Stable assignment ensures a user keeps the same variant so product outcomes can be tied to one model experience. -->
+A **rollout** asks, “Can we deliver this change safely?” A **controlled experiment** asks, “Did this change improve the product?” Both practices may split traffic, yet the reason for the split is different.
 
-**Experiment assignment** is the routing step that chooses a variant for an eligible unit. The assignment must be stable. If user `u_124` enters treatment today, they should keep treatment for the duration of the experiment unless the team stops the test. Stability protects the user experience and protects the analysis.
+During a canary rollout, a team may send a small percentage of requests to a candidate endpoint and watch errors, latency, saturation, and rollback signals. That protects production from a faulty container, incompatible feature lookup, or expensive inference path. The canary can pass every operational check even if the candidate produces worse decisions.
 
-Many teams use a feature flag or experiment service for assignment. The key idea is deterministic bucketing. The service hashes the experiment key and user ID, maps the hash into a bucket, and returns `control` or `treatment`. That assignment is also logged so analysts can join outcomes later.
+A baseline-versus-canary dashboard also gives weak causal evidence. Canary traffic may come from one cluster, one region, or one time window. Returning users may cross between versions. A weighted endpoint can route one request to the candidate and the next request from the same person to the baseline. These differences make the groups harder to compare as product populations.
 
-A small assignment function can show the shape:
+An A/B test adds the missing experimental controls: a declared population, random assignment, stable group membership, exposure records, outcome definitions, and a statistical decision plan. The release system still owns health checks and rollback. The experiment system owns the product comparison.
+
+Cloud endpoints from SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks Model Serving can distribute requests across deployments. Their traffic weights are valuable delivery controls. Stable user cohorts, exposure-to-outcome joins, and statistical analysis still require an experiment layer or equivalent application logic.
+
+## Learn the Language of a Controlled Experiment
+<!-- section-summary: A small set of terms describes who enters the experiment, what changes, what is measured, and how a decision is made. -->
+
+Experiment discussions get confusing if “user,” “request,” and “exposure” are used as though they mean the same thing. The following terms describe separate parts of the design.
+
+### Treatment and control
+
+The **control** is the current product experience. The **treatment** is the candidate experience under evaluation. For a fraud model, control might use the current model and review threshold; treatment might use a new model with a recalibrated threshold.
+
+The comparison should capture the full behavior that differs. If treatment changes the model and threshold together, the experiment estimates their combined product effect. It cannot later prove how much came from each component without another experiment or a factorial design.
+
+### Random assignment and the experimental unit
+
+**Random assignment** uses chance to place eligible units into control or treatment. The **experimental unit**, also called the randomization unit, is the entity being assigned: a request, user, device, account, store, city, or cluster.
+
+Randomization creates comparable groups in expectation. Stable assignment keeps the selected experience consistent for the chosen unit. These are related requirements. A random result regenerated independently on every request can create a 50/50 traffic split while giving a single user a mixed experience.
+
+### Exposure and outcome
+
+An **assignment** says which group a unit belongs to. An **exposure** says that the unit actually encountered the changed experience. An **outcome** is the later event or measurement used to judge impact.
+
+For a recommendation test, opening the application can create an assignment. Rendering the recommendation rail creates an exposure. A saved item, skip, purchase, or later return visit creates an outcome. Keeping these events distinct reveals whether treatment was delivered and whether the outcome feed arrived.
+
+### Hypothesis, primary metric, and guardrail
+
+A **hypothesis** predicts a direction and a reason: “The candidate ranker will increase successful sessions because it places relevant results earlier.” The **primary metric** is the main numerical outcome used for the decision. A **guardrail metric** protects an area where harm would block launch, such as severe-error rate, cancellation rate, fairness disparity, or p95 latency.
+
+An **analysis population** defines whose outcomes enter the estimate. This choice deserves a written rule before launch because filtering people after observing their behavior can destroy the balance created by randomization.
+
+## Choose the Unit That Receives the Experience
+<!-- section-summary: The randomization unit should match the boundary across which the treatment can remain consistent and outcomes can remain reasonably independent. -->
+
+The best randomization unit follows the product interaction. In essence, ask two questions: “Which entity needs a consistent experience?” and “Can one assigned entity affect another entity’s outcome?”
+
+### Request, user, and device units
+
+Request-level assignment can fit a stateless infrastructure optimization where each request stands alone. It usually fits poorly for personalization. A person who sees different recommendation policies across consecutive page loads may adapt to both, creating **crossover** between variants.
+
+User-level assignment fits signed-in products where behavior spans sessions and devices. Device-level assignment supports anonymous experiences, although the same person may use several devices and several people may share one device. A stable cookie or platform-generated stable identifier keeps an anonymous device in one group.
+
+### Account, location, and cluster units
+
+Account-level assignment fits team products because people inside one account share settings, workflows, and outcomes. Location-level assignment can fit store operations, logistics, or marketplace supply. Cluster assignment groups connected users, households, classrooms, or geographic areas if their actions influence each other.
+
+Larger units reduce contamination, yet they also reduce the number of independent observations. Ten thousand users inside twenty stores produce twenty randomized store units. The calculation therefore has twenty independent units, even though the experiment observes many more people. The sample-size calculation and statistical method must use the level of randomization.
+
+```mermaid
+flowchart TD
+    A["Does the experience need to stay consistent across sessions?"] -->|"Yes"| B["Use user or account"]
+    A -->|"No"| C["Can each request stand alone?"]
+    C -->|"Yes"| D["Request may fit"]
+    C -->|"No"| E["Use device or user"]
+    B --> F["Can assigned units affect each other?"]
+    E --> F
+    F -->|"Yes"| G["Randomize a location, household, or cluster"]
+    F -->|"No"| H["Keep the smaller stable unit"]
+```
+
+The unit choice should also account for repeated sessions, shared inventory, and social effects. A pricing experiment can change remaining inventory for later shoppers. A feed-ranking experiment can change what creators produce. A fraud model can alter attacker behavior. Each case creates links between units that a simple user-level design may miss.
+
+## Separate Assignment, Exposure, and Outcome
+<!-- section-summary: Trustworthy experiments preserve stable assignment and record the actual product exposure that connects a model release to later outcomes. -->
+
+Stable assignment is the foundation. You can think of it as attaching a durable experiment label to the chosen unit. A person assigned to treatment on one visit receives treatment again on later visits. This consistency protects the product experience and keeps behavior connected to one experimental group.
+
+A common implementation hashes an experiment identifier together with a persistent unit identifier, then maps the result into a bucket. The hash converts the two identifiers into a repeatable number. A percentage range maps that number to control or treatment, so the same inputs return the same group.
 
 ```python
-import hashlib
+from hashlib import sha256
 
-
-def assign_variant(experiment_key: str, user_id: str) -> str:
-    raw = f"{experiment_key}:{user_id}".encode("utf-8")
-    bucket = int(hashlib.sha256(raw).hexdigest()[:8], 16) % 100
-    if bucket < 50:
-        return "control"
-    return "treatment"
+def variant(experiment: str, unit_id: str) -> str:
+    digest = sha256(f"{experiment}:{unit_id}".encode()).digest()
+    bucket = int.from_bytes(digest[:8], "big") % 10_000
+    return "treatment" if bucket < 5_000 else "control"
 ```
 
-Production code usually has more controls: overrides for internal testers, holdout groups, kill switches, and audit logs. The core requirement stays the same. The same user should land in the same variant, and every prediction event should record that variant.
+Production teams commonly obtain this behavior from Statsig, LaunchDarkly, Optimizely, or an internal allocation service. A managed service adds reviewed targeting, persistent assignment, holdouts, audit history, and experiment health checks. An internal allocator carries the same responsibilities and needs careful testing around salts, allocation changes, identifier loss, and concurrent experiments.
 
-The recommendation response should carry experiment fields:
+Assignment alone cannot prove delivery. A user may be assigned to treatment and never open the screen that calls the model. The application should write an exposure at the point where the model-driven result reaches the product experience. That record should include:
 
-```json
-{
-  "user_id": "u_124",
-  "rail_id": "because_you_listened",
-  "experiment_key": "home_rec_v13_discovery",
-  "variant": "treatment",
-  "model_name": "home-rec",
-  "model_version": "13",
-  "trace_id": "8f7b2c9b..."
-}
+- experiment and variant identity;
+- randomization-unit identifier or governed join key;
+- exposure time and product surface;
+- model registry name and immutable model version;
+- release, feature, and policy versions;
+- prediction or trace identifier for operational investigation.
+
+Model identity matters because an endpoint name can move between artifacts during a long-running experiment. Policy identity matters because a threshold, eligibility rule, post-ranking filter, or fallback can change the decision users receive even if the model artifact stays fixed.
+
+The join key should support outcome analysis without copying unrestricted personal data into every telemetry system. A governed pseudonymous identifier, documented retention policy, and access-controlled mapping table are common choices.
+
+```mermaid
+flowchart TD
+    E["Eligible unit"] --> A["Stable assignment record"]
+    A --> P["Product requests decision"]
+    P --> X["Exposure record: variant + model + policy"]
+    X --> O["Outcome arrives now or later"]
+    A --> I["Intent-to-treat population"]
+    O --> I
+    X --> V["Delivery and triggered-analysis checks"]
 ```
 
-Those fields connect product events, service metrics, and traces. OpenTelemetry trace IDs help the team follow a slow recommendation request across the API, feature service, and model server. Prometheus metrics can show service health by variant if the service emits labels carefully and keeps label cardinality under control.
+## Turn the Hypothesis Into Decision Metrics
+<!-- section-summary: A primary metric expresses the intended benefit, while guardrails and counter-metrics reveal unacceptable costs. -->
 
-## Choose Metrics Before The First User Enters
-<!-- section-summary: Experiment metrics should include one primary outcome plus guardrails for user harm, model behavior, and service health. -->
+A metric is a rule for turning events into a number. “Engagement” is a topic. “Completed searches per eligible user during seven days after assignment” is a metric definition. The second version identifies the unit, event, denominator, and time window.
 
-Metrics should be written before the experiment starts. If the team chooses metrics after seeing the results, the analysis turns into a search for a story. SoundGarden writes one primary metric, a few guardrails, and several diagnostic metrics.
+### Choose one primary metric
 
-The **primary metric** is the main success measure. For SoundGarden, that is `saved_tracks_per_user_7d`, because saving a track is stronger than a quick click and fits the discovery goal. The **guardrail metrics** protect areas the team refuses to harm, such as skip rate, app exit rate, 95th-percentile (**p95**) latency, and complaint rate. P95 is the response time that 95 percent of requests meet or beat. **Diagnostic metrics** help explain the result, such as genre diversity, new-artist exposure, and cold-start behavior.
+The primary metric should represent the product benefit named in the hypothesis. For a candidate recommendation model, click-through rate may react quickly, yet clicks can reward curiosity or misleading content. Saves per eligible user, completed listening sessions, or retained users may reflect the intended value more closely. The right choice depends on the product decision.
 
-| Metric type | Metric | Decision use |
-|---|---|---|
-| Primary | Saved tracks per eligible user over seven days | Main success measure |
-| Guardrail | Skip rate in first 30 seconds | Stop or reject if it rises past threshold |
-| Guardrail | p95 recommendation latency | Stop if treatment hurts page load |
-| Guardrail | Complaint or "hide artist" rate | Reject if treatment increases negative feedback |
-| Diagnostic | New-artist exposure per user | Explains discovery behavior |
-| Diagnostic | Genre concentration by segment | Finds over-personalization or segment issues |
+Selecting one primary metric protects the team from searching a large scorecard for any positive result. Secondary metrics can explain how behavior changed. They should carry labels such as diagnostic, supporting, or exploratory so their role stays clear.
 
-The metric definitions should be concrete enough for SQL. A dashboard title such as "engagement" is too vague. A definition such as "saved tracks within seven days of assignment divided by eligible users assigned to the variant" is reviewable.
+### Add guardrails and counter-metrics
 
-SoundGarden stores assignment and product events in warehouse tables:
+Guardrails define unacceptable harm. A conversion model could improve purchases while increasing refunds. A support-routing model could reduce handling time while increasing reopened tickets. A fraud model could reduce losses while blocking too many legitimate customers.
 
-| Table | Important fields |
-|---|---|
-| `experiment_assignments` | `experiment_key`, `user_id`, `variant`, `assigned_at_utc`, `model_version` |
-| `recommendation_impressions` | `user_id`, `trace_id`, `variant`, `model_version`, `shown_at_utc`, `rail_id` |
-| `listening_events` | `user_id`, `track_id`, `event_name`, `event_time_utc`, `listen_seconds` |
-| `user_feedback_events` | `user_id`, `event_name`, `artist_id`, `event_time_utc` |
+A **counter-metric** captures the plausible downside created by optimizing the primary outcome. If the primary metric rewards clicks, long-term satisfaction and complaint rate can counter short-term click seeking. If the primary metric rewards automated approvals, later default rate and manual-review burden can reveal transferred risk.
 
-This schema is part of the release system. If variant or model version is missing from product events, the analysis gets weaker. The experiment can still route traffic, but the team loses evidence.
+Service metrics belong in the same plan. Error rate, timeout rate, p95 or p99 latency, resource saturation, and inference cost protect the delivery path. Prometheus, OpenTelemetry, and cloud monitoring can alert on these signals during the run. Product outcomes usually come from warehouse or lakehouse events and mature on a slower schedule.
 
-## Plan Sample Size And A Stopping Rule
-<!-- section-summary: A trustworthy experiment sets its detectable effect, power, duration, and stopping rule before assignment starts. -->
+### Decide which segments can block launch
 
-An experiment needs enough independent units to distinguish a useful effect from normal variation. The **minimum detectable effect (MDE)** is the smallest improvement that would justify changing the product. SoundGarden chooses an MDE of `0.08` saved tracks per eligible user over seven days. A smaller lift would not cover the engineering and editorial cost of operating the new ranker.
+Aggregate improvement can hide local harm. Prewritten segment checks might cover new users, device classes, regions, product tiers, or groups relevant to fairness and accessibility. A team should name decision-gating segments in advance. Post-hoc slicing remains valuable for investigation, though repeated searching across dozens of segments raises the chance of a lucky pattern.
 
-**Statistical power** is the probability that the planned analysis detects an effect of at least the MDE when that effect really exists. Teams commonly plan for 80% or 90% power and a 5% false-positive rate, then adjust for expected exclusions and missing outcomes. The calculation needs a historical estimate of metric variance. A heavy-tailed count metric such as saved tracks can require a bootstrap simulation or a variance-reduction method rather than a simple normal formula.
+## Handle Delayed Outcomes and Decision Policies
+<!-- section-summary: ML outcomes often arrive after the prediction, so experiments need explicit attribution windows, maturity rules, and policy identity. -->
 
-SoundGarden runs this planning simulation on historical user-level rows:
+Many ML decisions receive their ground truth later. A recommendation impression can lead to a purchase hours later. A credit decision may mature over months. A predictive-maintenance alert may need the next inspection. An experiment readout is premature until the relevant outcome window has closed for the included cohort.
 
-```python
-import numpy as np
+An **attribution window** defines how long an outcome can be linked to an assignment or exposure. A seven-day purchase metric, for example, counts qualifying purchases from assignment through the next seven days. Every analyzed unit needs the same opportunity to produce that outcome. Units assigned near the end of enrollment must finish their window before the final readout.
 
-rng = np.random.default_rng(20260712)
-historical = user_metrics["saved_tracks_7d"].to_numpy()
+Missing outcomes need a semantic rule. No purchase event can correctly mean zero purchases if event collection is healthy. A missing payment feed, incomplete label join, or absent regional export means unknown data. Converting telemetry failure into zero silently biases the result. Data freshness, join coverage, and event-volume checks should distinguish an absent user action from a failed measurement.
 
-def simulated_power(users_per_arm: int, mde: float, repetitions: int = 2_000) -> float:
-    detected = 0
-    for _ in range(repetitions):
-        control = rng.choice(historical, users_per_arm, replace=True)
-        treatment = rng.choice(historical, users_per_arm, replace=True) + mde
-        delta = treatment.mean() - control.mean()
-        pooled_se = np.sqrt(
-            control.var(ddof=1) / users_per_arm
-            + treatment.var(ddof=1) / users_per_arm
-        )
-        detected += delta / pooled_se > 1.959964
-    return detected / repetitions
+The user-facing treatment may also include policy around the model score:
 
-for n in (25_000, 50_000, 75_000, 100_000):
-    print(n, simulated_power(n, mde=0.08))
+```text
+features -> model score -> threshold -> business rule -> fallback -> action
 ```
 
-The production analysis should use a reviewed statistics package and analysis plan; this simulation exposes the inputs so beginners can see why sample size depends on variance, MDE, false-positive tolerance, and desired power. SoundGarden records `75,000` mature users per arm, a minimum fourteen-day enrollment period to cover weekday and weekend behavior, and seven more days for the final cohort's outcome window.
+Suppose treatment uses a new fraud model while a risk-policy service changes the review threshold halfway through the test. The resulting effect mixes two changes, so attribution is difficult. Freeze decision-policy versions during the experiment, include them in exposure logs, or design separate randomized factors under statistical review.
 
-The plan also defines stopping rules. Safety guardrails can stop traffic immediately. A normal success decision waits for the prewritten sample size and maturity window. The team avoids stopping on the first positive dashboard because repeated daily looks increase the chance of seeing a lucky result. If the business needs continuous monitoring for success, a statistician selects a sequential design with adjusted boundaries before launch.
+## Plan Sample Size, Power, and Duration
+<!-- section-summary: Sample size depends on the smallest valuable effect, normal outcome variation, desired power, error tolerance, and randomization unit. -->
 
-```yaml
-analysis_plan:
-  unit: user_id
-  primary_metric: saved_tracks_per_eligible_user_7d
-  minimum_detectable_effect: 0.08
-  power: 0.90
-  two_sided_alpha: 0.05
-  required_mature_users_per_arm: 75000
-  minimum_enrollment_days: 14
-  outcome_maturity_days: 7
-  success_readout: once_after_maturity
-  safety_stop:
-    skip_rate_absolute_increase: 0.015
-    complaint_rate_relative_increase: 0.20
-    recommendation_p95_ms: 200
+An experiment needs enough independent units to distinguish a meaningful effect from ordinary variation. Three planning terms make this practical.
+
+The **minimum detectable effect (MDE)** is the smallest change the experiment is designed to detect. Teams should tie it to a product decision. A 0.1 percentage-point gain may be valuable at enormous scale and irrelevant for a small workflow with high operating cost.
+
+**Statistical power** is the probability that the planned test detects an effect at least as large as the MDE if that effect exists. **Significance level**, often written as alpha, controls the planned false-positive tolerance. Higher power, smaller MDE, noisier metrics, and stricter error tolerance all require more units.
+
+For a simplified two-arm test of a conversion rate, assume a 10% baseline, a one percentage-point MDE, 5% two-sided alpha, 80% power, and equal groups. A normal approximation gives:
+
+```text
+n per arm ≈ 2 × (1.96 + 0.84)² × 0.10 × 0.90 ÷ 0.01²
+          ≈ 14,100 independent units
 ```
 
-## Analyze The Experiment With Segments And Delayed Labels
-<!-- section-summary: ML experiment analysis needs assignment checks, segment review, delayed outcomes, and guardrail comparisons. -->
+This planning illustration provides no universal sample count. Unequal allocation, clustered randomization, repeated observations, rare events, variance reduction, and heavy-tailed revenue can change the requirement substantially. Teams commonly use their experiment platform, a reviewed statistics library, or simulation over historical unit-level data.
 
-The first analysis check is **sample ratio mismatch**. That means the observed split between control and treatment differs from the planned split. A 50/50 experiment with 49.8 percent treatment is probably fine. A 65/35 split may mean eligibility, caching, or assignment logging broke.
+Duration adds product context that sample size alone misses. The run should cover relevant weekly cycles, delayed-outcome maturity, and expected learning or novelty. A high-traffic site may collect the planned sample in one afternoon while still producing a misleading result if weekday and weekend behavior differ.
 
-A simple assignment check looks like this:
+## Analyze the Population You Randomized
+<!-- section-summary: Intent-to-treat analysis preserves the balance created by random assignment and measures the effect of offering the treatment. -->
+
+The usual primary analysis follows **intent to treat (ITT)**. Every eligible unit stays in its assigned group, including units that never reached the model-driven surface. ITT estimates the effect of assigning or offering the candidate experience under real product usage.
+
+This can feel counterintuitive. If half the assigned users never open the relevant screen, the measured effect is diluted. That dilution is often the product truth: shipping the feature to the whole eligible population produces impact only through people who encounter it.
+
+Filtering to units that actually received treatment creates a **treatment-on-the-treated (ToT)** or triggered view. This view can estimate the effect among reached units only under stronger assumptions. Exposure itself may depend on treatment. A faster recommendation model could make the page render, while a slower control could cause abandonment before the exposure event. Keeping only observed exposures would then compare different types of users.
+
+A trustworthy triggered analysis uses a qualification rule that can be evaluated for both groups, often through counterfactual trigger logging, and verifies that excluded units behave like an A/A comparison. ITT remains the default decision estimate. ToT serves a clearly stated secondary purpose with statistical review.
+
+The SQL shape below preserves assigned units. It also keeps exposure coverage visible as a diagnostic:
 
 ```sql
 SELECT
-  variant,
-  COUNT(DISTINCT user_id) AS assigned_users,
-  COUNT(DISTINCT user_id) * 1.0
-    / SUM(COUNT(DISTINCT user_id)) OVER () AS share
-FROM experiment_assignments
-WHERE experiment_key = 'home_rec_v13_discovery'
-GROUP BY variant;
+  a.variant,
+  COUNT(*) AS assigned_units,
+  COUNT(DISTINCT e.unit_id) AS exposed_units,
+  AVG(COALESCE(o.completed_actions, 0)) AS actions_per_assigned_unit
+FROM experiment_assignments AS a
+LEFT JOIN first_exposures AS e
+  ON a.experiment_id = e.experiment_id
+ AND a.unit_id = e.unit_id
+LEFT JOIN mature_outcomes AS o
+  ON a.experiment_id = o.experiment_id
+ AND a.unit_id = o.unit_id
+WHERE a.experiment_id = :experiment_id
+GROUP BY a.variant;
 ```
 
-After assignment looks healthy, compare the primary metric and guardrails. This query builds a seven-day saved-track rate by variant:
+Here, absent completed-action events count as zero only after the pipeline has verified outcome-feed completeness. Exposure coverage appears beside the ITT metric so delivery failures stay visible.
 
-```sql
-WITH assigned AS (
-  SELECT
-    user_id,
-    variant,
-    assigned_at_utc
-  FROM experiment_assignments
-  WHERE experiment_key = 'home_rec_v13_discovery'
-),
-saves AS (
-  SELECT
-    a.user_id,
-    a.variant,
-    COUNTIF(e.event_name = 'track_saved') AS saved_tracks_7d
-  FROM assigned a
-  LEFT JOIN listening_events e
-    ON e.user_id = a.user_id
-   AND e.event_time_utc >= a.assigned_at_utc
-   AND e.event_time_utc < TIMESTAMP_ADD(a.assigned_at_utc, INTERVAL 7 DAY)
-  GROUP BY a.user_id, a.variant
-)
-SELECT
-  variant,
-  COUNT(*) AS users,
-  AVG(saved_tracks_7d) AS avg_saved_tracks_7d,
-  APPROX_QUANTILES(saved_tracks_7d, 100)[OFFSET(50)] AS median_saved_tracks_7d
-FROM saves
-GROUP BY variant;
-```
+## Check the Evidence Before Reading the Lift
+<!-- section-summary: Assignment balance, identifier integrity, exposure delivery, outcome freshness, and join coverage must pass before a metric difference is trusted. -->
 
-The query uses assignment time as the anchor. That avoids counting saves from before the user entered the experiment. It also leaves room for delayed outcomes. A user assigned today may need seven full days before the primary metric is final.
+The first experiment readout should test the evidence itself. A polished lift chart built from broken assignments or missing events can create a confident wrong decision.
 
-Segments matter because a total win can hide a local problem. SoundGarden reviews trial users, paid users, new users, long-time subscribers, and primary genre groups. If treatment improves total saves but harms new jazz listeners through repeated recommendations, the team should inspect that segment before ramping.
+### Sample ratio mismatch
 
-Guardrails can use faster windows. Latency and errors should page during the experiment, not after seven days. Prometheus alerting rules can watch the treatment service while the product analysis waits for delayed labels:
+**Sample ratio mismatch (SRM)** means the observed group counts differ more than random variation would reasonably explain from the planned allocation. A 50/50 design that repeatedly records a large imbalance may have an assignment bug, identifier loss, eligibility difference, cache problem, logging filter, or warehouse transformation error.
+
+SRM is an alarm about experiment validity. The team should pause interpretation, trace counts from allocator through exposure stream and analytical table, repair the cause, and restart or invalidate affected data according to the analysis plan.
+
+### Crossover and identifier failures
+
+Crossover occurs if one unit appears in several variants. Common causes include changing from device ID to user ID, inconsistent salts between client and server, lost cookies, and allocation changes without persistent assignment. Experiment diagnostics should report crossover rate and assignment reasons.
+
+### Logging and join failures
+
+Exposure counts should reconcile with product traffic. Outcome events need the same unit identifier or an approved mapping. Freshness checks should compare expected arrival time with the latest partition. Join coverage should be reviewed by variant and major segment, because a region-specific export failure can create a false treatment effect.
+
+dbt data tests fit this layer well. Built-in `unique`, `not_null`, `accepted_values`, and `relationships` assertions cover basic contracts; custom SQL tests can fail on duplicate assignments, crossovers, stale partitions, unexpected allocation ratios, or low exposure-to-outcome coverage.
 
 ```yaml
-groups:
-  - name: recommendation-experiment
-    rules:
-      - alert: TreatmentRecommendationLatencyHigh
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le) (
-              rate(http_request_duration_seconds_bucket{
-                service_name="home-rec-api",
-                experiment_key="home_rec_v13_discovery",
-                variant="treatment"
-              }[5m])
-            )
-          ) > 0.20
-        for: 10m
-        labels:
-          severity: page
-        annotations:
-          summary: "Treatment recommendation p95 latency is above 200 ms"
+models:
+  - name: experiment_assignments
+    columns:
+      - name: assignment_key
+        data_tests: [unique, not_null]
+      - name: variant
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [control, treatment]
 ```
 
-This alert protects the user request path while the experiment continues. The final decision still needs product metrics, but service health should never wait for the experiment readout.
+## Protect the Result From Time and Repeated Testing
+<!-- section-summary: Novelty, learning, peeking, and multiple comparisons can make an early positive result look stronger than the lasting effect. -->
 
-![From assignment to seven-day readout](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/assignment-to-seven-day-readout.png)
+User behavior can change during a test. A **novelty effect** is an early response to a new experience that fades. A **learning effect** grows as users discover how to use a new workflow. Plotting treatment effect by enrollment cohort and time since first exposure can reveal both patterns. The planned duration should cover the period needed for the product claim.
 
-*The assignment table, recommendation impressions, listening events, and feedback events connect a day-zero variant to the seven-day saved-track readout.*
+Repeatedly checking a fixed-horizon test and stopping at the first favorable result raises the false-positive rate. This practice is often called **peeking**. Safety monitoring can continue throughout the run because harm needs rapid action. Success decisions should follow the planned maturity and sample rule, or use a preselected sequential method whose boundaries account for repeated looks.
 
-## Handle Uncertainty, Repeated Looks, And Interference
-<!-- section-summary: Confidence intervals, a prewritten comparison set, novelty checks, and interference review keep a positive lift from turning into a premature launch. -->
+Multiple metrics create a related problem. Twenty independent tests at a 5% threshold provide many chances for a lucky positive result. A clear primary metric keeps the main decision focused. Experiments with several primary outcomes or variants need a documented multiplicity procedure, such as family-wise error or false-discovery control, selected before analysis.
 
-A point estimate such as `+3.4% relative lift` leaves out how uncertain that result is. SoundGarden reports the **absolute treatment effect** first, which is treatment mean minus control mean, plus a 95% confidence interval. A confidence interval built by a valid procedure would contain the true effect in about 95% of repeated experiments under the procedure's assumptions. The frequentist interpretation describes that repeated procedure rather than assigning a 95% probability to this one fixed interval.
+Concurrent launches can also contaminate interpretation. Experiment layers or mutual-exclusion groups prevent units from entering combinations with known interactions. Teams should record overlapping experiment assignments so unexpected interactions can be investigated.
 
-The same users create the control and treatment outcome distributions, so the analysis resamples user rows inside each arm and computes a bootstrap interval for the mean difference:
+## Recognize Interference and Feedback Loops
+<!-- section-summary: Some ML treatments change the environment shared by control and treatment, weakening the assumption that units act independently. -->
 
-```python
-from scipy.stats import bootstrap
-import numpy as np
+Some products connect participants through shared resources or direct interaction. A change delivered to one participant can therefore alter the experience available to someone in the other group. **Interference** is the name for this cross-group effect.
 
-control = mature_users.loc[mature_users.variant == "control", "saved_tracks_7d"].to_numpy()
-treatment = mature_users.loc[mature_users.variant == "treatment", "saved_tracks_7d"].to_numpy()
+Standard A/B analysis assumes one unit’s assignment has no effect on another unit’s outcome. Interference weakens that assumption, so the measured difference may combine direct treatment impact with changes to the shared environment.
 
-def mean_difference(control_sample, treatment_sample, axis=-1):
-    return np.mean(treatment_sample, axis=axis) - np.mean(control_sample, axis=axis)
+In a marketplace, a treatment that ranks certain listings higher changes inventory available to control users. In a social product, ranking changes affect which posts receive reactions, which then changes what creators publish. In delivery operations, a route-optimization treatment reallocates drivers shared by both groups. The control environment has now been altered by treatment.
 
-result = bootstrap(
-    (control, treatment),
-    mean_difference,
-    paired=False,
-    confidence_level=0.95,
-    n_resamples=20_000,
-    method="BCa",
-    rng=np.random.default_rng(20260712),
-)
+Possible responses include cluster randomization, geographic switchbacks, time-based switchback experiments, marketplace-specific estimators, or a design that measures equilibrium effects. Each method changes the statistical assumptions. A team should involve an experimentation specialist early instead of applying a user-level test to a connected system.
 
-print(float(mean_difference(control, treatment)))
-print(result.confidence_interval)
+ML feedback loops add another layer. Treatment-generated clicks may enter the next training dataset, causing future models to learn from behavior created by the experiment. Preserve variant and policy identity in training events, define whether experimental data can enter retraining, and keep a stable holdout if the long-term effect matters.
+
+```mermaid
+flowchart TD
+    M["Model variant"] --> D["Decisions shown to users"]
+    D --> B["User or marketplace behavior"]
+    B --> L["Logged labels and features"]
+    L --> N["Next training dataset"]
+    N --> M
+    D --> S["Shared inventory or social graph"]
+    S --> B
 ```
 
-The experiment ships only when the interval excludes harmful values and the lower bound clears the smallest useful improvement recorded in the analysis plan. A p-value alone cannot answer whether the improvement is large enough to matter.
+## Build the Experiment as a Production Data System
+<!-- section-summary: Industrial experiments connect assignment, immutable release identity, governed event tables, data-quality tests, statistical analysis, and decision records. -->
 
-Multiple comparisons need the same discipline. SoundGarden has one primary metric, so it avoids selecting the best result from twenty engagement measures. The four guardrails each have prewritten harm thresholds. Segment analyses are diagnostic unless the plan names a segment as a decision gate and adjusts the error control. If the team tests many model variants or many primary outcomes, it should use a documented family-wise or false-discovery procedure with statistical review.
+An industrial experiment is a small production system. Its job is to preserve the causal comparison from product configuration through the final decision. Every layer carries a different piece of evidence, and those pieces must join through stable identities.
 
-Two product effects can also invalidate a clean-looking estimate. **Novelty effects** happen when users react to a changed experience because it is new; the team plots effect by cohort week and checks whether the lift decays. **Interference** happens when one user's treatment affects another user's outcome. Playlist sharing and collaborative queues can cross variant boundaries. For a strongly social feature, SoundGarden may randomize households or friendship clusters, or limit the claim to isolated listening surfaces. Randomizing individual users while ignoring those links would overstate the independence of the observations.
+The control plane defines eligibility, allocation, unit type, metrics, and stop rules. The request path obtains a stable assignment. The product logs actual exposure with immutable release identity. A governed warehouse or lakehouse joins outcomes after their maturity window. A statistics layer estimates effects and uncertainty. A decision record connects the result to the next release action.
 
-The final review asks five questions:
-
-- Did assignment pass the sample-ratio check and remain stable?
-- Did every cohort receive its complete seven-day outcome window?
-- Does the confidence interval exclude both zero and the prewritten practical floor?
-- Did any guardrail or prewritten segment fail after the planned comparison adjustment?
-- Did novelty, network interference, instrumentation changes, or concurrent launches weaken the causal claim?
-
-These checks give the release owner a defensible result. They also allow an honest `inconclusive` decision when the interval stays wide. Extending or rerunning an experiment under a new plan can be the correct engineering choice.
-
-## Turn The Result Into A Release Decision
-<!-- section-summary: The experiment result should lead to ship, stop, iterate, or rerun, with the decision tied to metrics and review evidence. -->
-
-An A/B test should end with a decision record. SoundGarden wants one of four outcomes: ship `v13`, stop and keep `v12`, iterate on a new `v14`, or rerun because the experiment evidence was invalid. The decision should name the metric movement, guardrails, affected segments, and release action.
-
-A decision packet can look like this:
-
-```yaml
-experiment_result:
-  experiment_key: home_rec_v13_discovery
-  decision: ship_with_25_percent_ramp
-  control_model_version: 12
-  treatment_model_version: 13
-  assignment_check:
-    sample_ratio_mismatch: pass
-    stable_user_assignment: pass
-  maturity:
-    users_per_arm: 78214
-    all_users_have_complete_7d_window: true
-    stopping_rule_followed: true
-  primary_metric:
-    name: saved_tracks_per_user_7d
-    absolute_effect: 0.10
-    relative_lift: 0.043
-    confidence_interval_95: [0.083, 0.117]
-    practical_effect_floor: 0.08
-  guardrails:
-    skip_rate_30s: pass
-    app_exit_rate: pass
-    p95_latency: pass
-    complaint_rate: pass
-  segment_notes:
-    trial_users: "positive lift, wider uncertainty"
-    primary_genre_jazz: "neutral, no guardrail breach"
-  next_release_action:
-    rollout: canary
-    first_step: 25
-    rollback_model: 12
+```mermaid
+flowchart TD
+    C["Experiment config and assignment service"] --> A["Stable assignment"]
+    R["MLflow or managed model registry"] --> P["Prediction path"]
+    A --> P
+    P --> E["Exposure table: variant + model + policy"]
+    U["Product outcome events"] --> W["Governed warehouse or lakehouse"]
+    E --> W
+    W --> Q["dbt or SQL quality gates"]
+    Q --> S["Experiment statistics layer"]
+    S --> D["Reviewed decision record"]
+    D --> G["Release ramp or rollback"]
 ```
 
-The release action should still use the release strategy controls from the previous article. A winning A/B test does not require an instant full rollout. SoundGarden can promote `v13` to a canary, continue watching guardrails, then move the registry alias after production signals stay healthy.
+A representative stack might use Statsig for assignment and experiment analysis, MLflow Model Registry for immutable model identity, product events in BigQuery, Snowflake, or a Databricks lakehouse, and dbt for analytical models and data tests. LaunchDarkly, Optimizely, or an internal allocator can fill the assignment role. A managed cloud registry can fill the registry role. The architecture matters more than matching one vendor combination.
 
-The clean habit is to keep the experiment record, dashboard link, analysis notebook or SQL file, model versions, and release manifest together. Future incidents and future model work will ask why `v13` shipped. The answer should live in evidence, not in a chat thread.
+Operational ownership should be explicit:
 
-![Experiment result to release action](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/experiment-result-release-action.png)
+- product and data science own the hypothesis, MDE, metrics, and segment interpretation;
+- application engineering owns assignment placement and true exposure logging;
+- ML engineering owns model, feature, policy, and release identity;
+- data engineering owns event contracts, maturity, joins, and quality checks;
+- an experimentation or statistics owner reviews power, estimators, and decision validity;
+- the release owner executes ramp, rollback, or follow-up work.
 
-*The decision packet turns metric lift, guardrail status, segment review, and rollback planning into one release action for `home-rec:v13`.*
+This separation prevents an experiment dashboard from becoming the only evidence. Raw contracts, transformations, model lineage, analysis version, and decision history remain inspectable.
 
-## Putting It Together
-<!-- section-summary: ML A/B testing connects model versions to product outcomes through stable assignment, prewritten metrics, and decision evidence. -->
+## Write the Decision Rules Before Launch
+<!-- section-summary: A prewritten analysis plan states what success, harm, inconclusive evidence, and invalid evidence will trigger. -->
 
-ML A/B testing helps SoundGarden decide whether a better offline model should change the live product. The team defines the product question, assigns users stably, logs model and variant fields, chooses metrics before launch, checks assignment quality, analyzes delayed outcomes, reviews segments, and turns the result into a release action.
+A **pre-registration** or analysis plan records the important choices before results can influence them. It can be a reviewed configuration, experiment brief, or versioned document. The plan should include:
 
-The important shift is from model score to user impact. Offline metrics help pick candidates. Canary protects the release path. A/B testing shows whether real users and the business gain from the model change while guardrails keep harm visible.
+- product hypothesis and eligible population;
+- randomization unit, allocation, and assignment persistence;
+- control and treatment release identities;
+- primary metric, guardrails, counter-metrics, and attribution windows;
+- MDE, power target, estimator, duration, and stopping rule;
+- decision-gating segments and multiplicity method;
+- evidence-quality gates such as SRM, crossover, freshness, and join coverage;
+- immediate harm-stop thresholds and rollback owner;
+- actions for win, loss, inconclusive evidence, and invalid evidence.
+
+A win can lead to a gradual release ramp with continued service and product monitoring. A loss can keep control in place and use diagnostic evidence to guide another candidate. An inconclusive result may call for more units, a lower-variance metric, or a redesigned treatment. Invalid evidence calls for instrumentation repair and a fresh run; extending corrupted data rarely restores randomization.
+
+Decision thresholds should express practical value as well as statistical uncertainty. A tiny effect can be statistically distinguishable at large scale while remaining too small to justify inference cost or operational complexity. A wide interval can include both valuable benefit and unacceptable harm, which supports an inconclusive decision.
+
+## Know Where Randomized Testing Is Inappropriate
+<!-- section-summary: Some decisions carry legal, ethical, privacy, or safety consequences that require stronger governance or a different evaluation design. -->
+
+Random assignment is a method; it grants no automatic permission to expose people to avoidable risk. High-impact decisions involving health, employment, credit, housing, education, public benefits, or physical safety need legal, risk, domain, and ethics review. Existing protections, known beneficial treatment, informed-consent duties, and anti-discrimination obligations may rule out a conventional control group.
+
+The experiment should minimize personal data, limit access, document retention, and evaluate whether the randomization unit or outcomes reveal sensitive attributes. Guardrails need enough authority to stop harm immediately. Some risks are too severe or too delayed for a live test to manage safely.
+
+Alternatives include retrospective causal analysis, shadow evaluation, simulation, expert review, phased observational studies, or testing a lower-risk workflow component. The NIST AI Risk Management Framework offers a useful governance structure through its Govern, Map, Measure, and Manage functions. Organizational policy and applicable law determine the final route.
+
+## The Main Idea
+<!-- section-summary: A trustworthy ML A/B test connects random assignment to real exposure, mature outcomes, evidence checks, and a prewritten product decision. -->
+
+ML A/B testing estimates whether a model-driven product change caused a meaningful outcome. The framework starts with a causal question, chooses a stable randomization unit, records assignment and actual exposure, waits for mature outcomes, checks evidence integrity, and analyzes the population defined in advance.
+
+Release controls and experiments work together. Canary, blue-green, shadow, and weighted routing protect delivery. Randomized assignment, exposure logs, outcome contracts, and statistical rules establish product impact. The final result should support one clear action: ship carefully, keep control, iterate, or rerun with repaired evidence.
+
+The practical lesson is to treat the experiment record as part of the release evidence. A model registry can identify the candidate artifact, yet the decision also needs its assignment rule, policy version, exposure coverage, outcome window, data-quality results, uncertainty estimate, and approved follow-up action.
 
 ## References
 
-- [OpenTelemetry: HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/)
-- [OpenTelemetry: HTTP metrics semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
-- [Prometheus: Alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
-- [Prometheus: Histograms and summaries](https://prometheus.io/docs/practices/histograms/)
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [SciPy bootstrap](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html)
+- [Statsig: Experiments overview](https://docs.statsig.com/experiments/overview)
+- [Statsig: Raw experiment events and unit identifiers](https://docs.statsig.com/metrics/raw-events)
+- [Statsig: Server persistent assignment](https://docs.statsig.com/server/concepts/persistent_assignment)
+- [Statsig: Experiment health checks](https://docs.statsig.com/experiments/monitor)
+- [LaunchDarkly: Continuous experiments](https://launchdarkly.com/docs/fed-docs/guides/cheatsheets/continuous-experiments)
+- [MLflow: Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
+- [dbt: Data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [Microsoft Research: Diagnosing sample ratio mismatch](https://www.microsoft.com/en-us/research/publication/diagnosing-sample-ratio-mismatch-in-online-controlled-experiments-a-taxonomy-and-rules-of-thumb-for-practitioners/)
+- [Microsoft Research: Trustworthy analysis of online A/B tests](https://www.microsoft.com/en-us/research/publication/trustworthy-analysis-of-online-a-b-tests-pitfalls-challenges-and-solutions/)
+- [Microsoft Research: Post-experiment patterns and triggered analysis](https://www.microsoft.com/en-us/research/group/experimentation-platform-exp/articles/patterns-of-trustworthy-experimentation-post-experiment-stage/)
+- [Microsoft Research: External validity and novelty effects](https://www.microsoft.com/en-us/research/articles/external-validity-of-online-experiments-can-we-predict-the-future/)
+- [Microsoft Research: Metric interpretation pitfalls](https://www.microsoft.com/en-us/research/publication/a-dirty-dozen-twelve-common-metric-interpretation-pitfalls-in-online-controlled-experiments/)
 - [NIST: Selecting sample sizes](https://www.itl.nist.gov/div898/handbook/prc/section2/prc222.htm)
-- [Microsoft Research: Diagnosing Sample Ratio Mismatch](https://www.microsoft.com/en-us/research/publication/diagnosing-sample-ratio-mismatch-in-online-controlled-experiments-a-taxonomy-and-rules-of-thumb-for-practitioners/)
-- [Microsoft Research: External validity and novelty in online experiments](https://www.microsoft.com/en-us/research/articles/external-validity-of-online-experiments-can-we-predict-the-future/)
+- [NIST: AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+- [Amazon SageMaker AI: Test models with production variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-ab-testing.html)
+- [Vertex AI: Endpoint traffic split](https://docs.cloud.google.com/vertex-ai/docs/reference/rpc/google.cloud.aiplatform.v1#endpoint)
+- [Azure Machine Learning: Managed online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
+- [Databricks Model Serving: Serve multiple models from one endpoint](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)

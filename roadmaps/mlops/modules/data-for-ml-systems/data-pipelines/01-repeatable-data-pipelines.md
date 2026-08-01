@@ -1,324 +1,603 @@
 ---
 title: "Repeatable Data Pipelines"
-description: "Show how data preparation turns into a versioned, rerunnable workflow."
-overview: "A repeatable data pipeline turns changing sources into validated, versioned ML datasets through explicit inputs and time, a transformation graph, gates, immutable outputs, lineage, and safe reruns. DVC is one implementation example."
+description: "Learn how production data pipelines create trustworthy ML datasets through declared inputs, deterministic transformations, safe retries, validation, publication, lineage, and controlled backfills."
+overview: "A repeatable data pipeline can rebuild a trustworthy ML dataset from declared source versions, reviewed transformation logic, and explicit run parameters. The production framework covers safe retries, validation, publication, lineage, backfills, recovery, ownership, and the roles of common industrial tools."
 tags: ["MLOps", "production", "pipelines"]
 order: 1
 id: "article-mlops-data-for-ml-systems-repeatable-data-pipelines"
 ---
 
+## Table of Contents
 
-## A Pipeline Gives Dataset Builds A Recipe
-<!-- section-summary: A repeatable data pipeline gives an ML dataset a reviewed recipe, fixed inputs, declared outputs, validation checks, and a run record. -->
+1. [What Makes A Data Pipeline Repeatable?](#what-makes-a-data-pipeline-repeatable)
+2. [The Repeatability Framework](#the-repeatability-framework)
+3. [1. Declare The Inputs And Their Time](#1-declare-the-inputs-and-their-time)
+4. [2. Make Transformations Deterministic](#2-make-transformations-deterministic)
+5. [3. Make Every Run Safe To Retry](#3-make-every-run-safe-to-retry)
+6. [4. Treat Validation As A Publication Gate](#4-treat-validation-as-a-publication-gate)
+7. [5. Publish A Stable Materialized Output](#5-publish-a-stable-materialized-output)
+8. [6. Record Lineage And Run Evidence](#6-record-lineage-and-run-evidence)
+9. [7. Schedule By Logical Data Windows](#7-schedule-by-logical-data-windows)
+10. [8. Plan Backfills Before You Need Them](#8-plan-backfills-before-you-need-them)
+11. [9. Recover Without Hiding The Failure](#9-recover-without-hiding-the-failure)
+12. [Choosing The Processing And Orchestration Layers](#choosing-the-processing-and-orchestration-layers)
+13. [Operational Ownership](#operational-ownership)
+14. [A Practical Industrial Baseline](#a-practical-industrial-baseline)
+15. [The Main Idea](#the-main-idea)
+16. [References](#references)
 
-A **repeatable data pipeline** is a workflow that builds a dataset the same planned way each time. It names the source data, accepts parameters such as date windows, runs ordered transformation steps, validates the result, writes a versioned output, and records what happened. For an ML team, this turns dataset creation from a notebook memory into a recipe another person can inspect, run, and debug.
+## What Makes A Data Pipeline Repeatable?
+<!-- section-summary: A repeatable data pipeline can rebuild the same logical dataset from declared source versions, code, configuration, and time boundaries. -->
 
-You need this as soon as a model result matters beyond one experiment. A notebook can answer, "Can this feature help?" A repeatable pipeline answers, "Which exact examples trained the model, which code prepared them, which checks passed, and can we rerun that build next month?" That second question is the production question.
+Suppose a daily pipeline builds features for a payment-risk model. It reads transactions, joins the current account profile, calculates recent spending totals, and appends the result to a training table.
 
-Think about a demand forecasting model for a grocery chain. The model predicts how many baskets of strawberries, tomatoes, and salad kits each store will sell tomorrow. If the dataset build quietly changes because a promotion table arrives late, the model may learn the wrong relationship between discounts and demand. If the team can rerun the pipeline with the same inputs and see the same output, the team can trust comparisons between model versions.
+The first run fails after writing half of the output. An operator retries it. During the gap, late transactions arrive and several account profiles change. The retry reads this newer state and appends a second set of rows. The job eventually reports success. The training table now contains duplicated keys, mixed source versions, and different profile values for the same logical day.
 
-The pipeline framework has six responsibilities. The input contract identifies source versions, parameters, and event-time boundaries. A directed acyclic graph, or DAG, orders transformations. Validation gates protect intermediate and final data. Publication creates an immutable versioned output. Run metadata records code, config, lineage, and evidence. Operational semantics define idempotency, retries, backfills, ownership, and recovery.
+Every command worked as written. The production failure came from missing rules around the commands.
 
-Those responsibilities organize the article. The grocery dataset and DVC configuration show how the framework looks in one implementation; they do not define the architecture.
+A **repeatable data pipeline** can rebuild a trustworthy dataset from a declared set of source versions, transformation code, configuration, and time boundaries. In essence, the team should be able to answer:
+
+- What exact data did this run read?
+- Which logic and parameters transformed it?
+- Could the same work run again safely?
+- Which checks approved the result?
+- What durable output did consumers receive?
+- Which evidence connects the output to the run?
+
+Repeatability has two useful levels. **Logical repeatability** means the same declared inputs and logic produce the same rows and values according to the dataset contract. **Byte-for-byte repeatability** also requires identical file order, compression, and serialization. Most distributed ML pipelines need logical repeatability. Spark may write a different set of Parquet file names on two runs while preserving the same keys, values, and table snapshot.
 
 ```mermaid
-flowchart LR
-    Contract["Input and time contract"] --> Transform["Ordered transformation graph"]
-    Transform --> Validate{"Validation gates"}
-    Validate -->|fail| Quarantine["Quarantine evidence and repair"]
-    Validate -->|pass| Publish["Immutable dataset publication"]
-    Publish --> Record["Run metadata and lineage"]
-    Record --> Operate["Retry, backfill, and recovery"]
-    Operate --> Contract
+flowchart TD
+    A["Declare source versions,<br/>parameters, and data window"] --> B["Run deterministic<br/>transformations"]
+    B --> C["Write to an isolated<br/>candidate output"]
+    C --> D{"Contracts and<br/>quality checks pass?"}
+    D -->|"No"| E["Keep evidence,<br/>quarantine, and repair"]
+    D -->|"Yes"| F["Commit a stable<br/>dataset version"]
+    F --> G["Record lineage,<br/>run evidence, and owner"]
+    G --> H["Release the dataset<br/>to training or inference"]
+
+    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef publish fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A input
+    class B,C work
+    class D gate
+    class E fail
+    class F,G,H publish
 ```
 
-The diagram shows why a pipeline is more than an ordered script. Input identity controls what the graph reads. Gates control whether output can enter training. Publication gives the result a stable identity. Run metadata explains the build, while operating rules keep retries and backfills from creating conflicting datasets.
+The transformation code is one part of this path. A production pipeline also defines the identity of its inputs, safe write behaviour, release gates, output identity, scheduling semantics, recovery rules, and ownership.
 
-## A Supporting Example: Grocery Forecasting Team
-<!-- section-summary: A supporting example follows a grocery forecasting team that needs reliable datasets from messy daily source data. -->
+## The Repeatability Framework
+<!-- section-summary: Nine connected responsibilities turn transformation code into a production dataset-building system. -->
 
-Imagine **RiverCart Grocers**, a regional grocery delivery company with 85 stores and a small ML team. The team owns a demand model called `fresh-demand-forecast`. Store managers use the forecast to order perishable items before the morning supplier cutoff. A bad forecast can waste food, create empty shelves, or push shoppers toward substitutions they dislike.
+It is useful to think of a pipeline as a small production system with nine connected responsibilities. Each responsibility answers a question that transformation code leaves open. Together, they keep one successful run from being mistaken for a reliable data product.
 
-The dataset combines several sources. The point-of-sale table has basket line items. The catalog table says which SKU belongs to produce, dairy, bakery, or frozen food. The promotion calendar records discounts and front-page placements. The inventory table reports stockouts. A weather feed gives temperature and rainfall by store region. The label is the next-day units sold for each `(store_id, sku_id, forecast_date)` pair.
+**Declared inputs and snapshots** give the run a fixed starting point. A warehouse table name identifies a location; a table snapshot, source watermark, object version, or extraction manifest identifies the data the run actually used.
 
-In early exploration, Maya, the data scientist, created the dataset in a notebook. She loaded a few SQL extracts, joined them, filled missing weather values, removed days with store closures, and wrote `train.parquet`. That helped the team prove the model idea. Then the model started winning review meetings, and the notebook turned into a risk. Nobody could tell whether last week's model used the old promotion join, the new closure filter, or a local CSV Maya had downloaded during debugging.
+**Deterministic transformations** keep hidden state out of the calculation. Current wall-clock time, unstable row ordering, mutable lookup tables, unseeded randomness, and implicit time zones can all change an output without a code change.
 
-The team decides to turn the preparation into a repeatable pipeline. Their first production goal is modest: build one training dataset for a requested date range, validate it, save a manifest, and let training reference the output by version. They can add orchestration, lineage, and richer backfills later, but the recipe needs to exist first.
+**Idempotent and restartable execution** makes retries safe. Idempotent means that applying the same logical operation again leaves the published state in the same condition. A partition replacement or key-based merge can provide that property. Blind append usually cannot.
 
-## Name The Inputs And The Time Window
-<!-- section-summary: Repeatable pipelines start by making source tables, date windows, label delays, and ownership explicit. -->
+**Contracts and validation** define which outputs are acceptable. Schema, unique keys, null rules, freshness, label maturity, ranges, and cross-table relationships belong here.
 
-The first step is naming inputs clearly. A pipeline input is any external thing the build reads: a warehouse table, a file prefix, a model artifact, a parameter file, a feature definition, or a secrets-free config. If a value changes the output dataset, it deserves a name in the pipeline record.
+**Materialized outputs** give downstream training jobs a durable dataset to read. A materialized output may be a warehouse table, a Delta Lake or Apache Iceberg snapshot, or a set of Parquet files with a manifest.
 
-RiverCart starts with a config file. The point of the file is plain: the dataset build should read parameters from a reviewed place rather than hidden notebook variables.
+**Lineage and run evidence** explain how the output was produced. They connect source datasets, the pipeline job, one execution, its code and configuration, validation results, and the published output.
+
+**Scheduling and backfills** map executions to logical data windows. A scheduler needs to know which partition a run owns and how historical partitions can be rebuilt with bounded concurrency.
+
+**Failure recovery** defines the response to missing sources, failed validation, worker crashes, partial writes, and defects discovered after publication.
+
+**Operational ownership** assigns the people responsible for source contracts, pipeline behaviour, platform reliability, and consumer acceptance.
+
+```mermaid
+mindmap
+  root((Repeatable pipeline))
+    Data identity
+      Source snapshots
+      Time boundaries
+      Parameters
+    Computation
+      Deterministic logic
+      Stable keys
+      Safe retries
+    Release
+      Validation gates
+      Atomic publication
+      Versioned outputs
+    Evidence
+      Run record
+      Lineage
+      Quality results
+    Operations
+      Scheduling
+      Backfills
+      Recovery
+      Ownership
+```
+
+These responsibilities stay useful across technology choices. One team may use a SQL warehouse and dbt, while another uses object storage and Polars. Large lakehouse workloads may use Spark on Databricks, and provider-centered teams may prefer managed pipelines. The architecture remains understandable because each product has a defined job.
+
+## 1. Declare The Inputs And Their Time
+<!-- section-summary: A repeatable run identifies source data through snapshots, versions, watermarks, and logical time boundaries. -->
+
+At a high level, input declaration answers, “Which facts were available to this build?” A source path gives an incomplete answer because production data keeps changing.
+
+Consider a feature called `spend_last_30_days`. The pipeline may run after midnight, yet the feature belongs to the data interval that just closed. Transactions arriving after the interval must stay outside that run. Corrections arriving later need an explicit late-data or backfill policy. Reading every row currently visible would allow execution time to change the feature value.
+
+Three kinds of time commonly appear:
+
+- **Event time** describes when the real-world event happened, such as the transaction timestamp.
+- **Processing time** describes when the platform received or processed the event.
+- **Effective time** describes when a reference value applied, such as the period during which an account tier was valid.
+
+ML labels introduce another boundary. If a return, chargeback, or customer outcome can arrive several days after the original event, the pipeline needs a **label cutoff**. Training should only include examples whose outcome window has matured according to the policy.
+
+A run specification can make those decisions explicit:
 
 ```yaml
-pipeline:
-  name: build_fresh_demand_examples
-  owner: demand-ml@rivercart.example
-  purpose: "Training data for next-day fresh grocery demand forecasting."
+run:
+  pipeline: payment_risk_features
+  logical_window:
+    start: "<window_start>"
+    end: "<window_end>"
+  label_cutoff: "<label_cutoff>"
+  code_commit: "<git_commit>"
+  config_version: "risk-features-v4"
 
-window:
-  start_date: "2026-05-01"
-  end_date: "2026-06-30"
-  label_delay_days: 2
-
-sources:
-  sales_lines: warehouse.retail.sales_lines
-  product_catalog: warehouse.retail.product_catalog
-  promotion_calendar: warehouse.marketing.promotion_calendar
-  inventory_snapshots: warehouse.supply.inventory_snapshots
-  store_weather_daily: warehouse.external.store_weather_daily
+inputs:
+  transactions:
+    table: "analytics.transactions"
+    snapshot_id: "<catalog_snapshot_id>"
+  accounts:
+    table: "analytics.account_history"
+    snapshot_id: "<catalog_snapshot_id>"
+  merchant_categories:
+    object_manifest: "s3://ml-data/manifests/<manifest_id>.json"
 
 output:
-  dataset_name: fresh_demand_examples
-  dataset_version: "2026-06-30-v1"
-  path: s3://rivercart-ml/datasets/fresh-demand/2026-06-30-v1/
+  dataset: "ml.payment_risk_features"
+  partition: "<logical_partition>"
 ```
 
-There are two timing details worth slowing down for. The **event date** is the date the example describes, such as the day RiverCart wants to forecast demand for a store and SKU. The **label delay** is the waiting period before the team trusts the true sales label. If sales corrections and refunds keep changing for two days, the pipeline should build June 30 labels after July 2. This prevents the model from training on labels that still move.
+Different storage systems express input identity differently. An object-store pipeline can record object version IDs or write an immutable manifest containing every object path and checksum. Delta Lake and Apache Iceberg expose table versions or snapshots. A warehouse may provide time travel, snapshots, or a controlled extraction table. A streaming pipeline often combines a source offset or checkpoint with an event-time watermark.
 
-The source list also makes ownership visible. If `promotion_calendar` changes shape, the data platform team and the marketing analytics team both know which ML pipeline may break. A source list sounds boring, but it is often the fastest way to reduce production confusion.
+The important distinction is between **where the data lives** and **which state of that data belongs to the run**. The first supports access. The second supports reconstruction.
 
-## Turn Notebook Steps Into Pipeline Stages
-<!-- section-summary: Pipeline stages split the dataset build into reviewed commands with dependencies, outputs, and parameters. -->
+## 2. Make Transformations Deterministic
+<!-- section-summary: Deterministic transformation logic produces the same logical rows and values from the same declared inputs and configuration. -->
 
-After the inputs are explicit, the team can split the notebook into stages. A **stage** is one named unit of work inside the pipeline, such as extracting source rows, joining features, creating labels, validating the output, or writing the manifest. The stage should have a clear command, clear dependencies, and clear outputs.
+A deterministic transformation produces the same logical result from the same declared inputs and configuration. You can think of it as a pure calculation at pipeline scale: every value that can influence the output enters through a reviewed input.
 
-DVC is one practical tool for this style of work. DVC stores pipeline structure in `dvc.yaml`, records the resolved run state in `dvc.lock`, and can rerun changed stages with `dvc repro`. The official DVC docs describe stages with `cmd`, `deps`, `params`, and `outs`, which maps nicely to ML dataset preparation.
+Several common SQL and dataframe habits break this property:
 
-RiverCart's first `dvc.yaml` can look like this:
+- Calling `current_timestamp` inside feature logic lets the execution clock change the result.
+- Selecting one duplicate row without a complete ordering lets the engine choose a different winner.
+- Joining a mutable “current customer” table changes historical examples after customer attributes change.
+- Sampling without a fixed seed changes the selected rows.
+- Relying on a machine's local time zone changes date boundaries.
+- Reading files through an unordered wildcard can alter downstream logic that depends on row order.
 
-```yaml
-stages:
-  extract_sources:
-    cmd: python pipelines/fresh_demand/extract_sources.py --config configs/fresh_demand.yaml
-    deps:
-      - pipelines/fresh_demand/extract_sources.py
-      - configs/fresh_demand.yaml
-    outs:
-      - data/interim/fresh_demand/raw_sales.parquet
-      - data/interim/fresh_demand/raw_promotions.parquet
-      - data/interim/fresh_demand/raw_inventory.parquet
-      - data/interim/fresh_demand/raw_weather.parquet
-
-  build_examples:
-    cmd: python pipelines/fresh_demand/build_examples.py --config configs/fresh_demand.yaml
-    deps:
-      - pipelines/fresh_demand/build_examples.py
-      - configs/fresh_demand.yaml
-      - data/interim/fresh_demand/raw_sales.parquet
-      - data/interim/fresh_demand/raw_promotions.parquet
-      - data/interim/fresh_demand/raw_inventory.parquet
-      - data/interim/fresh_demand/raw_weather.parquet
-    outs:
-      - data/processed/fresh_demand/examples.parquet
-
-  validate_examples:
-    cmd: python pipelines/fresh_demand/validate_examples.py --config configs/fresh_demand.yaml
-    deps:
-      - pipelines/fresh_demand/validate_examples.py
-      - data/processed/fresh_demand/examples.parquet
-    outs:
-      - reports/fresh_demand/validation.json
-
-  publish_manifest:
-    cmd: python pipelines/fresh_demand/publish_manifest.py --config configs/fresh_demand.yaml
-    deps:
-      - pipelines/fresh_demand/publish_manifest.py
-      - data/processed/fresh_demand/examples.parquet
-      - reports/fresh_demand/validation.json
-    outs:
-      - manifests/fresh_demand/2026-06-30-v1.yaml
-```
-
-The important habit is that each stage rewrites its output from its declared inputs. The extract stage produces raw snapshots for the requested window. The build stage creates one ML-ready table. The validation stage writes a machine-readable report. The manifest stage records the dataset identity. The command line could run inside CI, an Airflow task, a Dagster asset, a Prefect flow, or a Kubernetes Job. DVC gives the small team a local and CI-friendly starting point before a heavier orchestrator enters the picture.
-
-The team can run the whole recipe with a command like this:
-
-```bash
-dvc repro
-```
-
-The run should update `dvc.lock` when inputs, parameters, code, or outputs change. That lock file is valuable because it records the concrete state DVC used for the pipeline. The Git commit now ties together the code, config, pipeline structure, and lock record.
-
-![Repeatable pipeline recipe from sources and config through stages to a validated dataset](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-pipeline-recipe.png)
-*The pipeline recipe makes each dataset build visible: named sources enter through config, ordered stages transform them, and the output is a checked dataset.*
-
-## Validate The Dataset Before Training
-<!-- section-summary: Validation checks catch schema drift, timing mistakes, missing values, row-count jumps, and label problems before a model trains. -->
-
-A repeatable pipeline needs validation before training picks up the dataset. Validation is the part of the workflow that says, "This output matches the contract we expect." A data contract for ML usually covers schema, freshness, null rates, accepted value ranges, row counts, duplicate keys, label maturity, and distribution changes.
-
-RiverCart uses two levels of checks. The SQL layer checks warehouse facts before extraction, and the Python layer checks the final dataframe. dbt data tests are a common way to express warehouse checks because generic tests such as `not_null`, `unique`, and `accepted_values` live beside the transformed models. For highly specific ML checks, the team can add singular SQL tests.
+Suppose multiple profile updates exist for one account. A stable transformation uses the run's cutoff time and a complete tie-break rule:
 
 ```sql
-select
-  store_id,
-  sku_id,
-  forecast_date,
-  count(*) as rows_per_key
-from {{ ref('fresh_demand_examples') }}
-group by 1, 2, 3
-having count(*) > 1
+with eligible_profiles as (
+    select
+        account_id,
+        risk_tier,
+        effective_at,
+        profile_version,
+        row_number() over (
+            partition by account_id
+            order by effective_at desc, profile_version desc
+        ) as row_rank
+    from analytics.account_history
+    where effective_at < :window_end
+)
+select account_id, risk_tier
+from eligible_profiles
+where row_rank = 1;
 ```
 
-This test returns rows that violate the unique training key. A passing test returns zero rows. That is a nice convention for CI because the result has a clear meaning and it can show the exact keys that failed.
+The parameter `:window_end` represents logical data time. The second ordering field resolves updates that share the same effective timestamp. Without that tie-breaker, two valid rows could compete for first place.
 
-For dataframe checks, Pandera gives the team a Python schema that can run in the pipeline and in unit tests. The schema below keeps the example tight while still showing real ML constraints.
+Determinism also requires stable business definitions. If missing merchant categories map to `"unknown"`, that rule belongs in reviewed code or configuration. A manual spreadsheet on one developer's laptop would introduce hidden state.
+
+Distributed engines add one nuance. Spark can schedule partitions differently across runs, so file names and row order may vary. Tests should compare the dataset's keys, values, schema, and relevant aggregate invariants. Byte order matters only for consumers whose contract explicitly requires it.
+
+### Match the transformation engine to the workload
+
+dbt fits transformations expressed mainly as SQL inside a warehouse or lakehouse. It builds a dependency graph from model references, materializes models, and keeps tests beside those models. Incremental models can process new or updated rows, provided the filter and unique-key policy capture late changes correctly.
+
+Polars fits Python data pipelines that can run efficiently on one machine. Its lazy API lets the optimizer inspect the whole query. The engine can push filters and projections toward the scan, check schemas before full execution, and stream supported operations. A typical pipeline starts with `scan_parquet` and can stream the result through `sink_parquet`:
 
 ```python
-import pandera.pandas as pa
-from pandera.typing import Series
-
-
-class FreshDemandExamples(pa.DataFrameModel):
-    store_id: Series[str] = pa.Field(str_length={"min_value": 3})
-    sku_id: Series[str] = pa.Field(str_length={"min_value": 5})
-    forecast_date: Series[pa.DateTime]
-    units_sold_next_day: Series[int] = pa.Field(ge=0, le=5000)
-    on_promotion: Series[bool]
-    price: Series[float] = pa.Field(gt=0, le=200)
-    inventory_on_hand: Series[int] = pa.Field(ge=0)
-    temperature_c: Series[float] = pa.Field(ge=-40, le=55)
-
-
-def validate_examples(df):
-    validated = FreshDemandExamples.validate(df, lazy=True)
-    duplicate_keys = validated.duplicated(["store_id", "sku_id", "forecast_date"]).sum()
-    if duplicate_keys:
-        raise ValueError(f"duplicate training keys: {duplicate_keys}")
-    return validated
+(
+    pl.scan_parquet(input_paths)
+    .filter(pl.col("event_time") < window_end)
+    .group_by(["account_id", "feature_date"])
+    .agg(pl.col("amount").sum().alias("daily_spend"))
+    .sink_parquet(candidate_output)
+)
 ```
 
-Great Expectations can play a similar role when a team wants expectation suites, validation definitions, checkpoints, actions, and Data Docs. The current GX Core docs describe a workflow of setting up a data context, connecting to data, defining expectations, and running validations. RiverCart might choose GX for production reporting and Pandera for smaller dataframe-level unit tests. The tool choice matters less than the contract. Training should only start after the dataset passes the required checks.
+Spark fits data that needs distributed scans, wide joins, large shuffles, or shared batch and streaming processing.
+
+On Databricks, **Lakeflow pipelines** manage dependencies among streaming tables, materialized views, and flows. Lakeflow pipelines extend **Apache Spark Declarative Pipelines (SDP)**, the underlying open framework for declarative batch and streaming pipelines. Lakeflow Jobs coordinates cross-system work, conditional branches, and broader retry policy.
+
+## 3. Make Every Run Safe To Retry
+<!-- section-summary: Idempotent writes and isolated candidate outputs let workers restart without duplicating or exposing partial data. -->
+
+Production workers fail. A cluster may disappear or a network call may time out. A scheduler may also lose contact after the compute job has committed its result. The pipeline therefore needs a safe answer to a simple question: “What happens if the same logical partition runs twice?”
+
+An **idempotent** operation reaches the same visible state after repeated application. Replacing the output for one declared partition is idempotent if every retry computes that partition from the same inputs. Merging rows by a stable unique key can also be idempotent if matched rows receive the same values. Appending the same rows again creates duplicates.
+
+For a Delta table, a bounded partition replacement can use `replaceWhere`. Here, `window_start` and `window_end` are already-resolved `date` or `datetime` values:
+
+```python
+if window_start >= window_end:
+    raise ValueError("window_start must be earlier than window_end")
+
+start_iso = window_start.isoformat()
+end_iso = window_end.isoformat()
+partition_predicate = (
+    f"feature_date >= '{start_iso}' "
+    f"AND feature_date < '{end_iso}'"
+)
+
+(
+    features.write
+    .format("delta")
+    .mode("overwrite")
+    .option("replaceWhere", partition_predicate)
+    .saveAsTable("ml.payment_risk_features")
+)
+```
+
+The production implementation should validate the window before constructing the predicate. A broad or empty predicate could replace unintended data. Key-based updates need similar safeguards around the merge key and duplicate source rows.
+
+Delta Lake and Apache Iceberg use atomic table commits, so readers see a complete committed table state. Iceberg records each committed change as a snapshot. Delta supports transaction identifiers for applications that need duplicate-write protection. Streaming jobs also require idempotent logic around each micro-batch because a restart may present a batch again.
+
+Plain object storage needs a publication convention. A strong pattern writes files under a run-specific staging prefix and validates them there. It then produces a manifest with paths and checksums before updating a small catalog record or approved-manifest pointer. Consumers read only approved manifests. An abandoned staging prefix stays invisible and can be removed later by a lifecycle job.
+
+```mermaid
+flowchart TD
+    A["Retry the same<br/>logical partition"] --> B["Read the same declared<br/>input snapshots"]
+    B --> C["Write a run-specific<br/>candidate output"]
+    C --> D{"Candidate complete<br/>and validated?"}
+    D -->|"No"| E["Leave the published<br/>version unchanged"]
+    D -->|"Yes"| F["Commit the table snapshot<br/>or approved manifest"]
+    F --> G["Consumers see one<br/>complete dataset version"]
+
+    classDef retry fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef safe fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A retry
+    class B,C work
+    class D gate
+    class E,F,G safe
+```
+
+Restartability also applies inside the run. Expensive extraction or feature stages may checkpoint intermediate results under the run ID. Those checkpoints are execution aids. The published dataset identity still comes from the final commit and run record.
+
+## 4. Treat Validation As A Publication Gate
+<!-- section-summary: Validation checks decide whether a candidate dataset is safe for downstream training or inference. -->
+
+Validation is the release review for data. It asks whether the candidate output still satisfies the assumptions used by training, evaluation, and serving.
+
+A practical pipeline checks several layers. Source checks confirm expected schema, freshness, and coverage before expensive processing begins. Transformation checks protect join cardinality, unique keys, and row-level invariants. Final checks cover null rates, accepted ranges, label maturity, segment coverage, and changes in important distributions.
+
+For a SQL-centric pipeline, dbt data tests place common assertions beside the model. The current configuration key is `data_tests`:
+
+```yaml
+models:
+  - name: payment_risk_features
+    columns:
+      - name: training_example_id
+        data_tests:
+          - not_null
+          - unique
+      - name: risk_tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["low", "medium", "high", "unknown"]
+```
+
+dbt treats each data test as a query for failing rows. Zero returned rows means the assertion passed. Singular SQL tests can express domain-specific rules, such as ensuring that every matured transaction has exactly one label.
+
+**GX Core (Great Expectations)** is the current Python validation library for defining expectations, validating dataframe or SQL-backed data, and producing machine-readable results. Soda and dataframe-native checks provide similar coverage where SQL-model tests are a poor fit. The team should select the smallest set that integrates with its execution path. Running several overlapping frameworks often creates inconsistent ownership.
+
+Threshold checks need an explicit response. A small change in row count may pass. A missing key column should block publication. A distribution shift may require review because it could reflect a genuine business event or a broken join.
 
 ![Validation gate checking schema, freshness, unique keys, label delay, and row count before training](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-validation-gate.png)
-*A validation gate turns quality rules into a visible handoff: training starts only after the dataset clears the checks that protect the model.*
 
-## Record The Run And Publish The Output
-<!-- section-summary: A dataset run record ties the output path to code, parameters, validation results, row counts, and source freshness. -->
+*A candidate dataset reaches training only after the checks covering its structure, timing, keys, and important values have passed.*
 
-Once the pipeline has built and validated the dataset, it should publish a run record. A **run record** is the receipt for one execution of the pipeline. It tells future teammates which commit ran, which config values were used, which output was written, and which validation report approved the output.
+If validation fails, the candidate output and report stay available for investigation while the previous approved version remains active. This separation prevents a failed daily build from replacing a healthy training input.
 
-RiverCart writes a manifest beside the dataset:
+## 5. Publish A Stable Materialized Output
+<!-- section-summary: Publication turns a validated candidate into a durable dataset version that consumers can reference. -->
 
-```yaml
-dataset:
-  name: fresh_demand_examples
-  version: "2026-06-30-v1"
-  path: s3://rivercart-ml/datasets/fresh-demand/2026-06-30-v1/
-  format: parquet
-  primary_key:
-    - store_id
-    - sku_id
-    - forecast_date
+A transformation result has limited production value until consumers can identify and read it consistently. **Materialization** means writing the computed result to durable storage. **Publication** means marking one materialized result as approved for downstream use.
 
-build:
-  run_id: fresh-demand-build-2026-07-03-0315
-  git_commit: 4f98aa7c9f2d
-  dvc_lock_digest: sha256:0fd65f1b0e84c72a
-  config_file: configs/fresh_demand.yaml
-  started_at_utc: "2026-07-03T03:15:08Z"
-  finished_at_utc: "2026-07-03T03:41:22Z"
+The published dataset should expose:
 
-contents:
-  row_count: 12988420
-  store_count: 85
-  sku_count: 4129
-  date_min: "2026-05-01"
-  date_max: "2026-06-30"
-  positive_sales_rate: 0.734
+- a stable dataset name and version or snapshot;
+- its schema and primary or natural key;
+- partition boundaries;
+- the input window and label cutoff;
+- row counts and important statistics;
+- validation status;
+- the pipeline run that created it;
+- the owner and retention policy.
 
-validation:
-  status: passed
-  report: reports/fresh_demand/validation.json
-  duplicate_keys: 0
-  missing_weather_rate: 0.0018
-  max_label_date: "2026-06-30"
+For lakehouse workloads, Delta Lake and Apache Iceberg provide transactional table commits and historical snapshots. A training job can read a specific table version instead of whatever data happens to be current. A warehouse table can use native time travel or a versioned table/view convention. A Parquet-based object-store pipeline can publish an immutable manifest whose entries point to complete files.
+
+```mermaid
+flowchart TD
+    A["Candidate files or table changes"] --> B["Schema, key, freshness,<br/>and quality checks"]
+    B --> C{"Approved?"}
+    C -->|"No"| D["Quarantine candidate<br/>and keep report"]
+    C -->|"Yes"| E["Atomic table commit<br/>or immutable manifest"]
+    E --> F["Catalog records version,<br/>owner, and evidence"]
+    F --> G["Training reads the<br/>approved identity"]
+
+    classDef candidate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef publish fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B candidate
+    class C gate
+    class D fail
+    class E,F,G publish
 ```
 
-This manifest gives the training pipeline something stable to reference. Instead of training from "the fresh demand table," the model trains from `fresh_demand_examples:2026-06-30-v1`. The distinction matters during review. If a candidate model improves forecast accuracy, the team can show the exact dataset version behind that score.
+Storage maintenance belongs to the operating design. Delta and Iceberg snapshots require retention and cleanup policies. Object-store staging prefixes need lifecycle rules. Retention should preserve the versions required for investigations, model reproducibility, audit, and rollback.
 
-The pipeline can also write a small summary row to a dataset catalog table:
+## 6. Record Lineage And Run Evidence
+<!-- section-summary: Run evidence connects a published dataset to its source versions, transformation job, execution, checks, and owner. -->
 
-```sql
-insert into ml_catalog.dataset_versions (
-  dataset_name,
-  dataset_version,
-  path,
-  git_commit,
-  row_count,
-  validation_status,
-  created_at_utc
-)
-values (
-  'fresh_demand_examples',
-  '2026-06-30-v1',
-  's3://rivercart-ml/datasets/fresh-demand/2026-06-30-v1/',
-  '4f98aa7c9f2d',
-  12988420,
-  'passed',
-  current_timestamp
-);
+Lineage explains how data moved and changed. Run evidence explains what happened during one execution. Together they give an operator a route from a questionable model result back to the dataset build.
+
+Three terms form a useful foundation:
+
+- A **dataset** is an input or output such as a table, object collection, or feature dataset.
+- A **job** is the durable pipeline definition, such as `build_payment_risk_features`.
+- A **run** is one execution of that job for a particular logical window.
+
+OpenLineage provides a standard model for these concepts. A run event can report that one job run started or completed and which datasets it read and wrote. Additional facets can carry schema, version, partitions, quality assertions, or output statistics. Airflow, Spark, and dbt integrations can emit compatible lineage events into a lineage backend.
+
+OpenLineage carries metadata about the work. The object store or lakehouse table still holds the data, the scheduler runs the job, and the validation engine evaluates quality. OpenLineage gives those tools a shared vocabulary.
+
+```mermaid
+flowchart TD
+    A["Input datasets<br/>and snapshot identities"] --> B["Pipeline job"]
+    B --> C["One run for a<br/>logical data window"]
+    C --> D["Validation results<br/>and runtime evidence"]
+    C --> E["Published output<br/>dataset version"]
+    A -. "OpenLineage dataset events" .-> F["Lineage backend"]
+    B -. "Job metadata" .-> F
+    C -. "Run events" .-> F
+    D -. "Quality facets" .-> F
+    E -. "Output dataset event" .-> F
+
+    classDef data fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef process fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef lineage fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,E data
+    class B,C process
+    class D evidence
+    class F lineage
 ```
 
-A catalog row helps dashboards, review packets, training jobs, and incident queries all find the same dataset identity.
+A useful run record identifies the pipeline, run, logical interval, code commit, and configuration version. It also records input and output snapshot IDs, engine version, row counts, test results, timing, retries, and owner. Secrets and sensitive record values stay out of the metadata.
 
-## Operate Reruns, Backfills, And Incidents
-<!-- section-summary: Production teams need a policy for normal reruns, historical backfills, failed checks, and emergency dataset rollback. -->
+![Run record tying dataset version, Git commit, validation report, and owner to a published dataset](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-run-record.png)
 
-The daily production work starts after the first clean run. A repeatable pipeline should have a small operating policy so the team knows what to do on normal days and during incidents.
+*The run record acts as a receipt for the published dataset, while lineage connects that receipt to upstream and downstream systems.*
 
-RiverCart uses three run types. A **scheduled run** builds the latest approved training window. A **rerun** rebuilds the same dataset version after an infrastructure failure, such as a worker crash before publish. A **backfill** rebuilds older windows after source data or logic changes. Each run type needs a reason, an owner, and a publish rule.
+## 7. Schedule By Logical Data Windows
+<!-- section-summary: A scheduler maps each run to a logical data interval and coordinates dependencies, retries, and publication. -->
 
-The backfill rule is the most important one. Say the promotion calendar had missing front-page placement flags for two weeks in June. The team should avoid silently overwriting `2026-06-30-v1`. They should create `2026-06-30-v2`, record why it exists, and compare validation metrics against the original.
+A schedule says more than “start at midnight.” It maps an execution to the data interval that the execution owns.
 
-```yaml
-backfill_request:
-  dataset_name: fresh_demand_examples
-  original_version: "2026-06-30-v1"
-  corrected_version: "2026-06-30-v2"
-  reason: "Marketing fixed missing front-page placement flags for 2026-06-10..2026-06-24."
-  requested_by: demand-ml-oncall
-  review_required:
-    - row_count_delta_pct
-    - promotion_feature_delta_pct
-    - top_sku_forecast_error_replay
+Suppose a daily run starts after the source warehouse closes its prior interval. The scheduler may launch the job later because of queue pressure, yet the job still processes the same declared logical window. This separation between **execution time** and **logical time** keeps delays from changing the data.
+
+Airflow models workflows as DAGs and creates runs for scheduled logical intervals. It is widely used in established environments where teams need cross-system tasks, retries, sensors, pools, and controlled backfills.
+
+Dagster models data products as assets. Partitioned assets give teams a direct vocabulary for materialization, asset checks, dependencies, and backfills.
+
+Managed services reduce platform operation for provider-centered workloads. Common choices include Databricks Lakeflow Jobs, SageMaker Pipelines, Vertex AI Pipelines, and Azure Machine Learning pipelines.
+
+The scheduler coordinates work. The transformation engine still owns the SQL or dataframe calculation, and the table format still owns atomic storage commits. Keeping those roles separate prevents workflow code from accumulating transformation logic.
+
+```mermaid
+sequenceDiagram
+    participant Scheduler
+    participant Sources
+    participant Transform
+    participant Quality
+    participant Catalog
+
+    Scheduler->>Sources: Confirm logical window is ready
+    Sources-->>Scheduler: Source snapshot identities
+    Scheduler->>Transform: Build candidate for that window
+    Transform-->>Scheduler: Candidate output and statistics
+    Scheduler->>Quality: Run required checks
+    Quality-->>Scheduler: Pass or fail with evidence
+    Scheduler->>Catalog: Publish approved dataset identity
+    Catalog-->>Scheduler: Committed version
 ```
 
-Operational checks should be easy to read in an on-call handoff:
+Freshness expectations should account for upstream availability, normal runtime, validation time, and publication. An alert such as “dataset has missed its expected publication time” gives the owner more context than a generic task-failed notification.
 
-| Check | Healthy signal | Owner |
-|---|---|---|
-| Source freshness | All source extracts cover the requested end date | Data platform |
-| Row count | Change stays inside reviewed threshold | ML platform |
-| Duplicate keys | Zero duplicate `(store_id, sku_id, forecast_date)` rows | Demand ML |
-| Label maturity | Latest label date respects the delay window | Demand ML |
-| Distribution drift | Price, promotion, inventory, and weather shifts have explanations | Demand ML and analytics |
-| Publish atomicity | Dataset path and manifest appear together | ML platform |
+## 8. Plan Backfills Before You Need Them
+<!-- section-summary: Backfills rebuild bounded historical partitions after late data, corrected sources, or transformation changes. -->
 
-The incident path starts from evidence. If a model trained on `2026-06-30-v1` starts over-ordering strawberries, the team checks the model run, finds the dataset version, opens the manifest, reads the validation report, and compares it with the corrected backfill. That is the practical value of repeatability: the team has a path through the dataset build rather than a hunt through notebooks and chat messages.
+A **backfill** runs pipeline logic for historical partitions. Teams use backfills after late source data arrives or a source correction changes old records. A feature-definition change and a new pipeline with missing history are two other common reasons.
 
-## Putting It Together
-<!-- section-summary: Repeatable pipelines make dataset builds inspectable, rerunnable, validated, and ready for later versioning and lineage work. -->
+The safest backfill unit is usually a declared partition or range of partitions. The pipeline calculates which outputs are affected, rebuilds them from controlled inputs, validates the candidate, and publishes according to the dataset's versioning policy.
 
-A repeatable data pipeline gives ML data a production recipe. It declares inputs and time windows, turns notebook logic into ordered stages, validates the output, records the run, and publishes a stable dataset identity. DVC is one lightweight way to express the pipeline and rerun changed stages. dbt, Pandera, and Great Expectations can cover different layers of validation. The same ideas also fit Airflow, Dagster, Prefect, Spark, and warehouse-native jobs.
+Airflow can create runs across a past logical-date range and control reprocessing behaviour and backfill concurrency. Dagster can materialize a selection of missing or changed asset partitions. A distributed engine such as Spark may process a partition range in one compute job. The orchestrator records which logical partitions that run covered.
 
-For RiverCart, the win is practical. The team can build `fresh_demand_examples:2026-06-30-v1`, show which code and source data produced it, and rebuild or backfill it with a clear review trail. That gives model training a stable input and gives incidents a place to start.
+Backfills need limits because they compete with scheduled production runs. A practical policy defines maximum concurrent runs, compute pools or quotas, run ordering, pause and cancel controls, and validation comparisons against the prior version.
 
-![Run record tying dataset version, Git commit, DVC lock, validation report, and owner to a published dataset](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-run-record.png)
-*The run record is the receipt: it connects the published dataset to the code, lockfile, validation report, and owner that produced it.*
+```mermaid
+flowchart TD
+    A["Late data or corrected logic"] --> B["Identify affected<br/>logical partitions"]
+    B --> C["Estimate data volume,<br/>cost, and dependencies"]
+    C --> D["Run a bounded backfill<br/>in an isolated pool"]
+    D --> E["Validate each partition<br/>and compare changes"]
+    E --> F{"Release policy"}
+    F -->|"Replace approved partitions"| G["Atomic bounded commit"]
+    F -->|"Preserve prior history"| H["Publish a corrected<br/>dataset version"]
+    G --> I["Record reason and lineage"]
+    H --> I
 
-## What's Next
-<!-- section-summary: The next article adds durable dataset identity and lineage so each model can point back to the data that trained it. -->
+    classDef cause fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef plan fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef release fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A cause
+    class B,C,D,E plan
+    class F gate
+    class G,H,I release
+```
 
-The next step is dataset versioning and lineage. A repeatable pipeline creates the dataset; versioning gives the output a durable identity, and lineage connects that identity to source tables, pipeline runs, training runs, and model releases.
+For example, a source team repairs account status history across twelve daily partitions. The pipeline owner first runs the corrected logic in an isolated environment. The review compares key counts and feature distributions with the published partitions, then examines downstream model impact. After approval, the platform publishes corrected partitions atomically or creates a new dataset version according to governance policy. The run record keeps the correction reason and affected range.
+
+## 9. Recover Without Hiding The Failure
+<!-- section-summary: Recovery actions preserve the last approved dataset, retain evidence, and match the actual failure class. -->
+
+Recovery is the process of returning the pipeline to a trustworthy state while protecting the last approved dataset. The right action depends on where the run stopped and whether any output reached consumers. Recovery therefore starts by identifying which guarantee failed.
+
+A missing source snapshot means the run lacks a valid starting point. The scheduler should wait or retry within a bounded window and leave the previous output active. Publishing an incomplete substitute would convert an availability incident into a data-quality incident.
+
+A validation failure means the candidate violates its contract. The team keeps the candidate and report for investigation, repairs the source or transformation, and runs the same logical window again.
+
+A worker crash before commit is an execution failure. Isolated staging and idempotent writes allow a clean retry. Unreferenced staging files can be removed later.
+
+A timeout after commit is ambiguous because the orchestrator may have missed the success response. The retry path should query the table transaction, manifest, or run ID before writing again.
+
+A defect discovered after publication requires a controlled rollback or correction. Delta and Iceberg snapshots can support rollback to an earlier table state. Manifest-based datasets can move the approved catalog pointer back to a previous manifest. The corrected pipeline then backfills affected partitions and produces fresh evidence.
+
+```mermaid
+flowchart TD
+    A["Pipeline incident"] --> B{"Which guarantee failed?"}
+    B -->|"Input unavailable"| C["Wait or retry;<br/>keep prior output"]
+    B -->|"Contract failed"| D["Quarantine candidate;<br/>repair and rerun"]
+    B -->|"Worker failed before commit"| E["Retry idempotent work;<br/>clean staging later"]
+    B -->|"Commit status unclear"| F["Check transaction,<br/>manifest, or run ID"]
+    B -->|"Defect found after release"| G["Roll back approved identity;<br/>run corrected backfill"]
+    C --> H["Record evidence and owner"]
+    D --> H
+    E --> H
+    F --> H
+    G --> H
+
+    classDef incident fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef action fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A incident
+    class B question
+    class C,D,E,F,G action
+    class H evidence
+```
+
+Retries should remain bounded. Permanent schema changes, permission errors, and failed contracts need human attention; repeated automatic execution only adds cost and noise.
+
+## Choosing The Processing And Orchestration Layers
+<!-- section-summary: The best pipeline stack follows the location, scale, transformation language, and operational ownership of the data. -->
+
+Tool selection can feel confusing because several products describe themselves as pipeline platforms. The clearer starting point is to separate data transformation from workflow coordination. First choose the engine that can process the data where it lives; then choose the orchestrator that can schedule, retry, and backfill that work.
+
+If the source data already lives in a warehouse and most transformations are relational, dbt is a strong default. Analysts and engineers can express the logic in SQL, review a model dependency graph, run data tests, and use incremental materializations. The warehouse supplies compute and storage semantics.
+
+If Parquet or similar files fit on a strong single machine, Polars offers a compact Python path with a lazy query engine. It works well for feature calculations, extraction utilities, and controlled batch jobs that have outgrown pandas. These workloads can stay on one machine instead of adopting a distributed cluster.
+
+If the workload needs distributed joins, large shuffles, high-volume streaming, or a shared lakehouse engine, Spark is the common choice.
+
+Databricks adds managed Spark compute and Delta Lake integration. Unity Catalog supplies governed identities and access controls for data assets. Lakeflow pipelines manage table and flow dependencies as the Databricks product built on Apache Spark Declarative Pipelines (SDP). Lakeflow Jobs coordinates broader workflows. Teams still define input identity, validation, publication, and recovery policy for those managed components.
+
+Airflow and Dagster sit above these transformation engines. Airflow is a practical fit for established enterprises coordinating many systems through time-based workflows. Dagster is attractive for greenfield platforms that want data assets, partitions, checks, and backfills to be first-class concepts. A managed provider orchestrator is often the simplest operational choice for a provider-centered stack.
+
+```mermaid
+flowchart TD
+    A["Where does the data live,<br/>and how large is the work?"] --> B{"Main transformation style"}
+    B -->|"SQL in warehouse or lakehouse"| C["dbt with warehouse<br/>or lakehouse compute"]
+    B -->|"Python and single-machine scale"| D["Polars lazy pipeline"]
+    B -->|"Distributed batch or streaming"| E["Spark or Databricks"]
+    C --> F{"Who coordinates schedules,<br/>dependencies, and backfills?"}
+    D --> F
+    E --> F
+    F -->|"Established cross-system platform"| G["Airflow"]
+    F -->|"Asset-oriented greenfield platform"| H["Dagster"]
+    F -->|"Provider-centered workload"| I["Managed orchestrator"]
+
+    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+    classDef engine fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    classDef orchestrator fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+    class A,B,F question
+    class C,D,E engine
+    class G,H,I orchestrator
+```
+
+Scale is only one factor. Team skills, data locality, governance, operational maturity, and existing platform commitments also matter. A small, well-owned pipeline on existing warehouse infrastructure can be more reliable than a new distributed platform carrying little data.
+
+## Operational Ownership
+<!-- section-summary: Clear ownership connects source contracts, pipeline operation, platform reliability, and downstream model use. -->
+
+Repeatability depends on people as much as code. A pipeline can produce perfect run metadata and still remain unreliable if nobody owns a broken source contract or approves a corrective backfill. Ownership tells the team who has authority to diagnose, repair, and release each part of the data path.
+
+The source owner maintains schema, freshness, and correction policies. The pipeline owner maintains transformations, contracts, runbooks, and backfill decisions. The platform owner maintains compute, orchestration, storage, catalog, permissions, and observability. The dataset consumer owns acceptance criteria for training, evaluation, or inference.
+
+A mature pipeline also has service expectations. Useful measures include source readiness, successful publication time, end-to-end runtime, validation pass rate, retry count, backfill age, and the number of unpublished candidate partitions. Alerts should point to an action and owner.
+
+For example, an alert that says “the feature dataset missed its publication target because the transaction source is two intervals behind” gives the pipeline owner a concrete investigation path. A generic “task failed” alert forces the operator to rediscover the dependency chain during the incident.
+
+Ownership also governs changes. A new column may be backward compatible for one consumer and dangerous for another. Schema changes, key changes, partition changes, and altered label cutoffs need review from both the pipeline owner and affected consumers.
+
+## A Practical Industrial Baseline
+<!-- section-summary: A common production baseline combines governed storage, an appropriate transformation engine, orchestration, validation, lineage, and platform observability. -->
+
+A practical production baseline starts with durable data in object storage, a warehouse, or a governed lakehouse. Delta Lake or Apache Iceberg adds transactional table commits and snapshots to object storage. Plain Parquet remains useful when an immutable manifest supplies identity and publication control.
+
+The transformation layer follows data location and scale. dbt fits SQL-centric models, Polars covers efficient single-node Python work, and Spark or Databricks handles distributed data. Airflow, Dagster, or a managed pipeline service coordinates schedules, dependencies, retries, and backfills. dbt tests or a focused dataframe-quality framework enforce contracts. OpenLineage connects compatible jobs, runs, and datasets across tools. Cloud monitoring, logs, and alerts expose operational health.
+
+An established warehouse team might use dbt, native warehouse tables, Airflow, dbt data tests, and OpenLineage. A greenfield lakehouse team might use object storage, Iceberg, Spark, Dagster, asset checks, and OpenLineage. A Databricks-centered team might use Delta tables and Lakeflow pipelines for managed table dependencies; Lakeflow pipelines extend the open Apache Spark Declarative Pipelines (SDP) framework. Lakeflow Jobs can coordinate broader workflows, while Unity Catalog supplies governed identities.
+
+The guarantees remain consistent across these stacks. Inputs need durable identities. Logic needs deterministic behaviour. Retries need safe write semantics. Contracts control publication, while run evidence, bounded backfills, recovery rules, and ownership support production operation.
+
+## The Main Idea
+<!-- section-summary: Repeatability comes from explicit data identity and operating guarantees around transformation code. -->
+
+A repeatable data pipeline gives every dataset build a fixed starting point and reviewed logic. It adds safe execution semantics, a release gate, a durable output, and an evidence trail.
+
+The most important design question is broader than “Can the transformation run?” Ask whether the team can rerun the same logical work after a failure and explain any changed result. The design should also protect consumers from partial output, support safe historical rebuilds, and identify the owner during an incident.
+
+With those guarantees explicit, dbt, Polars, Spark, Databricks, Airflow, Dagster, Delta Lake, Iceberg, object storage, and OpenLineage fit into understandable roles. The tools implement the system; the repeatability framework defines what the system must guarantee.
 
 ## References
 
-- [DVC documentation: dvc.yaml files](https://doc.dvc.org/user-guide/project-structure/dvcyaml-files)
-- [DVC command reference: repro](https://doc.dvc.org/command-reference/repro)
-- [dbt documentation: data tests](https://docs.getdbt.com/docs/build/data-tests)
-- [Pandera documentation: DataFrame Models](https://pandera.readthedocs.io/en/stable/dataframe_models.html)
+- [dbt documentation: Data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [dbt documentation: Incremental models](https://docs.getdbt.com/docs/build/incremental-models)
+- [Polars documentation: Using the lazy API](https://docs.pola.rs/user-guide/lazy/using/)
+- [Polars documentation: Lazy sources and sinks](https://docs.pola.rs/user-guide/lazy/sources_sinks/)
+- [Apache Spark documentation: Spark SQL and DataFrames](https://spark.apache.org/docs/latest/sql-programming-guide.html)
+- [Databricks documentation: Spark Declarative Pipelines and Lakeflow pipelines](https://docs.databricks.com/aws/en/ldp/)
+- [Databricks documentation: Run pipelines in a workflow](https://docs.databricks.com/aws/en/ldp/workflows)
+- [Delta Lake documentation: Batch reads and writes](https://docs.delta.io/delta-batch/)
+- [Delta Lake documentation: Table updates and merge](https://docs.delta.io/delta-update/)
 - [Great Expectations documentation: GX Core overview](https://docs.greatexpectations.io/docs/core/introduction/gx_overview/)
+- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/)
+- [Apache Iceberg documentation: Maintenance](https://iceberg.apache.org/docs/latest/maintenance/)
+- [Apache Airflow documentation: Backfill](https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/backfill.html)
+- [Dagster documentation: Backfilling data](https://docs.dagster.io/guides/build/partitions-and-backfills/backfilling-data)
+- [OpenLineage specification: Object model](https://openlineage.io/docs/spec/object-model/)

@@ -8,6 +8,20 @@ id: "article-mlops-governance-and-responsible-ai-ai-inventory-impact-assessments
 aliases: ["ai-inventory-impact-assessments-third-party-risk", "roadmaps/mlops/modules/governance-and-responsible-ai/standards-and-compliance/03-ai-inventory-impact-assessments-third-party-risk.md"]
 ---
 
+## Table of Contents
+
+1. [Why Inventory Comes Before Assessment](#why-inventory-comes-before-assessment)
+2. [Define The Inventory Unit](#define-the-inventory-unit)
+3. [Discover Systems and Reconcile the Inventory](#discover-systems-and-reconcile-the-inventory)
+4. [Record A Useful System Entry](#record-a-useful-system-entry)
+5. [Triage The Assessment Depth](#triage-the-assessment-depth)
+6. [Run The Impact Assessment](#run-the-impact-assessment)
+7. [Connect Controls To Release Evidence](#connect-controls-to-release-evidence)
+8. [Review Change And Retirement](#review-change-and-retirement)
+9. [Test Whether the Assessment Still Deserves Trust](#test-whether-the-assessment-still-deserves-trust)
+10. [Reassess The Decision And Its Evidence](#reassess-the-decision-and-its-evidence)
+11. [References](#references)
+
 ## Why Inventory Comes Before Assessment
 <!-- section-summary: An inventory identifies the complete AI system and owner, while an impact assessment examines what that specific system and use can do to people and operations. -->
 

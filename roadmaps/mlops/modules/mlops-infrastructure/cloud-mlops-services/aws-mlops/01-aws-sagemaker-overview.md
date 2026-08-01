@@ -5,7 +5,21 @@ overview: "Amazon SageMaker AI provides managed resources for training, pipeline
 tags: ["MLOps", "advanced", "cloud"]
 order: 1
 id: "article-mlops-mlops-infrastructure-aws-sagemaker-overview"
+aliases:
+  - roadmaps/mlops/modules/mlops-infrastructure/cloud-mlops-services/01-aws-sagemaker-overview.md
 ---
+
+## Table of Contents
+
+1. [Start With The Lifecycle, Not The Console](#start-with-the-lifecycle-not-the-console)
+2. [Understand The Two Ownership Planes](#understand-the-two-ownership-planes)
+3. [Map The Main Resources To Their Jobs](#map-the-main-resources-to-their-jobs)
+4. [Follow One Candidate Through The Boundary](#follow-one-candidate-through-the-boundary)
+5. [Design Monitoring As Two Joined Views](#design-monitoring-as-two-joined-views)
+6. [Security And Recovery Are Architecture, Not Setup Tasks](#security-and-recovery-are-architecture-not-setup-tasks)
+7. [Decide Whether SageMaker AI Is The Right Platform Weight](#decide-whether-sagemaker-ai-is-the-right-platform-weight)
+8. [The Durable Picture](#the-durable-picture)
+9. [References](#references)
 
 **Amazon SageMaker AI** is AWS's managed platform for training, registering, deploying, and monitoring machine-learning models. It supplies AWS resources for the ML lifecycle so a team does not have to build every job runner, registry service, and inference control plane itself.
 

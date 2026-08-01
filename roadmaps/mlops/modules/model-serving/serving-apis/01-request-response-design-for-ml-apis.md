@@ -10,6 +10,19 @@ aliases:
   - child-serving-apis-02-request-response-design-for-ml-apis
 ---
 
+## Table of Contents
+
+1. [A Request Contract Is The Product Shape Of A Prediction](#a-request-contract-is-the-product-shape-of-a-prediction)
+2. [A Delivery ETA Contract Under Real Constraints](#a-delivery-eta-contract-under-real-constraints)
+3. [Name The Inputs The Caller Understands](#name-the-inputs-the-caller-understands)
+4. [Shape The Response For Decisions And Debugging](#shape-the-response-for-decisions-and-debugging)
+5. [Version The Contract And The Model Separately](#version-the-contract-and-the-model-separately)
+6. [Support Single And Batch Calls](#support-single-and-batch-calls)
+7. [Design Error Bodies Before Incidents](#design-error-bodies-before-incidents)
+8. [Review The Contract With Real Consumers](#review-the-contract-with-real-consumers)
+9. [Putting It Together](#putting-it-together)
+10. [References](#references)
+
 ## A Request Contract Is The Product Shape Of A Prediction
 <!-- section-summary: ML API request design defines the fields, units, versions, and response evidence that product services use when they ask a model for a prediction. -->
 

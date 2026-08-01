@@ -10,6 +10,20 @@ aliases:
   - child-security-03-environment-isolation-for-ml-workloads
 ---
 
+## Table of Contents
+
+1. [Why ML Workloads Need Boundaries](#why-ml-workloads-need-boundaries)
+2. [Development Is the Most Flexible Environment](#development-is-the-most-flexible-environment)
+3. [Training Runs With Approved Inputs](#training-runs-with-approved-inputs)
+4. [Staging Rehearses the Release](#staging-rehearses-the-release)
+5. [Production Has the Narrowest Authority](#production-has-the-narrowest-authority)
+6. [Kubernetes Adds Workload-Level Separation](#kubernetes-adds-workload-level-separation)
+7. [Identity Connects the Layers](#identity-connects-the-layers)
+8. [Risky Code Needs Stronger Isolation](#risky-code-needs-stronger-isolation)
+9. [The Boundary Must Survive Failure](#the-boundary-must-survive-failure)
+10. [CarePath’s Final Environment Shape](#carepaths-final-environment-shape)
+11. [References](#references)
+
 ## Why ML Workloads Need Boundaries
 
 <!-- section-summary: Environment isolation limits how exploratory code, training jobs, release tests, and production services can affect one another. -->

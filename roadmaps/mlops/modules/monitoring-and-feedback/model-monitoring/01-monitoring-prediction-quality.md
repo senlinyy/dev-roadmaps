@@ -10,6 +10,19 @@ aliases:
   - child-model-monitoring-02-monitoring-prediction-quality
 ---
 
+## Table of Contents
+
+1. [What Prediction Quality Means After Deployment](#what-prediction-quality-means-after-deployment)
+2. [Keep a Receipt for Every Important Prediction](#keep-a-receipt-for-every-important-prediction)
+3. [The Model Cannot Be Graded Until Reality Arrives](#the-model-cannot-be-graded-until-reality-arrives)
+4. [Compare Predictions That Belong Together](#compare-predictions-that-belong-together)
+5. [Choose a Metric That Matches the Real Mistake](#choose-a-metric-that-matches-the-real-mistake)
+6. [A Global Average Can Hide a Local Failure](#a-global-average-can-hide-a-local-failure)
+7. [How Teams Build the Monitoring Loop](#how-teams-build-the-monitoring-loop)
+8. [From an Alert to a Safe Response](#from-an-alert-to-a-safe-response)
+9. [The Whole Idea in One View](#the-whole-idea-in-one-view)
+10. [References](#references)
+
 ## What Prediction Quality Means After Deployment
 <!-- section-summary: Prediction-quality monitoring checks whether live model outputs still agree with real outcomes and still support the product decision they were built for. -->
 
@@ -32,36 +45,33 @@ Each arrow answers a beginner-friendly question. What did the model predict? Wha
 
 A production prediction needs a durable **prediction record**. You can think of this record as a receipt. It preserves the information required to reconstruct the decision after the real outcome arrives and gives every later investigation a stable place to start.
 
-This receipt solves a problem that appears only after the model has handled many versions and millions of requests. An average dashboard can show that something changed, while the receipt lets an investigator return to one affected decision and ask which model, data, and product rule produced it. The same identity then connects the service trace, the later outcome, and the monitoring result.
+Assume the serving path already emits a privacy-controlled prediction record through a reconciled asynchronous capture path. Prediction-quality monitoring begins after that evidence is trustworthy. Its concern is narrower: does the receipt contain the fields needed to attach a later outcome and compare like with like?
 
-The receipt starts with a unique `prediction_id` and the time of the decision. It records the model version, the feature or preprocessing version, the raw model output, and a small set of useful segments such as region or product channel. It also records the rule that turned the model output into an action.
+For that job, `prediction_id` and decision time identify the case and place it in the correct production window. Model and preprocessing versions explain which implementation produced the output. The output, policy version, and product action separate model behaviour from the rule that used it. Approved segment keys let the report find important differences inside the population. The join key for the later outcome must keep the same meaning for the full outcome window. A segment such as region belongs here only when the team has a legitimate reason and enough examples to measure it safely.
 
-That last part deserves attention. Suppose a fraud model returns a risk score of `0.72`. One policy may approve scores below `0.80`. A stricter policy may send every score above `0.65` to manual review. The model output stayed at `0.72`, while the product action changed. Recording a `policy_version` keeps the model and the business rule separate during an investigation.
+The distinction between prediction and action matters. Suppose a fraud model returns a risk score of `0.72`. One policy approves scores below `0.80`, while a later policy sends scores above `0.65` to manual review. The model output stayed the same and the action changed. A quality report that records only the score can wrongly blame the model for a policy change; `policy_version` and `action` preserve the separation.
 
-A compact record might look like this:
+A compact monitoring row makes that separation concrete:
 
 ```json
 {
-  "prediction_id": "pred-8f31",
-  "decision_time": "2026-07-18T09:42:00Z",
-  "model_version": "price-model-17",
-  "feature_version": "property-features-6",
-  "prediction": 465000,
-  "policy_version": "listing-policy-4",
-  "action": "show-estimate",
-  "region": "north-west"
+  "prediction_id": "pred_01K0Q7H7T8Z6M3X2",
+  "prediction_time": "<RFC 3339 timestamp>",
+  "model_version": "price-v18",
+  "preprocessing_version": "property-features-v12",
+  "policy_version": "listing-v4",
+  "prediction": {"sale_price_gbp": 485000},
+  "action": "show_estimate",
+  "segment": {"region_group": "city-centre"},
+  "outcome_join_key": "sale_8F31"
 }
 ```
 
-This example contains identity rather than a full feature payload. Full inputs may contain personal or commercially sensitive data, so teams usually keep request-level records in protected object storage, a warehouse, or a lakehouse table. Prometheus and cloud monitoring are better suited to low-cardinality totals such as prediction count, failure count, or fallback rate. A unique prediction ID belongs in the protected record or trace because using it as a metric label would create a separate time series for every request.
+This row belongs in a governed decision table rather than a metric label or broad application log. The later sale outcome joins through the controlled key, while the prediction, policy, and action remain separate fields. A privacy review decides whether the segment and join key may be retained and who can query them.
 
-In a common production design, the inference service writes the decision and the receipt as one logical operation. The service can publish the receipt to Kafka, Kinesis, Pub/Sub, or an equivalent event stream after it has chosen the product action. A consumer lands those events in an append-only object-store or lakehouse table. Smaller systems can write directly to a warehouse, although the write should remain asynchronous so a temporary analytics outage does not make the customer-facing prediction unavailable.
+Before computing quality, the monitoring job checks that the selected prediction IDs are unique, required versions are present, outcome joins use the agreed key, and receipt coverage agrees with the complete service-level prediction count. If the capture feed is incomplete, the job publishes a data-quality incident and withholds the quality claim. This protects the next sections from calculating precise metrics over an untrustworthy population.
 
-The capture path needs the same care as any other data pipeline. A retry can deliver the same event twice, so `prediction_id` acts as the idempotency key when the curated table is built. A schema version lets consumers handle an added field without confusing old and new records. A dead-letter destination retains rejected events for repair. The service also increments a low-cardinality counter for every prediction, and the monitoring job compares that counter with the number of unique receipts that arrived. That reconciliation reveals a silent capture failure before a quality dashboard starts reasoning from incomplete traffic.
-
-Privacy rules shape what the receipt contains. Teams often store stable entity tokens, derived features that matter to investigation, and references to protected raw data rather than copying a complete customer request into every monitoring system. Access is restricted by role, retention follows the longest justified outcome window, and deletion workflows reach the monitoring copy as well as the product database. The result is enough identity to explain a decision without turning monitoring into an uncontrolled second customer-data store.
-
-The prediction record gives the later outcome somewhere to attach. Without that stable link, a team may know that average quality fell while remaining unable to identify which model, feature path, policy, or segment produced the affected decisions.
+In essence, the receipt is the stable left side of the outcome join. The rest of this article explains how to decide when the right side is mature, which predictions belong in the same cohort, and what evidence is strong enough to change production.
 
 ## The Model Cannot Be Graded Until Reality Arrives
 <!-- section-summary: Outcomes turn predictions into measurable evidence, and maturity rules prevent incomplete recent cases from distorting the result. -->
@@ -77,6 +87,8 @@ The same principle applies when labels arrive late or receive corrections. A dis
 Production teams usually make these rules explicit in a **label contract**. The contract identifies the source event and the key that connects it to a prediction. It separates an early useful signal from the rule for a final mature label, then states how corrections and arrival delays are handled. A named owner resolves changes to those rules. For a delivery estimate, `delivered_at` may be final within hours. For a credit decision, a delinquency label may need 90 days plus a short ingestion allowance. Giving both labels the same daily freshness target would create a false expectation for one and a dangerously slow response for the other.
 
 The outcome pipeline keeps event time and observation time separate. Event time says when the outcome happened; observation time says when the monitoring system learned about it. This distinction matters during backfills. A chargeback created on Monday and imported on Thursday belongs to Monday's business event, while Thursday's observation time explains why earlier monitoring runs did not include it. Versioned outcome rows or a warehouse snapshot preserve this history, and the cohort job selects the newest outcome state known as of its run time.
+
+In a warehouse-first implementation, product events or change-data capture land in BigQuery with both timestamps. A dbt incremental model turns those events into versioned label states, and Airflow passes an explicit `as_of_time` into the cohort build. Suppose Thursday's load contains a correction for Monday. The workflow rebuilds the affected Monday cohort as a new metric revision, while the earlier published run remains available for audit. The tools are useful here because they preserve the difference between when reality changed and when the monitor learned about it.
 
 There is a harder problem when the product action changes whether an outcome can ever be observed. If a payment is blocked, nobody gets to see whether approving it would have caused a chargeback. If only high-risk cases receive human review, the reviewed labels describe a model-selected group rather than all traffic. This missing view of the alternative action is called **censoring**.
 
@@ -122,6 +134,21 @@ Late outcomes make idempotency important. Rerunning the same cohort after a back
 
 Suppose an orchestrated job expects 600,000 eligible predictions and finds 599,700 unique receipts, 520,000 mature outcomes, 77,000 pending cases, 1,900 censored cases, and 800 failed joins. Those numbers tell a coherent story. If the next run still has 520,000 mature outcomes but only 260,000 matches, the orchestrator should stop metric publication and open a data incident. Publishing the resulting MAE would give a precise number built from a damaged population.
 
+The same counts become easier to inspect as a flow. In the diagram below, the width of each band represents the number of predictions that remain in a particular evidence state:
+
+```mermaid
+sankey-beta
+Expected eligible predictions,Captured prediction receipts,599700
+Expected eligible predictions,Missing prediction receipts,300
+Captured prediction receipts,Mature joined outcomes,520000
+Captured prediction receipts,Pending outcomes,77000
+Captured prediction receipts,Censored cases,1900
+Captured prediction receipts,Failed outcome joins,800
+Mature joined outcomes,Metric denominator,520000
+```
+
+This is an evidence-accounting view rather than a quality score. The 300 missing receipts indicate a capture problem. The 800 failed joins indicate an outcome-linking problem. Pending and censored cases have known meanings, so they remain visible without entering the final denominator. If any band changes unexpectedly, the team investigates that transition before interpreting MAE, recall, or another model metric.
+
 ![Evidence funnel from durable prediction receipts through mature outcomes, joined records, governed cohorts, and a quality result, with missing joins stopping publication](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/trustworthy-quality-metric.png)
 
 *A quality metric earns trust through the evidence funnel around it. Maturity, join coverage, cohort identity, sample size, and uncertainty are part of the result rather than optional dashboard details.*
@@ -149,6 +176,8 @@ Uncertainty belongs in the decision as well. A bootstrap interval can show how m
 
 Threshold changes receive their own evaluation. A fraud classifier can keep the same ranking quality while a new review threshold sends twice as many cases to investigators. Teams replay candidate thresholds on mature recent cohorts, estimate precision, recall, expected loss, and queue volume, then canary the chosen policy separately from a model release. This prevents a policy incident from being recorded as a model-quality failure.
 
+One practical metric job reads a tested cohort table into a pinned Python environment and uses scikit-learn for precision, recall, calibration, or regression error. The job writes the result back with the scikit-learn version, metric-definition version, cohort ID, sample count, and uncertainty interval. Before a change is released, the same container runs a small fixture whose expected denominator and score are stored in source control. This pattern gives the warehouse responsibility for population correctness and gives the Python task responsibility for the statistical calculation.
+
 ## A Global Average Can Hide a Local Failure
 <!-- section-summary: Segment results and uncertainty reveal where a model is failing and whether the available evidence is strong enough to act on. -->
 
@@ -175,11 +204,15 @@ Fast operational signals take a different route. Prometheus or the cloud monitor
 
 An Airflow or Dagster workflow commonly runs the loop as separate tasks. It checks that prediction and outcome partitions arrived, builds the candidate cohort, executes dbt or Great Expectations validations, computes versioned metrics, writes detailed results, and publishes a small set of alertable time series. A failed validation stops the publish task. That dependency is important: a dashboard should keep the last accepted result with a visible stale timestamp instead of silently replacing it with a calculation from bad evidence.
 
-Managed platforms can cover part of this path. Azure Machine Learning can schedule tabular monitoring signals and connect threshold events through Azure Event Grid. Gemini Enterprise Agent Platform Model Monitoring v2 can run scheduled comparisons for registered tabular model versions and remains a Preview service. Databricks teams can land requests and responses in governed inference tables, then profile or transform those Delta tables. Existing SageMaker Model Monitor users can continue scheduled monitoring, while AWS has announced that new-customer access closes on 30 July 2026 and that no new features are planned. A new AWS design should prefer ordinary governed capture, processing jobs or the established data platform, and CloudWatch for operational alerting.
+Managed platforms can cover part of this path. Azure Machine Learning can schedule tabular monitoring signals and connect threshold events through Azure Event Grid. Gemini Enterprise Agent Platform Model Monitoring v2 can run scheduled comparisons for registered tabular model versions and remains a Preview service. Databricks teams can land requests and responses in governed inference tables, then profile or transform those Delta tables. AWS positions SageMaker Model Monitor for existing customers and says no new features are planned. A new AWS design should prefer ordinary governed capture, processing jobs or the established data platform, and CloudWatch for operational alerting.
 
 These services reduce plumbing when the model already lives in their supported path. They still need the application to preserve decision identity and the data team to supply correct outcomes. A managed drift chart cannot decide when a chargeback is mature, recover a censored counterfactual, or explain why a product threshold changed. Those are properties of the decision system rather than features of a monitoring vendor.
 
 The monitor must also check itself. The job records its last successful run, input window, code version, row counts, rejected records, and publication time. Serving counts are reconciled with captured prediction IDs. Outcome counts are reconciled with joined labels. A dashboard that still shows yesterday's healthy value after the job stopped is a monitoring failure, even though the chart remains green.
+
+![Production prediction-quality stack from capture through validation, measurement, publication, and owned action](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/prediction-quality-production-stack.png)
+
+*The detailed evidence remains in governed storage while the alerting layer receives small, validated signals. Failed coverage or joins stop publication and open a data incident instead of manufacturing a reassuring quality result.*
 
 ## From an Alert to a Safe Response
 <!-- section-summary: A useful alert first verifies the evidence, then locates the failing boundary, limits harm, repairs the cause, and proves recovery. -->
@@ -191,6 +224,8 @@ The first investigation checks the measuring system: did the job run, did the sc
 Suppose recall falls from `0.88` to `0.63`, while outcome join coverage falls from `97%` to `46%` at the same time. The monitoring owner freezes promotion and automatic retraining because their evidence is incomplete. The data owner updates the source adapter or dbt model, reprocesses the affected outcome partitions into a candidate table, and checks eligible predictions, duplicates, orphan outcomes, and maturity states.
 
 The corrected job recomputes the original cohorts beside the published results. When coverage returns to its expected range and sampled prediction IDs lead to the intended outcomes, the team promotes the corrected table and records the metric revision. A controlled outcome then travels through ingestion, cohort building, dashboard publication, and alert delivery. Release automation resumes only after that complete path works.
+
+With dbt and Airflow, the failed relationship or coverage test stops the downstream publication task. dbt can store the failing records in its audit schema, which gives the data owner the exact prediction IDs that missed an outcome instead of only a failed task name. Airflow reruns the repaired partition and starts the publish task only after the same tests pass. Prometheus continues showing the last accepted metric together with a stale timestamp, and Alertmanager routes the pipeline-freshness alert until the controlled outcome proves that publication and notification work again.
 
 If the evidence path is healthy and the decline belongs to one new model route, the response changes. The release owner can shift that route to the approved model, pause the affected automated action, or send a risky score range to review. Early signals such as action rate, queue size, and fallback use confirm that the containment is active. Mature outcomes later confirm whether prediction quality recovered. The incident stays open until the evidence that justified the action has caught up.
 

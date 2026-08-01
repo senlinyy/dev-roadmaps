@@ -7,6 +7,21 @@ order: 1
 id: "article-mlops-governance-and-responsible-ai-model-governance-explained"
 ---
 
+## Table of Contents
+
+1. [Model Governance Connects Risk Decisions to Operations](#model-governance-connects-risk-decisions-to-operations)
+2. [The Governance Framework Has Four Connected Responsibilities](#the-governance-framework-has-four-connected-responsibilities)
+3. [Govern the Complete AI System, Not Only the Model File](#govern-the-complete-ai-system-not-only-the-model-file)
+4. [Map Purpose, Context, and Harm Before Choosing Controls](#map-purpose-context-and-harm-before-choosing-controls)
+5. [Decision Rights Give Every Approval a Meaning](#decision-rights-give-every-approval-a-meaning)
+6. [Measure With an Evidence Chain, Not a Folder of Reports](#measure-with-an-evidence-chain-not-a-folder-of-reports)
+7. [Manage Risk by Enforcing the Decision in the Delivery Path](#manage-risk-by-enforcing-the-decision-in-the-delivery-path)
+8. [Monitoring Keeps the Approval Conditions Alive](#monitoring-keeps-the-approval-conditions-alive)
+9. [Periodic Review and Retirement Complete the Lifecycle](#periodic-review-and-retirement-complete-the-lifecycle)
+10. [Common Governance Failures](#common-governance-failures)
+11. [How the Pieces Work Together](#how-the-pieces-work-together)
+12. [References](#references)
+
 ## Model Governance Connects Risk Decisions to Operations
 <!-- section-summary: Model governance defines purpose, ownership, evidence, decision rights, controls, monitoring, and retirement for an AI system. -->
 

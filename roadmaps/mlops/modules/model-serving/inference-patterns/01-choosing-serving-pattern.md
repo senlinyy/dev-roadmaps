@@ -10,6 +10,21 @@ aliases:
   - child-inference-patterns-03-choosing-serving-pattern
 ---
 
+## Table of Contents
+
+1. [What a Serving Pattern Decides](#what-a-serving-pattern-decides)
+2. [The Concepts You Will Connect](#the-concepts-you-will-connect)
+3. [Online Request-Response Serving](#online-request-response-serving)
+4. [Batch Scoring](#batch-scoring)
+5. [Streaming and Event-Driven Inference](#streaming-and-event-driven-inference)
+6. [Asynchronous Queue-Based Serving](#asynchronous-queue-based-serving)
+7. [Framework Choices in Production](#framework-choices-in-production)
+8. [Serving-Pattern Decision Matrix](#serving-pattern-decision-matrix)
+9. [Operational Checks Before You Commit](#operational-checks-before-you-commit)
+10. [Runbook: The Pattern Is Causing Trouble](#runbook-the-pattern-is-causing-trouble)
+11. [Putting It Together](#putting-it-together)
+12. [References](#references)
+
 ## What a Serving Pattern Decides
 <!-- section-summary: A serving pattern is the production shape of prediction: request path, freshness, runtime, cost, and failure behavior. -->
 

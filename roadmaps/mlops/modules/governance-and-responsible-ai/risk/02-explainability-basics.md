@@ -7,6 +7,22 @@ order: 2
 id: "article-mlops-governance-and-responsible-ai-explainability-basics"
 ---
 
+## Table of Contents
+
+1. [Explainability Starts With A Question](#explainability-starts-with-a-question)
+2. [Scope Separates Global Behaviour From One Prediction](#scope-separates-global-behaviour-from-one-prediction)
+3. [Method Families Answer Different Kinds Of Why](#method-families-answer-different-kinds-of-why)
+4. [Choose A Method From The Model, Data, And Decision](#choose-a-method-from-the-model-data-and-decision)
+5. [Global Attribution Reveals Model Dependence](#global-attribution-reveals-model-dependence)
+6. [Local Attribution Describes One Prediction](#local-attribution-describes-one-prediction)
+7. [Counterfactual And Example-Based Explanations Need Feasibility](#counterfactual-and-example-based-explanations-need-feasibility)
+8. [Validity Tests Determine Whether An Explanation Deserves Trust](#validity-tests-determine-whether-an-explanation-deserves-trust)
+9. [Reason Codes Translate Evidence Into Governed Language](#reason-codes-translate-evidence-into-governed-language)
+10. [Explanation Is A Versioned Release Artifact](#explanation-is-a-versioned-release-artifact)
+11. [Production Monitoring Watches Behaviour And Explanation Drift](#production-monitoring-watches-behaviour-and-explanation-drift)
+12. [Useful Explanations Connect Question, Method, And Action](#useful-explanations-connect-question-method-and-action)
+13. [References](#references)
+
 ## Explainability Starts With A Question
 <!-- section-summary: An explanation is useful only when it answers a defined question for a person who can act on it. -->
 
