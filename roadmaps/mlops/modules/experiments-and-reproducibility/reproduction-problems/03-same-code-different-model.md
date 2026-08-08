@@ -10,21 +10,21 @@ id: "article-mlops-experiments-and-reproducibility-same-code-different-model"
 ## Table of Contents
 
 1. [The Commit Matches and the Model Still Changed](#the-commit-matches-and-the-model-still-changed)
-2. [Use the First-Divergence Method](#use-the-first-divergence-method)
+2. [Find The First Step Where The Runs Differ](#find-the-first-step-where-the-runs-differ)
 3. [Define the Difference Before Investigating It](#define-the-difference-before-investigating-it)
 4. [Compare Data Snapshot, Split, and Order](#compare-data-snapshot-split-and-order)
-5. [Compare Resolved Configuration and Runtime Inputs](#compare-resolved-configuration-and-runtime-inputs)
-6. [Inspect Stateful Preprocessing](#inspect-stateful-preprocessing)
-7. [Diff Dependencies and Native Libraries](#diff-dependencies-and-native-libraries)
+5. [Compare The Final Configuration Used By Each Run](#compare-the-final-configuration-used-by-each-run)
+6. [Compare The Learned Preprocessing Values](#compare-the-learned-preprocessing-values)
+7. [Compare Dependencies And Native Libraries](#compare-dependencies-and-native-libraries)
 8. [Inspect Hardware, Kernels, and Precision](#inspect-hardware-kernels-and-precision)
-9. [Treat Distributed Topology as Training Input](#treat-distributed-topology-as-training-input)
+9. [Compare Distributed Training Topology](#compare-distributed-training-topology)
 10. [Verify Checkpoint and Resume State](#verify-checkpoint-and-resume-state)
-11. [Measure the Nondeterministic Boundary](#measure-the-nondeterministic-boundary)
+11. [Measure Variation From Nondeterministic Operations](#measure-variation-from-nondeterministic-operations)
 12. [Verify the Evaluation Path](#verify-the-evaluation-path)
 13. [Isolate the Cause With Controlled Replays](#isolate-the-cause-with-controlled-replays)
 14. [Decide Whether the Difference Is Acceptable](#decide-whether-the-difference-is-acceptable)
-15. [Turn the Finding Into a Production Control](#turn-the-finding-into-a-production-control)
-16. [Record the Causal Finding](#record-the-causal-finding)
+15. [Add A Production Check For The Confirmed Cause](#add-a-production-check-for-the-confirmed-cause)
+16. [Record What Caused The Difference](#record-what-caused-the-difference)
 17. [The Main Idea](#the-main-idea)
 18. [References](#references)
 
@@ -50,7 +50,7 @@ flowchart TD
 
 The matching commit is valuable. It removes one large branch from the investigation. It is not a complete run identity.
 
-## Use the First-Divergence Method
+## Find The First Step Where The Runs Differ
 <!-- section-summary: The investigation follows the training path in order and tests the earliest changed layer before interpreting differences farther downstream. -->
 
 Training is a chain of transformations. Raw records become splits, batches, tensors, gradients, checkpoints, predictions, and finally evaluation metrics. A difference near the start can affect every later stage.
@@ -112,17 +112,17 @@ Data is the first layer because the model learns from the examples it receives. 
 
 Then separate three related identities:
 
-### Snapshot identity
+### Check Which Data Snapshot Each Run Used
 
 The snapshot determines which feature rows and labels exist. Late-arriving labels, corrected records, deleted examples, or a shifted time window can change the learned relationship.
 
 MLflow records useful dataset metadata: name, digest, schema, profile, source, and training or evaluation context. That metadata connects the run to its input. The data platform has a separate responsibility: retain an immutable Delta version, Iceberg snapshot, or object manifest that the team can read again.
 
-### Split identity
+### Check Which Rows Belonged To Each Split
 
 The split determines which examples become training, validation, and test evidence. A matching dataset with a new random split is a different experiment. For grouped or temporal tasks, compare group assignments and cutoffs as well as row counts.
 
-### Order identity
+### Check The Order Of Training Examples
 
 Stochastic gradient training also depends on batch order. The same rows in another order can follow a different optimization path. Data-loader worker count, sampler state, sharding, dropped final batches, and distributed world size can all affect order.
 
@@ -144,7 +144,7 @@ Suppose the snapshots match, while `train_ids_sha256` differs. The first diverge
 
 If snapshot and split match but ordered batches differ, compare sampler configuration, worker count, `drop_last`, and distributed sharding. PyTorch data-loader workers receive their own seeds, and randomness from NumPy or other libraries inside worker code must follow the intended worker seed policy.
 
-## Compare Resolved Configuration and Runtime Inputs
+## Compare The Final Configuration Used By Each Run
 <!-- section-summary: The same configuration file can resolve to different behavior through defaults, overrides, feature flags, environment variables, and secret-backed settings. -->
 
 A path such as `configs/train.yaml` identifies a source file. The training process usually merges that file with command-line arguments, environment variables, orchestrator parameters, feature flags, and library defaults.
@@ -173,7 +173,7 @@ Also capture values that appear incidental: locale, time zone, thread count, cac
 
 The diagnostic control is simple: materialize the resolved configuration at job start, hash it, log it as an artifact, and fail the comparison gate if an unexplained field differs.
 
-## Inspect Stateful Preprocessing
+## Compare The Learned Preprocessing Values
 <!-- section-summary: Fitted encoders, tokenizers, scalers, imputers, vocabularies, and reference tables can change the tensors even if transformation source code stays fixed. -->
 
 Preprocessing often contains learned state. A standard scaler stores means and variances. A categorical encoder stores category order. A tokenizer stores a vocabulary and normalization rules. An imputer may store replacement values. These objects are part of the model-producing system.
@@ -198,7 +198,7 @@ If the arrays differ, inspect the fitted preprocessing artifacts before training
 
 For example, a customer-risk model may use the same Python transformer while a newly fitted category encoder sorts values differently after a new category arrives. Every downstream weight now corresponds to a changed input position. The first divergence is preprocessing state, far upstream of the optimizer.
 
-## Diff Dependencies and Native Libraries
+## Compare Dependencies And Native Libraries
 <!-- section-summary: Python packages, compiled extensions, BLAS libraries, framework builds, and container contents can change behavior below unchanged application source. -->
 
 Application code calls into libraries. Those libraries call native code and hardware kernels. A source commit therefore runs inside a larger software stack.
@@ -248,7 +248,7 @@ The goal is to measure the boundary, not to demand byte equality from every GPU 
 
 Small numerical differences can remain harmless. They can also grow in unstable optimization or change top-k ordering near a decision threshold. The acceptance rule should reflect the product consequence.
 
-## Treat Distributed Topology as Training Input
+## Compare Distributed Training Topology
 <!-- section-summary: Worker count, sharding, effective batch size, reduction order, and sampler behavior can alter optimization under the same code and seed. -->
 
 Distributed training changes the shape of the computation. Suppose the baseline used four workers and the candidate used eight. Even if batch size per worker stays fixed, the effective batch size doubles:
@@ -299,7 +299,7 @@ Also distinguish **training checkpoints** from **activation checkpointing**. Tra
 
 The controlled test starts both runs from the same verified full-state checkpoint, or starts both from the same initial weights. Mixing fresh and resumed paths prevents a clean causal conclusion.
 
-## Measure the Nondeterministic Boundary
+## Measure Variation From Nondeterministic Operations
 <!-- section-summary: Repeated identical-condition runs establish the normal variation range before the team attributes every difference to a changed system input. -->
 
 After the recorded inputs match, some variation may remain. Random initialization, augmentation, worker timing, nondeterministic kernels, and parallel reduction order can create a distribution of valid outcomes.
@@ -387,7 +387,7 @@ For the payment scenario, a new label snapshot might correctly include a recent 
 
 Cause and acceptance are separate decisions. Understanding why a model changed supplies causal confidence. Release safety still depends on the size and consequence of that change.
 
-## Turn the Finding Into a Production Control
+## Add A Production Check For The Confirmed Cause
 <!-- section-summary: The permanent fix captures the missing identity or comparison at the earliest layer where the investigation lost visibility. -->
 
 Incident prevention should follow the causal finding. Add the smallest control that would have exposed the divergence before full training or promotion.
@@ -421,7 +421,7 @@ An industrial training job can log one compact fingerprint at startup and anothe
 
 MLflow can store these values as tags, parameters, dataset inputs, and artifacts. Large state still belongs in governed artifact or data storage; the run record keeps immutable references and digests.
 
-## Record the Causal Finding
+## Record What Caused The Difference
 <!-- section-summary: The investigation record links the observed difference, first divergence, controlled test, impact decision, and new prevention control. -->
 
 A causal finding is the handoff from diagnosis to engineering action. It explains which input first changed, what controlled test isolated its effect, and how the evidence shaped the release decision. Without this record, a future team sees a held model or a new validation rule with no reason behind it.

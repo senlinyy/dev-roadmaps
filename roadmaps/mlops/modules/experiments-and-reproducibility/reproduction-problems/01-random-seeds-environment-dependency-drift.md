@@ -10,17 +10,17 @@ id: "article-mlops-experiments-and-reproducibility-random-seeds-environment-depe
 ## Table of Contents
 
 1. [The Same Command Can Produce a Different Run](#the-same-command-can-produce-a-different-run)
-2. [Locate the First Divergence](#locate-the-first-divergence)
-3. [Data and Splits Define the Training Population](#data-and-splits-define-the-training-population)
-4. [A Seed Replays One Random Stream](#a-seed-replays-one-random-stream)
-5. [Deterministic Modes Control Algorithm Choice](#deterministic-modes-control-algorithm-choice)
-6. [Dependencies and Native Runtimes Change the Computation](#dependencies-and-native-runtimes-change-the-computation)
-7. [Hardware Defines a Numerical Boundary](#hardware-defines-a-numerical-boundary)
-8. [Distributed Training Adds Order and Topology](#distributed-training-adds-order-and-topology)
-9. [Clean Processes Remove Hidden State](#clean-processes-remove-hidden-state)
-10. [Evaluation Can Drift After Training](#evaluation-can-drift-after-training)
-11. [Diagnose Divergence in Causal Order](#diagnose-divergence-in-causal-order)
-12. [Choose Exact, Numerical, or Conclusion-Stable Reproduction](#choose-exact-numerical-or-conclusion-stable-reproduction)
+2. [Find The First Step Where The Runs Differ](#find-the-first-step-where-the-runs-differ)
+3. [Compare The Training Data And Split Membership](#compare-the-training-data-and-split-membership)
+4. [Understand What A Random Seed Controls](#understand-what-a-random-seed-controls)
+5. [Use Deterministic Algorithms Where Exact Replays Matter](#use-deterministic-algorithms-where-exact-replays-matter)
+6. [Record Python Packages And Native Runtime Libraries](#record-python-packages-and-native-runtime-libraries)
+7. [Record Hardware And Numerical Precision](#record-hardware-and-numerical-precision)
+8. [Record Distributed Training Topology And Execution Order](#record-distributed-training-topology-and-execution-order)
+9. [Run Reproduction Tests In A Clean Process](#run-reproduction-tests-in-a-clean-process)
+10. [Keep The Evaluation Pipeline Fixed](#keep-the-evaluation-pipeline-fixed)
+11. [Investigate The Earliest Causes First](#investigate-the-earliest-causes-first)
+12. [Choose How Closely The Reproduced Result Must Match](#choose-how-closely-the-reproduced-result-must-match)
 13. [Main Idea](#main-idea)
 14. [References](#references)
 
@@ -35,10 +35,10 @@ Training is stateful because each optimization step depends on the steps before 
 
 The practical goal is to find the **first divergence**: the earliest point at which two runs receive different inputs or produce different state. The first divergence identifies the responsible layer and prevents a team from changing seeds, thresholds, or packages at random until a familiar metric appears.
 
-## Locate the First Divergence
+## Find The First Step Where The Runs Differ
 <!-- section-summary: A layered view connects every source of run drift to a control and to the earliest evidence that can reveal it. -->
 
-You can think of a training run as a stack of conditions around one optimization process. The upper layers define what should be computed. Lower layers determine how that computation executes. Evaluation interprets the result at the end.
+A training run passes through a stack of conditions around one optimization process. The upper layers define what should be computed. Lower layers determine how that computation executes. Evaluation interprets the result at the end.
 
 ```mermaid
 flowchart TD
@@ -60,12 +60,12 @@ Conditions outside the portable artifact need a **record**. The host kernel, GPU
 
 The diagnostic evidence should be close to the layer it describes. A dataset manifest proves row identity. The first batch of record IDs proves sampler order. A hash of initialized weights checks model initialization. Early logits and losses show whether the numerical path has separated. A versioned evaluator proves that the same outputs received the same interpretation.
 
-## Data and Splits Define the Training Population
+## Compare The Training Data And Split Membership
 <!-- section-summary: Reproducible training fixes the rows, labels, split membership, transformations, and sample order presented to the optimizer. -->
 
 Two queries can use the same SQL text and return different training data. New events arrive, labels are corrected, duplicated records are removed, and an upstream table is rebuilt. A path called `training/current` or a table read without a snapshot describes a moving population.
 
-### Freeze row and split membership
+### Keep Training Rows And Split Membership Fixed
 
 The first control is an immutable data identity: a table version, snapshot ID, commit, or content manifest that can recover the same source rows. The training record should also preserve the filtering and feature code, label definition, allowed observation time, and any upstream artifact versions. A snapshot protects the data state; it cannot repair a changed transformation.
 
@@ -73,7 +73,7 @@ Split membership needs its own identity. Re-running `train_test_split` after row
 
 A grouped split records the group key so related rows cannot leak across training and validation. A time-based split records the cutoff, timezone, exclusion window, and late-data policy. These fields let a replay rebuild the same boundary after the source table receives newer records.
 
-### Prove the order presented to the optimizer
+### Record The Order Of Training Examples
 
 Order matters after membership is fixed. Stochastic gradient methods update the model batch by batch, so a changed shuffle or shard order changes the optimization path. Record the sampler type, seed, batch size, dropped-tail policy, worker count, and the first sample IDs for each epoch. Augmentation belongs here too: the stored image may match while a random crop presented to the model differs.
 
@@ -87,16 +87,16 @@ flowchart TD
 
 Suppose a nightly retraining job reads a fraud-label table without a version. A label correction lands between two runs, moving several transactions into the positive class. The release owner sees a recall change before the morning promotion window and may blame model randomness. Comparing the dataset snapshot and split-manifest hashes exposes the changed population before anyone modifies the training code. The repair is to bind the run to a recoverable table version, rebuild the split manifest from that version, and verify the first batch IDs against the original trace.
 
-## A Seed Replays One Random Stream
+## Understand What A Random Seed Controls
 <!-- section-summary: A seed initializes a pseudorandom generator; reproducibility also requires the same generator, call order, and independently controlled worker streams. -->
 
 A computer usually creates training randomness with a **pseudorandom number generator**, or **PRNG**. The generator holds an internal state. A seed initializes that state. The same generator algorithm, starting state, and sequence of calls produce the same stream of values.
 
-### One process can contain several random streams
+### Account For Multiple Random Streams In One Process
 
 That definition explains both the value and the limit of a seed. Weight initialization, shuffling, dropout, augmentation, sampling, and hyperparameter search may use separate generators. Python, NumPy, PyTorch, data-loader workers, and third-party libraries can each own one. An extra random call during debugging shifts every later value from that stream. A library upgrade may also change the generator or how an operation consumes it.
 
-### Give workers independent reproducible streams
+### Give Each Worker Its Own Reproducible Seed
 
 For parallel work, independent streams are important. Giving every worker the same copied NumPy state can make several workers apply identical augmentations. Giving workers unrecorded entropy prevents replay. A recorded root seed plus a stable derivation rule produces separate, recoverable worker or trial streams.
 
@@ -133,7 +133,7 @@ loader = DataLoader(
 
 The proof should come from observed state. Record the root seed and derivation policy, then compare initialized-weight hashes, the first shuffled sample IDs, and the first augmented batch. Equal final seeds with different first-batch hashes point toward a missing generator or a changed call sequence.
 
-## Deterministic Modes Control Algorithm Choice
+## Use Deterministic Algorithms Where Exact Replays Matter
 <!-- section-summary: Framework determinism selects repeatable implementations where available and reports operations that cannot satisfy the requested policy. -->
 
 Random numbers are one source of variation. Parallel numerical algorithms create another. A GPU may add thousands of values through many threads. Floating-point addition has limited precision and depends on operation order, so different reduction orders can produce slightly different results even though the mathematical expression is equivalent.
@@ -153,12 +153,12 @@ tf.config.experimental.enable_op_determinism()
 
 Use strict determinism for regression tests, incident reproduction, and narrow comparisons where exactness matters. A throughput-oriented production training mode may permit faster algorithms after the team measures variation across several seeds, records every runtime setting, and defines a numerical or product-level acceptance policy. This makes the tradeoff explicit: strict mode improves diagnosis, while performance mode accepts measured variability.
 
-## Dependencies and Native Runtimes Change the Computation
+## Record Python Packages And Native Runtime Libraries
 <!-- section-summary: A lockfile fixes the Python resolution, an image digest fixes user-space content, and a runtime manifest exposes native components outside those boundaries. -->
 
 Source code can stay unchanged while its imported behaviour changes. A broad requirement such as `torch>=2` permits different framework builds. A transitive dependency may update preprocessing, serialization, or metrics. Binary wheels may link to different native libraries on different platforms.
 
-### Lock and synchronize Python packages
+### Lock Python Dependencies And Verify The Lockfile
 
 A dependency lock records the resolved package graph. With uv, `uv.lock` contains exact resolved versions and belongs in version control. The `--locked` option rejects a stale or missing lock and leaves it unchanged. The `--frozen` option trusts the existing lock without checking whether project metadata still agrees with it. That distinction matters in CI: freshness validation protects a reviewed build, while frozen behaviour is useful only when the caller intentionally trusts the recorded lock.
 
@@ -189,18 +189,18 @@ environment:
 
 Keep the full generated files too: the dependency inventory, framework build output, OS details, and accelerator report. The compact manifest supplies comparison keys; the attached files provide the evidence needed after one key differs.
 
-### Pin the container image by digest
+### Pin The Container Image By Digest
 
 A container packages much of this user-space environment. Tags remain movable: rebuilding `trainer:reviewed` can point the same name at new content. An image digest is a SHA-256 identity for immutable image content.
 
 ```bash
 docker buildx imagetools inspect registry.example/trainer:reviewed
-docker pull registry.example/trainer@sha256:<platform-specific-digest>
+docker pull registry.example/trainer@sha256:4be93e9b0ad86950868696a9e30edc8309b86ac48f7c7136f7a0a3df41fd6d80
 ```
 
 Multi-platform images have an index digest plus a digest for each platform variant. Record the variant that actually ran. Keep the built image and its provenance; rebuilding the same Dockerfile can resolve new base images or package content.
 
-## Hardware Defines a Numerical Boundary
+## Record Hardware And Numerical Precision
 <!-- section-summary: The container stops at user space, while the host, accelerator, driver, and precision policy still shape numerical execution. -->
 
 The same image can run on a CPU, one GPU family, or another GPU family. Those devices may use different kernels, instruction sets, reduction strategies, and precision paths. The host kernel, container runtime, GPU driver, and attached accelerator also sit outside the image.
@@ -211,12 +211,12 @@ Hardware variation is often legitimate. A team may need to validate a new accele
 
 Suppose an ML platform team moves a ranking model from one GPU generation to another before a scheduled capacity migration. The same container produces slightly different logits, although ranking quality remains stable. The team compares per-query score differences, ranking metrics, latency, and important segment guardrails before approving the new pool. A failed guardrail blocks the migration even if the average metric remains close. The observed outcome is a documented hardware compatibility result with measured numerical bounds.
 
-## Distributed Training Adds Order and Topology
+## Record Distributed Training Topology And Execution Order
 <!-- section-summary: Worker count, sharding, collective order, and checkpoint state alter the sequence of batches and numerical reductions. -->
 
 Distributed training divides work across processes called **ranks**. The **world size** is the total number of ranks. Each rank sees a data shard, computes gradients, and participates in collective operations that combine those gradients.
 
-### Topology changes the update path
+### Understand How Topology Changes Model Updates
 
 Changing world size changes more than capacity. It can alter sample assignment, per-rank batch size, dropped-tail handling, gradient accumulation, and reduction order. The same global batch size can therefore follow a different numerical path. PyTorch DistributedDataParallel also relies on the application to shard inputs, commonly through a `DistributedSampler`; the sampler epoch and seed must stay aligned across ranks.
 
@@ -229,7 +229,7 @@ flowchart TD
     E --> F["Training trajectory<br/>(weights after each distributed step)"]
 ```
 
-### Resume the full training state
+### Restore The Full Training State From A Checkpoint
 
 A faithful resume needs more than model weights. Optimizer moments, the learning-rate scheduler, and the gradient scaler preserve the update rule. Epoch and step counters, sampler position, and random-generator states preserve the job's position in that rule. The parent checkpoint digest connects the resumed run to the exact state it loaded.
 
@@ -237,7 +237,7 @@ Loading weights alone starts a related run from a warm model. The original optim
 
 Consider a training job interrupted after epoch three. The retry receives four GPUs after the original used eight. The pipeline owner must decide whether to meet the release window by continuing or to preserve exact replay. A four-GPU resume may change shard and reduction order, so the safe record marks it as a changed-topology recovery run. Recovery succeeds after the resumed run passes the declared tolerance and product gates; an exact investigation waits for the original topology or restarts from the beginning.
 
-## Clean Processes Remove Hidden State
+## Run Reproduction Tests In A Clean Process
 <!-- section-summary: Fresh jobs replace notebook history, mutable globals, caches, and implicit resume behaviour with explicit inputs. -->
 
 A notebook cell can show identical code while reading different in-memory state. An earlier cell may have filtered a DataFrame in place, changed a global seed, reloaded a module, installed a package, or populated a cache. Re-running the training cell continues from that history.
@@ -250,7 +250,7 @@ Notebook work still has a useful verification step: restart the kernel and run a
 
 For example, a data scientist tests an image model after several interactive preprocessing experiments. The current notebook kernel contains an old normalization object, so a later training cell uses different statistics from a clean job. The engineer responsible for packaging sees different first-batch hashes before the candidate review. Without that check, reviewers would compare candidates trained on different inputs. Moving normalization into versioned code and starting a fresh process produces matching batch hashes and removes the hidden dependency.
 
-## Evaluation Can Drift After Training
+## Keep The Evaluation Pipeline Fixed
 <!-- section-summary: Identical model outputs can receive different scores after labels, cohorts, joins, thresholds, or metric implementations change. -->
 
 A reproduction can train the same model and still report a different result because evaluation changed. The evaluator has its own data, code, and release rules.
@@ -263,7 +263,7 @@ Consider a payment-fraud release review. The original protocol waits until charg
 
 Evaluation drift has a distinctive signature: prediction hashes match, while metrics differ. That observation sends the investigation to labels, joins, metric code, or thresholds and avoids unnecessary retraining.
 
-## Diagnose Divergence in Causal Order
+## Investigate The Earliest Causes First
 <!-- section-summary: Layer fingerprints narrow a final mismatch to the first different input, state, operation, or evaluation rule. -->
 
 Preserve both runs before investigating. Overwriting a failed run removes the evidence needed to compare it. Then confirm the reproduction target: exact execution in one fixed environment, numerical agreement across an allowed boundary, or the same product conclusion.
@@ -285,11 +285,11 @@ flowchart TD
     H -->|Yes| J["Later-step drift<br/>(inspect topology, reductions, resume state)"]
 ```
 
-### Compare identities first
+### Compare Data, Code, And Environment Identities First
 
 Start with identities because they are cheap and decisive. Compare the evaluation protocol, dataset snapshot, split manifest, code commit, resolved configuration, lock digest, and image digest. Then compare hardware and topology. An unexpected identity mismatch means the runs are different experiments. Restore the original condition or label the comparison as a migration study.
 
-### Compare early state
+### Compare The First Training Steps
 
 If identities match, compare state at small checkpoints:
 
@@ -305,7 +305,7 @@ The earliest mismatch maps to a short list of causes. Equal sample IDs with a di
 
 After repairing the responsible layer, rerun from a clean environment and prove that the first divergence has disappeared. Avoid changing several controls together; a bundle of fixes can make the symptom vanish without revealing the cause.
 
-## Choose Exact, Numerical, or Conclusion-Stable Reproduction
+## Choose How Closely The Reproduced Result Must Match
 <!-- section-summary: A reproduction policy states which identities must match, which outputs allow tolerance, and which product decision must remain unchanged. -->
 
 Exact equality is useful for narrow regression tests in one supported environment. Dataset and split identities, code, configuration, locks, and image digests should usually match exactly. Selected tensors or predictions may also match exactly under a fixed deterministic runtime.

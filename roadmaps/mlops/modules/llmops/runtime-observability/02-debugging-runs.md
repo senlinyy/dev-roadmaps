@@ -9,22 +9,22 @@ id: "article-mlops-llmops-debugging-runs"
 
 ## Table of Contents
 
-1. [Debugging an Agent Run Means Reconstructing Cause](#debugging-an-agent-run-means-reconstructing-cause)
-2. [A Six-Stage Framework Keeps the Investigation Grounded](#a-six-stage-framework-keeps-the-investigation-grounded)
+1. [What Debugging An Agent Run Requires](#what-debugging-an-agent-run-requires)
+2. [Use Six Stages To Investigate A Run](#use-six-stages-to-investigate-a-run)
 3. [Stage One: Define the Symptom and Contain the Risk](#stage-one-define-the-symptom-and-contain-the-risk)
 4. [Stage Two: Identify the Exact Run and Configuration](#stage-two-identify-the-exact-run-and-configuration)
-5. [Stage Three: Read the Trace as a State Timeline](#stage-three-read-the-trace-as-a-state-timeline)
-6. [Stage Four: Find the First Meaningful Divergence](#stage-four-find-the-first-meaningful-divergence)
-7. [A Healthy Control and Fleet Signals Show the Scope](#a-healthy-control-and-fleet-signals-show-the-scope)
-8. [Stage Five: Prove the Cause With Controlled Replay](#stage-five-prove-the-cause-with-controlled-replay)
-9. [Common Failure Patterns Point to Different Repairs](#common-failure-patterns-point-to-different-repairs)
-10. [Current Tools Support Different Parts of the Workflow](#current-tools-support-different-parts-of-the-workflow)
-11. [Stage Six: Repair the Owning Layer and Verify Recovery](#stage-six-repair-the-owning-layer-and-verify-recovery)
-12. [Turn Every Confirmed Failure Into Lasting Evidence](#turn-every-confirmed-failure-into-lasting-evidence)
+5. [Stage Three: Read The Trace As A Timeline Of State Changes](#stage-three-read-the-trace-as-a-timeline-of-state-changes)
+6. [Stage Four: Find The First Step That Departed From The Expected Run](#stage-four-find-the-first-step-that-departed-from-the-expected-run)
+7. [Compare The Failed Run With A Healthy Control And The Fleet](#compare-the-failed-run-with-a-healthy-control-and-the-fleet)
+8. [Stage Five: Use Controlled Replay To Test The Suspected Cause](#stage-five-use-controlled-replay-to-test-the-suspected-cause)
+9. [Match Common Failure Patterns To Repairs](#match-common-failure-patterns-to-repairs)
+10. [Use Current Tools For Different Investigation Steps](#use-current-tools-for-different-investigation-steps)
+11. [Stage Six: Repair The Owning Layer And Verify Recovery](#stage-six-repair-the-owning-layer-and-verify-recovery)
+12. [Turn Confirmed Failures Into Regression Tests](#turn-confirmed-failures-into-regression-tests)
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
-## Debugging an Agent Run Means Reconstructing Cause
+## What Debugging An Agent Run Requires
 
 <!-- section-summary: Agent debugging explains how one execution produced an unwanted outcome and identifies the earliest system condition that needs repair. -->
 
@@ -46,7 +46,7 @@ flowchart TD
 
 The first divergence matters because later failures often cascade. An agent may ask the same question four times because a tool returned a new enum that the state reducer could not map. The loop is visible, while the unmapped enum is causal. Raising the loop limit would prolong the failure. Updating the contract handling repairs it.
 
-### A model is one layer of the system
+### Check More Than The Model Output
 
 An agent run combines application input, identity, context assembly, retrieval, model behavior, tool contracts, orchestration, persistent state, policy controls, and external dependencies. A defect in any layer can change the path. Starting with “the model made a mistake” narrows the investigation too early.
 
@@ -54,7 +54,7 @@ Suppose a generated answer cites a policy that expired. The model may have selec
 
 Good debugging assigns the earliest proven divergence to the layer that owns it. It also records uncertainty. One trace can demonstrate what happened during one run. Similar traces, metrics, and repeated replay show whether the mechanism is widespread and reliable.
 
-## A Six-Stage Framework Keeps the Investigation Grounded
+## Use Six Stages To Investigate A Run
 
 <!-- section-summary: A disciplined investigation moves from symptom and identity through timeline, divergence, proof, repair, and permanent learning. -->
 
@@ -82,7 +82,7 @@ Each stage prevents a common failure in the investigation itself. A precise symp
 
 The framework works for a one-call assistant, a tool-using loop, and a durable multi-agent workflow. More complex systems create more evidence, although the reasoning order stays stable.
 
-### Evidence strength increases across the process
+### Check Each Claim With Stronger Evidence
 
 A support report is a symptom. A trace event is an observation. A difference from a healthy control is a hypothesis. A replay that changes one variable provides stronger causal evidence. A repaired release that recovers both the case and fleet signal confirms the operational result.
 
@@ -96,9 +96,9 @@ The symptom anchors the investigation in product behavior. Describe what actuall
 
 Separate **symptom** from **impact**. A poor draft seen by one reviewer has different urgency from an unauthorized payment. A single long-running task differs from every task on one release entering a loop. Severity follows the effect and exposure.
 
-### Write a falsifiable incident statement
+### Write A Falsifiable Incident Statement
 
-A useful statement contains:
+The incident statement contains:
 
 - the observed outcome;
 - the expected outcome;
@@ -137,7 +137,7 @@ flowchart TD
     C -. "release and config manifest" .-> G["Resolved execution identity"]
 ```
 
-### Resolve the behavior bundle
+### Record The Exact Prompt, Model, Tools, And Policy
 
 Agent behavior depends on more than source code. Capture the application release, agent or graph revision, prompt version, requested and resolved model, model settings, tool contract versions, retrieval index, policy version, feature flags, and environment.
 
@@ -161,7 +161,7 @@ Keep the record compact and structured:
 
 The values can be immutable references, which keeps raw configuration in its governed source. Their purpose is to explain which behavior bundle produced the run and support a compatible replay.
 
-### Verify trace identity against domain evidence
+### Match The Trace To The Real Product Event
 
 Trace metadata provides correlation data. Authorization and effect evidence remain in their authoritative systems. Confirm a payment through the payment ledger, a ticket through the ticket system, and an approval through the approval service.
 
@@ -169,7 +169,7 @@ The trace should hold safe references to those records. If the reference is miss
 
 Current platforms expose different identity fields. OpenAI Agents SDK traces use `trace_id` and can use `group_id` for related conversations. LangSmith groups spans called runs under one trace and links conversational traces into threads. MLflow traces expose trace IDs, metadata, tags, and client request IDs for search and correlation.
 
-## Stage Three: Read the Trace as a State Timeline
+## Stage Three: Read The Trace As A Timeline Of State Changes
 
 <!-- section-summary: The trace tree explains causal nesting, while a state timeline shows the ordered facts and transitions that controlled the agent’s next action. -->
 
@@ -190,7 +190,7 @@ flowchart TD
     G --> H["Decision D3<br/>execute tool"]
 ```
 
-### Scan the trace shape before reading payloads
+### Scan The Trace Structure Before Payload Details
 
 Start with the root. Confirm workflow, release, duration, terminal outcome, and failure class. Then scan child spans for errors, long duration, repeated operations, unexpected fan-out, missing stages, and open spans.
 
@@ -198,7 +198,7 @@ A repeated model-tool-model cycle can signal a loop. A retrieval span with zero 
 
 Only then inspect protected inputs and outputs. The trace shape narrows which payloads matter and reduces unnecessary exposure.
 
-### Read one transition at a time
+### Inspect One State Change At A Time
 
 For each important step, ask four questions:
 
@@ -209,13 +209,13 @@ For each important step, ask four questions:
 
 Suppose a tool returns `approval_status="expired_pending_review"`. The tool span records that value, yet the next checkpoint still says `approval_status="active"`. The model later repeats the tool call. The divergence sits in result-to-state projection, not in tool selection.
 
-### Missing evidence is a result
+### Treat Missing Evidence As A Finding
 
 A tool request without a result has an indeterminate outcome. A handoff without a destination child may mean propagation or runtime failure. A model span without prompt version weakens comparison. Record these gaps explicitly as `trace_incomplete` or a similar bounded class.
 
 Missing telemetry cannot support a successful conclusion. A side-effecting tool with an unknown result requires reconciliation. A read-only tool with a missing result may require a rerun after instrumentation repair.
 
-## Stage Four: Find the First Meaningful Divergence
+## Stage Four: Find The First Step That Departed From The Expected Run
 
 <!-- section-summary: The first meaningful divergence is the earliest input, context, decision, contract, state, control, or environment condition that explains the unwanted path. -->
 
@@ -236,7 +236,7 @@ flowchart TD
 
 The visible failure is the loop guard. The first meaningful divergence is the unsupported result status. The repair can add explicit handling, update compatibility tests, and route the status to human review.
 
-### Inspect the fault layers in a useful order
+### Inspect Failure Layers In A Fixed Order
 
 Start with **input and identity**. Confirm task, caller permissions, tenant, and locale. A correct workflow operating on the wrong account is still a critical failure.
 
@@ -252,13 +252,13 @@ Evaluate **model behavior** after verifying the evidence it received. The model 
 
 Finally, inspect **environment and dependencies**. Quotas, regional failures, rate limits, queue delay, provider changes, and release configuration can alter an otherwise sound path.
 
-### Semantic contract drift can hide behind valid JSON
+### Check Meaning Even If The JSON Is Valid
 
 A tool response may remain schema-valid while its meaning changes. Adding a new enum value, changing whether an empty list means “none” or “unknown,” or returning eventual consistency after a write can break the consumer.
 
 Industrial contract testing covers field meaning and evolution. Producers publish versioned contracts and representative fixtures. Consumers test known and unknown enum behavior. Unknown states route to a bounded fallback or human review. They never silently map to success.
 
-## A Healthy Control and Fleet Signals Show the Scope
+## Compare The Failed Run With A Healthy Control And The Fleet
 
 <!-- section-summary: A nearby healthy run narrows the difference set, while fleet metrics reveal whether the same mechanism affects one case, cohort, release, or dependency. -->
 
@@ -266,7 +266,7 @@ One failed run establishes what happened once. A healthy control helps isolate w
 
 Choose a healthy run from the same workflow, input class, environment, and nearby traffic window. Keep permissions and risk level similar. Prefer the accepted release if the failure appeared in a candidate cohort.
 
-### Compare semantic events, not raw trace text
+### Compare Semantic Events Instead Of Raw Trace Text
 
 Raw traces differ in timestamps, IDs, token counts, and harmless wording. Normalize both runs into meaningful events: retrieval source selected, tool requested, arguments validated, state changed, guardrail decided, handoff completed, and outcome recorded.
 
@@ -285,7 +285,7 @@ LangSmith currently supports side-by-side trace comparison. Other platforms can 
 
 Change one comparison dimension at a time. If the failed run differs in prompt, model, tool contract, and retrieval index, the pair is a weak control. Find a closer run or use controlled replay.
 
-### Use metrics and trace search to measure scope
+### Measure How Many Runs Are Affected
 
 Filter traces by release, workflow, tool contract, failure class, and outcome. MLflow’s current trace search syntax supports fields such as `trace.status`, `trace.execution_time_ms`, tags, and metadata. A focused query can find failed traces from one release:
 
@@ -315,7 +315,7 @@ sum by (release, failure_class) (
 
 Always read the denominator. Ten failures among twenty tasks signal a different incident from ten among a million. Use trace IDs for investigation and bounded labels for metrics. Raw request IDs and user IDs create high cardinality and privacy risk.
 
-## Stage Five: Prove the Cause With Controlled Replay
+## Stage Five: Use Controlled Replay To Test The Suspected Cause
 
 <!-- section-summary: Controlled replay freezes the relevant state and dependencies, reproduces the failure, and changes one suspected cause to test causality safely. -->
 
@@ -341,67 +341,67 @@ expected:
 
 This fixture preserves the result that triggered the bug. A live account service may already have changed, which would hide the original condition.
 
-### Replay in a sandbox
+### Replay In A Sandbox
 
 Replay must isolate side effects. Replace payment, email, calendar, account, and infrastructure tools with sandbox implementations or recorded fixtures. Keep authorization and idempotency logic active so the test still exercises safety contracts.
 
 External reads may also need fixtures. A current search index cannot reproduce a result caused by an older snapshot. Store source identifiers, versions, filters, and safe content fixtures needed for the case.
 
-### Durable runtimes can replay from checkpoints
+### Replay From Checkpoints In Durable Runtimes
 
 LangGraph supports checkpoint-based replay and forking through its time-travel features. Nodes before the selected checkpoint reuse persisted state. Nodes after it execute again, including model calls, API calls, and interrupts.
 
 That last detail is operationally important. Checkpoint replay actively executes downstream work. Re-executed nodes can produce new outputs and side effects. Use a sandbox, replace write tools, or enforce idempotency before resuming a production-derived checkpoint.
 
-### Variable behavior needs repeated trials
+### Repeat Trials For Variable Model Behaviour
 
 Deterministic assertions cover schema validation, forbidden tools, exact state transitions, approval order, idempotency, and bounded retries. One violation can prove a contract failure.
 
 Semantic decisions can vary across model calls. Run several trials with the same fixture and report pass rate plus individual reasons. A repair that succeeds once and fails four times is still unreliable. Preserve the original failure and every rerun; retries must never erase evidence.
 
-## Common Failure Patterns Point to Different Repairs
+## Match Common Failure Patterns To Repairs
 
 <!-- section-summary: Wrong answers, false success, loops, unsafe actions, and slow runs each leave different evidence and belong to different system owners. -->
 
 Agent incidents often share a surface symptom while requiring very different repairs. The trace and state timeline separate these mechanisms. The scenarios below illustrate how industrial teams move from evidence to the owning layer.
 
-### A grounded-looking answer uses the wrong source
+### Investigate An Answer Grounded In The Wrong Source
 
 The answer cites a real document, yet that document is archived. Inspect the retrieval span for data-source version, filters, returned identifiers, ranks, and reranker version. Inspect context assembly to confirm which chunks reached the model.
 
 If the current-version filter is missing, repair the retrieval configuration and add a test containing both active and archived documents. Monitor the rate of archived-source selection. A prompt instruction saying “use current policy” provides weaker protection because the model cannot recover a document that retrieval omitted.
 
-### The agent reports success after a tool timeout
+### Investigate False Success After A Tool Timeout
 
 Inspect the model’s proposed tool call, application validation, tool span, downstream request, and authoritative effect record. A timeout means the caller lacks a conclusive result. The external system may have committed the operation.
 
 Repair the workflow with idempotency keys, an `indeterminate` state, authoritative reconciliation, and response rules that prohibit success claims without an effect reference. Replay both outcomes: committed after timeout and absent after timeout. Each branch needs a safe next action.
 
-### The agent enters a loop
+### Investigate Agent Loops
 
 Repeated model and tool spans reveal the loop shape. Inspect state changes between iterations. Common causes include a result that never reaches state, an unknown enum, a retry counter that resets, or a completion condition that reads the wrong field.
 
 Repair the state or contract mechanism first. Keep a loop guard as containment. Add deterministic assertions for maximum calls and required state progress. Track turn count and repeated-tool rate by release so gradual regressions appear before cost grows sharply.
 
-### A handoff loses required context
+### Investigate Lost Context During A Handoff
 
 The source agent selects the correct specialist, yet the specialist asks for information already collected. Compare the source checkpoint, handoff payload, destination starting state, and propagated identity. Check serialization and field allowlists.
 
 Repair the handoff contract with a versioned state schema and required-field validation. Record safe state references on both spans. A contract test can reject a handoff that omits approval state or tenant scope before the destination agent runs.
 
-### A guardrail blocks valid work or allows unsafe work
+### Investigate Incorrect Guardrail Decisions
 
 Inspect the guardrail version, stage, input reference, decision, reason code, and enforcement result. A guardrail can make the correct decision while orchestration ignores it. It can also receive the wrong content because it ran before context assembly or after a lossy transformation.
 
 Replay positive and negative fixtures. Calibrate model-based guardrails against expert labels. Keep deterministic authorization and approval controls outside a probabilistic judge. Monitor block rate and false-positive review by policy version.
 
-### A run is slow or unexpectedly expensive
+### Investigate Slow Or Unexpectedly Expensive Runs
 
 Read the span waterfall and token usage. Separate queue time, retrieval, model latency, tool latency, retries, and parallel fan-out. A long root span does not identify the bottleneck.
 
 If repeated retrieval dominates, cache or deduplicate safe reads. If context growth increases model time, repair state summarization and context selection. If one dependency dominates p95, set timeouts and a bounded fallback. Verify quality alongside latency and cost so optimization does not remove required evidence.
 
-## Current Tools Support Different Parts of the Workflow
+## Use Current Tools For Different Investigation Steps
 
 <!-- section-summary: OpenTelemetry, OpenAI, LangSmith, MLflow, Prometheus, and durable runtimes each provide a distinct part of an industrial debugging system. -->
 
@@ -427,13 +427,13 @@ MLflow Tracing supports OpenTelemetry and GenAI semantic conventions. `mlflow.se
 
 Use technical status and product outcome together. A trace with status `OK` can still contain a poor answer or rejected business action. Store evaluator assessments and outcome fields so quality incidents remain searchable.
 
-### Build a stable evidence contract above the vendor
+### Keep A Stable Evidence Contract Across Vendors
 
 Keep a small internal schema for workflow, release, prompt, model route, tool contract, retrieval snapshot, policy, outcome, failure class, and authoritative references. Map platform-specific fields into it.
 
 This layer keeps runbooks and regression fixtures stable as tracing backends or experimental GenAI conventions evolve. It also lets metrics, traces, and incident records use the same bounded vocabulary.
 
-## Stage Six: Repair the Owning Layer and Verify Recovery
+## Stage Six: Repair The Owning Layer And Verify Recovery
 
 <!-- section-summary: The repair targets the earliest proven divergence and is verified at case, system, rollout, and fleet levels. -->
 
@@ -441,7 +441,7 @@ The cause determines the owner and repair. Missing source filters belong to retr
 
 A repair packet records the symptom, first divergence, supporting traces, replay case, changed component, rollout scope, monitoring signal, and rollback trigger. Keep these relationships explicit so review focuses on the demonstrated cause.
 
-### Verify at four levels
+### Verify The Repair At Four Levels
 
 **Case verification** reruns the controlled fixture. The affected release reproduces the failure, and the candidate repair passes across the required trials.
 
@@ -460,13 +460,13 @@ flowchart TD
     C -->|Regression| F["Stop or roll back"]
 ```
 
-### Roll back the complete behavior bundle
+### Roll Back The Complete Behaviour Bundle
 
 Agent behavior can change through code, prompt, model route, tool configuration, retrieval index, policy, or feature flag. A rollback that restores only application code may leave the harmful prompt or index active.
 
 Record the full accepted bundle and restore the changed components together where needed. Decide how in-flight runs are handled. Some can resume safely from a compatible checkpoint. Others need cancellation, migration, or manual reconciliation.
 
-## Turn Every Confirmed Failure Into Lasting Evidence
+## Turn Confirmed Failures Into Regression Tests
 
 <!-- section-summary: A resolved incident should add the smallest durable test, trace field, metric, contract, or runbook change that prevents recurrence or shortens diagnosis. -->
 
@@ -474,13 +474,13 @@ A repaired incident can still repeat if the knowledge stays only in a chat threa
 
 Create a sanitized regression case that preserves the failure condition. Add expert expectations, severity, required or forbidden operations, and relevant state outcomes. Confirm that the affected release fails the case before accepting it as a regression test.
 
-### Improve the weakest evidence boundary
+### Strengthen The Weakest Evidence Boundary
 
 If support could not find the trace, add correlation from the product record. If the trace lacked tool results, add a completeness contract. If an unknown enum caused the failure, add producer-consumer compatibility fixtures. If the fleet signal hid the cohort, add a bounded release label.
 
 Choose the smallest addition that changes a decision. Logging every prompt creates cost and privacy exposure. A version, result class, state-transition event, or authoritative reference often provides stronger evidence.
 
-### Close the production-to-eval loop
+### Add The Production Failure To The Evaluation Set
 
 The durable loop is:
 

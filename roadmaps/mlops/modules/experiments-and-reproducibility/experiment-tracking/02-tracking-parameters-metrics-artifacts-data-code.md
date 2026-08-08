@@ -10,21 +10,21 @@ id: "article-mlops-experiments-and-reproducibility-tracking-parameters-metrics-a
 ## Table of Contents
 
 1. [A Final Score Cannot Explain a Training Run](#a-final-score-cannot-explain-a-training-run)
-2. [Give Every Execution a Run Identity](#give-every-execution-a-run-identity)
-3. [Think of Tracking as an Evidence Graph](#think-of-tracking-as-an-evidence-graph)
-4. [Parameters Record the Choices](#parameters-record-the-choices)
-5. [Metrics Record Behavior Over Steps and Time](#metrics-record-behavior-over-steps-and-time)
-6. [Artifacts Preserve the Outputs Behind the Numbers](#artifacts-preserve-the-outputs-behind-the-numbers)
-7. [Dataset Identity Connects a Score to Its Evidence](#dataset-identity-connects-a-score-to-its-evidence)
-8. [Code and Environment Explain the Execution](#code-and-environment-explain-the-execution)
-9. [Model Signatures Preserve the Serving Contract](#model-signatures-preserve-the-serving-contract)
-10. [Parent and Child Runs Organize Search](#parent-and-child-runs-organize-search)
+2. [Identify Every Training Execution As A Run](#identify-every-training-execution-as-a-run)
+3. [Connect Run Inputs To Their Outputs](#connect-run-inputs-to-their-outputs)
+4. [Record The Choices Given To Each Run](#record-the-choices-given-to-each-run)
+5. [Record Metrics Across Training Steps And Evaluation Time](#record-metrics-across-training-steps-and-evaluation-time)
+6. [Keep The Files Used To Review Each Result](#keep-the-files-used-to-review-each-result)
+7. [Record Which Dataset Produced Each Metric](#record-which-dataset-produced-each-metric)
+8. [Record The Exact Code And Runtime Environment](#record-the-exact-code-and-runtime-environment)
+9. [Record The Model's Expected Inputs And Outputs](#record-the-models-expected-inputs-and-outputs)
+10. [Group Related Trials With Parent And Child Runs](#group-related-trials-with-parent-and-child-runs)
 11. [Track a Small Run With MLflow 3](#track-a-small-run-with-mlflow-3)
-12. [Store Each Kind of Evidence in the Right System](#store-each-kind-of-evidence-in-the-right-system)
+12. [Store Run Metadata And Large Files In The Right Systems](#store-run-metadata-and-large-files-in-the-right-systems)
 13. [Keep Secrets and Sensitive Data Out of Run Metadata](#keep-secrets-and-sensitive-data-out-of-run-metadata)
-14. [Design Logging for Scale and Failure](#design-logging-for-scale-and-failure)
+14. [Make Tracking Reliable Under Load And Failure](#make-tracking-reliable-under-load-and-failure)
 15. [Verify Tracking by Reconstructing One Run](#verify-tracking-by-reconstructing-one-run)
-16. [Choose a Platform Without Changing the Evidence Model](#choose-a-platform-without-changing-the-evidence-model)
+16. [Choose A Tracking Platform That Preserves Required Records](#choose-a-tracking-platform-that-preserves-required-records)
 17. [The Main Idea](#the-main-idea)
 18. [References](#references)
 
@@ -43,7 +43,7 @@ At a high level, **experiment tracking** gives each execution a durable evidence
 
 The tracking page is therefore more than a leaderboard. It is an index into the evidence behind a result. The UI helps people search and compare that evidence; the evidence model is the part that makes the page trustworthy.
 
-## Give Every Execution a Run Identity
+## Identify Every Training Execution As A Run
 <!-- section-summary: A run identifies one bounded execution of training or evaluation so all of its inputs, observations, and outputs can be connected. -->
 
 A **run** is one execution of a piece of ML work. Running `python train.py` once can create one run. Repeating the command with a different learning rate creates another. Evaluating an existing checkpoint on a new dataset can also create its own run.
@@ -54,7 +54,7 @@ The boundary should match the question engineers want to compare. If one process
 
 A run should also express intent. A short description can say “test stronger regularization after validation loss diverged,” while tags identify the owner, task, branch, and lifecycle purpose. This context distinguishes a deliberate experiment from a smoke test, failed setup attempt, or scheduled baseline evaluation.
 
-## Think of Tracking as an Evidence Graph
+## Connect Run Inputs To Their Outputs
 <!-- section-summary: Experiment evidence forms a graph from data, code, configuration, and environment through one execution to metrics and model artifacts. -->
 
 Experiment tracking records cause and effect as a connected evidence chain. Data, code, configuration, and environment shape an execution. That execution produces metrics and artifacts, and review decisions refer to those outputs and their lineage.
@@ -76,29 +76,29 @@ Each edge carries meaning. A validation metric belongs to a particular validatio
 
 This structure also reveals gaps. A model with no dataset input has weak lineage. A loss curve with no step values hides its training history. A run with a Git commit and a dirty working tree still has uncertain code. Tracking works well once those gaps are visible and testable.
 
-## Parameters Record the Choices
+## Record The Choices Given To Each Run
 <!-- section-summary: Parameters preserve the resolved choices supplied to the run, including model settings and data or evaluation rules. -->
 
 Parameters answer, “What did we ask this execution to do?” They are inputs chosen before or during the run. Metrics answer a different question by recording what happened after those choices were applied.
 
-### Record the resolved recipe
+### Record The Final Parameter Values
 
 **Parameters** are the choices that shape an execution. Hyperparameters such as learning rate, tree depth, batch size, and regularization are common examples. The same category also includes feature-set name, training window, label definition, sampling rule, split seed, threshold, and evaluation configuration.
 
 Think of parameters as the resolved recipe. A templated YAML file may contain defaults and environment substitutions. The run should record the final values used by the process, plus the original config file as an artifact if it helps review. Logging only the template can hide an override passed through the command line or scheduler.
 
-### Make comparisons stable
+### Use Consistent Parameter Names
 
 Parameter names should stay stable across related runs. `learning_rate`, `lr`, and `eta` may represent the same concept, yet three keys make automated comparison harder. A team-owned configuration schema can define canonical names, types, units, and required values.
 
 Some values belong elsewhere. A database password belongs in the secret manager, outside experiment parameters. A million feature names form a file artifact, while the parameter can record the feature-set version or artifact URI. A long SQL query can live as a versioned artifact with its hash recorded in the run.
 
-## Metrics Record Behavior Over Steps and Time
+## Record Metrics Across Training Steps And Evaluation Time
 <!-- section-summary: Metrics preserve numerical observations together with their names, steps, timestamps, datasets, and interpretation. -->
 
 Metrics turn the behavior of a run into comparable numerical evidence. Their meaning comes from context: the evaluation dataset, calculation rule, training step, time, segment, and model checkpoint associated with each value.
 
-### Preserve the training history
+### Keep The Full Metric History
 
 A **metric** is a numerical observation produced during or after a run. Final accuracy, validation loss, inference latency, training cost, subgroup recall, and calibration error are all metrics.
 
@@ -116,30 +116,30 @@ flowchart TD
 
 Metric keys need a clear contract. `valid/log_loss` should identify the validation split and log-loss definition. Units belong in names or documentation for latency, memory, energy, and cost. Direction should be known: lower log loss is better, while higher recall is better.
 
-### Attach evaluation context
+### Record The Evaluation Context For Every Metric
 
 Segment metrics reveal whether an aggregate result hides a weak group. Record a bounded set of predeclared segments such as region, device class, label group, or data-quality bucket. Large per-example results fit an artifact or evaluation table; turning each segment and class combination into a metric key can overwhelm the tracking backend.
 
 MLflow 3 can associate a metric with a specific logged model and dataset. This is valuable if one run creates several checkpoints or evaluates one model on several snapshots. The metric then answers “how did this exact model perform on this exact dataset?”
 
-## Artifacts Preserve the Outputs Behind the Numbers
+## Keep The Files Used To Review Each Result
 <!-- section-summary: Artifacts store durable files produced or consumed by a run, including models, reports, examples, and resolved configuration. -->
 
 Metrics summarize a result, while artifacts preserve the files behind it. A reviewer can open those files to inspect failures, load the trained model, or recover configuration details that would be awkward as scalar fields.
 
-### Keep the files that support review
+### Keep Models, Predictions, And Reports For Review
 
 An **artifact** is a file or directory connected to a run. Model weights are artifacts. Confusion matrices, evaluation reports, sample predictions, feature lists, resolved configs, and dependency lockfiles are also artifacts.
 
 Artifacts provide the detail that scalar metrics leave out. Accuracy can say that ten percent of examples were wrong. A prediction table can show which examples failed, their labels, scores, segments, and error categories. A model file lets another process load the trained result instead of retraining from memory.
 
-### Give artifacts identity and retention
+### Give Every Artifact An Identity And Retention Rule
 
 Useful artifacts are deliberate. Saving every temporary checkpoint from every exploratory run can create high storage cost and a workspace full of indistinguishable files. Keep checkpoints needed for recovery, comparison, or long-running training. Apply shorter retention to disposable intermediate files, and preserve artifacts linked to promoted models or formal decisions according to governance policy.
 
 An artifact needs its own integrity information. Object version, checksum, size, format, and creation run help detect missing or replaced content. The run record should keep a stable reference even if a friendly alias later points to a newer artifact.
 
-## Dataset Identity Connects a Score to Its Evidence
+## Record Which Dataset Produced Each Metric
 <!-- section-summary: Dataset tracking records the exact snapshot, source, transformation lineage, schema, and role used by a run. -->
 
 ML behavior depends heavily on data. Two runs with identical code and parameters can produce different models because the rows, labels, or point-in-time joins changed.
@@ -152,7 +152,7 @@ A fingerprint helps detect changed content, though a fingerprint alone cannot re
 
 MLflow datasets can record a name, digest, source, schema, profile, and context through `mlflow.log_input()`. Metadata-only references are appropriate for governed data that remains in a lakehouse, warehouse, or object store. Raw customer rows can stay under the data platform’s access and retention controls.
 
-## Code and Environment Explain the Execution
+## Record The Exact Code And Runtime Environment
 <!-- section-summary: Code revision and runtime identity capture the implementation and computing conditions that transformed inputs into outputs. -->
 
 The Git commit identifies the versioned source tree. It should be accompanied by repository identity, entrypoint, and dirty-tree state. A commit alone misses uncommitted notebook cells or local edits. Teams can reject candidate runs from a dirty tree or attach a reviewed diff artifact.
@@ -163,7 +163,7 @@ The **environment** describes where the code executed. Python version, dependenc
 
 MLflow model logging writes environment files such as `requirements.txt`, `python_env.yaml`, and `conda.yaml` for supported model flavors. Those files describe model dependencies. The broader training environment still benefits from an image digest and infrastructure metadata.
 
-## Model Signatures Preserve the Serving Contract
+## Record The Model's Expected Inputs And Outputs
 <!-- section-summary: A model signature records expected inputs, outputs, and inference parameters so the tracked artifact can be validated and integrated safely. -->
 
 A model file can exist while its usage contract is unclear. A **model signature** describes the names, types, and shapes of inputs and outputs. It can also describe inference parameters. An **input example** gives a small concrete payload that satisfies the contract.
@@ -174,7 +174,7 @@ Signatures support two practical checks. First, model logging can validate that 
 
 The signature complements the feature contract. It describes the boundary presented to the model artifact. Feature lineage explains how production data is transformed into that boundary.
 
-## Parent and Child Runs Organize Search
+## Group Related Trials With Parent And Child Runs
 <!-- section-summary: Parent-child relationships group many related executions while preserving the parameters and metrics of each independent trial. -->
 
 Hyperparameter optimization can create hundreds of trials. Flattening them into one experiment produces a long run list with little sense of which trials belong to the same search.
@@ -247,12 +247,12 @@ The tracking server now knows the unique run ID and logged model ID. MLflow 3 gi
 
 Autologging can capture standard parameters, metrics, and models for supported libraries. Teams should inspect what their integration records and add domain evidence such as dataset snapshot, feature contract, segment report, and decision context.
 
-## Store Each Kind of Evidence in the Right System
+## Store Run Metadata And Large Files In The Right Systems
 <!-- section-summary: Tracking metadata indexes a run, artifact storage holds durable files, and governed data systems retain large datasets and sensitive records. -->
 
 Experiment tracking connects several storage systems. Its value comes from giving each system a clear responsibility and preserving stable links among them, instead of copying every input and output into one database.
 
-### Separate metadata from durable files
+### Separate Run Metadata From Large Files
 
 A tracking platform usually separates a metadata backend from an artifact store. The metadata backend holds run IDs, parameters, tags, metric points, statuses, and artifact references. The artifact store holds larger files such as model weights, plots, reports, and Parquet outputs. Object storage is a common artifact backend.
 
@@ -271,7 +271,7 @@ flowchart TD
 
 Use the tracking backend for values people filter, sort, and graph. Use the artifact store for durable run outputs. Use the data platform for governed datasets. Store links and immutable identities across these systems so the run page remains the entry point.
 
-### Retain the complete evidence chain
+### Keep Inputs And Outputs Long Enough For Reproduction
 
 Retention should follow value and obligation. Promoted models and formal evaluation evidence often need long retention. Failed setup runs, dense metric histories, and disposable checkpoints can expire earlier. A retention job should preserve referential integrity; keeping a run whose required model artifact has vanished creates a misleading record.
 
@@ -286,7 +286,7 @@ Raw prediction examples can contain personal, health, financial, or confidential
 
 Retention and deletion obligations apply to artifacts too. A copied customer row inside a confusion-analysis CSV can escape the controls attached to the source dataset. Data classification should decide which artifacts are permitted, who can read them, and how deletion requests propagate.
 
-## Design Logging for Scale and Failure
+## Make Tracking Reliable Under Load And Failure
 <!-- section-summary: Batching, bounded metric frequency, explicit completion checks, and failure visibility keep tracking reliable during large or distributed jobs. -->
 
 Logging every training batch from every worker can overload the tracking service and slow the job. Aggregate worker metrics through the main process, choose a meaningful step interval, and batch related values with `mlflow.log_metrics()`. Keep dense framework telemetry in the platform designed for it, while logging the curves needed for experiment comparison.
@@ -302,7 +302,7 @@ Distributed jobs need one logical owner for the run. If every worker creates a s
 
 Completeness is difficult to judge from a run page alone. Reconstruction tests the record from a new engineer’s perspective and reveals which assumptions remained only in the original author’s notebook or memory.
 
-### Rebuild from the run identity
+### Rebuild A Run From Its Recorded Identity
 
 The strongest tracking check is a reconstruction exercise. Select an important completed run and ask an engineer unfamiliar with it to rebuild the evaluation.
 
@@ -324,11 +324,11 @@ flowchart TD
 
 Exact floating-point equality may be unrealistic across accelerators or nondeterministic operations. The acceptance rule can use metric tolerances, prediction agreement, schema equality, and checksum equality for deterministic artifacts. The rule should be written before the exercise.
 
-### Repair the evidence contract
+### Fix Missing Or Mutable Run Records
 
 Common failures reveal actionable gaps: a mutable data URI, missing feature transformation, dirty source tree, expired artifact, incompatible dependency, absent random seed, or metric code that changed. Fix the logging contract and repeat the exercise. A beautiful dashboard cannot substitute for this proof.
 
-## Choose a Platform Without Changing the Evidence Model
+## Choose A Tracking Platform That Preserves Required Records
 <!-- section-summary: MLflow, W&B, and managed tracking services package the workflow differently while preserving the same core evidence relationships. -->
 
 MLflow provides open APIs and a separable tracking server, metadata backend, and artifact store. MLflow 3 also gives logged models first-class identity and links metrics to models and datasets. Databricks offers a managed MLflow tracking server for teams that want the same API with platform-managed hosting.

@@ -10,19 +10,19 @@ aliases: ["hooks-and-sandboxes"]
 
 ## Table of Contents
 
-1. [Hooks And Sandboxes Guard Different Boundaries](#hooks-and-sandboxes-guard-different-boundaries)
+1. [What Hooks And Sandboxes Control](#what-hooks-and-sandboxes-control)
 2. [Follow One Safe Execution Path](#follow-one-safe-execution-path)
-3. [Hooks Attach Rules And Evidence To The Lifecycle](#hooks-attach-rules-and-evidence-to-the-lifecycle)
-4. [Hook Failure Policy Determines What Can Continue](#hook-failure-policy-determines-what-can-continue)
-5. [Sandbox Design Starts With A Threat Model](#sandbox-design-starts-with-a-threat-model)
-6. [Isolation Has Several Independent Dimensions](#isolation-has-several-independent-dimensions)
-7. [Credentials And Network Access Need Their Own Boundaries](#credentials-and-network-access-need-their-own-boundaries)
-8. [Recovery And Cleanup Belong To The Execution Path](#recovery-and-cleanup-belong-to-the-execution-path)
-9. [Choose The Smallest Credible Isolation Shape](#choose-the-smallest-credible-isolation-shape)
-10. [Prove The Boundary Before Expanding Autonomy](#prove-the-boundary-before-expanding-autonomy)
+3. [Use Hooks To Add Rules And Evidence](#use-hooks-to-add-rules-and-evidence)
+4. [Define What Happens If A Hook Fails](#define-what-happens-if-a-hook-fails)
+5. [Design The Sandbox From The Threats](#design-the-sandbox-from-the-threats)
+6. [Apply Several Kinds Of Isolation](#apply-several-kinds-of-isolation)
+7. [Limit Credentials And Network Access Separately](#limit-credentials-and-network-access-separately)
+8. [Clean Up And Recover After Execution](#clean-up-and-recover-after-execution)
+9. [Choose An Isolation Level For The Workload Risk](#choose-an-isolation-level-for-the-workload-risk)
+10. [Test Isolation Before Expanding Autonomy](#test-isolation-before-expanding-autonomy)
 11. [References](#references)
 
-## Hooks And Sandboxes Guard Different Boundaries
+## What Hooks And Sandboxes Control
 <!-- section-summary: Hooks control and observe named lifecycle events, while sandboxes contain the processes, files, and resources used by agent-generated execution. -->
 
 An agent that can only answer questions stays inside a fairly narrow boundary. An agent that can run tests, install packages, edit files, or launch build scripts crosses into a different kind of system. Its output now causes real processes to execute against real resources.
@@ -52,10 +52,7 @@ flowchart TD
     D --> E["Structured result<br/>and approved artifacts"]
     E -. "guides the next state" .-> A
 
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef isolate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B control; class C isolate; class D work; class E result
-    linkStyle default stroke:#7C8DB5,stroke-width:2px
 ```
 
 ## Follow One Safe Execution Path
@@ -95,7 +92,7 @@ Each failure also has a defined result. A policy outage stops the command before
 
 This path shows the relationship between hooks and sandboxes. Hooks attach policy and evidence to the transitions. The sandbox service enforces the operating boundary. Durable run state connects the two and provides enough information for recovery after a worker crash.
 
-## Hooks Attach Rules And Evidence To The Lifecycle
+## Use Hooks To Add Rules And Evidence
 <!-- section-summary: Lifecycle hooks run at named events so policy, accounting, tracing, redaction, and cleanup follow one consistent path. -->
 
 A mature run has repeated concerns that belong at many points. Every model call needs usage accounting. Every protected execution needs policy evaluation. Every completed command needs a safe result record. Every sandbox needs cleanup, including runs that end through cancellation or failure.
@@ -117,7 +114,7 @@ For example, a proposed shell command can produce this small event before execut
 
 The runtime supplies these fields from trusted state. The policy hook can return `deny`, or it can issue a short-lived execution lease for this exact call. The hook never has to infer the target or identity from the command text.
 
-### Name the lifecycle before adding callbacks
+### Define Lifecycle Events Before Adding Hooks
 
 The useful lifecycle follows the real work. Common events include:
 
@@ -135,7 +132,7 @@ The OpenAI Agents SDK exposes `RunHooks` for a complete runner invocation and `A
 
 The hook name should describe a fact that has already been defined by the orchestrator. `tool.before_execute` is clear because the runtime knows which proposal is awaiting authorization. A hook named `maybe_continue_work` hides the state transition and forces later investigators to read its implementation to learn what happened.
 
-### Put enforcement before the effect
+### Run Enforcement Before An External Action
 
 Timing changes the meaning of a hook. A pre-execution policy hook can stop a command. A post-execution hook can classify its result and preserve evidence. The post-execution hook cannot undo a network request or a deleted file.
 
@@ -145,13 +142,13 @@ For a protected action, the only route to the executor should perform these step
 
 The model proposes the action. Trusted identity comes from authenticated run context. The policy decision binds that identity, the proposed action, the target resource, and the policy version. An **execution lease** is a short-lived permission for this exact admitted operation. It prevents an old approval from authorizing a later, changed command.
 
-### Use hooks for cross-cutting work
+### Use Hooks For Shared Checks And Telemetry
 
 Hooks fit work that should happen consistently around many operations. Tracing and usage accounting are common examples. Policy checks, redaction, and deadline propagation also benefit from one attachment point. Cleanup hooks help every terminal path reach the same teardown logic. Domain decisions stay in the application service that owns the effect. A refund policy, for example, belongs to the payment domain. A generic hook may enforce that an approved refund decision exists before the payment adapter runs.
 
 This boundary keeps a hook understandable. It receives a declared event, performs one bounded responsibility, and returns a result that the orchestrator can interpret. It never invents a hidden branch in the workflow.
 
-## Hook Failure Policy Determines What Can Continue
+## Define What Happens If A Hook Fails
 <!-- section-summary: Each hook needs explicit ordering, timeout, retry, and failure behavior because a failed control has a different meaning from failed telemetry. -->
 
 A hook is ordinary software, so it can time out, crash, receive a duplicate event, or lose its connection to a dependency. The harness must decide the consequence before production traffic arrives.
@@ -190,7 +187,7 @@ Ordering also needs tests. A policy denial should produce zero executor calls. A
 
 One especially important failure occurs after an external effect and before the post-hook finishes. The absence of a completion event cannot prove that nothing happened. The executor should write `running` durably before the effect, use a stable operation ID, and write the terminal outcome afterward. A reconciliation worker can then inspect old `running` records and query the owning service before any retry. Hooks support this evidence path; durable state protects it across process failure.
 
-## Sandbox Design Starts With A Threat Model
+## Design The Sandbox From The Threats
 <!-- section-summary: A sandbox design identifies untrusted inputs, protected assets, possible escape paths, and the impact that each control must contain. -->
 
 The word **sandbox** can describe anything from a temporary directory to a hardware-backed virtual machine. The label says very little about protection. A useful design starts by asking what may be hostile and what must remain safe.
@@ -211,10 +208,7 @@ flowchart TD
     D --> G["Protect private data<br/>and external services"]
     E --> H["Protect capacity<br/>and cost"]
 
-    classDef source fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827; classDef boundary fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef control fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef asset fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A source; class B boundary; class C,D,E control; class F,G,H asset
-    linkStyle default stroke:#7C8DB5,stroke-width:2px
 ```
 
 The threat model therefore describes at least four questions:
@@ -228,12 +222,12 @@ From those answers, the team chooses several layers of control. Isolation limits
 
 No single layer carries the whole promise. A stronger runtime cannot repair an administrator credential inside the guest. A short-lived credential cannot protect a shared host from a kernel escape. A default-deny network policy cannot protect a secret copied into command output. The sandbox is a defence-in-depth system whose layers address different paths.
 
-## Isolation Has Several Independent Dimensions
+## Apply Several Kinds Of Isolation
 <!-- section-summary: Filesystem, process, kernel, resource, and lifetime controls combine to contain code execution and preserve only approved results. -->
 
 The execution boundary has several independent dimensions. Each one answers a concrete question: what can code inside the sandbox read, change, consume, or keep?
 
-### Filesystem controls define what can change
+### Limit The Files A Sandbox Can Read Or Change
 
 A fresh workspace should start from a known source revision and runtime image. The image is pinned by digest where reproduction matters. Its root filesystem stays read-only, while a dedicated task volume provides the writable `/workspace` directory.
 
@@ -245,7 +239,7 @@ Archive extraction needs separate thresholds. They cap the compressed input, tot
 
 At completion, the platform copies only approved artifacts. A patch, test report, and small structured log may qualify. Package caches, arbitrary archives, secret files, and the complete home directory should disappear with the workspace.
 
-### Process and kernel controls limit local power
+### Limit Processes And Kernel Access
 
 Inside the guest, execution should use a non-root user, drop Linux capabilities, block privilege escalation, and apply a seccomp profile. Process namespaces separate the task from host processes. A PID limit prevents a fork bomb from exhausting the node.
 
@@ -255,7 +249,7 @@ gVisor adds a user-space application kernel that intercepts the sandboxed worklo
 
 A microVM places a virtual-machine boundary around the guest kernel. Firecracker uses Linux KVM and a minimal device model. A companion jailer adds host-side restrictions. This shape provides a strong tenant boundary for highly untrusted workloads. The surrounding platform still needs to build images, update guest kernels, connect networks and storage, schedule work, and collect evidence.
 
-### Resource and lifetime controls contain runaway work
+### Limit Resource Use And Execution Time
 
 Compute and storage need explicit budgets. The runtime should cap CPU, memory, process count, writable space, and open files.
 
@@ -298,7 +292,7 @@ spec:
 
 Kubernetes' Restricted Pod Security Standard supplies a useful baseline for non-root execution, disabled privilege escalation, seccomp, and dropped capabilities. Admission policy should enforce that baseline so one missing field cannot silently weaken a task. The sandbox conformance suite then proves the effective runtime behaviour, including controls supplied by the cluster.
 
-## Credentials And Network Access Need Their Own Boundaries
+## Limit Credentials And Network Access Separately
 <!-- section-summary: Task-scoped identity limits external authority, while default-deny networking restricts where sandboxed code can send requests. -->
 
 Useful tasks sometimes need private resources. A test may clone a repository, read a fixture from object storage, or send results to an artifact service. Giving the sandbox the platform's general credential would expose far more authority than the task requires.
@@ -324,17 +318,14 @@ flowchart TD
     D -->|"other destination"| F["Deny and record"]
     E --> G["Cleanup revokes token"]
 
-    classDef policy fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef identity fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef network fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef deny fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A policy; class B,C,G identity; class D,E network; class F deny
-    linkStyle default stroke:#7C8DB5,stroke-width:2px
 ```
 
 Kubernetes `NetworkPolicy` controls traffic at IP address and port level, and it only works with a network plugin that enforces the policy. A default-deny egress policy also blocks DNS until an explicit DNS rule is added. Hostname-level rules, TLS inspection, and a central outbound audit usually require an egress proxy or gateway beyond the built-in NetworkPolicy API.
 
 Imagine a repository test that unexpectedly runs `curl https://upload.example`. The DNS request may resolve, but the egress gateway rejects the destination because it is absent from the task's allowlist. The executor records `network_denied`, the run stops, and the security team can inspect the command and repository revision. If the same request succeeds in a conformance test, the environment should stay out of service until the network boundary is repaired.
 
-## Recovery And Cleanup Belong To The Execution Path
+## Clean Up And Recover After Execution
 <!-- section-summary: Durable state, leases, bounded output, credential revocation, and idempotent cleanup return failed runs to a known safe condition. -->
 
 Execution platforms fail in awkward places. A worker can disappear after the command starts. A test can spawn grandchildren that survive the parent. The evidence store can reject an oversized log. The sandbox provider can time out during deletion.
@@ -358,10 +349,7 @@ flowchart TD
     G --> H["Retry cleanup"]
     H --> E
 
-    classDef failure fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827; classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef safe fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,G failure; class B,C,E,H control; class D evidence; class F safe
-    linkStyle default stroke:#7C8DB5,stroke-width:2px
 ```
 
 Deletion confirmation enters durable run state. A failed deletion keeps the workspace in quarantine until the retry succeeds or an operator resolves the incident.
@@ -372,7 +360,7 @@ The current OpenAI Agents SDK sandbox lifecycle illustrates this distinction. Th
 
 Cleanup success is an observable result. A task is complete after approved evidence is durable and the execution lease, credentials, network path, processes, and workspace have reached their terminal state. A quarantined sandbox remains an incident even if the agent produced a correct patch.
 
-## Choose The Smallest Credible Isolation Shape
+## Choose An Isolation Level For The Workload Risk
 <!-- section-summary: Isolation strength follows code trust, tenancy, external authority, workload compatibility, and the team's ability to operate the platform. -->
 
 The strongest runtime carries real cost, and the cheapest runtime may leave an unacceptable escape path. The choice should follow the threat model and the team's operating context.
@@ -391,19 +379,16 @@ flowchart TD
     H -->|"stronger container boundary"| I["gVisor runtime"]
     H -->|"hardware VM boundary"| J["Firecracker-based platform"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef simple fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef managed fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef platform fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,C,E,H question; class B simple; class D managed; class F,G,I,J platform
-    linkStyle default stroke:#7C8DB5,stroke-width:2px
 ```
 
-### A local process fits trusted development
+### Use A Local Process For Trusted Development
 
 A local process or temporary directory is useful for developer experiments with trusted code and low-value data. It offers speed and direct debugging. It should be described honestly as a development environment, since it usually shares the developer's files, network, credentials, and kernel.
 
 The OpenAI Agents SDK currently provides `UnixLocalSandboxClient` for this local workflow. Its own client guide recommends Docker or a hosted provider for stronger isolation or production-style parity.
 
-### A managed sandbox or container is the practical default
+### Use A Managed Sandbox Or Container For Routine Isolation
 
 For most teams adding code execution, a managed sandbox or managed container service is a sensible first production choice. The provider operates provisioning, host patching, scheduling, and destruction. The customer still verifies the identity and network model. It must also check data region and retention, runtime-image control, resource limits, audit evidence, and cleanup guarantees.
 
@@ -411,17 +396,17 @@ Docker or another ordinary container runtime can also fit trusted single-tenant 
 
 For applications built with the OpenAI Agents SDK, Sandbox Agents keep the agent definition separate from the sandbox client. The same agent can use a local, Docker, or hosted client. The feature remains beta, so teams should evaluate it through controlled adoption before treating it as a platform default.
 
-### Kubernetes fits teams that already need a platform
+### Use Kubernetes If The Team Already Operates The Platform
 
 Kubernetes Jobs fit organisations that already operate Kubernetes and need queued execution with custom images. Quotas and admission controls set the cluster boundary. Workload identity and network policy connect each job to approved external resources. `RuntimeClass` selects a configured runtime for a Pod and is stable in Kubernetes. A platform team must still install and patch that runtime on the nodes.
 
 Kubernetes also introduces a platform to operate. The team owns cluster security, capacity, upgrades, policy enforcement, and telemetry. It must prevent one tenant from exhausting shared nodes. A team without those needs often receives a safer result sooner from a managed sandbox service.
 
-### gVisor fits hostile container-style workloads
+### Use gVisor For Hostile Container-Style Workloads
 
 gVisor fits multi-tenant or hostile workloads that benefit from a user-space kernel while keeping the container model. It narrows direct interaction with the host kernel. Compatibility and performance tests matter because build tools, browsers, debuggers, and machine-learning libraries can exercise unusual system calls.
 
-### Firecracker fits a purpose-built microVM platform
+### Use Firecracker For A Purpose-Built MicroVM Platform
 
 Firecracker fits platforms that require a hardware-virtualization boundary with high microVM density. It is a virtual machine monitor built around KVM, a minimal device model, and a jailer. These primitives are suitable for secure multi-tenant execution. Firecracker supplies the virtualization foundation; a complete agent sandbox service still needs a control plane and the surrounding lifecycle.
 
@@ -429,7 +414,7 @@ A team choosing this path owns guest kernels, root filesystems, snapshot integri
 
 Across every choice, the decision comes down to five practical dimensions: how hostile the code may be, how many tenants share infrastructure, which external authority enters the guest, which workload features must remain compatible, and who can operate the boundary continuously.
 
-## Prove The Boundary Before Expanding Autonomy
+## Test Isolation Before Expanding Autonomy
 <!-- section-summary: Conformance tests and failure injection verify the effective sandbox, hook ordering, evidence path, and cleanup result before wider authority is allowed. -->
 
 A configuration file expresses intent. A conformance test checks what the running system actually permits. This distinction matters because effective controls come from several layers at once. The manifest may request a read-only root filesystem, the admission controller may add policy, and the runtime may enforce the final kernel boundary. Testing through the production entry path shows the combined result that real agent code receives.

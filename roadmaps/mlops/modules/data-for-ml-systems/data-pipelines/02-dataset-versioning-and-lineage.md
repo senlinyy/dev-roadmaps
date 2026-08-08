@@ -9,21 +9,21 @@ id: "article-mlops-data-for-ml-systems-dataset-versioning-and-lineage"
 
 ## Table of Contents
 
-1. [A Mutable Name Cannot Identify Training Data](#a-mutable-name-cannot-identify-training-data)
-2. [Build Dataset Identity in Layers](#build-dataset-identity-in-layers)
-3. [Preserve the Data State](#preserve-the-data-state)
-4. [Pin the Transformation That Produced It](#pin-the-transformation-that-produced-it)
-5. [Version the Schema and Data Contract](#version-the-schema-and-data-contract)
-6. [Record Lineage as Run Evidence](#record-lineage-as-run-evidence)
-7. [Connect Datasets to Training Runs](#connect-datasets-to-training-runs)
-8. [Separate Reproducibility from Auditability](#separate-reproducibility-from-auditability)
-9. [Align Retention and Access with the Promise](#align-retention-and-access-with-the-promise)
-10. [Compare and Rebuild with Evidence](#compare-and-rebuild-with-evidence)
-11. [Avoid the Common Versioning Traps](#avoid-the-common-versioning-traps)
-12. [A Complete Version Record](#a-complete-version-record)
+1. [A Dataset Name Cannot Tell You Which Data Was Used](#a-dataset-name-cannot-tell-you-which-data-was-used)
+2. [Record Enough Detail To Identify One Exact Dataset](#record-enough-detail-to-identify-one-exact-dataset)
+3. [Keep The Exact Rows And Files Used For Training](#keep-the-exact-rows-and-files-used-for-training)
+4. [Record The Code And Parameters That Produced The Dataset](#record-the-code-and-parameters-that-produced-the-dataset)
+5. [Record What Each Column Means And Which Changes Are Allowed](#record-what-each-column-means-and-which-changes-are-allowed)
+6. [Record How Data Moved From Sources To The Dataset](#record-how-data-moved-from-sources-to-the-dataset)
+7. [Connect Each Dataset Version To The Training Job That Used It](#connect-each-dataset-version-to-the-training-job-that-used-it)
+8. [Know The Difference Between Rebuilding Data And Explaining Its History](#know-the-difference-between-rebuilding-data-and-explaining-its-history)
+9. [Keep Historical Data Long Enough And Restrict Who Can Read It](#keep-historical-data-long-enough-and-restrict-who-can-read-it)
+10. [Prove That A Rebuilt Dataset Matches The Original](#prove-that-a-rebuilt-dataset-matches-the-original)
+11. [Avoid The Common Versioning Traps](#avoid-the-common-versioning-traps)
+12. [What To Record For Every Dataset Version](#what-to-record-for-every-dataset-version)
 13. [References](#references)
 
-## A Mutable Name Cannot Identify Training Data
+## A Dataset Name Cannot Tell You Which Data Was Used
 <!-- section-summary: A table or storage path can keep the same name while its rows change, so a training run needs an immutable data identity. -->
 
 A data scientist trains a model from `analytics.customer_features`. The run looks promising, and the team records the table name beside the metrics. Several weeks later, another engineer loads the same table to investigate the result. New customers have arrived, corrected labels have replaced old labels, and one transformation now fills missing income values differently. The table name stayed the same while the dataset changed underneath it.
@@ -36,7 +36,7 @@ The distinction matters during every serious comparison. If model `v42` outperfo
 
 Production dataset identity therefore covers more than storage history. It connects the data state, transformation, contract, run evidence, retention policy, and downstream use. Tools implement pieces of that framework; the framework explains how those pieces fit together.
 
-## Build Dataset Identity in Layers
+## Record Enough Detail To Identify One Exact Dataset
 <!-- section-summary: A dependable dataset identity combines a logical name, an immutable storage reference, a contract version, and a manifest that connects them. -->
 
 People need a short name they can discuss. Systems need exact references they can resolve. A production dataset version supplies both.
@@ -46,13 +46,12 @@ The **logical name** describes the dataset's purpose, such as `customer_churn_tr
 You can think of the manifest as a release record for data. It states which data state was approved, which recipe created it, and which rules describe its use. A friendly release label such as `r42` points to the manifest; the manifest carries the technical identities.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#1f2937", "primaryTextColor": "#f9fafb", "primaryBorderColor": "#67e8f9", "lineColor": "#a5b4fc", "secondaryColor": "#312e81", "tertiaryColor": "#3f1d2e", "fontFamily": "Inter, sans-serif"}}}%%
+
 flowchart TB
     Name["Logical dataset<br/>customer_churn_training"] --> Release["Dataset release<br/>r42"]
     Release --> State["Immutable data state<br/>snapshot or object manifest"] & Contract["Contract version<br/>schema + meaning"]
     Release --> Build["Build identity<br/>code + config + runtime"] & Use["Training and evaluation runs"]
-    classDef identity fill:#1f2937,stroke:#67e8f9,color:#f9fafb,stroke-width:2px
-    classDef evidence fill:#312e81,stroke:#c4b5fd,color:#f9fafb,stroke-width:2px
+
     class Name,Release identity
     class State,Contract,Build,Use evidence
 ```
@@ -61,12 +60,12 @@ Each layer answers a different question. The logical name answers “What kind o
 
 A digest adds an integrity check. A **digest** is a fingerprint calculated from content or metadata. The digest of a canonical manifest can prove that the manifest stayed unchanged. A full content digest can prove that the dataset bytes stayed unchanged. Those are different promises, so the record should state what was hashed and which algorithm was used.
 
-## Preserve the Data State
+## Keep The Exact Rows And Files Used For Training
 <!-- section-summary: Table snapshots, object manifests, and warehouse materializations preserve data in different ways and require explicit retention. -->
 
-The immutable state is the first technical anchor. Its implementation depends on how the data is stored. Lakehouse tables already maintain snapshots. Object storage needs an explicit file manifest or version IDs. Warehouses can publish a physical table or a read-only snapshot under a release-specific name.
+The first job is to keep the exact data state used for training. The method depends on where the data lives. Lakehouse tables already maintain snapshots. Object storage needs an explicit file list or version IDs. Warehouses can publish a physical table or a read-only snapshot under a release-specific name.
 
-### Delta Lake and Iceberg identify table snapshots
+### Use Table Versions For Lakehouse Data
 
 Delta Lake commits every successful table change as a numbered table version. A training query can pin that version:
 
@@ -86,7 +85,7 @@ Both formats give readers a consistent table state. A timestamp-based query can 
 
 A table snapshot covers one table. A dataset assembled from three tables needs three pinned source identities, plus the transformation that joined them. The final published dataset may also receive its own snapshot. This is why a manifest remains useful in a lakehouse: it groups several storage-level identities into one ML release.
 
-### Object datasets need a manifest
+### List Every File In Object-Storage Datasets
 
 A prefix such as `s3://ml-data/images/train/` is a moving location. New files can arrive and old files can be replaced without changing the prefix. An object manifest records every member of the dataset.
 
@@ -104,7 +103,7 @@ The object key locates the file. A storage version ID selects one generation if 
 
 Amazon S3 ETags require care. Only specific single-part uploads under supported encryption produce MD5 ETags. Multipart uploads and several other encryption modes produce different values. S3 supports stored checksums such as SHA-256 and CRC algorithms, so an integrity policy should use a documented checksum field.
 
-### Warehouses can publish physical snapshots
+### Copy Warehouse Data Into A Fixed Snapshot
 
 A warehouse transformation often writes a release-specific table such as `ml_snapshots.customer_features_r42`. The table name is immutable by policy, and permissions block updates after publication. Some warehouses also provide native read-only snapshots. BigQuery, for example, supports:
 
@@ -117,7 +116,7 @@ The snapshot preserves the base table contents at creation time and remains quer
 
 Across all three patterns, storage supplies a retrievable state. Feature definitions, filtering logic, label cutoffs, and transformation code belong to the build identity described next.
 
-## Pin the Transformation That Produced It
+## Record The Code And Parameters That Produced The Dataset
 <!-- section-summary: A dataset release must pin source states, transformation code, parameters, runtime, and the run that published the output. -->
 
 Two pipelines can read the same source snapshot and produce different training rows. One may exclude refunded orders, another may keep them. One may join the latest account state, another may use a point-in-time join. Storage identity alone cannot explain that difference.
@@ -153,7 +152,7 @@ This separation also handles reruns. The same recipe can execute twice because a
 
 **Nondeterminism** means the same declared inputs can produce small or large differences across executions. Distributed row ordering, random sampling without a fixed seed, unstable tie-breaking, and floating-point reductions are common causes. A production build should remove avoidable nondeterminism and define tolerances for the remaining differences.
 
-## Version the Schema and Data Contract
+## Record What Each Column Means And Which Changes Are Allowed
 <!-- section-summary: A physical schema describes fields and types, while a versioned data contract also defines meaning, timing, quality, and compatibility. -->
 
 A snapshot can preserve every row and still leave a future reader confused. A field named `account_age` might mean days since signup in one release and months since first purchase in another. Both values may use the same integer type. The physical schema stayed compatible while the feature meaning changed.
@@ -186,20 +185,19 @@ Table formats help enforce structural evolution. Iceberg tracks fields with pers
 
 Contract history should link each release to the exact version it passed. If `r42` used contract `v4`, a later edit to the contract document must create `v5`. Rewriting `v4` in place would make old approvals ambiguous.
 
-## Record Lineage as Run Evidence
+## Record How Data Moved From Sources To The Dataset
 <!-- section-summary: Runtime lineage connects datasets through the jobs and executions that actually read and wrote them. -->
 
-Dataset identity answers which state exists. Lineage explains the path that produced it and the consumers that relied on it. Useful lineage is an evidence graph built from actual executions.
+After the data state is fixed, the team still needs to know how source data moved through transformations into that state. This recorded path is **lineage**. Useful lineage comes from actual pipeline executions and also identifies the jobs and models that later consumed the dataset.
 
 OpenLineage provides a provider-neutral model for that graph. A **Dataset** represents a collection of data. A **Job** represents a defined transformation, such as `build_customer_churn_training`. A **Run** represents one execution of that job. Runtime events list the input and output datasets observed during the run, and facets attach details such as schema or source-code location.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#1f2937", "primaryTextColor": "#f9fafb", "primaryBorderColor": "#67e8f9", "lineColor": "#c4b5fd", "secondaryColor": "#312e81", "tertiaryColor": "#3f1d2e", "fontFamily": "Inter, sans-serif"}}}%%
+
 flowchart TB
     SourceA["Source dataset<br/>accounts@1842"] & SourceB["Source dataset<br/>events@snapshot-918"] --> Build["Build job · run 7f2"]
     Build --> Release["Dataset release<br/>customer_churn_training:r42"] --> Train["Training job · run a91"] --> Model["Model version<br/>churn-model:42"]
-    classDef data fill:#1f2937,stroke:#67e8f9,color:#f9fafb,stroke-width:2px
-    classDef run fill:#312e81,stroke:#c4b5fd,color:#f9fafb,stroke-width:2px
+
     class SourceA,SourceB,Release,Model data
     class Build,Train run
 ```
@@ -210,7 +208,7 @@ Unity Catalog automatically captures lineage for many operations executed on Dat
 
 A catalog makes lineage discoverable and applies governance. Data preservation remains the responsibility of table snapshots, object versions, and retained evidence. Runtime capture may also have gaps for unsupported operations or external tools. The manifest remains the durable release record, while the lineage backend supplies navigation and impact analysis.
 
-## Connect Datasets to Training Runs
+## Connect Each Dataset Version To The Training Job That Used It
 <!-- section-summary: Experiment tracking should log the dataset identity as a first-class model input with its source, digest, schema, and usage context. -->
 
 The training run closes the evidence chain. Its input should point to the dataset release, storage source, digest, schema, and usage context. MLflow supports first-class dataset inputs for training, validation, and evaluation.
@@ -237,7 +235,7 @@ The responsibility boundary matters here. MLflow tracks the dataset reference us
 
 In a managed platform, the registry and catalog may add automatic connections from runs to models and data. Keep the same release identifier across those systems. A model review should move from model version to MLflow run, then to dataset release, contract, build run, and source snapshots without relying on a human-written note.
 
-## Separate Reproducibility from Auditability
+## Know The Difference Between Rebuilding Data And Explaining Its History
 <!-- section-summary: Reproducibility concerns retrieving or rebuilding the data, while auditability concerns explaining the decisions and actors around it. -->
 
 Teams often use “reproducible” and “auditable” as if they promise the same result. One concerns reconstructing the data; the other concerns explaining the decisions and people around it.
@@ -252,7 +250,7 @@ A retained snapshot with no owner or intended-use record offers reproducible byt
 
 This distinction also prevents false confidence from lineage graphs. A graph may prove that job `A` wrote dataset `B`. Reproduction still depends on retained source states, code, configuration, runtime, and deterministic behavior. Auditability still depends on human decisions and access history.
 
-## Align Retention and Access with the Promise
+## Keep Historical Data Long Enough And Restrict Who Can Read It
 <!-- section-summary: A version remains reproducible only while its snapshots, files, metadata, and permissions survive for the required period. -->
 
 Every versioning system eventually cleans up history. A manifest can live much longer than the snapshots and files it names, so the retention policy determines how long the technical identity remains usable.
@@ -267,10 +265,10 @@ Access policy is equally important. A dataset snapshot can preserve personal, co
 
 Privacy deletion, contractual limits, or regulation may require the organization to remove data before the desired reproduction window ends. The approved policy should describe that tradeoff in advance. The team can retain permitted metadata, aggregate validation evidence, and deletion records while acknowledging that exact reconstruction is no longer available.
 
-## Compare and Rebuild with Evidence
+## Prove That A Rebuilt Dataset Matches The Original
 <!-- section-summary: Run comparison starts from manifests, isolates the changed identities, and validates any retrieved or rebuilt dataset against the recorded release. -->
 
-A fair model comparison first compares the data evidence. Two model runs that reference the same dataset release and evaluation release isolate model code, parameters, or runtime as the likely source of a metric difference. Different dataset identities introduce a data change that reviewers must examine.
+A rebuild should first prove that it recovered the same dataset state, code, parameters, and schema as the original run. Only then can a model comparison isolate model code, parameters, or runtime as the likely source of a metric difference. Different dataset identities introduce a data change that reviewers must examine.
 
 A useful comparison reads both manifests and reports changes across five areas: storage states, contract versions, source snapshots, build identity, and output validation. The result can stay compact:
 
@@ -293,14 +291,13 @@ This record tells reviewers that the evaluation basis stayed fixed while trainin
 Rebuilding follows the same identities in reverse:
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#1f2937", "primaryTextColor": "#f9fafb", "primaryBorderColor": "#67e8f9", "lineColor": "#a5b4fc", "secondaryColor": "#312e81", "fontFamily": "Inter, sans-serif"}}}%%
+
 flowchart TB
     Run["Model or dataset run"] --> Manifest["Resolve dataset manifest"] --> Content{"Snapshot retained?"}
     Content -->|"yes"| Retrieve["Retrieve immutable output"] --> Verify["Verify keys, schema,<br/>digest and tolerances"]
     Content -->|"no, rebuild permitted"| Rebuild["Load pinned sources<br/>run pinned recipe"] --> Verify
     Verify --> Compare["Compare with recorded evidence"]
-    classDef step fill:#1f2937,stroke:#67e8f9,color:#f9fafb,stroke-width:2px
-    classDef choice fill:#312e81,stroke:#c4b5fd,color:#f9fafb,stroke-width:2px
+
     class Run,Manifest,Retrieve,Rebuild,Verify,Compare step
     class Content choice
 ```
@@ -309,7 +306,7 @@ Retrieval verifies the manifest and content digests. A rebuild checks out the pi
 
 The rebuilt output receives a new run identity. It should never overwrite the historical release record. A successful match confirms the original evidence; a mismatch starts an investigation into missing inputs, nondeterminism, retention loss, or an incomplete manifest.
 
-## Avoid the Common Versioning Traps
+## Avoid The Common Versioning Traps
 <!-- section-summary: Weak implementations confuse locations, timestamps, hashes, catalogs, and lineage records with complete dataset identity. -->
 
 The most common trap is recording a mutable table name or storage prefix. It locates current data and says nothing about the state consumed by an older run. Pin the table snapshot or every object generation.
@@ -324,10 +321,10 @@ Schema compatibility is another incomplete signal. A unit change from dollars to
 
 Finally, retention must cover the whole evidence chain. A retained output with expired source snapshots supports retrieval and blocks full rebuild. Retained source snapshots with a deleted container image may reproduce different results. Review the bundle as one policy.
 
-## A Complete Version Record
+## What To Record For Every Dataset Version
 <!-- section-summary: A complete dataset release connects its purpose, exact data state, contract, build run, lineage, consumers, retention, and access policy. -->
 
-A production dataset version is a release of evidence. Its logical name tells people what it represents. Its snapshot or object manifest pins the data state. Its contract defines structure and meaning. Its build record pins code, configuration, runtime, and actual source states. Runtime lineage connects the release to the jobs that created and consumed it. MLflow attaches that identity to model training and evaluation.
+Every published dataset version needs enough detail to recover and explain it. Its logical name tells people what it represents. Its snapshot or object manifest pins the data state. Its contract defines structure and meaning. Its build record pins code, configuration, runtime, and actual source states. Runtime lineage connects the release to the jobs that created and consumed it. MLflow attaches that identity to model training and evaluation.
 
 Retention determines how long the team can retrieve or rebuild the release. Access policy controls who can inspect its contents. Audit records preserve the people, purpose, checks, and approvals around it.
 

@@ -9,18 +9,18 @@ id: "article-mlops-llmops-context-design"
 
 ## Table of Contents
 
-1. [Context Engineering Builds One Working View](#context-engineering-builds-one-working-view)
-2. [Each Source Has a Different Job](#each-source-has-a-different-job)
-3. [Context Engineering Connects Prompts, Retrieval, and Memory](#context-engineering-connects-prompts-retrieval-and-memory)
+1. [Choose What The Model Sees For One Step](#choose-what-the-model-sees-for-one-step)
+2. [Give Each Information Source A Clear Job](#give-each-information-source-a-clear-job)
+3. [How Prompts, Retrieval, And Memory Fit Together](#how-prompts-retrieval-and-memory-fit-together)
 4. [Putting Everything in the Prompt Creates New Failure Modes](#putting-everything-in-the-prompt-creates-new-failure-modes)
-5. [Assembly Is a Policy Pipeline](#assembly-is-a-policy-pipeline)
-6. [Ordering and Token Budgets Express Priorities](#ordering-and-token-budgets-express-priorities)
-7. [Compaction Keeps Long Runs Focused](#compaction-keeps-long-runs-focused)
+5. [Build Context In A Controlled Sequence](#build-context-in-a-controlled-sequence)
+6. [Set The Order And Token Budget For Context](#set-the-order-and-token-budget-for-context)
+7. [Summarize Long Runs Without Losing Important State](#summarize-long-runs-without-losing-important-state)
 8. [Prompt Injection Is a Trust-Boundary Problem](#prompt-injection-is-a-trust-boundary-problem)
 9. [Evaluate the Context Before Blaming the Model](#evaluate-the-context-before-blaming-the-model)
 10. [References](#references)
 
-## Context Engineering Builds One Working View
+## Choose What The Model Sees For One Step
 <!-- section-summary: Context engineering assembles a bounded, task-specific view for one model decision from a much larger application state. -->
 
 At a high level, **context engineering** is the work of deciding what a model can see for one step of a task. The application may know thousands of facts and have access to many services. The model receives only the instructions, messages, evidence, tool descriptions, and results included in its current input.
@@ -76,7 +76,7 @@ A production context design makes six decisions explicit:
 5. how untrusted content stays inside a data boundary;
 6. which records and evaluations make the context observable.
 
-## Each Source Has a Different Job
+## Give Each Information Source A Clear Job
 <!-- section-summary: Instructions, user input, application state, evidence, tool results, and history contribute different kinds of information and should retain those roles. -->
 
 A model ultimately processes tokens, so two pieces of text can look deceptively similar. A policy instruction, an excerpt from a web page, and a previous assistant message are all text. Their meaning inside the application is very different.
@@ -117,7 +117,7 @@ The user can ask for a refund, change the desired response format, or provide mo
 
 Instruction hierarchy guides model behaviour. It still leaves real authorisation to application code. Even a perfectly followed instruction can be bypassed by a software defect, so the refund service must enforce ownership again at execution time.
 
-### The current user input states the immediate goal
+### Use The Current User Input For The Immediate Goal
 
 The user's current message deserves special treatment because it explains what the person wants now. It may narrow, correct, or replace an earlier preference.
 
@@ -125,7 +125,7 @@ For example, a stored preference might say, “Give detailed answers.” The cur
 
 A production context block should therefore preserve the user's words and the application-derived metadata separately. The authenticated account ID, tenant, locale, and granted scopes come from the runtime. They should never be inferred from prose in the message.
 
-### Authoritative application state supplies current business facts
+### Read Current Business Facts From Authoritative Application State
 
 **Authoritative state** is the source your application trusts to establish a business fact. An order service may own fulfilment status. A workflow database may own approval state. An identity provider may own account membership. The model can explain or act on those facts, yet it should not invent them from conversation history.
 
@@ -154,7 +154,7 @@ Retrieval does not make a passage true, current, or authorised. A vector search 
 
 Current hosted tools can help with this layer. OpenAI File Search, for example, searches vector stores with semantic and keyword search, can filter by metadata, and can return file citations. A team may instead use a governed enterprise search service or its own vector and keyword indexes. The important design choice is the same: retrieval produces **candidate evidence**; context assembly decides which candidates belong in this decision.
 
-### Tool results report an observation or operation
+### Treat Tool Results As Observations, Not Instructions
 
 Tools let a model request fresh information or propose an action. A useful result is small, typed, and clear about status.
 
@@ -176,7 +176,7 @@ A good tool contract starts with stable identifiers and the fields required for 
 
 Tool output can be stale, incomplete, or hostile. An error page might be returned instead of JSON. A web tool may fetch a page containing hidden instructions. Validate the shape, label the source, and keep side-effect permissions in the tool executor.
 
-### Conversation history preserves local continuity
+### Use Conversation History For Local Continuity
 
 History helps the model understand references such as “use the second option” or “make it shorter.” It also contains earlier tool calls and assistant answers. User corrections may matter most because they change how later messages should be read. History loses value as the task moves forward and authoritative state changes.
 
@@ -184,7 +184,7 @@ Sending a full transcript on every step often preserves noise along with continu
 
 In essence, history explains **how the conversation arrived here**. Run state explains **what the workflow has completed**. Domain state explains **what the business system currently records**. Long-term memory stores **selected information that may help in a later interaction**. Context engineering chooses the small portion of each that this model step needs.
 
-## Context Engineering Connects Prompts, Retrieval, and Memory
+## How Prompts, Retrieval, And Memory Fit Together
 <!-- section-summary: Prompt wording, retrieval, memory, and context engineering solve related problems at different points in the system. -->
 
 These terms often appear together, which can make them feel interchangeable. A simple separation helps because each one controls a different part of the model's input. Their boundaries also show a team where to investigate a failure.
@@ -229,37 +229,37 @@ flowchart TD
     T --> O
 ```
 
-### Relevance
+### Keep Only Relevant Information
 
 Most available information has little value for the current step. Suppose a model is deciding whether an alert needs escalation. A year of raw monitoring events can bury the five events that describe the current failure. Noise also creates accidental associations: a similar incident from another service may steer the response toward the wrong remediation.
 
 The solution is step-specific selection. Start with the decision the model must make, list the evidence that decision requires, then admit optional material only if it improves representative evaluations.
 
-### Freshness
+### Check Whether Information Is Current
 
 Old facts become dangerous if they sit beside current facts with no clear version. A cached inventory value and a fresh warehouse read might both appear as “stock: 4.” A summary from the previous release may describe a flag that has since changed.
 
 Carry versions and timestamps through the assembly pipeline. Define acceptable age by fact type. A user preference can remain useful for months; a payment or deployment state may require a fresh service read. If the authoritative source is unavailable, represent that absence directly instead of filling the gap with stale history.
 
-### Authority
+### Prefer Authoritative Sources
 
 A user statement, a retrieved document, and a transactional record can disagree. More context gives the model more statements, yet it provides no deterministic rule for choosing the right owner.
 
 Resolve ownership in application logic. The payment service establishes payment state. The user establishes the requested action. A policy repository establishes the effective rule after revision and scope checks. The model can explain a typed conflict; it should not decide which database the organisation trusts.
 
-### Cost
+### Stay Within Cost Limits
 
 Input tokens affect request cost, data transfer, provider processing, and often latency. Large tool schemas and repeated instruction blocks consume the same budget as useful evidence. Long histories also make tracing and incident reproduction more expensive.
 
 Measure input tokens by block type, then reduce the largest low-value contributors. Common improvements include narrower tool responses, metadata filtering before retrieval, fewer overlapping tools, and compact representations linked to durable sources.
 
-### Attention
+### Protect The Model's Attention
 
 Model capacity and model use are different ideas. A fact can fit inside the window and still be overlooked or confused with a nearby statement. Anthropic describes context as a finite resource with diminishing returns and recommends a small set of high-signal tokens. The exact degradation varies by model and task, so teams should test it with their own examples.
 
 A useful experiment takes a stable evaluation set and adds realistic distractors: older policy versions, unrelated tool output, repeated instructions, and long history. Compare evidence use and final task success as context grows. This turns “the model can accept it” into a measured product decision.
 
-## Assembly Is a Policy Pipeline
+## Build Context In A Controlled Sequence
 <!-- section-summary: A production assembler authorises, validates, selects, budgets, serialises, and records context through visible application logic. -->
 
 A production context should come from a repeatable pipeline. If context is assembled through scattered string interpolation, teams struggle to answer basic incident questions: Which policy version was used? Why was a passage included? Which block was removed? Did the user have access to the document?
@@ -281,7 +281,7 @@ flowchart TD
     P --> M["Model call"]
 ```
 
-### Authorise before model-facing selection
+### Check Access Before Selecting Information
 
 Access checks belong near the data source. Filter by authenticated identity, tenant, role, resource, purpose, and regional policy before a retrieved passage or database field reaches prompt-building code.
 
@@ -307,13 +307,13 @@ A common production stack might use PostgreSQL for workflow state and Redis for 
 
 These products do different jobs. Context policy coordinates them without pretending that the vector index owns business truth or that a cache owns permanent state.
 
-### Select, budget, and preserve semantic units
+### Choose Complete Passages That Fit The Token Budget
 
 Selection turns candidates into the actual working view. Required blocks enter first. Optional evidence competes within a capped budget. Duplicates and superseded revisions are removed.
 
 Pruning should respect meaningful boundaries. Keep a policy rule with its exception. Keep a JSON object valid. Keep a tool schema complete. Cutting at an arbitrary token index can reverse meaning or produce malformed data.
 
-### Record a projection manifest
+### Record Which Information Reached The Model
 
 A **projection manifest** records how the context was assembled without copying every sensitive token into general telemetry. It may contain:
 
@@ -337,7 +337,7 @@ A **projection manifest** records how the context was assembled without copying 
 
 This manifest supports reproduction, debugging, evaluation, and audit. Store it under a retention policy appropriate to the identifiers it contains. Keep raw prompts and tool payloads behind stricter content-capture controls.
 
-## Ordering and Token Budgets Express Priorities
+## Set The Order And Token Budget For Context
 <!-- section-summary: Token allocation and block order reveal which information the application considers essential for a model decision. -->
 
 A **token budget** is a plan for spending the model's limited input capacity. In essence, it converts product priorities into space reservations.
@@ -376,7 +376,7 @@ Ordering also matters. Keep block types stable and clearly labelled so the model
 
 Avoid one universal ordering rule. Some tasks benefit from evidence immediately before the question; others rely on a fixed instruction prefix and structured input. Test realistic alternatives with the same eval set. The best order is the one that consistently preserves required evidence use, instruction following, latency, and cost for that workload.
 
-## Compaction Keeps Long Runs Focused
+## Summarize Long Runs Without Losing Important State
 <!-- section-summary: Compaction reduces old interaction history while durable state and artefacts preserve exact facts that must survive. -->
 
 Long-running work produces messages, tool results, intermediate plans, errors, and revisions. Replaying the entire history eventually adds cost and noise. **Compaction** creates a smaller representation of earlier work so the model can continue with the goal, key decisions, open questions, and useful references.
@@ -483,7 +483,7 @@ Useful context-quality measures include:
 - **injection resistance:** whether hostile data changes behaviour or tool access;
 - **task outcome:** whether the final response or action succeeds.
 
-### Observe the assembly path
+### Trace How Context Was Built
 
 OpenTelemetry can connect context assembly to retrieval, model, and tool spans. Current Generative AI semantic conventions cover operations and token usage, while application-specific context fields should use a clear project namespace. The conventions are still evolving, so pin the version emitted by your instrumentation and review upgrades deliberately.
 

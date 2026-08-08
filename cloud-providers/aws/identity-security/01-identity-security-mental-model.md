@@ -91,10 +91,6 @@ graph TB
     U4[Diana]:::other --> ReadG
     U5[Eve]:::other --> DevG
     U5 --> ReadG
-
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef security fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef other fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 Notice Eve belongs to both `Developers` and `ReadOnly`. A user can be in multiple groups and receives the combined permissions. New engineer joins? Add them to the right group. Engineer leaves? Remove them from the groups.
@@ -206,10 +202,6 @@ graph LR
     IDC -->|AssumeRole| STS
     STS --> DevAcct
     STS --> Prod
-
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef security fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef other fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 The engineer authenticates once against the identity provider. From there, Identity Center handles which AWS accounts the engineer can access, which permission sets they can use, and how long each session lasts.
@@ -428,10 +420,6 @@ graph TB
     ProdAcct --> LambdaRole
     ProdAcct --> EC2Role
     DevAcct --> CrossRole
-
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef security fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef other fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 The diagram connects the pieces in the order we introduced them.

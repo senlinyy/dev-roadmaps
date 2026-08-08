@@ -9,19 +9,19 @@ id: "article-mlops-model-evaluation-choosing-evaluation-metric"
 
 ## Table of Contents
 
-1. [An Evaluation Metric Summarizes One Question About a Model](#an-evaluation-metric-summarizes-one-question-about-a-model)
+1. [What An Evaluation Metric Tells You About A Model](#what-an-evaluation-metric-tells-you-about-a-model)
 2. [Start With the Task, Decision, Cost, and Operating Rule](#start-with-the-task-decision-cost-and-operating-rule)
 3. [Match the Metric to What the Model Predicts](#match-the-metric-to-what-the-model-predicts)
-4. [Use One Primary Metric With Protective Guardrails](#use-one-primary-metric-with-protective-guardrails)
-5. [Choose the Operating Point Before Judging the Decision](#choose-the-operating-point-before-judging-the-decision)
-6. [Check Probability Quality if the Score Carries Meaning](#check-probability-quality-if-the-score-carries-meaning)
-7. [Connect Offline Metrics to Production Outcomes](#connect-offline-metrics-to-production-outcomes)
+4. [Choose One Main Metric And Set Limits On Other Harms](#choose-one-main-metric-and-set-limits-on-other-harms)
+5. [Choose The Decision Threshold Before Judging The Model](#choose-the-decision-threshold-before-judging-the-model)
+6. [Check Whether Predicted Probabilities Match Real Outcomes](#check-whether-predicted-probabilities-match-real-outcomes)
+7. [Check Whether Offline Improvements Lead To Better Production Outcomes](#check-whether-offline-improvements-lead-to-better-production-outcomes)
 8. [Add Baselines, Segments, and Uncertainty](#add-baselines-segments-and-uncertainty)
-9. [Turn the Choice Into a Repeatable Metric Contract](#turn-the-choice-into-a-repeatable-metric-contract)
+9. [Record How Every Model Will Be Evaluated](#record-how-every-model-will-be-evaluated)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
-## An Evaluation Metric Summarizes One Question About a Model
+## What An Evaluation Metric Tells You About A Model
 <!-- section-summary: An evaluation metric turns predictions and known outcomes into a number that answers one defined question about model behaviour. -->
 
 Imagine a model that selects urgent cases for a review queue. Out of 1,000 cases, 50 are truly urgent. The model catches 45 of them and sends 150 cases to reviewers.
@@ -56,9 +56,6 @@ flowchart TD
     M --> E["Evidence limits<br/>Baseline, segments, uncertainty"]
     E --> R["Release question"]
 
-    classDef purpose fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
     class T,D,C purpose
     class O,M mechanism
     class E,R decision
@@ -160,7 +157,7 @@ A compact map helps summarize the choice after the theory is understood:
 | Ordered list | Are useful items placed inside the visible positions? | Precision@k, recall@k, MRR, NDCG |
 | Probability | Do scores reward good probability estimates and match observed risk? | Log loss, Brier loss, calibration curve |
 
-## Use One Primary Metric With Protective Guardrails
+## Choose One Main Metric And Set Limits On Other Harms
 <!-- section-summary: A primary metric represents the main intended benefit, while guardrails keep other harms, constraints, and important populations visible. -->
 
 Production decisions rarely have one consequence. A model may find more valuable cases and create more customer friction at the same time. Compressing both effects into one unexplained number hides the trade-off that reviewers need to judge.
@@ -179,13 +176,13 @@ A utility or cost function can combine outcomes if the organization understands 
 
 This measure connects directly to a business decision if each term comes from defensible evidence. Weak estimates can make a precise-looking score fragile. Keep the underlying outcomes visible beside the total so reviewers can see what changed.
 
-### Avoid optimizing the guardrail away
+### Do Not Trade Away A Safety Limit For A Better Main Score
 
 If one metric selects the model and every other metric is reviewed casually, teams tend to accept regressions after investing in a candidate. Write primary and guardrail limits before the final holdout result appears. The same rule should apply to each candidate in the review round.
 
 Composite leaderboards can still support exploration. Release evidence needs the actual decision dimensions: benefit, harm, capacity, segments, and uncertainty.
 
-## Choose the Operating Point Before Judging the Decision
+## Choose The Decision Threshold Before Judging The Model
 <!-- section-summary: A threshold or cutoff turns model outputs into product actions and determines the precision, recall, workload, and harm users experience. -->
 
 A binary classifier often emits a score between zero and one. The threshold turns that score into an action. Lowering it usually selects more cases, which often raises recall and alert volume while reducing precision. Raising it usually selects fewer cases and risks more false negatives.
@@ -232,7 +229,7 @@ Use validation data or cross-validation to choose the threshold. Then freeze the
 
 Top-k ranking and quantile forecasts have equivalent operating choices. The team should select `k` from the visible product surface and choose a forecast quantile from the asymmetric business cost.
 
-## Check Probability Quality if the Score Carries Meaning
+## Check Whether Predicted Probabilities Match Real Outcomes
 <!-- section-summary: Probability evaluation checks whether scores reward honest estimates and whether groups of similar scores occur at the predicted rate. -->
 
 Suppose 100 cases receive scores near `0.8`. If the score is presented as an 80 percent risk, roughly 80 comparable cases should eventually show the outcome. **Calibration** describes this agreement between predicted probability and observed frequency.
@@ -249,7 +246,7 @@ Fitting a calibrator on the same data used to train the classifier produces opti
 
 Calibration can also vary across time and segments. A globally calibrated risk model may overstate risk for one region and understate it for another. Segment calibration and support counts belong in the report if probability meaning influences a consequential action.
 
-## Connect Offline Metrics to Production Outcomes
+## Check Whether Offline Improvements Lead To Better Production Outcomes
 <!-- section-summary: Offline metrics measure behaviour on labelled examples, while production outcomes also depend on data freshness, workflow adoption, system reliability, and user response. -->
 
 Offline evaluation asks how predictions compare with known outcomes under a recorded protocol. Production asks whether the complete system improves a real workflow under current data and user behaviour.
@@ -272,9 +269,6 @@ flowchart TD
     S["Service reliability"] --> W
     H["Human and user response"] --> O
 
-    classDef offline fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef production fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class L,P,M offline
     class R,W decision
     class O,D,S,H production
@@ -303,13 +297,13 @@ Use several baselines for different questions:
 
 The comparison should use the same eligible examples, label policy, operating rule, and metric implementation. Candidate-versus-production decisions work best with paired predictions for the same units.
 
-### Segment reports limit broad claims
+### Use Segment Results To Limit Broad Claims
 
 Overall averages can hide a failing language, region, device, class, horizon, or workflow route. Choose segments from known harms, product boundaries, incident history, and domain knowledge.
 
 Each segment needs its sample size, candidate and baseline values, coverage, and uncertainty. Sparse evidence should narrow the release claim or trigger targeted collection. Removing the segment from the report would turn missing knowledge into confidence.
 
-### Point estimates need uncertainty
+### Add Confidence Intervals To Point Estimates
 
 Evaluation data is a sample from the population the team cares about. Another valid sample would produce a different metric. Confidence intervals and paired comparisons show the precision of the estimate.
 
@@ -317,10 +311,10 @@ The resampling or statistical unit should follow the real dependence. Many rows 
 
 The interval should answer a release question: is the improvement large enough to matter, and is the harmful end still acceptable? Multiple metrics and many segment searches also need care because some apparent gains occur by chance.
 
-## Turn the Choice Into a Repeatable Metric Contract
+## Record How Every Model Will Be Evaluated
 <!-- section-summary: A metric contract records the target, population, operating rule, primary measure, guardrails, baselines, segments, uncertainty, and release interpretation before final results appear. -->
 
-A **metric contract** is the versioned agreement that tells the evaluation job and reviewers how a candidate will be judged. It keeps the product reasoning beside the code that calculates the evidence.
+The team needs a versioned record of how every candidate will be judged. This record is called a **metric contract**. It keeps the product reasoning beside the code that calculates the evidence.
 
 The contract should include:
 
@@ -364,7 +358,7 @@ The example stays focused on the decision. It avoids dozens of library options a
 
 *The contract preserves why each metric exists and which product boundary it protects.*
 
-### Automate calculation without outsourcing judgement
+### Automate Metric Calculation And Keep Final Judgement With Reviewers
 
 Scikit-learn provides metric functions and scoring interfaces for model selection. Be explicit about `scoring`; estimator defaults are commonly accuracy for classifiers and R² for regressors, which may have little connection to the product decision.
 

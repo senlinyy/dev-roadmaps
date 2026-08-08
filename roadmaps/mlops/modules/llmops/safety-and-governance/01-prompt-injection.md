@@ -10,18 +10,18 @@ id: "article-mlops-llmops-prompt-injection"
 ## Table of Contents
 
 1. [What Prompt Injection Means](#what-prompt-injection-means)
-2. [Direct and Indirect Injection](#direct-and-indirect-injection)
-3. [Instructions and Data Need Different Trust](#instructions-and-data-need-different-trust)
-4. [Why Model-Only Filtering Falls Short](#why-model-only-filtering-falls-short)
-5. [Map the Complete Attack Path](#map-the-complete-attack-path)
-6. [Layer One: Reduce the Influence of Untrusted Content](#layer-one-reduce-the-influence-of-untrusted-content)
-7. [Layer Two: Limit the Authority Available to the Model](#layer-two-limit-the-authority-available-to-the-model)
-8. [Layer Three: Put a Gate Between Reading and Acting](#layer-three-put-a-gate-between-reading-and-acting)
-9. [Use Managed Detection as One Layer](#use-managed-detection-as-one-layer)
-10. [Test Security Properties Across the Whole Workflow](#test-security-properties-across-the-whole-workflow)
-11. [Monitor for Attempts and Control Failures](#monitor-for-attempts-and-control-failures)
-12. [Respond to a Production Injection Incident](#respond-to-a-production-injection-incident)
-13. [Plan for Residual Risk](#plan-for-residual-risk)
+2. [Understand Direct And Indirect Prompt Injection](#understand-direct-and-indirect-prompt-injection)
+3. [Treat Instructions And Untrusted Data Differently](#treat-instructions-and-untrusted-data-differently)
+4. [Why Model Filters Cannot Provide Complete Protection](#why-model-filters-cannot-provide-complete-protection)
+5. [Trace The Complete Prompt Injection Attack Path](#trace-the-complete-prompt-injection-attack-path)
+6. [Layer One: Limit The Influence Of Untrusted Content](#layer-one-limit-the-influence-of-untrusted-content)
+7. [Layer Two: Limit The Model's Authority](#layer-two-limit-the-models-authority)
+8. [Layer Three: Check Before An External Action](#layer-three-check-before-an-external-action)
+9. [Add Managed Injection Detection As One Layer](#add-managed-injection-detection-as-one-layer)
+10. [Test Prompt Injection Across The Entire Workflow](#test-prompt-injection-across-the-entire-workflow)
+11. [Monitor Attack Attempts And Control Failures](#monitor-attack-attempts-and-control-failures)
+12. [Respond To A Production Prompt Injection Incident](#respond-to-a-production-prompt-injection-incident)
+13. [Document And Accept The Remaining Risk](#document-and-accept-the-remaining-risk)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
@@ -45,10 +45,6 @@ flowchart TD
     E -->|"Matches task and policy"| F["Bounded result"]
     E -->|"Outside task or authority"| G["Block, isolate, or review"]
 
-    classDef trusted fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef untrusted fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef model fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef control fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,F trusted
     class B,G untrusted
     class C,D model
@@ -57,7 +53,7 @@ flowchart TD
 
 Prompt injection can change an answer without touching another system. Its impact grows sharply once the model can search private data, call APIs, send messages, edit files, run code, or remember information for future sessions. Security therefore focuses on both the chance of model manipulation and the authority available after manipulation.
 
-## Direct and Indirect Injection
+## Understand Direct And Indirect Prompt Injection
 <!-- section-summary: Direct injection arrives through the person using the system, while indirect injection arrives through content the system reads on someone's behalf. -->
 
 Prompt injection has two main entry paths. Both can change model behaviour, although the attacker’s relationship to the application differs.
@@ -92,10 +88,6 @@ flowchart TD
     D --> E["Answer, plan, or tool request"]
     E --> F["Possible data exposure or side effect"]
 
-    classDef direct fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef indirect fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef system fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef impact fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A direct
     class B,C indirect
     class D,E system
@@ -104,7 +96,7 @@ flowchart TD
 
 NIST’s Generative AI Profile and MITRE ATLAS distinguish direct and indirect prompt injection because threat modelling needs both entry paths. Product tests should use both as well.
 
-## Instructions and Data Need Different Trust
+## Treat Instructions And Untrusted Data Differently
 <!-- section-summary: Developer policy defines the task, while user and external content provide goals or evidence under lower trust and narrower authority. -->
 
 Every piece of text in an LLM context can influence the model, yet each source plays a different role in the product. The application needs to preserve those roles so evidence cannot quietly gain the authority of developer policy.
@@ -138,7 +130,7 @@ evidence:
 
 This structure gives the harness and later security checks a durable record of the task and evidence source. The model still processes the text probabilistically, so the structure reduces influence without creating a perfect isolation boundary.
 
-### Structured outputs narrow the handoff
+### Use Structured Outputs At System Boundaries
 
 Free-form text can carry a new instruction into the next model or tool. A structured handoff forces the first stage to return only expected fields such as `claim`, `source_id`, and `confidence`. Application code validates types, allowed values, source ownership, and length before another stage receives the result.
 
@@ -146,7 +138,7 @@ For example, a document-reading stage can extract three cited facts from an untr
 
 Structured output improves control, although a malicious document can still distort the extracted facts. Source verification and action policy remain necessary.
 
-## Why Model-Only Filtering Falls Short
+## Why Model Filters Cannot Provide Complete Protection
 <!-- section-summary: Model prompts and classifiers reduce common attacks, while deterministic controls contain attacks that evade or confuse those probabilistic layers. -->
 
 A stronger system prompt can tell the model to treat documents as evidence and ignore instructions inside them. A dedicated classifier can flag likely attacks. A more robust model can resist many known patterns. These are useful layers because they stop common attempts early and improve the quality of ordinary runs.
@@ -161,7 +153,7 @@ The practical consequence is simple: a detector score can influence routing, qua
 
 Suppose a travel assistant detects no injection in a webpage and then proposes booking a premium ticket. The purchase service still checks the authenticated user, itinerary, spending limit, destination, and approval. A missed detection may produce a poor proposal. The business gate prevents an unauthorized purchase.
 
-## Map the Complete Attack Path
+## Trace The Complete Prompt Injection Attack Path
 <!-- section-summary: Threat modelling follows untrusted content through context, model decisions, capabilities, protected assets, and observable impact. -->
 
 Prompt-injection reviews often focus on the malicious sentence. Production security needs the entire path from source to impact because the same text creates very different risk in a read-only summariser and an agent with payment or shell access.
@@ -187,32 +179,30 @@ flowchart TD
     I["Authorization, approval, sandbox, egress policy"] -. controls .-> D
     J["Audit, alerts, and response"] -. observes .-> E
 
-    classDef path fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef defence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,C,D,E path
     class F,G,H,I,J defence
 ```
 
 The diagram also shows **defence in depth**. Each control owns a different transition. Source scanning reduces exposure. Context isolation limits influence. Tool scope reduces capability. Authorization and approval constrain effects. Monitoring reveals attempts and failures. One missed layer still meets another independently enforced boundary.
 
-## Layer One: Reduce the Influence of Untrusted Content
+## Layer One: Limit The Influence Of Untrusted Content
 <!-- section-summary: Ingestion and context controls preserve source trust, minimise exposed content, and constrain how external text travels through the workflow. -->
 
 The first defence layer manages what enters the model and how the application represents it. Its purpose is to reduce unnecessary exposure, preserve the origin of every passage, and stop raw external text from flowing freely toward privileged decisions.
 
-### Treat every external source as untrusted by default
+### Treat Every External Source As Untrusted
 
 Files, webpages, email bodies, tool responses, and user-editable knowledge entries all come from outside the application’s trusted policy. Record their source, owner, parser, collection, data classification, and review state. Retrieval should return those attributes with every chunk.
 
 A document uploaded to an approved knowledge base can still contain hostile content. Storage approval grants access to a collection. Every sentence inside the document remains external evidence.
 
-### Retrieve the smallest useful evidence set
+### Retrieve Only The Evidence Needed For The Task
 
 A model asked to compare two clauses needs those clauses and their surrounding definitions. It rarely needs the entire document repository. Narrow retrieval reduces both privacy exposure and the amount of adversarial content in context.
 
 Search filters should enforce tenant and collection access before ranking returns content. Source allowlists can restrict high-risk workflows to reviewed collections. New or suspicious content can enter a quarantine index that supports analyst inspection without reaching production agents.
 
-### Keep instruction-like text visible as evidence
+### Mark Retrieved Instructions As Untrusted Evidence
 
 Preserve source labels and delimiters around untrusted passages. Tell the model that quoted content can describe commands without granting permission to execute them. Ask for citations so reviewers can see which evidence shaped the answer.
 
@@ -220,7 +210,7 @@ For workflows with a read stage and an action stage, extract bounded facts into 
 
 These controls improve separation inside the context. They also create provenance for investigation if an attack passes through.
 
-## Layer Two: Limit the Authority Available to the Model
+## Layer Two: Limit The Model's Authority
 <!-- section-summary: Least privilege limits the data, tools, credentials, destinations, and network paths reachable during one task. -->
 
 The second defence layer assumes that hostile content may still influence the model. It limits the damage available from that influence.
@@ -244,7 +234,7 @@ Code-executing agents need an isolated filesystem and constrained process permis
 
 For MCP-based tools, the MCP security guidance reinforces normal authorization principles: validate token audience, avoid token passthrough, bind state to authenticated users, minimise scopes, and protect local servers with consent and sandboxing. Prompt injection can exploit weak tool infrastructure, so tool protocol security belongs in the same threat model.
 
-## Layer Three: Put a Gate Between Reading and Acting
+## Layer Three: Check Before An External Action
 <!-- section-summary: A deterministic action gate checks the original goal, trusted identity, proposed effect, data class, destination, and approval before execution. -->
 
 The highest-risk transition occurs after the model reads untrusted content and before another system performs a side effect. At this point, a model-generated suggestion can turn into an email, payment, file edit, account change, or network request.
@@ -286,7 +276,7 @@ Imagine an email assistant that reads a hostile message and proposes forwarding 
 
 OpenAI’s current Agents SDK supports input, output, and tool guardrails, plus durable human approval for sensitive tool calls. Equivalent orchestration layers can implement the same pause-and-resume contract. The durable security property is exact-action approval and server-side authorization, regardless of framework.
 
-## Use Managed Detection as One Layer
+## Add Managed Injection Detection As One Layer
 <!-- section-summary: Managed prompt-attack services can screen inputs and outputs, while application policy decides how detections affect routing, review, and authorization. -->
 
 Cloud platforms provide production services that detect prompt attacks. They reduce the amount of custom classifier work and provide versioned operational controls.
@@ -309,7 +299,7 @@ OpenAI Agents SDK guardrails can validate user input, final output, and tool inp
 
 These services occupy the **detection and workflow-control layer**. Their outputs need monitoring and calibration against real product traffic. A false positive can block a legitimate task. A false negative can pass hostile content. Authorization, least privilege, sandboxing, and approval remain independently enforced.
 
-## Test Security Properties Across the Whole Workflow
+## Test Prompt Injection Across The Entire Workflow
 <!-- section-summary: Prompt-injection tests place hostile instructions in realistic sources and verify that protected data and side effects stay behind their controls. -->
 
 A good security test checks the whole application path. A model refusal is useful, yet the stronger assertion is that protected data stayed private and no unauthorized action occurred.
@@ -347,7 +337,7 @@ def test_untrusted_instruction_cannot_send_data(agent_app, source):
 
 This test allows different refusal wording. It verifies the security invariant across four entry paths.
 
-### Measure containment as well as detection
+### Measure Whether Controls Contain Attacks
 
 Classify each result by the furthest layer reached:
 
@@ -361,7 +351,7 @@ The third result reveals a model-level failure and a successful security boundar
 
 Run the suite against changes to the model, system prompt, retrieval pipeline, parser, tools, permissions, guardrails, and orchestration code. Red-team exercises should also explore new paths beyond the fixed regression suite. OWASP recommends adversarial testing and breach simulations, and MITRE ATLAS provides technique identifiers for threat coverage.
 
-## Monitor for Attempts and Control Failures
+## Monitor Attack Attempts And Control Failures
 <!-- section-summary: Production monitoring combines detector findings, unexpected model behaviour, policy decisions, tool activity, and downstream outcomes. -->
 
 Production monitoring should reveal both attack pressure and defence performance. Teams need to see where hostile content enters, which controls stop it, and whether any request reaches protected data or a real side effect.
@@ -387,7 +377,7 @@ OpenTelemetry provides a common path for traces and metrics. Security-specific e
 
 An alert should point to an action. A rise in document-attack detections may quarantine one connector. Repeated egress blocks may disable a tool and page security. A single confirmed cross-tenant exposure requires incident handling even if the overall rate is tiny.
 
-## Respond to a Production Injection Incident
+## Respond To A Production Prompt Injection Incident
 <!-- section-summary: Incident response contains capability, preserves evidence, scopes exposure, repairs the failed boundary, and adds a regression test. -->
 
 Suppose an indirect injection causes an agent to send restricted information to an external endpoint. The response should follow the actual path of impact.
@@ -398,7 +388,7 @@ Disable the affected tool, connector, or route. Revoke short-lived credentials a
 
 Read-only functions with independent authorization may remain available. A safe degraded mode preserves useful service while the risky path stays closed.
 
-### Preserve and scope the evidence
+### Record Incident Evidence And Measure The Affected Runs
 
 Collect the trace, source hash, parser and retrieval versions, model and prompt versions, tool inventory, policy decisions, credentials used, network records, and downstream audit log. Keep sensitive payloads under incident access controls.
 
@@ -410,7 +400,7 @@ The durable fix belongs at the layer that allowed impact. A retrieval flaw needs
 
 Add the incident and safe variants to the evaluation suite. Test the original path plus nearby sources and tool combinations. Restore the capability through a controlled release and watch the new policy and denial signals.
 
-## Plan for Residual Risk
+## Document And Accept The Remaining Risk
 <!-- section-summary: Residual risk remains after controls, so autonomy and data access should match the consequence of a possible failure. -->
 
 Prompt injection has no universal perfect filter. OWASP describes fool-proof prevention as unclear because generative models respond stochastically to input. OpenAI’s agent safety guidance also emphasises that mitigations reduce risk without eliminating mistakes or manipulation.

@@ -10,7 +10,7 @@ id: "article-mlops-llmops-structured-outputs"
 ## Table of Contents
 
 1. [Structured Output Gives Software a Dependable Object](#structured-output-gives-software-a-dependable-object)
-2. [The Seven Layers of a Structured-Output Boundary](#the-seven-layers-of-a-structured-output-boundary)
+2. [Check Structured Output At Seven Separate Layers](#check-structured-output-at-seven-separate-layers)
 3. [Define the Object Before the Schema](#define-the-object-before-the-schema)
 4. [JSON Schema Describes the Allowed Shape](#json-schema-describes-the-allowed-shape)
 5. [Read the Provider Response State First](#read-the-provider-response-state-first)
@@ -18,8 +18,8 @@ id: "article-mlops-llmops-structured-outputs"
 7. [Validate Meaning, Policy, and Authority](#validate-meaning-policy-and-authority)
 8. [Separate Returned Data From Requested Actions](#separate-returned-data-from-requested-actions)
 9. [Match Recovery to the Failure](#match-recovery-to-the-failure)
-10. [Version the Contract With Its Consumers](#version-the-contract-with-its-consumers)
-11. [Evaluate the Whole Boundary](#evaluate-the-whole-boundary)
+10. [Update Structured Output Safely Across Its Consumers](#update-structured-output-safely-across-its-consumers)
+11. [Test Structured Output From Generation To Final Action](#test-structured-output-from-generation-to-final-action)
 12. [What to Carry Into Production](#what-to-carry-into-production)
 13. [References](#references)
 
@@ -59,11 +59,6 @@ flowchart TD
     G -->|"Accepted"| H["Support workflow consumes the object"]
     G -->|"Rejected"| I["Correction or human review"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef good fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B model
     class C,G gate
@@ -79,11 +74,11 @@ Three terms are easy to confuse:
 
 Asking a model to “return JSON” only targets the first item. The response may be valid JSON and still omit `decision`, invent a new reason code, or use a string where the application expects an array. A schema gives the contract enough precision for machines to check it.
 
-## The Seven Layers of a Structured-Output Boundary
+## Check Structured Output At Seven Separate Layers
 
 <!-- section-summary: A production boundary has seven separate layers, from provider response state through evaluation, and each layer answers a different question. -->
 
-It helps to picture structured output as a stack of seven contracts. Each layer answers one question, and a successful answer at one layer says nothing about the layers below it.
+A production system checks structured output at seven separate layers. Each layer answers one question, and passing one layer does not prove that the layers below it will pass.
 
 ```mermaid
 flowchart TD
@@ -94,10 +89,6 @@ flowchart TD
     L5 --> L6["6. Recovery policy<br/>What should happen after each failure class?"]
     L6 --> L7["7. Evaluation<br/>Does the boundary work across realistic cases?"]
 
-    classDef provider fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef contract fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef safety fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef operation fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class L1 provider
     class L2,L3,L5 contract
     class L4 safety
@@ -378,10 +369,6 @@ flowchart TD
     D -->|"No"| Z["Create approval or review task"]
     D -->|"Yes"| E["Consumer may accept the decision"]
 
-    classDef candidate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef accept fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A candidate
     class B,C,D gate
     class X,Y,Z stop
@@ -412,11 +399,6 @@ flowchart TD
     G -->|"Yes"| H["Trusted runtime performs action"]
     G -->|"No"| I["Deny or request approval"]
 
-    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef data fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef good fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,G question
     class B,C,D data
     class E,F action
@@ -456,10 +438,6 @@ flowchart TD
     B -->|"Semantic contradiction"| G["Add evidence, correct, or review"]
     B -->|"Policy or authority denial"| H["Return reason or request approval"]
 
-    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef retry fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef review fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B question
     class C,D retry
     class F,G review
@@ -468,7 +446,7 @@ flowchart TD
 
 Set a total attempt budget for the complete user request, not a separate generous budget for every layer. A provider retry followed by a correction retry and a fallback model call can quietly multiply latency and cost. The final trace should show every attempt and the object chosen for downstream use.
 
-## Version the Contract With Its Consumers
+## Update Structured Output Safely Across Its Consumers
 
 <!-- section-summary: A structured-output schema is an API contract, so changes must account for producers, stored objects, and every downstream consumer. -->
 
@@ -505,7 +483,7 @@ Store `schema_version` beside every object, along with the model-system version 
 
 Keep provider schemas and internal domain schemas related but separately owned. Provider constraints may support only part of JSON Schema. The internal validator can enforce additional limits and cross-field rules without pretending the provider enforces them during generation.
 
-## Evaluate the Whole Boundary
+## Test Structured Output From Generation To Final Action
 
 <!-- section-summary: Evaluation should measure response states, schema reliability, field correctness, evidence support, business outcomes, and compatibility across realistic slices. -->
 
@@ -554,11 +532,6 @@ flowchart TD
     H -->|"Yes"| I["Canary release"]
     H -->|"No"| J["Revise contract, prompt, model, or policy"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef test fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef report fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef good fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,C,D,E,F test
     class G,H report

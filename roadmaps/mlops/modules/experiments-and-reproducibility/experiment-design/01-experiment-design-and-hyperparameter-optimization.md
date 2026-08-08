@@ -10,18 +10,18 @@ id: "article-mlops-experiments-and-reproducibility-experiment-design-and-hyperpa
 ## Table of Contents
 
 1. [A Higher Score Can Come From an Unfair Comparison](#a-higher-score-can-come-from-an-unfair-comparison)
-2. [Start With the Decision](#start-with-the-decision)
-3. [Define the Hypothesis, Baseline, and Controlled Change](#define-the-hypothesis-baseline-and-controlled-change)
+2. [Decide What The Experiment Must Prove](#decide-what-the-experiment-must-prove)
+3. [Compare One Controlled Change With A Baseline](#compare-one-controlled-change-with-a-baseline)
 4. [Give Training, Validation, and Test Data Different Jobs](#give-training-validation-and-test-data-different-jobs)
 5. [Choose a Split That Matches Production](#choose-a-split-that-matches-production)
-6. [Define the Objective and Its Guardrails](#define-the-objective-and-its-guardrails)
-7. [Turn the Search Space Into Trials](#turn-the-search-space-into-trials)
-8. [Choose How the Search Spends Its Budget](#choose-how-the-search-spends-its-budget)
-9. [Separate Training Early Stopping From Trial Pruning](#separate-training-early-stopping-from-trial-pruning)
-10. [Run a Tracked Study With Optuna and MLflow](#run-a-tracked-study-with-optuna-and-mlflow)
-11. [Confirm the Candidate Instead of Trusting the Winning Trial](#confirm-the-candidate-instead-of-trusting-the-winning-trial)
-12. [Operate Tuning as a Shared Platform Capability](#operate-tuning-as-a-shared-platform-capability)
-13. [Record the Decision](#record-the-decision)
+6. [Decide What The Search Should Improve And Protect](#decide-what-the-search-should-improve-and-protect)
+7. [Choose Which Hyperparameters The Search May Try](#choose-which-hyperparameters-the-search-may-try)
+8. [Choose The Search Strategy And Compute Budget](#choose-the-search-strategy-and-compute-budget)
+9. [Understand The Difference Between Early Stopping And Trial Pruning](#understand-the-difference-between-early-stopping-and-trial-pruning)
+10. [Run Hyperparameter Search With Optuna And MLflow](#run-hyperparameter-search-with-optuna-and-mlflow)
+11. [Recheck The Selected Model Before Approval](#recheck-the-selected-model-before-approval)
+12. [Run Hyperparameter Search Reliably At Team Scale](#run-hyperparameter-search-reliably-at-team-scale)
+13. [Record Which Model Was Chosen And Why](#record-which-model-was-chosen-and-why)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
@@ -50,20 +50,20 @@ flowchart TD
 
 A sound study defines the decision and fair-comparison rules before an optimizer proposes configurations. This keeps the search focused on a stable question instead of letting attractive trial results reshape the evaluation.
 
-## Start With the Decision
+## Decide What The Experiment Must Prove
 <!-- section-summary: A useful experiment centers on the decision its evidence must support and the consequence of a wrong choice. -->
 
 At a high level, an experiment turns an uncertain modeling idea into evidence for a specific action. “Find the best model” is too vague because *best* could refer to accuracy, latency, memory, fairness, cost, or several of them together.
 
-### One Question, One Action
+### Connect One Experiment Question To One Decision
 
 A clearer question sounds like this: **Should the model owner advance a tuned fraud classifier to shadow evaluation if it improves average precision while keeping the false-positive review queue and prediction latency within their approved limits?**
 
 This sentence identifies the actor, the next action, the quality target, and the operational limits. It also makes failure concrete. A poor selection can overwhelm reviewers, delay legitimate payments, or exceed the serving budget. The visible outcome is a decision that the release team can carry out: advance the candidate, reject it, or revise the experiment.
 
-### The Contract Freezes the Rules
+### Write The Experiment Rules Before Running Trials
 
-Teams usually capture this agreement in an **experiment contract**. The contract is a small versioned document that stays stable across trials. It prevents the question from drifting after someone sees an attractive result.
+Before any trial runs, teams usually capture this agreement in an **experiment contract**. The contract is a small versioned document that stays stable across trials. It prevents the question from drifting after someone sees an attractive result.
 
 ```yaml
 decision: advance one fraud candidate to shadow evaluation
@@ -83,18 +83,18 @@ final_confirmation: protected_test_partition
 
 The contract leaves the winning parameter values open. It defines the rules under which a result will count as credible evidence.
 
-## Define the Hypothesis, Baseline, and Controlled Change
+## Compare One Controlled Change With A Baseline
 <!-- section-summary: A fair experiment compares a declared change with a meaningful baseline while holding the remaining conditions steady. -->
 
 At a high level, this part of the design separates the idea being tested from the reference it must beat. That separation lets the team explain what the result actually supports.
 
-### Hypothesis and Baseline
+### State Why The Change Should Beat The Baseline
 
 A **hypothesis** explains why a proposed change should affect an outcome. For example, “stronger regularization should reduce overfitting to older fraud patterns and improve average precision on newer transactions.” This statement can be contradicted by evidence, which makes it useful.
 
 The **baseline** is the reference the candidate must beat. In production work, the current deployed model is often the most important baseline because it represents the system users already receive. A transparent heuristic or linear model can add context, especially if a complex candidate barely improves on it.
 
-### Controlled Change
+### Keep Unrelated Conditions Fixed
 
 The **controlled change** names what is allowed to vary. If a team changes the label definition, feature pipeline, model family, and tuning space in one study, the result measures the whole bundle. It cannot explain which part caused the improvement. That bundle comparison may still support a release decision, provided the contract says so. A study intended to learn whether one feature helps should keep the remaining choices fixed.
 
@@ -114,15 +114,15 @@ Consider a churn model review. The ML engineer wants to learn whether a new feat
 
 At a high level, the three data partitions create boundaries between learning, choosing, and confirming. Those boundaries prevent evidence used to tune a model from also pretending to be an unbiased final check.
 
-### Training Teaches the Model
+### Use Training Data To Fit The Model
 
 The **training set** teaches the model. During training, the algorithm learns model parameters such as tree splits, coefficients, or neural-network weights.
 
-### Validation Guides Development
+### Use Validation Data To Choose A Model
 
 The **validation set** guides development choices. HPO repeatedly evaluates trials on validation data, so information from this set influences hyperparameter selection. Validation performance is therefore useful for choosing a candidate, though its optimism grows as the team tries more ideas against the same examples.
 
-### Test Data Confirms the Locked Candidate
+### Use Test Data For The Final Check
 
 The **test set** estimates how the locked candidate performs on evidence that played no role in selection. Its labels stay outside the HPO objective and outside informal trial review. The team opens that evidence after it has committed the chosen configuration and evaluation procedure.
 
@@ -158,22 +158,22 @@ A group split keeps related examples together. If one customer, patient, machine
 
 A time split trains on the past and evaluates on the future. It is the natural choice for demand forecasting, fraud, churn, ranking, and many other systems whose data changes over time. Feature calculations must also follow the time boundary. A rolling 30-day purchase total for a decision on Monday can include data available through Monday, never purchases from the following week.
 
-### Keep Preprocessing Inside the Split
+### Fit Preprocessing Only On Training Data
 
 Preprocessing can leak too. Imputation values, vocabulary, normalization statistics, target encoding, and feature selection must be learned from the training portion inside each fold. Scikit-learn pipelines help enforce this order by fitting transforms during the training step and applying the learned transform to validation data.
 
 Here is a concrete failure pattern. Before a quarterly risk-model review, a data scientist normalizes the full dataset and then creates folds. The mean and variance from validation records have already influenced the training inputs. The score increase may be small, yet it can decide a close comparison. The reviewer should require the transform inside the cross-validation pipeline. The visible correction is a rerun whose fold artifacts contain training-only preprocessing state.
 
-## Define the Objective and Its Guardrails
+## Decide What The Search Should Improve And Protect
 <!-- section-summary: The objective ranks trials, while guardrails keep an attractive score from hiding an unacceptable product or system regression. -->
 
 At a high level, the objective tells the optimizer what to pursue, while guardrails define outcomes the organization refuses to sacrifice. Reading both together prevents the search from optimizing a narrow metric at the product's expense.
 
-### The Primary Objective
+### Choose The Main Optimization Metric
 
 The **objective** is the number the optimizer tries to improve. It should represent the main decision as directly as the available offline evidence allows. Average precision is often more informative than raw accuracy for rare positive classes. Ranking systems may use nDCG at a declared cutoff. Forecasting systems may use a scale-aware error metric and evaluate important horizons separately.
 
-### Guardrails Define Eligibility
+### Set Limits Every Selected Model Must Meet
 
 A **guardrail** is a condition that every eligible candidate must satisfy. Latency, memory, cost, false-positive rate, calibration error, fairness slices, and model size are common examples. Guardrails prevent one aggregate score from erasing an operational or product failure.
 
@@ -191,7 +191,7 @@ flowchart TD
 
 Metric definitions also need versions. A change to label logic, slice membership, or evaluation code creates a new study boundary. Trial scores from different metric definitions should never share one leaderboard.
 
-## Turn the Search Space Into Trials
+## Choose Which Hyperparameters The Search May Try
 <!-- section-summary: A search space defines the permitted hyperparameter values, and each trial evaluates one resolved configuration under the fixed experiment rules. -->
 
 A model learns **parameters** from data. Linear-model coefficients and neural-network weights are parameters. A team chooses **hyperparameters** around that learning process. Regularization strength, learning rate, batch size, tree depth, and network width are hyperparameters.
@@ -211,12 +211,12 @@ if penalty == "elasticnet":
 
 Search ranges should fail validation if the training code ignores a field or the value cannot run on approved infrastructure. Imagine a platform engineer reviewing a nightly image-model study. The declared batch-size range includes values that exceed GPU memory. If every large trial crashes, the study spends its budget learning a platform limit that was already known. A preflight check can reject those values before workers start, leaving failed trial records for unexpected runtime errors.
 
-## Choose How the Search Spends Its Budget
+## Choose The Search Strategy And Compute Budget
 <!-- section-summary: Search algorithms propose configurations, while schedulers and pruners decide how much resource each trial receives. -->
 
 At a high level, every HPO study has two allocation decisions. The search algorithm chooses the next configuration, and the resource policy chooses how long that trial may continue.
 
-### Grid, Random, and Bayesian Search
+### Choose Between Grid, Random, And Bayesian Search
 
 **Grid search** evaluates every listed combination. It is useful for a small discrete space, such as three regularization values crossed with two feature choices. Its cost grows rapidly as dimensions are added.
 
@@ -224,7 +224,7 @@ At a high level, every HPO study has two allocation decisions. The search algori
 
 **Bayesian optimization** uses completed results to propose promising configurations. Optuna's default Tree-structured Parzen Estimator, or **TPE**, models parameter values from stronger and weaker trials, then favors regions associated with stronger outcomes. Early suggestions still need broad exploration because the optimizer has little evidence at the start.
 
-### Multi-Fidelity Scheduling
+### Allocate More Compute To Promising Trials
 
 The experiment budget should include maximum trials, wall-clock time, parallel workers, per-trial hardware, and a retry policy. These limits belong in the contract. Increasing parallelism can shorten elapsed time while consuming the same or greater compute. It can also reduce how much each new Bayesian suggestion learns from earlier completed trials.
 
@@ -240,16 +240,16 @@ flowchart TD
     K2 --> R3["Final round<br/>(few trials, full resource)"]
 ```
 
-## Separate Training Early Stopping From Trial Pruning
+## Understand The Difference Between Early Stopping And Trial Pruning
 <!-- section-summary: Training early stopping controls one model's fitting process, while HPO pruning abandons an entire configuration so the study can spend resources elsewhere. -->
 
 At a high level, both mechanisms save compute by ending work early. Training early stopping judges progress inside one model, while HPO pruning judges whether an entire configuration deserves more of the study budget.
 
-### Training-Level Decision
+### Stop One Model's Training Early
 
 **Training early stopping** belongs inside one trial. It watches that model's validation curve and ends fitting after improvement has stalled. The trial may still be a successful completed trial, and the selected checkpoint may come from an earlier epoch.
 
-### Study-Level Decision
+### Stop An Entire Trial Early
 
 **HPO pruning** belongs to the study. It compares one trial's intermediate evidence with the study's pruning rule. If the configuration looks uncompetitive after the required warmup, the study abandons the whole trial and reallocates the remaining budget.
 
@@ -266,7 +266,7 @@ flowchart TD
 
 Both rules need a warmup. Some models improve slowly at the start, and noisy early metrics can remove a configuration that would later perform well. The study should preserve completed, pruned, and failed statuses. A pruned trial represents an intentional budget decision; a failed trial represents an execution or configuration error.
 
-## Run a Tracked Study With Optuna and MLflow
+## Run Hyperparameter Search With Optuna And MLflow
 <!-- section-summary: Optuna can suggest and prune trials while MLflow records the parameters, metrics, lineage, and outcomes needed for review. -->
 
 Optuna is a current open-source HPO framework with samplers and pruners. MLflow provides experiment tracking. A common implementation uses one MLflow parent run for the study and a child run for each trial. The parent stores the experiment contract, data manifest, code revision, environment image, search method, and budget. Each child stores one configuration, its metrics, status, and artifacts.
@@ -334,7 +334,7 @@ At the review meeting, the model owner should see more than `study.best_value`. 
 
 The same design works with other current industrial stacks. W&B Sweeps combines search configuration with tracked runs. Amazon SageMaker Automatic Model Tuning and Azure Machine Learning sweep jobs manage trial execution on their cloud training platforms. Distributed systems such as Ray Tune can coordinate large searches across a cluster. The tool can change; the experiment contract, leakage controls, budget, lineage, and final confirmation remain required.
 
-## Confirm the Candidate Instead of Trusting the Winning Trial
+## Recheck The Selected Model Before Approval
 <!-- section-summary: The top validation trial is a candidate whose stability, guardrails, and protected test performance still need confirmation. -->
 
 Searching many configurations creates **selection bias**. Some trial will benefit from random variation in the validation set, training seed, or execution. The largest validation score is therefore expected to look slightly better than its true future performance.
@@ -358,7 +358,7 @@ If the protected test result disappoints, the team records that outcome and form
 
 For limited datasets, **nested cross-validation** provides a stronger estimate. Each outer fold acts as unseen evaluation data, while an inner search selects hyperparameters using only the outer fold's training portion. It costs more because the tuning study repeats across outer folds. High-risk or data-constrained decisions may justify that expense.
 
-## Operate Tuning as a Shared Platform Capability
+## Run Hyperparameter Search Reliably At Team Scale
 <!-- section-summary: Production tuning needs durable studies, isolated workers, quotas, searchable lineage, and explicit failure handling around the optimizer. -->
 
 The optimization library is one component of a production HPO system. The surrounding platform owns durable study storage, immutable datasets, pinned containers, isolated workers, secrets, queues, quotas, logs, cancellation, and artifact retention.
@@ -382,7 +382,7 @@ The platform needs an execution view that separates queued and running work from
 
 Managed HPO services can reduce infrastructure ownership. SageMaker Automatic Model Tuning creates training jobs from declared ranges and an objective. Azure Machine Learning sweep jobs combine a search space, sampling algorithm, primary metric, limits, and early-termination policy. W&B Sweeps suits teams that already use W&B for tracked experiments. Optuna with MLflow gives teams direct control and works across local, Kubernetes, and managed-job environments. Choose the execution layer that matches the organization's existing training platform and operational ownership.
 
-## Record the Decision
+## Record Which Model Was Chosen And Why
 <!-- section-summary: A decision record connects the experiment evidence to the action the team approved and preserves reasons for future reviewers. -->
 
 The final artifact is a decision record. In essence, it connects the technical evidence to the action that an accountable owner approved. It links the contract, baseline, study, chosen trial, rejected alternatives, seed reruns, protected test report, guardrails, cost, limitations, approvers, and next action.

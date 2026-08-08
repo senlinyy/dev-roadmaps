@@ -12,18 +12,18 @@ id: "article-mlops-model-evaluation-bias-fairness-responsible-evaluation"
 1. [What a Fairness Review Is Trying to Learn](#what-a-fairness-review-is-trying-to-learn)
 2. [Overall Quality, Group Performance, Allocation, and Representation Ask Different Questions](#overall-quality-group-performance-allocation-and-representation-ask-different-questions)
 3. [Define the People, Attributes, and Intersections in Scope](#define-the-people-attributes-and-intersections-in-scope)
-4. [Map the Decision and Harm Before Choosing a Metric](#map-the-decision-and-harm-before-choosing-a-metric)
-5. [The Evidence Can Carry Bias Before the Model Trains](#the-evidence-can-carry-bias-before-the-model-trains)
+4. [Describe The Decision And Possible Harm Before Choosing A Metric](#describe-the-decision-and-possible-harm-before-choosing-a-metric)
+5. [Check For Bias In Data And Labels Before Training](#check-for-bias-in-data-and-labels-before-training)
 6. [Choose Fairness Metrics From the Harm](#choose-fairness-metrics-from-the-harm)
 7. [Fairness Criteria Can Conflict](#fairness-criteria-can-conflict)
-8. [Read Group Results With Counts and Uncertainty](#read-group-results-with-counts-and-uncertainty)
-9. [Thresholds and Product Policies Shape the Outcome](#thresholds-and-product-policies-shape-the-outcome)
-10. [A Disparity Identifies a Problem, Not Its Cause](#a-disparity-identifies-a-problem-not-its-cause)
-11. [Mitigation Can Change the Data, Model, Policy, or Product](#mitigation-can-change-the-data-model-policy-or-product)
-12. [Use Current Fairness Tooling After the Framework Is Clear](#use-current-fairness-tooling-after-the-framework-is-clear)
+8. [Interpret Group Results With Counts And Uncertainty](#interpret-group-results-with-counts-and-uncertainty)
+9. [Check How Thresholds And Product Rules Change Group Outcomes](#check-how-thresholds-and-product-rules-change-group-outcomes)
+10. [Investigate The Cause Of Every Group Disparity](#investigate-the-cause-of-every-group-disparity)
+11. [Choose A Repair In The Data, Model, Policy, Or Product](#choose-a-repair-in-the-data-model-policy-or-product)
+12. [How Current Tools Measure And Reduce Fairness Gaps](#how-current-tools-measure-and-reduce-fairness-gaps)
 13. [Handle Sensitive Attributes With Purpose and Control](#handle-sensitive-attributes-with-purpose-and-control)
-14. [Turn the Review Into Governance and a Release Decision](#turn-the-review-into-governance-and-a-release-decision)
-15. [Continue the Review in Production](#continue-the-review-in-production)
+14. [Use Fairness Results To Approve, Limit, Or Reject A Release](#use-fairness-results-to-approve-limit-or-reject-a-release)
+15. [Monitor Fairness After Release](#monitor-fairness-after-release)
 16. [The Main Idea](#the-main-idea)
 17. [References](#references)
 
@@ -65,10 +65,6 @@ flowchart TD
     G --> H
     H --> I["Mitigate, restrict, monitor,<br/>or decline the ML use"]
 
-    classDef context fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef system fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C context
     class D,E,F,G system
     class H evidence
@@ -92,7 +88,7 @@ Each concern points to different evidence and a different repair.
 
 Before choosing metrics, separate the four questions that are often mixed together.
 
-### Overall quality describes the population as one group
+### Measure Overall Quality Across The Full Population
 
 Overall accuracy, recall, mean error, or ranking quality describes broad model performance.
 It answers whether the model supports its main task across the evaluation population.
@@ -105,7 +101,7 @@ Overall quality also hides distribution.
 A speech recognizer with a 7 percent word error rate can average a 4 percent rate for one accent group and a 20 percent rate for another.
 The overall score says little about the second group’s experience.
 
-### Group performance asks who receives weaker predictions
+### Compare Prediction Quality Across Groups
 
 **Group performance** compares quality or error rates across groups.
 For speech recognition, the team may compare word error rate.
@@ -115,7 +111,7 @@ For a demand forecast, it may compare absolute error across neighbourhoods if fo
 This question often describes **quality-of-service harm**.
 People can access the same feature while receiving substantially different quality.
 
-### Allocation asks who receives a benefit or burden
+### Check Who Receives Benefits Or Burdens
 
 An **allocation harm** occurs when a system helps decide who receives an opportunity, resource, service, review, restriction, or cost.
 Examples include an interview, a loan review, an insurance investigation, a school place, extra identity verification, or access to a promotion.
@@ -124,7 +120,7 @@ Selection rate describes how often each group receives the positive action.
 Error rates add crucial context.
 If qualified applicants from one group are rejected more often, false-negative rate reveals a lost-opportunity pattern that overall selection alone cannot explain.
 
-### Representation asks how a system depicts or recognizes people
+### Check How The System Represents Or Recognizes People
 
 A **representation harm** concerns visibility, stereotyping, denigration, erasure, or the way identities and cultures appear in system outputs.
 Search results that repeatedly associate one group with low-status roles provide one example.
@@ -178,7 +174,7 @@ Self-identified gender, a category inferred from a name, and a reviewer’s perc
 An image classifier that estimates perceived age supplies evidence about appearance, not a person’s verified age.
 The data documentation should state how the attribute was collected, who supplied it, and which values remain unknown.
 
-### Proxies can carry group information
+### Check Whether Other Features Reveal Sensitive Group Membership
 
 A model may exclude a protected attribute and still reproduce group differences.
 A **proxy** is another feature correlated with the sensitive characteristic.
@@ -190,7 +186,7 @@ Removing one column therefore leaves a wider investigation.
 The team examines data history, feature meaning, model reliance, and outcome differences.
 Proxy analysis needs context because correlation alone supplies no proof of an unfair mechanism.
 
-### Intersections reveal experiences hidden by broad groups
+### Check Intersections Hidden By Broad Groups
 
 People belong to several groups at once.
 An overall result for women and an overall result for older adults can both pass while older women experience a concentrated failure.
@@ -216,10 +212,6 @@ flowchart TD
     H --> J["Evidence limitation and<br/>collection plan"]
     J --> I
 
-    classDef context fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef people fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef group fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef limit fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A context
     class B,C,D people
     class E,F,G,I group
@@ -231,7 +223,7 @@ Inferring identity from names, images, or geography can introduce another biased
 Sometimes the responsible result is a narrower claim: the available evidence cannot measure the intended groups reliably.
 The team can then pursue approved data collection, qualitative research, external evaluation, or a more cautious product scope.
 
-## Map the Decision and Harm Before Choosing a Metric
+## Describe The Decision And Possible Harm Before Choosing A Metric
 <!-- section-summary: A fairness question connects one product decision to the affected people, beneficial action, harmful error, and human or automated response. -->
 
 Metric names feel abstract until they are tied to a real action.
@@ -273,10 +265,6 @@ flowchart TD
     G --> H["Later outcome and appeal"]
     H --> I["Compare effects and errors<br/>across governed groups"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef system fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,C system
     class D,E,F,G action
@@ -291,14 +279,14 @@ Fairness requirements should be set before the final candidate result appears.
 Product, domain, policy, privacy, legal, and affected-stakeholder perspectives may all be needed.
 The result is a reviewed harm-and-measurement plan, not a metric chosen by whichever model currently scores best.
 
-## The Evidence Can Carry Bias Before the Model Trains
+## Check For Bias In Data And Labels Before Training
 <!-- section-summary: Historical decisions, labels, sampling, and measurement can create group differences that a model learns or that an evaluation hides. -->
 
 A model learns from records created by an earlier process.
 Those records can already contain unequal treatment or incomplete observation.
 Training faithfully on them may reproduce the process with greater scale and consistency.
 
-### Historical decisions can shape the label
+### Check Whether Past Decisions Changed The Labels
 
 Suppose a hiring dataset uses “received a strong annual review” as the target.
 Only people who were hired and remained long enough can receive that label.
@@ -312,7 +300,7 @@ Repayment is observed for approved applicants and usually unknown for rejected a
 This is sometimes called a **selective-label problem**: the old decision controls which outcomes become visible.
 A model trained on approved loans alone may have weak evidence about people whom the older policy excluded.
 
-### Labels can encode inconsistent judgment
+### Check Whether Reviewers Applied Labels Consistently
 
 Human labels often represent policy and interpretation.
 Content reviewers may disagree about sarcasm, reclaimed slurs, or dialect.
@@ -323,7 +311,7 @@ Measure agreement and disagreements by group where possible.
 Review the label guide, annotator coverage, escalation rules, and policy versions.
 A fairness gap built from inconsistent labels may describe the labelling process as much as the model.
 
-### Sampling can leave some experiences almost invisible
+### Check Whether Important Experiences Are Missing From The Sample
 
 Training and evaluation data may underrepresent a device, language, disability-related interaction, or service channel.
 The number of rows alone provides limited reassurance.
@@ -332,7 +320,7 @@ The sample also needs the relevant range of conditions and enough positive outco
 Targeted collection and stratified evaluation can strengthen the evidence.
 Sampling weights may be needed for full-population estimates if the fairness set intentionally oversamples smaller groups.
 
-### Measurement can work differently across groups
+### Check Whether Features And Sensors Work Equally Well Across Groups
 
 A feature or outcome may have unequal measurement quality.
 Wearable sensors can perform differently across skin tones or movement patterns.
@@ -356,10 +344,6 @@ flowchart TD
     G --> H["Model learns the recorded process"]
     H --> I["Fairness review checks each evidence boundary"]
 
-    classDef history fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef process fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef data fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef review fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A history
     class B,C,D,E,F process
     class G,H data
@@ -380,7 +364,7 @@ The decision and its harmful errors determine which comparison deserves priority
 Fairness metrics express a specific idea about which quantities should align across groups.
 Each one protects a different concern.
 
-### Selection-rate parity focuses on access to the predicted action
+### Use Selection-Rate Parity To Compare Access To The Predicted Action
 
 **Demographic parity** asks whether groups receive the positive prediction at similar rates.
 In probability notation, it compares `P(prediction = positive | group)`.
@@ -393,7 +377,7 @@ Selection parity alone leaves qualification and error patterns unexplained.
 Groups may have different observed outcome rates because of history, measurement, or other causes.
 A matching selection rate can also hide higher false negatives in one group.
 
-### Equal opportunity focuses on qualified people who receive the benefit
+### Use Equal Opportunity To Compare Benefits For Qualified People
 
 **Equal opportunity** compares true-positive rates across groups.
 Among people labelled positive, it asks how often the system predicts positive.
@@ -404,7 +388,7 @@ The complementary false-negative rate shows how often each group loses that oppo
 This criterion depends on the label.
 If “genuinely needs the service” is measured inconsistently across groups, equal-opportunity results inherit that problem.
 
-### Equalized odds protects both types of classification error
+### Use Equalized Odds To Compare Both Types Of Classification Error
 
 **Equalized odds** asks for similar true-positive rates and false-positive rates across groups.
 It therefore considers missed benefits and incorrectly assigned benefits or burdens.
@@ -412,7 +396,7 @@ It therefore considers missed benefits and incorrectly assigned benefits or burd
 A fraud system may use it to examine both missed fraud and legitimate payments incorrectly blocked.
 The criterion is demanding because threshold changes often move the two error rates in opposite directions.
 
-### Predictive parity asks what a positive decision means
+### Use Predictive Parity To Compare What A Positive Decision Means
 
 **Predictive parity** compares precision across groups.
 Among people who receive a positive prediction, it asks how often the positive outcome occurs.
@@ -420,7 +404,7 @@ Among people who receive a positive prediction, it asks how often the positive o
 This matters when a score or alert carries a claim of risk.
 If two groups receive the same “high risk” label and the observed event rate differs sharply, downstream reviewers may interpret the alert differently.
 
-### Calibration asks whether probabilities keep the same meaning
+### Use Calibration To Compare Whether Probabilities Keep The Same Meaning
 
 A score is **calibrated within groups** if cases assigned a probability near 0.7 experience the outcome about 70 percent of the time in each group.
 Calibration matters when the probability itself drives pricing, staffing, communication, or several thresholds.
@@ -428,7 +412,7 @@ Calibration matters when the probability itself drives pricing, staffing, commun
 Calibration should be checked across the score range.
 One average calibration error can hide a poorly calibrated band near the action boundary.
 
-### Individual and representation questions need other evidence
+### Use Other Evidence For Individual And Representation Harms
 
 **Individual fairness** asks whether similar people receive similar decisions.
 Its difficulty lies in defining “similar” without encoding the same unfair assumptions under review.
@@ -451,9 +435,6 @@ flowchart TD
     F --> L["Group calibration"]
     G --> M["Context-specific qualitative<br/>and quantitative evidence"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef harm fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef metric fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A question
     class B,C,D,E,F,G harm
     class H,I,J,K,L,M metric
@@ -489,9 +470,6 @@ flowchart TD
     E --> F["Selection rates and the meaning<br/>of positive decisions can change"]
     F --> G["Governance chooses which harm<br/>the system should prioritize"]
 
-    classDef condition fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef mechanism fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef tradeoff fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A condition
     class B,C,D,E mechanism
     class F,G tradeoff
@@ -509,7 +487,7 @@ Treating the rate as unquestioned ground truth can make the metric choice appear
 A responsible report therefore presents the chosen criterion, competing metrics, overall utility, and who accepted the trade-off.
 It avoids a leaderboard where the “fairest” candidate is simply the model that wins one selected number.
 
-## Read Group Results With Counts and Uncertainty
+## Interpret Group Results With Counts And Uncertainty
 <!-- section-summary: Fairness gaps need denominators, outcome counts, coverage, and uncertainty before they can support a release claim. -->
 
 Group metrics inherit every evidence requirement from segment evaluation.
@@ -554,9 +532,6 @@ flowchart TD
     G -->|"Yes"| H["Reviewed fairness result"]
     G -->|"No"| I["Collect evidence, narrow scope,<br/>or keep a safer workflow"]
 
-    classDef metric fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A metric
     class B,C,D,E,F,G evidence
     class H,I decision
@@ -571,7 +546,7 @@ If hundreds of groups and intersections are scanned, some extreme gaps will appe
 Predeclared fairness groups can support gates.
 Newly discovered groups need confirmation on fresh data, with immediate containment available for plausible high-severity harm.
 
-## Thresholds and Product Policies Shape the Outcome
+## Check How Thresholds And Product Rules Change Group Outcomes
 <!-- section-summary: The model score, decision threshold, human workflow, and fallback policy jointly determine who receives a benefit or burden. -->
 
 A model commonly produces a score.
@@ -615,10 +590,6 @@ flowchart TD
     G --> H["Workload, waiting time,<br/>appeals, and final outcomes"]
     H --> I["Evaluate the complete system"]
 
-    classDef score fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef policy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A score
     class B policy
     class C,D,E,F,G action
@@ -632,7 +603,7 @@ If a mitigation relies on human review, load-test the review queue and define th
 The policy version belongs in the fairness report.
 A threshold change, staffing change, or new fallback can alter experienced fairness even if the model artifact stays fixed.
 
-## A Disparity Identifies a Problem, Not Its Cause
+## Investigate The Cause Of Every Group Disparity
 <!-- section-summary: Group gaps are descriptive evidence, so diagnosis follows the data, labels, model, policy, and human workflow before choosing a repair. -->
 
 A group gap says that outcomes differ under the evaluated system.
@@ -673,10 +644,6 @@ flowchart TD
     G --> H["Test a targeted change"]
     H --> I["Re-evaluate fairness,<br/>utility, and new side effects"]
 
-    classDef finding fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef inspect fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A finding
     class B,C,D,E,F inspect
     class G,H action
@@ -691,7 +658,7 @@ Diagnosis ends with a testable mechanism and an owner.
 “The model is biased” is too broad for remediation.
 “The parser omits contractor credentials used more often in this group” names a data transformation, a concrete repair, and evidence that can prove recovery.
 
-## Mitigation Can Change the Data, Model, Policy, or Product
+## Choose A Repair In The Data, Model, Policy, Or Product
 <!-- section-summary: Fairness mitigation targets the layer that creates the harm and then verifies both the intended improvement and any new trade-offs. -->
 
 Suppose the investigation finds that a parser drops qualifications written in one credential format.
@@ -701,7 +668,7 @@ Changing the parser and rebuilding the evaluation rows targets the responsible l
 Fairness mitigation follows the same principle across the system.
 The repair should match the mechanism found during diagnosis.
 
-### Data and label mitigation repairs the evidence
+### Repair Biased Or Incomplete Data And Labels
 
 Data work can add underrepresented conditions, improve attribute coverage, correct parsing, revise a label guide, use multiple reviewers, or gather outcomes that the old policy never observed.
 
@@ -713,7 +680,7 @@ Suppose a speech model underperforms on a device-and-accent intersection because
 Targeted collection, audio-quality review, and a stratified evaluation set address the identified coverage gap.
 Recovery evidence includes improved word error rate for the intersection, stable performance elsewhere, and production tests on the actual device route.
 
-### Model mitigation changes the optimization problem
+### Change Model Training To Optimize A Fairness Constraint
 
 Fairlearn includes reduction algorithms such as `ExponentiatedGradient`.
 They turn constraints such as demographic parity or equalized odds into a sequence of weighted learning problems for a compatible estimator.
@@ -722,7 +689,7 @@ AIF360 also provides in-processing algorithms that incorporate fairness objectiv
 The chosen constraint encodes a value decision.
 The team should compare the resulting fairness metric, overall utility, calibration, group-specific errors, and operational cost.
 
-### Post-processing changes decisions after scoring
+### Change Decisions After Scoring
 
 Fairlearn’s `ThresholdOptimizer` and AIF360 post-processing algorithms can adjust decisions to satisfy a selected parity constraint.
 This can work with an existing model and avoids retraining.
@@ -732,7 +699,7 @@ The decision path may need sensitive attributes at inference time.
 The transformation can change calibration, selection volume, and treatment near the boundary.
 Deployment must reproduce the post-processing rule exactly, and governance must approve its use.
 
-### Product mitigation changes the surrounding workflow
+### Change The Surrounding Product Workflow
 
 Some harms are best controlled through the product.
 The system can abstain on unsupported cases, route them to a trusted workflow, present uncertainty to trained reviewers, add an appeal, or remove automation from a high-consequence action.
@@ -756,10 +723,6 @@ flowchart TD
     I -->|"Yes"| J["Controlled rollout"]
     I -->|"No"| K["Revise, narrow, or stop"]
 
-    classDef cause fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef mitigation fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A cause
     class B,C,D,E,F mitigation
     class G,H,I verify
@@ -774,10 +737,10 @@ A fairer model score can still produce unfair outcomes if the product policy, hu
 Roll out the complete change through a bounded pilot or staged release.
 Define success, stop conditions, fallback, review capacity, and the mature outcomes needed for confirmation.
 
-## Use Current Fairness Tooling After the Framework Is Clear
+## How Current Tools Measure And Reduce Fairness Gaps
 <!-- section-summary: Fairlearn, TFMA Fairness Indicators, AIF360, and managed platforms automate group evidence and mitigation after the team has defined the fairness question. -->
 
-Once the team has defined the decision, harms, groups, metrics, evidence limits, and release consequences, tools can run the analysis consistently.
+The fairness plan defines the decision, harms, groups, metrics, evidence limits, and release consequences. Current tools can then run that analysis consistently.
 They calculate group results and preserve artifacts.
 They cannot choose the ethical or legal meaning of fairness for the product.
 
@@ -849,14 +812,14 @@ The production data pipeline still validates and versions the inputs.
 CI reruns the chosen evaluation, while the approval workflow records the result.
 Deployment and monitoring then reproduce the reviewed model and policy.
 
-### Managed cloud tools need a lifecycle check
+### Check Whether Managed Fairness Tools Are Still Supported
 
 Azure Machine Learning’s Responsible AI dashboard includes cohort analysis, error analysis, model performance, interpretability, and fairness assessment for supported models.
 It can help teams inspect sensitive groups and share reviewed evidence inside an Azure ML workflow.
 Its fairness assessment uses categorical sensitive attributes, so continuous or more complex identity measures need a separate evaluation design.
 The fairness metric and target still come from the team’s harm analysis.
 
-Amazon SageMaker Clarify can calculate pre-training and post-training bias metrics and model explanations for existing customers.
+Amazon SageMaker Clarify remains available to existing customers for pre-training and post-training bias metrics and model explanations.
 AWS has closed Clarify to new customer access and states that the service will receive no new features.
 New AWS designs should use an available open-source evaluation job or another supported service and store governed results with the model approval evidence.
 
@@ -884,10 +847,6 @@ flowchart TD
     F --> G["Authorized reviewers"]
     D --> H["Access audit, retention,<br/>and deletion controls"]
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef restricted fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef output fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C source
     class D,E restricted
     class F,G output
@@ -919,7 +878,7 @@ Without that record, privacy protection can accidentally appear as a fairness pa
 Local law and organizational obligations vary.
 Privacy, legal, security, domain, and affected-stakeholder review should shape collection and use before the evaluation pipeline is deployed.
 
-## Turn the Review Into Governance and a Release Decision
+## Use Fairness Results To Approve, Limit, Or Reject A Release
 <!-- section-summary: Fairness evidence needs accountable owners, documented trade-offs, an enforceable product scope, and authority to stop or narrow a release. -->
 
 A fairness report has little force if every gap ends with “monitor after launch.”
@@ -945,10 +904,6 @@ flowchart TD
     E --> F["Production feedback and appeals"]
     F --> A
 
-    classDef govern fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef map fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef measure fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef manage fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A govern
     class B map
     class C measure
@@ -981,7 +936,7 @@ A scoped release is credible only if the product can identify and route the supp
 High-impact failures, invalid labels, weak attribute evidence, unlawful data handling, absent appeals, or unenforceable scope can each block release.
 The candidate’s overall improvement leaves those control failures unresolved.
 
-## Continue the Review in Production
+## Monitor Fairness After Release
 <!-- section-summary: Production monitoring follows the fairness plan through traffic, decisions, delayed outcomes, appeals, and changes to policy or population. -->
 
 Offline evaluation studies a bounded sample and one system version.
@@ -1015,10 +970,6 @@ flowchart TD
     H --> J["Update mitigation and<br/>future release evidence"]
     I --> J
 
-    classDef production fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef response fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A production
     class B,C,D,E,F,G decision
     class H,I,J response

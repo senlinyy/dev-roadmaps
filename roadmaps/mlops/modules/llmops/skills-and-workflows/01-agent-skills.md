@@ -9,21 +9,21 @@ id: "article-mlops-llmops-agent-skills"
 
 ## Table of Contents
 
-1. [An Agent Skill Teaches a Reusable Capability](#an-agent-skill-teaches-a-reusable-capability)
-2. [Skills Have a Specific Place in Agent Architecture](#skills-have-a-specific-place-in-agent-architecture)
-3. [The Skill Package Separates Procedure From Supporting Material](#the-skill-package-separates-procedure-from-supporting-material)
-4. [Discovery Selects the Procedure for the Task](#discovery-selects-the-procedure-for-the-task)
-5. [Progressive Loading Protects the Context Budget](#progressive-loading-protects-the-context-budget)
-6. [Execution Turns Instructions Into Checked Work](#execution-turns-instructions-into-checked-work)
-7. [The Runtime Enforces the Trust Boundary](#the-runtime-enforces-the-trust-boundary)
-8. [State and Idempotency Make Skills Safe to Retry](#state-and-idempotency-make-skills-safe-to-retry)
-9. [Versions Make Capability Behaviour Reproducible](#versions-make-capability-behaviour-reproducible)
-10. [Evaluation and Observability Cover Selection and Execution](#evaluation-and-observability-cover-selection-and-execution)
-11. [Ownership Carries the Skill Through Its Lifecycle](#ownership-carries-the-skill-through-its-lifecycle)
+1. [What An Agent Skill Does](#what-an-agent-skill-does)
+2. [Where Skills Fit In Agent Architecture](#where-skills-fit-in-agent-architecture)
+3. [What Goes Inside A Skill Package](#what-goes-inside-a-skill-package)
+4. [How The Runtime Selects A Skill For The Task](#how-the-runtime-selects-a-skill-for-the-task)
+5. [Load Skill Content In Stages](#load-skill-content-in-stages)
+6. [Turn Skill Instructions Into Verified Work](#turn-skill-instructions-into-verified-work)
+7. [Enforce Skill Permissions In The Runtime](#enforce-skill-permissions-in-the-runtime)
+8. [Make A Skill Safe To Retry](#make-a-skill-safe-to-retry)
+9. [Version Skills For Reproducible Behaviour](#version-skills-for-reproducible-behaviour)
+10. [Evaluate Skill Selection And Execution](#evaluate-skill-selection-and-execution)
+11. [Assign Ownership Across The Skill Lifecycle](#assign-ownership-across-the-skill-lifecycle)
 12. [Decide What Deserves a Reusable Skill](#decide-what-deserves-a-reusable-skill)
 13. [References](#references)
 
-## An Agent Skill Teaches a Reusable Capability
+## What An Agent Skill Does
 <!-- section-summary: A skill packages the operating knowledge that turns a broad agent capability into a repeatable way of performing one class of work. -->
 
 At a high level, an **agent skill** is a reusable package that teaches an agent how to perform a recognizable kind of work. The agent already knows how to reason, read files, and call tools. The skill supplies the procedure, local rules, supporting material, and checks that make those abilities useful for a particular job.
@@ -57,7 +57,7 @@ Each stage owns a different failure. A vague description can prevent discovery. 
 
 This makes a skill more substantial than a prompt fragment. It is a maintained capability artifact with an owner, a contract, a version, and evidence that it still works.
 
-## Skills Have a Specific Place in Agent Architecture
+## Where Skills Fit In Agent Architecture
 <!-- section-summary: Prompts, skills, tools, plugins, agents, and workflows solve different problems and connect through explicit boundaries. -->
 
 Several agent concepts involve instructions or actions, so their names can blur together. The simplest way to separate them is to ask what responsibility each one owns.
@@ -88,7 +88,7 @@ Imagine an agent preparing a customer-incident report. The skill defines how to 
 
 These boundaries guide architecture choices. Missing live data points to a tool or connector. Durable branching points to a workflow runtime. Reusable expert procedure points to a skill. A discoverable installable bundle points to a plugin.
 
-## The Skill Package Separates Procedure From Supporting Material
+## What Goes Inside A Skill Package
 <!-- section-summary: A skill package keeps the essential operating procedure in one instruction file and loads scripts, references, templates, and assets for the parts that need them. -->
 
 A skill needs one obvious entry point. In the open Agent Skills format, that entry point is `SKILL.md`: YAML frontmatter supplies discovery metadata, and the Markdown body supplies the core instructions.
@@ -109,7 +109,7 @@ deployment-review/
 
 The folders express different responsibilities. `SKILL.md` carries the reasoning framework and tells the agent which resource to use. `references/` carries facts, schemas, policies, or background that would overwhelm the main procedure. `scripts/` carries deterministic computation or validation. `assets/` carries templates and files that the agent copies or transforms.
 
-### Discovery metadata explains the trigger
+### Use Metadata To Describe When The Skill Applies
 
 The `name` is a stable identifier. The `description` states what the skill does and which requests should activate it. A description such as “helps with deployments” gives the selector very little information. A stronger description names the job and boundary:
 
@@ -124,7 +124,7 @@ The open specification also defines optional compatibility and metadata fields. 
 
 OpenAI skill packages can also include `agents/openai.yaml` for interface metadata, invocation policy, and tool dependencies. A declared dependency helps the host make a tool available. The permission to use that tool still comes from the runtime and the current user or workload identity.
 
-### Core instructions carry the operating framework
+### Put The Operating Procedure In Core Instructions
 
 The main instructions should answer the practical questions an engineer would ask before performing the work:
 
@@ -138,13 +138,13 @@ The main instructions should answer the practical questions an engineer would as
 
 The instructions should remain understandable without opening every reference. A skill that hides its central logic in six optional files forces the agent to reconstruct the procedure during each run.
 
-### References deepen facts that change independently
+### Keep Independent Facts In References
 
 A policy catalogue, provider-specific command guide, schema, or long worked example often belongs in `references/`. The main file tells the agent which reference fits the current task.
 
 For example, a deployment review may always use the same five-part risk framework. Kubernetes rollout rules and an internal production-approval policy can live in separate references because they change under different owners. Updating one policy no longer requires rewriting the entire skill.
 
-### Scripts handle deterministic work
+### Use Scripts For Deterministic Work
 
 Scripts fit tasks where the same input should produce the same mechanical result. Useful examples include parsing a report, checking required fields, validating a schema, or generating a checksum.
 
@@ -152,11 +152,11 @@ A model can judge whether rollback evidence is credible. A small validator can p
 
 Scripts need the same engineering discipline as ordinary production code. Their dependencies and inputs need clear bounds, and failures need useful error messages. Tests, sandboxing, and an explicit output format make the script safe for an agent to call repeatedly.
 
-### Templates and assets shape the deliverable
+### Use Templates And Assets For Deliverables
 
 A template can define the sections of an incident report or the cells in a review workbook. It guides presentation while the skill's procedure determines what the content means. A single filled example should never become the hidden algorithm for every future task.
 
-## Discovery Selects the Procedure for the Task
+## How The Runtime Selects A Skill For The Task
 <!-- section-summary: Discovery filters available skills by trust, policy, compatibility, and task fit before detailed instructions enter the model context. -->
 
 A runtime may know about skills from a repository, a user's local collection, an administrator, an organisation registry, or an installed plugin. The complete catalogue can be large. Discovery narrows that catalogue to the procedure that belongs to the current request.
@@ -192,7 +192,7 @@ Descriptions deserve their own evaluation set. Start with direct requests and pa
 
 Current Codex skill discovery follows this progressive pattern. It initially exposes the skill's name, description, and path. A user can invoke a skill directly, and Codex can also activate one after matching the description. This is one industrial implementation of the vendor-neutral discovery responsibility.
 
-## Progressive Loading Protects the Context Budget
+## Load Skill Content In Stages
 <!-- section-summary: Progressive loading gives the model just enough skill information for discovery, then adds the full procedure and selected resources only after activation. -->
 
 An organisation may maintain hundreds of procedures. Loading all of them into every request would crowd out the user's task, current evidence, tool results, and working state. Conflicting instructions would also become more likely.
@@ -219,7 +219,7 @@ Current Codex implementations also bound the initial skills list. The published 
 
 The budget is a design constraint, not a reason to make the skill shallow. Core decisions stay in `SKILL.md`; details that apply to fewer tasks move into named resources.
 
-## Execution Turns Instructions Into Checked Work
+## Turn Skill Instructions Into Verified Work
 <!-- section-summary: Skill execution connects understood inputs, bounded procedure, permitted tools, deterministic checks, and observable output. -->
 
 Activation gives the agent a procedure. Execution turns that procedure into an artifact or decision. A reliable run keeps the important stages visible:
@@ -265,7 +265,7 @@ The agent now knows what to repair. The final trace can record the validator ver
 
 Success also needs a visible result. “Script exited with code 0” proves that one checker ran. It cannot prove that the report addressed the user's question. The quality contract combines mechanical checks, source evidence, and task outcome.
 
-## The Runtime Enforces the Trust Boundary
+## Enforce Skill Permissions In The Runtime
 <!-- section-summary: Skill packages can request instructions, files, scripts, and tools, while the host controls provenance, permissions, isolation, secrets, and approval. -->
 
 A skill can influence the model and may include executable code. That makes it part of the software supply chain.
@@ -300,7 +300,7 @@ Current OpenAI guidance for hosted skills explicitly calls out prompt-injection-
 
 Sensitive writes need a clear approval point. MCP's tools specification recommends a human control that can deny tool invocations. Production policy can be stricter by requiring approvals for particular data classes, environments, or action types.
 
-## State and Idempotency Make Skills Safe to Retry
+## Make A Skill Safe To Retry
 <!-- section-summary: Multi-step skills need run state and idempotent side effects so retries continue the work without duplicating external changes. -->
 
 Instructions can describe a sequence, although the instruction file does not persist which steps already happened. A long-running capability needs state outside the model context.
@@ -346,7 +346,7 @@ Local file operations need similar care. A report generator can write to a run-s
 
 Skills that only read and report may need very little durable state. A skill that sends a message or updates a record needs to remember the operation identity and outcome. Deployments and approval pauses also need an orchestrator or application state store. The skill defines the procedure and operation identities; the workflow runtime owns transitions, retries, and checkpoints.
 
-## Versions Make Capability Behaviour Reproducible
+## Version Skills For Reproducible Behaviour
 <!-- section-summary: Immutable skill versions connect every run to a known package, dependency set, output contract, and rollback path. -->
 
 A skill changes production behaviour. Editing its description can alter discovery. Editing instructions can change decisions. Updating a script can change artifacts. Replacing a reference can change which policy the agent applies.
@@ -383,7 +383,7 @@ Using an unpinned `latest` reference in a controlled production workflow makes b
 
 Removing a vulnerable package needs more than deleting the file. Disable discovery, block new runs, identify executions through version traces, review affected outputs and effects, and retain the evidence required by policy.
 
-## Evaluation and Observability Cover Selection and Execution
+## Evaluate Skill Selection And Execution
 <!-- section-summary: Skill quality depends on choosing the right capability, performing its procedure correctly, respecting policy, and delivering a useful result. -->
 
 At a high level, skill evaluation checks whether the right capability was chosen and whether it performed the job correctly. Those are separate problems. An excellent procedure provides no value if the runtime selects it for the wrong request, and perfect routing cannot rescue a procedure that produces incomplete work. Safety and recovery form a third layer because a useful result can still be unacceptable if it bypassed approval or repeated a side effect.
@@ -428,7 +428,7 @@ Suppose report quality falls after a release. The investigation first checks whe
 
 This ordering directs the repair to the responsible layer. A routing defect needs a description or registry change. A stale rule needs a reference release. A missing report field needs instructions or validation. A denied action needs a policy or capability decision.
 
-## Ownership Carries the Skill Through Its Lifecycle
+## Assign Ownership Across The Skill Lifecycle
 <!-- section-summary: A named owner maintains triggers, instructions, resources, dependencies, evaluations, releases, incidents, and retirement. -->
 
 A reusable procedure needs an owner who understands the job it represents. The owner may be a platform team, domain team, security group, or product group. Ownership includes more than approving the first draft.

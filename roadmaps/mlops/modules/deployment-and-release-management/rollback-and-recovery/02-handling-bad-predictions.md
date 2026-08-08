@@ -9,12 +9,12 @@ id: "article-mlops-deployment-and-release-management-handling-bad-predictions"
 
 ## Table of Contents
 
-1. [A Bad Prediction Can Hide Behind HTTP 200](#a-bad-prediction-can-hide-behind-http-200)
-2. [A Symptom Points to a Problem, Not Its Cause](#a-symptom-points-to-a-problem-not-its-cause)
-3. [Protect Users and Preserve Evidence](#protect-users-and-preserve-evidence)
-4. [Check the Evidence Before Blaming the Model](#check-the-evidence-before-blaming-the-model)
+1. [A Service Can Return HTTP 200 And Still Make Bad Predictions](#a-service-can-return-http-200-and-still-make-bad-predictions)
+2. [Separate The Visible Symptom From The Actual Cause](#separate-the-visible-symptom-from-the-actual-cause)
+3. [Protect Users And Save The Evidence Needed For Investigation](#protect-users-and-save-the-evidence-needed-for-investigation)
+4. [Verify Prediction And Outcome Data Before Changing The Model](#verify-prediction-and-outcome-data-before-changing-the-model)
 5. [Find Every Decision That May Be Affected](#find-every-decision-that-may-be-affected)
-6. [Turn a Large Incident Into a Bounded Cohort](#turn-a-large-incident-into-a-bounded-cohort)
+6. [Group Affected Decisions Into Concrete Cohorts](#group-affected-decisions-into-concrete-cohorts)
 7. [Choose Containment That Matches the Evidence](#choose-containment-that-matches-the-evidence)
 8. [Diagnose the Decision Path Layer by Layer](#diagnose-the-decision-path-layer-by-layer)
 9. [Trace One Decision Through the Live System](#trace-one-decision-through-the-live-system)
@@ -25,7 +25,7 @@ id: "article-mlops-deployment-and-release-management-handling-bad-predictions"
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
-## A Bad Prediction Can Hide Behind HTTP 200
+## A Service Can Return HTTP 200 And Still Make Bad Predictions
 <!-- section-summary: A prediction-quality incident can continue while the serving API remains fast, available, and technically successful. -->
 
 At a high level, **handling bad predictions** means protecting people from harmful ML-driven decisions and then discovering which part of the decision system failed. The difficult part is that the serving API may look perfectly healthy. It can return `200 OK`, meet its latency target, and produce a valid JSON response for every request while the product makes increasingly poor choices.
@@ -49,9 +49,9 @@ flowchart TD
     I["Decision quality"] -. "actions, outcomes, harm" .-> F
 ```
 
-A useful incident response follows the whole path. The model is one component inside a larger decision system, and any component can produce a bad outcome.
+Incident response follows the whole decision path. The model is one component inside a larger system, and any component can produce a bad outcome.
 
-## A Symptom Points to a Problem, Not Its Cause
+## Separate The Visible Symptom From The Actual Cause
 <!-- section-summary: A visible quality problem is evidence that something changed, while the underlying cause may sit in data, features, models, policies, runtime, outcomes, or releases. -->
 
 A **symptom** is the first visible sign of trouble. Examples include a spike in customer complaints, an unusual approval rate, more human overrides, lower measured accuracy, or a sudden change in score distribution. A **cause** is the failure that produced that sign.
@@ -98,7 +98,7 @@ mindmap
       Definition changed
 ```
 
-## Protect Users and Preserve Evidence
+## Protect Users And Save The Evidence Needed For Investigation
 <!-- section-summary: The first response reduces immediate harm while keeping enough evidence to reconstruct the affected decision path. -->
 
 The first operational goal is **harm reduction**. If a model can trigger a high-impact action, the team may pause automation, route uncertain cases to human review, restore a known-safe release, or activate a deterministic safety rule. Root-cause analysis can continue after the dangerous path is contained.
@@ -127,7 +127,7 @@ flowchart TD
     G --> H["Repair cause and recover past decisions"]
 ```
 
-## Check the Evidence Before Blaming the Model
+## Verify Prediction And Outcome Data Before Changing The Model
 <!-- section-summary: Responders verify monitoring freshness, schemas, labels, joins, and policy definitions before treating a quality alert as model decay. -->
 
 Prediction quality is often measured through several data pipelines. Predictions are recorded now, outcomes may arrive hours or weeks later, and a join connects the two. A broken measurement path can therefore look exactly like a broken model.
@@ -194,7 +194,7 @@ The left join is deliberate. It keeps decisions whose outcomes have not arrived 
 
 Sensitive raw inputs rarely belong in general application logs. A secure reference to an approved feature snapshot is often safer. Investigators can retrieve the necessary values under controlled access, while ordinary operators see only the identifiers and non-sensitive fields required for triage.
 
-## Turn a Large Incident Into a Bounded Cohort
+## Group Affected Decisions Into Concrete Cohorts
 <!-- section-summary: Cohort analysis narrows the incident by time, release, route, segment, and dependency so responders can contain the unsafe slice. -->
 
 A global quality metric tells the team that something moved. **Cohort analysis** tells them where it moved. A cohort is a group of decisions that share a property, such as the same release, region, model route, product category, or feature-source version.

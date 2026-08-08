@@ -10,14 +10,14 @@ id: "article-mlops-mlops-infrastructure-object-storage-for-ml-systems"
 ## Table of Contents
 
 1. [Object Storage Holds The Durable Bytes](#object-storage-holds-the-durable-bytes)
-2. [Namespace Gives Every Asset A Stable Address](#namespace-gives-every-asset-a-stable-address)
-3. [Publication Marks A Complete Asset](#publication-marks-a-complete-asset)
-4. [Integrity Connects A Name To Content](#integrity-connects-a-name-to-content)
-5. [Access Follows Workload Responsibilities](#access-follows-workload-responsibilities)
+2. [Give Every Stored Asset A Stable Name And Address](#give-every-stored-asset-a-stable-name-and-address)
+3. [Publish A Manifest Only After Every File Is Ready](#publish-a-manifest-only-after-every-file-is-ready)
+4. [Use Checksums To Verify The Stored Content](#use-checksums-to-verify-the-stored-content)
+5. [Give Each Workload Only The Storage Access It Needs](#give-each-workload-only-the-storage-access-it-needs)
 6. [Versioning And Immutability Protect Different Risks](#versioning-and-immutability-protect-different-risks)
-7. [Lifecycle Policy Follows Operational Meaning](#lifecycle-policy-follows-operational-meaning)
-8. [Recovery Tests The Whole Chain](#recovery-tests-the-whole-chain)
-9. [The Complete Storage Method](#the-complete-storage-method)
+7. [Set Retention And Storage Classes By Asset Purpose](#set-retention-and-storage-classes-by-asset-purpose)
+8. [Test Recovery From The Release Record To A Working Model](#test-recovery-from-the-release-record-to-a-working-model)
+9. [Follow The Complete Object-Storage Workflow](#follow-the-complete-object-storage-workflow)
 10. [References](#references)
 
 ## Object Storage Holds The Durable Bytes
@@ -30,7 +30,7 @@ Object storage differs from a local or shared filesystem in ways that shape an M
 The storage service understands bytes, metadata, and access rules. The wider MLOps system supplies meaning. A bucket cannot decide that a model passed evaluation, that a dataset is safe for training, or that version `42` is the rollback target. Registries, catalogs, run records, and deployment records attach that meaning to stable object identities.
 
 ```mermaid
-flowchart LR
+flowchart TD
     Data["Dataset snapshot"] --> Run["Training run record"]
     Run --> Objects["Models, checkpoints, reports"]
     Objects --> Registry["Registry version and review"]
@@ -41,7 +41,7 @@ flowchart LR
 
 A useful object-storage design therefore has seven responsibilities: namespace and identity, safe publication, integrity, access control, protection from replacement or deletion, lifecycle management, and tested recovery. The following sections follow those responsibilities rather than one provider’s console.
 
-## Namespace Gives Every Asset A Stable Address
+## Give Every Stored Asset A Stable Name And Address
 <!-- section-summary: Immutable dataset, run, and release identities prevent independent jobs from overwriting or silently reinterpreting the same key. -->
 
 A **namespace** is the naming structure used for buckets and object keys. Human-readable prefixes help operators navigate during an incident, while immutable identifiers prevent ambiguity. A training run should write to its own run ID. A dataset release should have a snapshot ID. An approved model package should resolve to a concrete object generation or content digest.
@@ -67,7 +67,7 @@ Names such as `latest/`, `final-model.pkl`, or `current-dataset/` can offer conv
 
 Bucket boundaries also carry operational meaning. Separate accounts, projects, buckets, or containers may enforce different permissions, network paths, encryption keys, retention rules, and cost ownership. A small team can use one bucket with carefully designed prefixes. A regulated or multi-team platform may need separate raw-data, curated-data, experiment, and production-release boundaries. More buckets improve isolation and add policy and discovery work, so the separation should follow a real trust or operating boundary.
 
-## Publication Marks A Complete Asset
+## Publish A Manifest Only After Every File Is Ready
 <!-- section-summary: Producers publish a manifest or completion record only after every required object exists and passes validation, so consumers never treat partial output as a valid asset. -->
 
 Many ML assets contain several files. A model release may include weights, tokenizer data, labels, signatures, and an evaluation report. A dataset release may contain hundreds of partitions plus a manifest. Object stores do not provide a portable atomic rename for an arbitrary multi-object collection.
@@ -94,7 +94,7 @@ The publication write should be create-only or conditional. Amazon S3 supports `
 
 Retries need an explicit rule. If the same run retries with identical object digests, publication can return the existing manifest as success. If any digest differs, the retry should fail and receive a new attempt identity. Silent replacement would disconnect earlier evaluation from the bytes later consumers load.
 
-## Integrity Connects A Name To Content
+## Use Checksums To Verify The Stored Content
 <!-- section-summary: Checksums, manifests, and runtime reporting prove that storage, review, and serving refer to the same bytes. -->
 
 A key tells you where to ask for an object. A **checksum** or cryptographic digest tells you which content arrived. Providers can validate supported checksums during upload and download. The MLOps platform can also record a digest in the dataset manifest, run record, registry version, and release approval.
@@ -105,7 +105,7 @@ An ETag should only be treated as a content digest when the provider’s rules a
 
 Signatures and provenance cover a related question: who produced the object and through which build path? A checksum alone proves content equality. It does not establish a trusted producer. Higher-assurance platforms may sign release manifests, retain build provenance, and verify both signature and digest at promotion time.
 
-## Access Follows Workload Responsibilities
+## Give Each Workload Only The Storage Access It Needs
 <!-- section-summary: Workload identities and least-privilege permissions limit each pipeline, reviewer, and serving runtime to the object operations required for its role. -->
 
 Access policy should follow the job that performs the work. A dataset builder can write curated snapshots. Training can read approved snapshots and write to run-specific output prefixes. Review automation can read evaluation evidence. Production serving can read approved model packages and should have no permission to overwrite them.
@@ -139,7 +139,7 @@ flowchart TB
 
 These controls complement each other. Versioning cannot recover a deleted storage account. A checksum cannot restore missing bytes. WORM retention cannot prove that the original upload was correct. The recovery design should cover the specific threat and failure boundary.
 
-## Lifecycle Policy Follows Operational Meaning
+## Set Retention And Storage Classes By Asset Purpose
 <!-- section-summary: Retention and storage-tier policy follow an asset’s rollback, replay, audit, privacy, and legal value rather than one age rule for the entire bucket. -->
 
 ML storage grows through dataset snapshots, intermediate features, checkpoints, evaluation outputs, model packages, prediction logs, and repeated experiments. **Lifecycle management** moves objects between storage classes or removes them according to policy. It controls cost and retention only when the asset catalog explains what each object means.
@@ -150,7 +150,7 @@ Deletion should follow dependency analysis. Removing a tokenizer while retaining
 
 Archive tiers can add retrieval delay and minimum-duration charges. A rollback artifact that takes hours to restore cannot support a ten-minute recovery objective. Teams should match storage class with recovery time and test the actual restore path rather than reading a price table alone.
 
-## Recovery Tests The Whole Chain
+## Test Recovery From The Release Record To A Working Model
 <!-- section-summary: Restore drills verify that identities, permissions, keys, manifests, dependencies, and retained bytes can still produce a working old release. -->
 
 A credible recovery test starts from the registry or release record rather than a hand-picked bucket key. The test resolves the previous approved release, retrieves its manifest, verifies every digest, restores protected objects if required, loads the complete runtime assets, and scores a fixture set. It also checks that required identities and encryption keys still work.
@@ -159,7 +159,7 @@ The test can fail even when the objects exist. Permissions may have changed. A c
 
 Recovery targets should distinguish durability from availability. Provider durability protects against hardware loss inside the service. Regional or account-level incidents, credential failures, destructive administrator actions, and policy mistakes may require replication, an isolated backup, or a second administrative boundary. The organisation’s threat model and recovery objective decide how far this design goes.
 
-## The Complete Storage Method
+## Follow The Complete Object-Storage Workflow
 <!-- section-summary: Object storage supports reliable ML systems when stable identities, publication, integrity, access, protection, retention, and recovery operate as one framework. -->
 
 Object storage gives ML systems durable, shared access to large bytes. Stable namespaces identify datasets, runs, and releases. A completion manifest protects consumers from partial output. Digests connect reviewed content with loaded content. Workload identities constrain access. Versioning and immutability address replacement and deletion risks. Lifecycle policy follows operational value. Recovery drills prove the full chain still works.

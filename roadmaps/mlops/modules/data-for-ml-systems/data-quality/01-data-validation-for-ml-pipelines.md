@@ -10,18 +10,18 @@ id: "article-mlops-data-for-ml-systems-data-validation-for-ml-pipelines"
 ## Table of Contents
 
 1. [When a Successful Run Still Produces Unsafe Data](#when-a-successful-run-still-produces-unsafe-data)
-2. [Validation Works in Layers](#validation-works-in-layers)
+2. [Check Data In Several Layers Before Publishing It](#check-data-in-several-layers-before-publishing-it)
 3. [Confirm the Source Is Ready](#confirm-the-source-is-ready)
-4. [Protect Structure and Meaning](#protect-structure-and-meaning)
-5. [Protect Relationships and Time](#protect-relationships-and-time)
-6. [Detect Statistical Change](#detect-statistical-change)
-7. [Validate Labels and Prevent Leakage](#validate-labels-and-prevent-leakage)
-8. [Turn Results Into a Publication Decision](#turn-results-into-a-publication-decision)
-9. [Quarantine, Repair, and Backfill Safely](#quarantine-repair-and-backfill-safely)
-10. [Keep Evidence and Ownership With Every Run](#keep-evidence-and-ownership-with-every-run)
-11. [Monitor the Validation System Itself](#monitor-the-validation-system-itself)
-12. [Choose Tools From the Data Boundary](#choose-tools-from-the-data-boundary)
-13. [Put the Complete Path Together](#put-the-complete-path-together)
+4. [Check Both Data Shape And Real-World Meaning](#check-both-data-shape-and-real-world-meaning)
+5. [Check How Rows Relate And Which Time They Represent](#check-how-rows-relate-and-which-time-they-represent)
+6. [Check Whether The Data Population Has Changed](#check-whether-the-data-population-has-changed)
+7. [Validate Labels And Prevent Leakage](#validate-labels-and-prevent-leakage)
+8. [Decide Whether The Dataset Is Safe To Publish](#decide-whether-the-dataset-is-safe-to-publish)
+9. [Keep Bad Data Out, Repair It, And Rebuild Affected Outputs](#keep-bad-data-out-repair-it-and-rebuild-affected-outputs)
+10. [Record The Checks, Results, And Responsible Owner](#record-the-checks-results-and-responsible-owner)
+11. [Make Sure The Validation Job Itself Still Runs](#make-sure-the-validation-job-itself-still-runs)
+12. [Choose Validation Tools That Fit Where The Data Runs](#choose-validation-tools-that-fit-where-the-data-runs)
+13. [How A Validation Run Decides What Gets Published](#how-a-validation-run-decides-what-gets-published)
 14. [References](#references)
 
 ## When a Successful Run Still Produces Unsafe Data
@@ -47,7 +47,7 @@ In practical terms, validation is a controlled path from observations to a decis
 
 The check itself is only one part. A rule such as “label coverage must be at least 95 percent” needs the dataset identity and the observed coverage. Its owner, severity, and response determine what happens after a failure. Without those surrounding controls, the rule can fail loudly while damaged data continues downstream.
 
-## Validation Works in Layers
+## Check Data In Several Layers Before Publishing It
 <!-- section-summary: A layered validation path moves from basic source readiness to ML-specific label and leakage checks before making a publication decision. -->
 
 One giant “data quality” check would mix unrelated failures. A missing source partition, an unexpected column, a broken join, and a shifted category distribution require different owners and different repairs. Production systems separate them into layers.
@@ -55,7 +55,7 @@ One giant “data quality” check would mix unrelated failures. A missing sourc
 You can think of the layers as a sequence of increasingly contextual questions. Early layers ask whether the data is present and readable. Middle layers ask whether rows still carry the intended meaning and relationships. Later layers ask whether the dataset still represents the modelling task.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+
 flowchart TD
     A["1. Source readiness<br/>Present, fresh, complete enough to inspect"] --> B["2. Structure<br/>Expected columns and compatible types"]
     B --> C["3. Meaning<br/>Allowed values, units, and business rules"]
@@ -66,10 +66,6 @@ flowchart TD
     G -->|Eligible| H["Publish an immutable dataset version"]
     G -->|Unsafe or uncertain| I["Block, quarantine, or review"]
 
-    classDef ready fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef contract fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef ml fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A ready
     class B,C,D contract
     class E,F ml
@@ -124,12 +120,12 @@ A six-hour error threshold has meaning only if the product and source schedule s
 
 Readiness failures also need two different diagnoses. A **data failure** means the source was available to inspect and violated a rule. An **execution failure** means the checker could not reach a conclusion because credentials expired, the query timed out, or the validation process crashed. Production gates should treat an execution failure as incomplete evidence and withhold publication. Otherwise a broken validator creates the same outcome as a passing validator.
 
-## Protect Structure and Meaning
+## Check Both Data Shape And Real-World Meaning
 <!-- section-summary: Structural rules keep data machine-readable, while semantic rules protect the real-world meaning carried by valid-looking values. -->
 
 After the source is ready, the next question is whether the records still have the shape and meaning expected by their consumer. These are separate responsibilities because a row can be structurally valid and semantically wrong.
 
-### Structure protects the machine contract
+### Check Columns, Types, And Required Fields
 
 A **schema** describes fields and their data types. A training table might require `account_id` as text and `balance` as a decimal. It might also require `country_code` as text and `decision_at` as a timestamp. Structural validation checks the presence and type of those fields. It can also protect nested shapes and column order where a file format depends on them.
 
@@ -139,7 +135,7 @@ Schema evolution is legitimate, so the contract also describes compatibility. Ad
 
 Warehouse-native types and enforced constraints provide the closest protection to the stored table. dbt data tests add reusable assertions to sources and models. Great Expectations (GX) adds explicit Expectations around batches read through Python. The implementation can vary; the structural claim should remain the same across systems.
 
-### Meaning protects the domain contract
+### Check Whether Values Make Sense For The Domain
 
 **Semantic validation** checks what a value means in the real world. An age of `900`, a probability of `1.7`, and a country code of `"UNKNOWN_NEW"` can all have valid data types. Domain rules decide whether those values are acceptable.
 
@@ -164,12 +160,12 @@ where status = 'closed'
 
 Zero returned rows means the assertion passed. Storing failures can speed investigation, although those records need access controls and retention because they may contain sensitive fields.
 
-## Protect Relationships and Time
+## Check How Rows Relate And Which Time They Represent
 <!-- section-summary: Relational checks preserve row identity and join coverage, while temporal checks stop future information from entering historical examples. -->
 
 Most ML datasets are assembled from several tables. Each source can pass its own checks while the final join quietly changes the population. This layer protects how records connect and which historical information each example is allowed to see.
 
-### Relationships protect the unit of learning
+### Check Keys, Duplicates, And Joins
 
 Every dataset has a **grain**: what one row represents. One row might represent an account, a transaction, or an account at one decision time. The key must identify that grain.
 
@@ -186,7 +182,7 @@ Relational validation therefore measures:
 
 Join coverage is the share of expected rows that found a match. An overall result can hide a local failure. Coverage may remain at 98 percent while one new region drops to 35 percent. Production checks calculate the overall value and the values for segments tied to product risk, geography, acquisition path, device type, or model route.
 
-### Time protects the historical boundary
+### Keep Future Information Out Of Historical Rows
 
 Training examples should contain only information that would have been available at the moment of prediction. Using information from later in time is **data leakage**. Leakage can create excellent offline metrics and poor production results because those future facts are unavailable to the live system.
 
@@ -199,7 +195,7 @@ Three timestamps help expose the boundary:
 For each historical example, feature availability should be at or before decision time. A refund may have an event date attached to the original purchase, yet the refund record only arrived ten days later. Joining by event date alone would leak that later knowledge into the earlier decision.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#93C5FD", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#FFE04F", "secondaryColor": "#2DD4BF", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+
 sequenceDiagram
     participant E as "Historical example"
     participant F as "Feature history"
@@ -214,7 +210,7 @@ sequenceDiagram
 
 Point-in-time joins implement this rule by selecting the latest eligible feature value for each decision. Validation then checks for future availability timestamps, missing historical matches, and unexpected changes in match coverage after late data or a backfill.
 
-## Detect Statistical Change
+## Check Whether The Data Population Has Changed
 <!-- section-summary: Statistical checks reveal population and pipeline changes that valid rows and schemas cannot expose. -->
 
 By this stage, the data is present, readable, meaningful, joinable, and time-correct. It can still describe a very different population from the one the model or pipeline expects. **Statistical validation** measures that broader behaviour.
@@ -238,7 +234,7 @@ Metrics such as the Kolmogorov–Smirnov statistic, population stability index, 
 
 Statistical checks also need seasonality. Comparing Monday morning traffic with Sunday night traffic may create a permanent false alarm. A useful baseline follows the product's known cycle and stays pinned to an approved data version. Updating it automatically after every run can teach the validator to accept a slowly deteriorating pipeline.
 
-## Validate Labels and Prevent Leakage
+## Validate Labels And Prevent Leakage
 <!-- section-summary: ML-specific validation confirms that outcomes are mature, joined correctly, policy-consistent, and separated from future information. -->
 
 Labels tell the model what happened. A label may be a purchase, a repayment, a defect, a cancellation, or a human review decision. Damage here changes the task the model learns, even if every feature remains healthy.
@@ -289,7 +285,7 @@ Examples whose 60-day window remains open never enter `eligible_examples`, so pe
 
 This grouped result measures every required region. The gate runs the same aggregation without `region` and `group by` for overall coverage. It compares both views with their reviewed thresholds, and a failed required region blocks the release even if the overall percentage passes.
 
-## Turn Results Into a Publication Decision
+## Decide Whether The Dataset Is Safe To Publish
 <!-- section-summary: A publication gate reads the complete validation result set and decides whether a named dataset version can reach its consumer. -->
 
 A validator can report that label coverage is 93 percent. A gate also needs the label policy, the dataset boundary, the affected population, and the fallback available to the product. Those details determine whether training continues.
@@ -302,7 +298,7 @@ A **publication gate** combines results with that policy. It runs after every re
 - **block** withholds the dataset from training, evaluation, feature publication, or serving.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+
 flowchart TD
     A["Collect every required check result"] --> B{"Any result missing,<br/>skipped, or unable to run?"}
     B -->|Yes| C["Block publication<br/>Evidence is incomplete"]
@@ -314,10 +310,6 @@ flowchart TD
     H -->|Yes| I["Require an owned decision<br/>before the deadline"]
     H -->|No| J["Publish immutable version<br/>with validation result ID"]
 
-    classDef healthy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,J healthy
     class B,D,F,H choice
     class C,E stop
@@ -332,10 +324,10 @@ Row-level and dataset-level decisions also differ. After dropping one invalid re
 
 Publication should create a new immutable identity or move an atomic “approved” reference only after the decision passes. Training jobs consume that approved identity. Searching a mutable folder for the newest files could expose an unvalidated dataset.
 
-## Quarantine, Repair, and Backfill Safely
+## Keep Bad Data Out, Repair It, And Rebuild Affected Outputs
 <!-- section-summary: Recovery preserves the rejected data, fixes the responsible boundary, rebuilds a new version, and proves that the original contract passes. -->
 
-A failed gate protects downstream work. The response path repairs the pipeline by preserving evidence, limiting impact, correcting the responsible boundary, and proving recovery.
+When a check fails, the candidate dataset stays out of training and production use. The response preserves the failed data for diagnosis, limits the impact, corrects the responsible source or transformation, rebuilds affected outputs, and proves recovery before publication resumes.
 
 **Quarantine** moves or marks the affected rows, files, partitions, or keys and keeps them unavailable to normal consumers. A useful quarantine record keeps the source identity, failed rule, contract version, failure time, and restricted pointer to diagnostic samples. An owner and retention deadline prevent the quarantine area from accumulating forgotten data.
 
@@ -357,7 +349,7 @@ Fallbacks also need explicit limits. A serving pipeline may use the previous app
 
 Recovery requires three pieces of proof. The new dataset passes the original or deliberately revised contract. Downstream jobs consume the replacement identity. Monitoring confirms that the failing observation returned to its expected range.
 
-## Keep Evidence and Ownership With Every Run
+## Record The Checks, Results, And Responsible Owner
 <!-- section-summary: Validation evidence connects a result to its data, policy, owner, action, and downstream release. -->
 
 Six months after a model release, the statement “the data tests passed” omits the evidence an investigator needs. The record must identify the tests, dataset, thresholds, and observations.
@@ -396,7 +388,7 @@ Failing samples need stronger protection than aggregate metrics. They can expose
 
 Ownership belongs to the boundary that can correct the issue. A data producer owns a missing source partition. An analytics or data engineering team may own a broken transformation. An ML team owns label eligibility and feature leakage rules. The validation platform team owns missing results, timeouts, and result-publication failures. Alerts should route to that owner with the dataset, rule, observation, and immediate containment action already attached.
 
-## Monitor the Validation System Itself
+## Make Sure The Validation Job Itself Still Runs
 <!-- section-summary: Validator health metrics reveal silent gaps where checks stopped running, scanned the wrong scope, or failed to publish evidence. -->
 
 A validation system can fail silently too. The scheduler may skip the job, credentials may expire, a filter may scan zero partitions, or the result writer may stop updating. If nobody monitors the validator, the absence of failures can look like healthy data.
@@ -420,18 +412,18 @@ Monitoring can use the organization's normal stack. Emit structured run metrics 
 
 Teams should test this control path. A scheduled test can disable one expected rule, force a query timeout, or make the result store unavailable in a non-production environment. The gate should withhold publication, the correct owner should receive an alert, and the run should expose the missing evidence. This proves that validator failure cannot quietly approve data.
 
-## Choose Tools From the Data Boundary
+## Choose Validation Tools That Fit Where The Data Runs
 <!-- section-summary: The right validation tool follows the data location, execution engine, ownership model, and response required at the boundary. -->
 
 The tool choice comes after the validation responsibilities are clear. Most teams need a small combination because warehouse tables, Python dataframes, distributed Spark pipelines, and managed cloud services expose different control points.
 
-### Start with SQL and warehouse-native controls
+### Start With SQL And Warehouse-Native Controls
 
 Use database types and enforced constraints for rules the storage engine can guarantee at write time. Use SQL assertions for aggregate, relational, temporal, and business rules. These checks run close to the data and avoid exporting large tables into a separate service.
 
 dbt fits teams whose transformations already live in warehouse SQL. Generic data tests cover repeated rules, while singular tests express one-off business logic as queries that return failing rows. `severity`, `error_if`, and `warn_if` map a failure count to job behavior, and `store_failures` can preserve records for investigation. dbt owns SQL-model validation; the scheduler or deployment job still owns whether a failed test blocks publication.
 
-### Use GX or Soda for a wider validation workflow
+### When A Dedicated Validation Framework Helps
 
 GX Core fits Python teams that validate batches across files, dataframes, and databases. An Expectation expresses one assertion. An Expectation Suite groups related assertions. A Validation Definition connects a data batch definition with a suite. A Checkpoint runs one or more Validation Definitions, returns Validation Results, and can trigger actions such as notifications or updated Data Docs.
 
@@ -441,7 +433,7 @@ Soda fits teams that want shared data contracts, testing, and production observa
 
 Choose GX for code-controlled Python validation and custom batch integration. Choose Soda when cross-team contract workflows, managed observation, and a shared investigation surface justify the platform. A warehouse-only team may need neither if dbt and native monitoring already cover its boundaries.
 
-### Match Spark-scale checks to the operating platform
+### When Validation Runs On Spark
 
 Deequ is an open-source library built on Apache Spark. Its `VerificationSuite` runs `Check` constraints and computes metrics through Spark jobs, which suits large tabular datasets already processed on Spark. It is a library, so the team owns scheduling, result storage, alerting, upgrades, and publication decisions.
 
@@ -465,7 +457,7 @@ The first rule protects a required key. The second keeps unexpected regions for 
 
 Open-source Spark Declarative Pipelines provides the pipeline framework, while these expectation APIs are a Databricks Lakeflow capability. Portable Spark teams can keep their validation in Deequ, SQL, or another engine-independent contract layer.
 
-### Use managed cloud quality services inside an established cloud estate
+### When To Use A Cloud Provider's Quality Service
 
 AWS Glue Data Quality provides a managed serverless layer built on Deequ. Teams write rules in Data Quality Definition Language (DQDL) and can evaluate cataloged data or data moving through Glue ETL. Row-level failed-record identification is available in the ETL path, while catalog evaluation focuses on dataset results. It fits an AWS data platform that already uses Glue, S3, Redshift, JDBC sources, and EventBridge or CloudWatch.
 
@@ -473,7 +465,7 @@ On Google Cloud, Knowledge Catalog automatic data quality runs `DataScan` jobs a
 
 Managed services remove infrastructure work and integrate with provider monitoring. The team still defines label maturity, point-in-time, segment, leakage, ownership, and publication policies.
 
-## Put the Complete Path Together
+## How A Validation Run Decides What Gets Published
 <!-- section-summary: Reliable validation connects ordered checks to an explicit release decision, durable evidence, owned recovery, and monitoring of the validator. -->
 
 A production validation run starts by confirming that the intended sources arrived and that the checker can read them. It protects schema and domain meaning before evaluating joins, row grain, and time boundaries. Statistical checks then compare the eligible population with a relevant baseline. Label and leakage checks confirm that the dataset represents the task the model will face.

@@ -9,30 +9,30 @@ id: "article-mlops-llmops-multimodal-evaluation-safety"
 
 ## Table of Contents
 
-1. [Evaluate the Whole Multimodal Task](#evaluate-the-whole-multimodal-task)
-2. [Define the Task Contract and Failure Model](#define-the-task-contract-and-failure-model)
-3. [Build a Dataset Around Real Conditions](#build-a-dataset-around-real-conditions)
-4. [Verify the Media Pipeline Before the Model](#verify-the-media-pipeline-before-the-model)
-5. [Measure Visual and Spatial Evidence](#measure-visual-and-spatial-evidence)
+1. [Evaluate The Complete Multimodal Workflow](#evaluate-the-complete-multimodal-workflow)
+2. [Define The Expected Task And Failure Types](#define-the-expected-task-and-failure-types)
+3. [Build A Dataset From Real Media Conditions](#build-a-dataset-from-real-media-conditions)
+4. [Test Media Processing Before Model Quality](#test-media-processing-before-model-quality)
+5. [Measure Visual And Spatial Understanding](#measure-visual-and-spatial-understanding)
 6. [Evaluate Documents, OCR, Tables, and Charts](#evaluate-documents-ocr-tables-and-charts)
-7. [Evaluate Audio and Video Across Time](#evaluate-audio-and-video-across-time)
-8. [Test Cross-Modal Grounding and Conflict](#test-cross-modal-grounding-and-conflict)
-9. [Evaluate Outputs and Accessibility](#evaluate-outputs-and-accessibility)
-10. [Defend Against Instructions Hidden in Media](#defend-against-instructions-hidden-in-media)
-11. [Moderate Unsafe Content and Record Provenance](#moderate-unsafe-content-and-record-provenance)
-12. [Combine Deterministic, Model, and Human Graders](#combine-deterministic-model-and-human-graders)
-13. [Measure Uncertainty and Grader Quality](#measure-uncertainty-and-grader-quality)
-14. [Fit Current Evaluation and Safety Tools into the System](#fit-current-evaluation-and-safety-tools-into-the-system)
-15. [Monitor the Live Multimodal Application](#monitor-the-live-multimodal-application)
-16. [Turn Evidence into Release Gates](#turn-evidence-into-release-gates)
-17. [The Complete Evaluation System](#the-complete-evaluation-system)
+7. [Evaluate Audio And Video Over Time](#evaluate-audio-and-video-over-time)
+8. [Test Whether The Model Connects And Resolves Modalities](#test-whether-the-model-connects-and-resolves-modalities)
+9. [Evaluate Generated Outputs And Accessibility](#evaluate-generated-outputs-and-accessibility)
+10. [Test Instructions Hidden In Media](#test-instructions-hidden-in-media)
+11. [Moderate Unsafe Media And Record Its Source](#moderate-unsafe-media-and-record-its-source)
+12. [Combine Deterministic, Model, And Human Evaluation](#combine-deterministic-model-and-human-evaluation)
+13. [Measure Evaluation Uncertainty And Grader Quality](#measure-evaluation-uncertainty-and-grader-quality)
+14. [Choose Current Evaluation And Safety Tools](#choose-current-evaluation-and-safety-tools)
+15. [Monitor The Multimodal Application In Production](#monitor-the-multimodal-application-in-production)
+16. [Use Evaluation Evidence For Release Gates](#use-evaluation-evidence-for-release-gates)
+17. [How The Complete Evaluation System Fits Together](#how-the-complete-evaluation-system-fits-together)
 18. [References](#references)
 
 At a high level, **multimodal evaluation** asks whether an application can use images, documents, audio, or video to complete a real task safely. The media expands what the system can perceive, but it also creates new ways to fail. A correct-looking answer may come from the wrong page, the wrong chart series, a mistranscribed number, a missed video frame, or an instruction hidden inside an uploaded image.
 
 This means the model is only one part of the evaluation target. The media decoder, OCR engine, frame sampler, prompt, model, tools, output renderer, and user interface all shape the final result. A model benchmark can compare general capability. A production evaluation must prove that the complete application meets its own task contract under the conditions its users will encounter.
 
-## Evaluate the Whole Multimodal Task
+## Evaluate The Complete Multimodal Workflow
 
 <!-- section-summary: Multimodal evaluation follows the complete path from captured media to a useful and safely delivered task outcome. -->
 
@@ -59,7 +59,7 @@ This view creates three levels of evaluation:
 
 A release report needs all three. End-to-end success without component evidence is hard to debug. Strong component scores without a safe outcome can approve the wrong product.
 
-## Define the Task Contract and Failure Model
+## Define The Expected Task And Failure Types
 
 <!-- section-summary: A task contract states the supported inputs, required evidence, allowed outputs, abstention behavior, and harms that can block release. -->
 
@@ -110,7 +110,7 @@ case:
 
 The coordinates are normalized from zero to one, so the case can be checked across image sizes. The media hash binds the label to exact bytes. This prevents a quietly replaced fixture from changing the meaning of an old evaluation run.
 
-## Build a Dataset Around Real Conditions
+## Build A Dataset From Real Media Conditions
 
 <!-- section-summary: A useful evaluation dataset crosses supported tasks with media conditions, user environments, rare hazards, and deliberate counterexamples. -->
 
@@ -146,7 +146,7 @@ Labels for multimodal tasks often need structure. A document answer may require 
 
 Human labelers need the same task contract as the model. Give them examples of ambiguous cases, a path to mark “cannot determine,” and an expert escalation route. Review disagreement before declaring one answer to be ground truth.
 
-## Verify the Media Pipeline Before the Model
+## Test Media Processing Before Model Quality
 
 <!-- section-summary: Decoder, sampling, resampling, rotation, OCR, and preprocessing checks prove that the model received the intended evidence. -->
 
@@ -168,7 +168,7 @@ The evaluation record stores the source hash, decoder version, preprocessing ver
 
 Test resource limits as part of this layer. Very large dimensions, compressed archives, malformed containers, long silence, and extreme video duration should fail early with a clear user outcome. File parsing runs in an isolated process with time, memory, and decompression limits. An uploaded document never gains network or tool authority merely because a model can read it.
 
-## Measure Visual and Spatial Evidence
+## Measure Visual And Spatial Understanding
 
 <!-- section-summary: Visual evaluation checks both the answer and the image region that supports it, especially for small, crowded, or partially hidden objects. -->
 
@@ -234,7 +234,7 @@ expected:
 
 Documents also carry security risks. Test hidden OCR layers, white text, comments, and attachments. Add cases with macros, external links, and instructions embedded in headers or images. Extraction code exposes all of this material as untrusted content. The application does not treat it as policy.
 
-## Evaluate Audio and Video Across Time
+## Evaluate Audio And Video Over Time
 
 <!-- section-summary: Audio and video evaluation binds claims to speakers, sounds, frames, and time intervals instead of grading only a final summary. -->
 
@@ -269,7 +269,7 @@ For temporal localization, **temporal IoU** applies the overlap idea to time int
 
 Frame sampling deserves its own tests. Run cases where the key event falls between regular sample points, lasts only a moment, or appears during a scene cut. Compare fixed-rate sampling, scene-based sampling, and any adaptive policy on the same source videos. Never interpret “absent from sampled frames” as proof that an event did not occur.
 
-## Test Cross-Modal Grounding and Conflict
+## Test Whether The Model Connects And Resolves Modalities
 
 <!-- section-summary: Cross-modal evaluation checks whether each claim is supported by the correct media evidence and whether contradictory signals trigger a safe resolution. -->
 
@@ -302,7 +302,7 @@ Build paired cases that isolate the source of truth:
 
 These counterfactuals reveal whether the system follows the media, the user's assertion, the prompt wording, or a familiar pattern. They are especially valuable for tasks where a plausible answer can earn a high text-only judge score.
 
-## Evaluate Outputs and Accessibility
+## Evaluate Generated Outputs And Accessibility
 
 <!-- section-summary: Output evaluation covers the generated content, the delivery channel, and whether people can perceive, control, and verify the result. -->
 
@@ -326,7 +326,7 @@ accessibility_case:
 
 Evaluate the delivered output rather than the generated artifact alone. A speech response interrupted before its warning has failed delivery. A correct image hidden behind an inaccessible control has failed the user task. Client events should record playback position, caption state, selected alternative, and user correction without placing raw sensitive media in general telemetry.
 
-## Defend Against Instructions Hidden in Media
+## Test Instructions Hidden In Media
 
 <!-- section-summary: Images, documents, transcripts, and subtitles are untrusted data that may contain instructions intended to redirect the model or activate tools. -->
 
@@ -358,7 +358,7 @@ A test image might contain a normal receipt plus small text telling the assistan
 
 Model refusal is helpful, but downstream authorization remains the security boundary. A successful injection should still be unable to read another user's object, change a payment, or publish content without the required identity and approval.
 
-## Moderate Unsafe Content and Record Provenance
+## Moderate Unsafe Media And Record Its Source
 
 <!-- section-summary: Safety filters classify harmful input and output, while provenance records the origin and edit history of generated media without claiming that the content is true. -->
 
@@ -383,7 +383,7 @@ Keep the source references, generator and policy versions, edit operations, and 
 
 Voice and likeness require explicit consent and purpose controls. The consent record identifies the approved voice, user, and product. It also explains how consent can be revoked. Test identity confusion and impersonation attempts. Include generated content that implies a real person said or did something outside the allowed use.
 
-## Combine Deterministic, Model, and Human Graders
+## Combine Deterministic, Model, And Human Evaluation
 
 <!-- section-summary: A layered grader stack uses code for objective facts, judge models for bounded rubrics, and people for expert or context-dependent decisions. -->
 
@@ -427,7 +427,7 @@ The scorer is intentionally small. Media decoding and region normalization happe
 
 Treat judge-model output as another measurement. Isolate untrusted candidate text from the rubric, disable tools, require structured output, and test whether injected media or responses can manipulate the judge. A model should never grade its own unsupported claim solely by reading the prose it generated.
 
-## Measure Uncertainty and Grader Quality
+## Measure Evaluation Uncertainty And Grader Quality
 
 <!-- section-summary: Release evidence includes sample size, repeated-run variation, confidence intervals, slice performance, reviewer agreement, and judge calibration. -->
 
@@ -454,7 +454,7 @@ evaluation_result:
 
 The candidate improved the aggregate score in this example. The release stays blocked because one critical failure violated the task contract. The team investigates that case, adds a regression, and decides whether to fix the system or narrow the supported chart types.
 
-## Fit Current Evaluation and Safety Tools into the System
+## Choose Current Evaluation And Safety Tools
 
 <!-- section-summary: Current platforms can run datasets, rubrics, human review, safety filters, traces, and custom scorers, while the product still owns media ground truth and release policy. -->
 
@@ -490,7 +490,7 @@ MLflow 3 provides evaluation datasets, human feedback, traces, model judges, cus
 
 The same scorer may run offline against a candidate and later sample production traces. Code-based media scorers remain appropriate for exact evidence checks. Automatic online evaluation in current MLflow guidance uses judge-based scorers, so teams should verify which offline code checks need a separate scheduled production job.
 
-## Monitor the Live Multimodal Application
+## Monitor The Multimodal Application In Production
 
 <!-- section-summary: Production monitoring connects media-pipeline health, safety actions, sampled quality, user corrections, and delayed outcomes to the exact released bundle. -->
 
@@ -522,7 +522,7 @@ Access to review media needs a declared purpose and short retention. Audit every
 
 Alert by actionability. A decoder-error spike goes to the media pipeline owner. A rise in unsafe image blocks goes to safety operations. A drop in critical-field accuracy comes from reviewed outcomes and may pause a task route. One blended “multimodal quality” dashboard will conceal these different responses.
 
-## Turn Evidence into Release Gates
+## Use Evaluation Evidence For Release Gates
 
 <!-- section-summary: A release gate combines hard safety blockers, paired quality metrics, slice limits, accessibility checks, human sign-off, canary evidence, and a tested rollback. -->
 
@@ -561,7 +561,7 @@ stateDiagram-v2
 
 An incident creates a regression case after privacy review. Preserve the source hash or governed reference, derived artifacts, exact release bundle, evidence links, delivered output, tool decisions, and confirmed outcome. Roll back the affected bundle rather than swapping only the model if preprocessing or policy caused the failure.
 
-## The Complete Evaluation System
+## How The Complete Evaluation System Fits Together
 
 <!-- section-summary: A production multimodal evaluation system joins task contracts, media evidence, layered graders, safety controls, monitoring, and reversible release decisions. -->
 

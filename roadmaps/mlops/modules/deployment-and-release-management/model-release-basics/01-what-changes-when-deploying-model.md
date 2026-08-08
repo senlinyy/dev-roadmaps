@@ -9,21 +9,21 @@ id: "article-mlops-deployment-and-release-management-what-changes-when-deploying
 
 ## Table of Contents
 
-1. [A Trained Model Is Only the Predictive Core](#a-trained-model-is-only-the-predictive-core)
-2. [The Release Unit Surrounds the Model](#the-release-unit-surrounds-the-model)
+1. [What A Trained Model Still Needs Before Production](#what-a-trained-model-still-needs-before-production)
+2. [What Belongs In A Complete Model Release](#what-belongs-in-a-complete-model-release)
 3. [Follow One Request From Input to Decision](#follow-one-request-from-input-to-decision)
-4. [Package One Compatible Execution Unit](#package-one-compatible-execution-unit)
-5. [Protect the Inference and Feature Contracts](#protect-the-inference-and-feature-contracts)
-6. [Treat Configuration, Policy, and Security as Release Behaviour](#treat-configuration-policy-and-security-as-release-behaviour)
-7. [Choose a Deployment Target From the Product Need](#choose-a-deployment-target-from-the-product-need)
-8. [Prove the Production Boundaries Before Release](#prove-the-production-boundaries-before-release)
-9. [Admit Production Traffic in Stages](#admit-production-traffic-in-stages)
-10. [Observability Turns a Deployment Into an Operated Service](#observability-turns-a-deployment-into-an-operated-service)
-11. [Rollback Restores the Complete Decision Path](#rollback-restores-the-complete-decision-path)
+4. [How To Package The Model So It Runs Reliably](#how-to-package-the-model-so-it-runs-reliably)
+5. [Keep Requests, Model Inputs, And Features Compatible](#keep-requests-model-inputs-and-features-compatible)
+6. [Include Configuration, Decision Rules, And Security In The Release](#include-configuration-decision-rules-and-security-in-the-release)
+7. [Choose How The Product Will Receive Predictions](#choose-how-the-product-will-receive-predictions)
+8. [Test The Complete Release Before Production](#test-the-complete-release-before-production)
+9. [Send Production Traffic To The New Release Gradually](#send-production-traffic-to-the-new-release-gradually)
+10. [How To Monitor And Operate The Deployed Model](#how-to-monitor-and-operate-the-deployed-model)
+11. [How To Restore The Previous Working Decision Path](#how-to-restore-the-previous-working-decision-path)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
-## A Trained Model Is Only the Predictive Core
+## What A Trained Model Still Needs Before Production
 <!-- section-summary: Deployment surrounds a trained artifact with every component required to produce reliable decisions for real callers. -->
 
 At a high level, **model deployment** connects a trained model to a real product or business process. The result might be an API that answers in milliseconds, a nightly batch job that scores millions of rows, a stream processor that reacts to events, or a model packaged inside a device. In every form, deployment gives callers a reliable way to use the model under production conditions.
@@ -51,24 +51,24 @@ flowchart TB
 
 The model sits near the centre of this system. Each surrounding component can change the final behaviour, so each one belongs in release design and validation.
 
-## The Release Unit Surrounds the Model
+## What Belongs In A Complete Model Release
 <!-- section-summary: A production release binds the predictive core, execution boundary, and operating boundary into one reviewed and recoverable unit. -->
 
 A **release unit** is the complete set of versioned components that move through testing and production together. You can think of it as the smallest package whose behaviour the team can approve, deploy, observe, and restore. Promoting only a model version leaves too many production decisions unresolved.
 
-### The predictive core defines the calculation
+### What The Trained Model Calculates
 
 The core includes the **model artifact**, its preprocessing, and the feature definitions it expects. Preprocessing can include tokenisation, scaling, categorical encoding, image resizing, or column ordering. A tiny difference in any of these steps can produce a valid-looking input with a different meaning.
 
 Feature dependencies extend beyond column names. The release needs the feature-set version, source, freshness expectation, missing-value behaviour, and any transformation shared with training. An `account_age` field measured in days and the same field measured in seconds pass a numeric type check while producing very different predictions.
 
-### The execution boundary makes the calculation callable
+### How Serving Code Runs The Model
 
 The execution boundary includes the **inference contract**, serving code, dependency environment, runtime or container image, and configuration. The contract describes valid requests and responses. The runtime loads the artifact, validates input, runs preprocessing, invokes the model, applies post-processing, and returns or stores the result.
 
 The image or managed environment pins operating-system packages, language libraries, inference servers, and hardware expectations. A dependency lock records Python packages. An OCI image digest identifies the exact container content. These identities let staging and production run the same tested execution unit.
 
-### The operating boundary controls real-world impact
+### How Production Controls Limit Real-World Impact
 
 The operating boundary includes the deployment target, traffic rules, observability, security controls, evidence, ownership, and rollback path. These pieces determine who can call the model, how much traffic reaches it, which signals govern promotion, who responds to trouble, and how the product returns to a safe state.
 
@@ -120,12 +120,12 @@ This is why the production path records both the model version and the policy ve
 
 Batch and streaming systems follow the same logic with different transport. A batch scorer validates a versioned input partition, creates versioned output, and publishes it only after quality checks pass. A stream processor validates event versions, handles late or repeated events, and writes predictions with a release identity. The surrounding release responsibilities stay consistent.
 
-## Package One Compatible Execution Unit
+## How To Package The Model So It Runs Reliably
 <!-- section-summary: Packaging preserves the model, preprocessing, serving code, dependencies, and loading rules that produced the reviewed behaviour. -->
 
-**Packaging** creates a repeatable execution unit from the predictive core. In essence, it answers a practical question: how will a clean production machine load this model and reproduce the tested prediction?
+**Packaging** combines the trained model, preprocessing, serving code, and runtime dependencies into one repeatable execution unit. It answers a practical question: how will a clean production machine load this model and reproduce the tested prediction?
 
-### Preserve preprocessing with the model path
+### Keep Preprocessing With The Model
 
 The safest shape is usually a pipeline that owns preprocessing and prediction together. A scikit-learn `Pipeline`, a PyTorch module with its transforms, or a custom MLflow `pyfunc` model can keep the transformation path close to the artifact. Shared feature logic may live in a feature platform, yet its version still needs to be pinned.
 
@@ -143,7 +143,7 @@ with mlflow.start_run():
 
 Here, `training_pipeline` contains the fitted preprocessing and estimator. The input example lets MLflow infer and validate the expected schema. A separate smoke test can call `mlflow.models.predict` in an isolated `uv` environment, which catches missing dependencies before the release reaches an endpoint.
 
-### Pin the runtime that loads the artifact
+### Record The Exact Runtime And Dependencies
 
 A model can pass evaluation under one library version and fail or change behaviour under another. Teams commonly lock Python dependencies with `uv`, Poetry, or a generated requirements file, then build an OCI container for online or batch execution. The release refers to the image digest because a mutable tag such as `latest` can point to different bytes over time.
 
@@ -151,18 +151,18 @@ Some platforms support a managed MLflow deployment with little custom serving co
 
 The model may be copied into the image or loaded from a registry at startup. Bundling creates one image-model identity and removes a startup download. External loading keeps large artifacts separate and allows a reusable serving image. External loading also introduces permissions, network availability, cache consistency, and startup-time concerns. The chosen design should pin an immutable model URI or checksum and fail readiness if the expected artifact cannot load.
 
-### Separate process health from model readiness
+### Check That The Service Can Actually Make Predictions
 
-A listening web process can still be unable to predict. The artifact may be downloading, GPU memory may be warming, or the feature connection may be unavailable. Production needs a readiness check that reflects the ability to accept useful traffic.
+A listening web process can still be unable to predict. The artifact may be downloading, GPU memory may be warming, or the feature connection may be unavailable. Production needs a readiness check that confirms the service can accept prediction traffic.
 
 Kubernetes expresses three different questions through probes. A startup probe gives slow initialisation time to finish. A readiness probe removes an unavailable replica from service traffic. A liveness probe restarts a process that can no longer make progress. Managed endpoints provide similar health and deployment states through platform controls.
 
-## Protect the Inference and Feature Contracts
+## Keep Requests, Model Inputs, And Features Compatible
 <!-- section-summary: Service, model, and feature contracts protect the meaning of data as it moves from a caller to the trained artifact. -->
 
 A **contract** is an explicit agreement about data crossing a boundary. You can think of it as the shared language between two independently changing components. Deployment usually has three related contracts.
 
-### The service contract belongs to callers
+### What Callers Send And Receive
 
 The service contract defines request fields, response fields, accepted content types, errors, authentication, and timeouts. OpenAPI is a common industrial standard for HTTP APIs. Protobuf often serves gRPC systems, and event schemas serve streaming systems.
 
@@ -170,19 +170,19 @@ Suppose an API accepts `{"amount": 120.50, "currency": "GBP"}` and returns a ris
 
 Callers and model services rarely upgrade at exactly the same moment. Additive optional fields can support a compatibility window. Removing a field or changing its meaning needs a new version and a migration plan. Contract tests run representative requests from supported caller versions against the packaged service.
 
-### The model contract belongs to the artifact
+### What The Trained Model Accepts And Returns
 
 The model signature describes the columns, tensors, parameters, and outputs expected by the artifact. A public request can differ from this signature. For example, the caller supplies an account ID while the service retrieves eight internal features and constructs the model input.
 
 The transformation between service input and model input is a critical test boundary. A **golden request** stores a small reviewed input and its expected transformed values or prediction tolerance. Running the same request in training, CI, staging, and production smoke tests catches changed column order, encoders, numerical precision, and dependency behaviour.
 
-### The feature contract preserves meaning and time
+### How Feature Definitions Keep Their Meaning Over Time
 
 A feature contract describes more than type. It identifies who owns the feature and where its source data comes from. It defines the entity key and the transformation that produces the value, including units and accepted ranges. Freshness and missing-value rules explain whether a live value is still safe to use. A version keeps these semantics stable across releases. Online models also need training-serving parity: the production feature path should reproduce the values used to build historical training rows for the same entity and event time.
 
 For a concrete example, a model may expect the number of failed logins during the previous 24 hours. A live pipeline that counts events since midnight supplies a valid integer with different semantics. A parity test selects known entities and timestamps, reconstructs their historical online features, and compares them with the training dataset. Feature stores such as Feast and managed feature platforms help manage definitions and retrieval, while the team still owns the semantic test.
 
-## Treat Configuration, Policy, and Security as Release Behaviour
+## Include Configuration, Decision Rules, And Security In The Release
 <!-- section-summary: Versioned policy controls how predictions affect users, while security controls who can invoke the service and which resources it can reach. -->
 
 Production behaviour often changes through configuration. Decision thresholds, enabled segments, fallback rules, timeouts, feature flags, and safety limits can alter outcomes without rebuilding the model. These settings belong to a reviewed, versioned policy and should be associated with the release evidence.
@@ -191,19 +191,19 @@ A lending model might return a probability of repayment. Policy determines which
 
 Configuration needs typed validation, ownership, approval rules proportional to risk, and an audit trail. High-impact values should move through the same environment promotion path as code. Dynamic configuration can still be useful for urgent controls, provided every evaluation records the resolved policy version.
 
-### Give the workload an identity
+### Give The Serving Workload Its Own Identity
 
 The serving process usually reads model storage and feature sources. It also sends data to a telemetry exporter and may retrieve sensitive configuration from a secrets manager. Current cloud and Kubernetes practice uses a workload identity or service account with narrowly scoped permissions. Long-lived credentials embedded in source code, images, or release YAML create avoidable exposure.
 
 Inbound controls authenticate callers and authorise the requested operation. Network policy or private endpoints can restrict access to internal services. Outbound controls limit which destinations the runtime can reach. Logs and traces need redaction rules because raw features, prompts, and outputs may contain sensitive data.
 
-### Verify what enters production
+### Verify Every Artifact Before Production
 
 An industrial software-supply-chain path identifies the model artifact, container digest, source revision, build process, and dependency inventory. OCI provides the container image format. An SBOM records included software components. SLSA provenance describes how an artifact was produced. Sigstore Cosign can verify signatures and attestations tied to an image digest.
 
 These controls answer different questions. A digest checks exact content identity. A signature connects that content to an approved signer. Provenance records the build path. Vulnerability scanning evaluates known package risks. Release policy can require these records before the deployment system accepts the image.
 
-## Choose a Deployment Target From the Product Need
+## Choose How The Product Will Receive Predictions
 <!-- section-summary: The required response time, input shape, scale, connectivity, and operational capacity determine the serving target. -->
 
 The deployment target should follow the way the product consumes predictions. Put another way, start with the decision deadline and the movement of data. A nightly planning process can wait for a batch job, while a user-facing checkout flow may need an online response in milliseconds. Event-driven automation and disconnected devices introduce their own boundaries.
@@ -231,7 +231,7 @@ Batch recovery often stops publication, reruns a previous release, or replaces a
 
 Online endpoints fit product paths where a caller waits for an answer, such as ranking search results or estimating delivery time. The main constraints are latency, availability, concurrency, and predictable failure behaviour. Autoscaling, timeouts, readiness, authentication, and controlled traffic matter as much as raw model speed.
 
-Managed endpoints are a practical default because the provider handles much of the compute lifecycle and traffic routing. Amazon SageMaker AI uses endpoints with production variants. Vertex AI deploys one or more `DeployedModel` resources behind an endpoint. Azure Machine Learning managed online endpoints route to deployments and support traffic mirroring. Databricks Model Serving routes traffic among served entities. Each platform uses different resource names for the same broad separation: a stable caller endpoint and one or more versioned deployments behind it.
+Managed endpoints are a practical default because the provider handles much of the compute lifecycle and traffic routing. Amazon SageMaker AI uses endpoints with production variants. Gemini Enterprise Agent Platform Online Inference deploys one or more `DeployedModel` resources behind an endpoint. Azure Machine Learning managed online endpoints route to deployments and support traffic mirroring. Databricks Model Serving routes traffic among served entities. Each platform uses different resource names for the same broad separation: a stable caller endpoint and one or more versioned deployments behind it.
 
 ### Streaming and edge inference have different boundaries
 
@@ -239,24 +239,24 @@ Streaming inference reacts to events without keeping a caller waiting. The event
 
 Edge inference runs on a device with limited compute, memory, power, or connectivity. Its release includes model conversion or quantisation, supported hardware, signed distribution, staged device cohorts, and a safe local fallback. Recovery can take longer because devices may remain offline, so backward compatibility and remote kill controls deserve early design.
 
-## Prove the Production Boundaries Before Release
+## Test The Complete Release Before Production
 <!-- section-summary: Pre-production validation checks the complete packaged path against contracts, infrastructure, failure modes, and rollback expectations. -->
 
 Staging exists to answer a different question from offline evaluation: can this exact release operate safely across production-like boundaries? It should use the packaged artifact, production contract logic, representative hardware, workload identity, dependency topology, and telemetry path. Scale may be smaller, while the important interfaces stay realistic.
 
-### Start with loading and prediction equivalence
+### Check That The Release Loads And Predicts The Same Way
 
 CI loads the model inside the release environment and runs golden requests. The outputs can use exact equality for deterministic transformations or reviewed tolerances for floating-point and accelerator differences. This test catches missing libraries, incompatible serialization, changed preprocessing, and hardware-specific behaviour.
 
 Then validate service and feature contracts. Send valid requests from every supported caller version. Send malformed values and verify stable error responses. Compare online feature assembly with historical training rows for known entity-time pairs. Confirm that the feature source, model signature, and service adapter agree on names, types, units, and missing-value handling.
 
-### Test performance with the real execution shape
+### Test Performance Under Realistic Load
 
 Measure cold start, warm latency percentiles, throughput, queueing, memory, accelerator use, and cost under representative request sizes. Average latency hides slow requests, so online services commonly inspect p50, p95, and p99. Batch systems measure total completion time and work skew. Streaming systems measure consumer lag and end-to-end event delay.
 
 Capacity testing should include the complete dependency path. A model that runs in 20 milliseconds can still miss a 100-millisecond deadline after feature retrieval, network hops, serialisation, and queueing. The test also needs a defined overload behaviour. The service can accept a bounded queue and shed lower-priority work after that limit. A product with an approved alternative may use its fallback, while another product may return a clear retryable error.
 
-### Exercise failure and recovery paths
+### Practice Failure And Recovery Before Release
 
 Make a feature source slow or unavailable. Start a replica with a missing artifact. Revoke an expected permission in staging. Send an oversized request. Restart instances during traffic. Verify timeouts, retries, circuit breakers, fallbacks, and telemetry for each case. Retries need strict bounds because repeated inference or downstream writes can amplify an incident.
 
@@ -279,7 +279,7 @@ livenessProbe:
 
 The final pre-production check deploys the previous release through the same path. This confirms that rollback artifacts, permissions, contracts, and capacity remain usable.
 
-## Admit Production Traffic in Stages
+## Send Production Traffic To The New Release Gradually
 <!-- section-summary: Shadow, canary, and blue-green strategies collect live evidence while controlling the number of decisions exposed to a candidate. -->
 
 Production supplies traffic patterns, dependency timing, and user behaviour that staging can only approximate. **Progressive delivery** limits exposure while the team collects this evidence. Each stage has an entry condition, a minimum evidence requirement, stop conditions, an owner, and a recovery action.
@@ -313,7 +313,7 @@ Amazon SageMaker AI supports shadow variants, and Azure Machine Learning support
 
 A canary serves real responses for a limited share of traffic. Percentage routing is only one dimension. Teams may hold out high-risk segments, require stable assignment for each user, or start with internal traffic. A 5% canary provides little evidence for a rare region if it receives only a handful of examples, so promotion gates should include sample coverage for important segments.
 
-SageMaker production variants, Vertex AI endpoint traffic splits, Azure endpoint traffic allocation, and Databricks served-entity traffic configuration all support weighted routing. The team still defines the statistical and operational meaning of each step.
+SageMaker production variants, Gemini Enterprise Agent Platform endpoint traffic splitting, Azure endpoint traffic allocation, and Databricks served-entity traffic configuration all support weighted routing. The team still defines the statistical and operational meaning of each step.
 
 ### Blue-green keeps a complete recovery environment
 
@@ -321,12 +321,12 @@ Blue-green deployment runs the current and candidate environments side by side. 
 
 Promotion should combine service health, input integrity, prediction behaviour, and product evidence. Label-based accuracy may arrive days or weeks later, so early gates use service objectives, schema and freshness checks, distribution guardrails, sampled review, and immediate product signals. High-impact releases may keep a longer observation window before full promotion.
 
-## Observability Turns a Deployment Into an Operated Service
+## How To Monitor And Operate The Deployed Model
 <!-- section-summary: Telemetry connects each request and outcome to the release that produced it, giving owners evidence for promotion and incident response. -->
 
 At a high level, **observability** gives the team enough evidence to understand what the deployed system is doing. OpenTelemetry is a vendor-neutral standard for generating, collecting, and exporting traces, metrics, and logs. Traces follow individual requests across components. Metrics summarise behaviour over time. Logs preserve discrete events and diagnostic detail.
 
-### Watch four views of the release
+### Monitor Service, Input, Prediction, And Product Health
 
 Service health covers latency, error rate, saturation, queue depth, restarts, and dependency failures. Input health covers contract errors, missing values, feature freshness, category changes, and fallback use. Prediction health covers score distributions, class rates, output bounds, and segment behaviour. Product evidence covers overrides, user outcomes, safety events, and delayed label-based quality.
 
@@ -348,13 +348,13 @@ Each event needs enough release context for comparison:
 
 Metrics should use bounded labels. A release label separates candidate and baseline data. Route and region labels reveal where behaviour differs, while a small result-class label distinguishes outcomes. Raw user IDs and request IDs create high cardinality and belong in traces or governed logs. Sensitive inputs and outputs should be collected only for an approved purpose. Access controls restrict who can inspect them. Retention rules limit storage time, and redaction removes unnecessary fields before export.
 
-### Promotion produces a durable evidence record
+### Record Why Each Release Was Promoted
 
 The deployment platform reports what is running. The release record explains why it was allowed to run. A promotion decision can link evaluation results, contract tests, performance tests, supply-chain verification, canary dashboards, approver identity, and the active traffic step.
 
 Automation handles measurable gates. For example, it can stop a canary after a latency objective breach, a feature contract error, or a prediction-rate guardrail violation. A named release owner handles ambiguous evidence and records the decision. Product, model, platform, security, and incident ownership should be clear before traffic starts.
 
-## Rollback Restores the Complete Decision Path
+## How To Restore The Previous Working Decision Path
 <!-- section-summary: Effective recovery restores a compatible model, runtime, feature path, policy, contract, and traffic route that the product can use immediately. -->
 
 **Rollback** routes work back to a known-safe release. In essence, recovery restores the previous decision path instead of changing only the model file. That path includes the image and its model, plus compatible preprocessing and feature definitions. It also restores the contract, policy, permissions, deployment configuration, and capacity that were proven together.
@@ -391,7 +391,8 @@ The team proves this unit in layers: reproduce the prediction inside the package
 - [Sigstore Cosign Verification](https://docs.sigstore.dev/cosign/verifying/verify/)
 - [Amazon SageMaker AI Deployment Guardrails](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails.html)
 - [Amazon SageMaker AI Shadow Tests](https://docs.aws.amazon.com/sagemaker/latest/dg/model-validation.html)
-- [Vertex AI Model Deployment](https://docs.cloud.google.com/vertex-ai/docs/predictions/deploy-model-api)
+- [Gemini Enterprise Agent Platform: Deploy a Model to an Endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/deploy-model-api)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning Online Endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
 - [Databricks Model Serving Traffic Splits](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)
 - [Kubernetes Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/)

@@ -15,9 +15,9 @@ aliases:
 1. [Separate the Five Information Layers](#separate-the-five-information-layers)
 2. [Understand Why Agent Memory Exists](#understand-why-agent-memory-exists)
 3. [Decide What Deserves Persistence](#decide-what-deserves-persistence)
-4. [Give Every Record a Scope and Lifetime](#give-every-record-a-scope-and-lifetime)
-5. [Build Working Context Through a Read Policy](#build-working-context-through-a-read-policy)
-6. [Govern Memory Writes as Data Changes](#govern-memory-writes-as-data-changes)
+4. [Set Where Each Record Can Be Used And For How Long](#set-where-each-record-can-be-used-and-for-how-long)
+5. [Use A Read Policy To Choose Which Memories The Model Sees](#use-a-read-policy-to-choose-which-memories-the-model-sees)
+6. [Review And Control Every Durable Memory Write](#review-and-control-every-durable-memory-write)
 7. [Consolidate Memory Without Losing Evidence](#consolidate-memory-without-losing-evidence)
 8. [Resolve Conflict and Staleness Explicitly](#resolve-conflict-and-staleness-explicitly)
 9. [Keep Domain Systems Authoritative](#keep-domain-systems-authoritative)
@@ -26,8 +26,8 @@ aliases:
 12. [Evaluate Memory as a Product Feature](#evaluate-memory-as-a-product-feature)
 13. [Observe Memory Decisions Safely](#observe-memory-decisions-safely)
 14. [Choose Industrial Implementations by Responsibility](#choose-industrial-implementations-by-responsibility)
-15. [Put the Pieces Into One Production Design](#put-the-pieces-into-one-production-design)
-16. [The Main Idea](#the-main-idea)
+15. [Follow One Memory Read-And-Write Cycle In Production](#follow-one-memory-read-and-write-cycle-in-production)
+16. [Preserve Continuity Without Replacing Authoritative Data](#preserve-continuity-without-replacing-authoritative-data)
 17. [References](#references)
 
 ## Separate the Five Information Layers
@@ -40,7 +40,7 @@ Teams often place a transcript, tool results, user preferences, workflow progres
 That object soon contains information with different owners, lifetimes, and trust levels.
 A useful design starts by separating five layers.
 
-### Working context is the model's temporary desk
+### Working Context Holds Information For One Model Call
 
 **Working context** is the exact information sent to the model for one step.
 It can contain instructions, recent messages, selected memories, retrieved passages, current state, and tool descriptions.
@@ -59,7 +59,7 @@ This is the system's working record for continuation.
 If a process restarts, session state should explain where execution may safely resume.
 Conversation history is useful session evidence, although structured fields should carry progress that application code must validate.
 
-### Durable memory carries selected information across sessions
+### Durable Memory Stores Information For Later Sessions
 
 **Durable memory** stores information expected to help again after the current session ends.
 A confirmed communication preference, a project convention, or a sanitized lesson from a resolved incident can qualify.
@@ -70,7 +70,7 @@ It also carries its source, confidence, and privacy class.
 An expiry or review policy limits how long the application treats it as active.
 It may still be wrong or outdated, so the application presents it as remembered information with visible source, age, and confidence.
 
-### Retrieved knowledge brings source material into the current decision
+### Retrieved Knowledge Adds Source Material To The Current Decision
 
 **Retrieved knowledge** comes from documents, code, policies, catalogues, or other governed collections.
 The retrieval index helps find that material.
@@ -80,7 +80,7 @@ A team handbook explaining an expense rule is retrieved knowledge.
 A user preference for receiving a weekly digest is durable memory.
 They may both enter working context, but they answer different questions and follow different update paths.
 
-### System-of-record data owns committed facts
+### System-Of-Record Data Provides Current Business Facts
 
 **System-of-record data** is the authoritative business state: the current order status, account balance, access grant, reservation, or incident record.
 The agent reads or changes it through an authorized tool.
@@ -100,10 +100,6 @@ flowchart TD
     G --> H["Model response or tool proposal"]
     H --> I["Application validates<br/>and routes the result"]
 
-    classDef task fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef context fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A task
     class C,D,E,F source
     class B,G context
@@ -150,9 +146,6 @@ flowchart TD
     F --> G["Use governed episodic memory<br/>or reviewed knowledge"]
     G --> H["Measure task benefit<br/>against risk and cost"]
 
-    classDef need fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef store fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,D,F need
     class C,E,G store
     class H outcome
@@ -225,7 +218,7 @@ The fields matter more than the YAML format.
 The record states who it belongs to, why it exists, how it was learned, and how long it should remain active.
 An embedding can be added for retrieval, while these structured fields still govern access and validity.
 
-## Give Every Record a Scope and Lifetime
+## Set Where Each Record Can Be Used And For How Long
 <!-- section-summary: Scope controls who and what may reuse information, while lifetime controls how long that reuse remains justified. -->
 
 **Scope** answers where a piece of state or memory may be reused.
@@ -255,9 +248,6 @@ flowchart TD
     E --> F["Tenant or global<br/>governed application policy"]
     F --> G["Wider reuse requires<br/>stronger authority and review"]
 
-    classDef short fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef durable fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef governed fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C short
     class D,E durable
     class F,G governed
@@ -279,7 +269,7 @@ For a multi-tenant application, `(tenant_id, user_id, memory_type)` is safer tha
 Authorization still runs on every read and write.
 A namespace organizes data, while access control decides whether the caller may use it.
 
-## Build Working Context Through a Read Policy
+## Use A Read Policy To Choose Which Memories The Model Sees
 <!-- section-summary: A memory read filters by identity, permission, validity, authority, relevance, and token budget before selected records enter working context. -->
 
 Storing a memory creates only the possibility of future use.
@@ -304,10 +294,6 @@ flowchart TD
     F --> G["Label source, age,<br/>confidence, and trust"]
     G --> H["Working context"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef filter fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef select fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef context fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,C filter
     class D,E,F,G select
@@ -331,7 +317,7 @@ Read policies should also support an empty result.
 If no valid memory applies, the system can ask a focused question or continue without personalization.
 Forcing a vaguely similar record into context creates confident continuity from weak evidence.
 
-## Govern Memory Writes as Data Changes
+## Review And Control Every Durable Memory Write
 <!-- section-summary: A memory write moves through extraction, validation, authorization, conflict handling, approval, and versioned persistence. -->
 
 A durable memory write is a product data change.
@@ -358,10 +344,6 @@ flowchart TD
     H --> I
     I --> J["Index, audit, and<br/>schedule review or expiry"]
 
-    classDef candidate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef policy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B candidate
     class C,D,F,G policy
     class H,I decision
@@ -418,9 +400,6 @@ flowchart TD
     L -->|"Yes"| M["Keep both with precedence<br/>and reindex"]
     L -->|"No"| H["Quarantine automatic use<br/>and record the conflict"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef process fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A input
     class B,C,D,E,K,L process
     class F,G,H,M decision
@@ -475,9 +454,6 @@ flowchart TD
     F -->|"Yes"| H["Keep both with precedence<br/>and reindex"]
     F -->|"No"| I["Quarantine automatic use<br/>and record the conflict"]
 
-    classDef claim fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef compare fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef resolution fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A claim
     class B,C,D,F compare
     class E,G,H,I resolution
@@ -513,10 +489,6 @@ flowchart TD
     F --> G["Domain service commits<br/>the external effect"]
     G --> H["Session state records<br/>operation ID and result reference"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef memory fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef domain fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef state fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B memory
     class C,D,E,F,G domain
@@ -564,10 +536,6 @@ flowchart TD
     F --> G["Verify search returns<br/>no active copy"]
     G --> H["Record completion<br/>without sensitive payload"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef delete fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,C,D,E,F delete
     class G verify
@@ -608,10 +576,6 @@ flowchart TD
     J -->|"Yes"| H["Retry safely with<br/>the same operation key"]
     J -->|"No or unknown"| I["Pause, poll, or<br/>request review"]
 
-    classDef effect fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef recover fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C effect
     class D,E recover
     class F,J decision
@@ -680,10 +644,6 @@ flowchart TD
     G --> H["Task success, correct use,<br/>safety, latency, and cost"]
     H --> I["Compare with memory disabled"]
 
-    classDef case fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef compare fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A case
     class B,C,D,E,F,G stage
     class H result
@@ -724,9 +684,6 @@ flowchart TD
     F --> G["Lifecycle event<br/>version, index, expiry"]
     G --> H["One correlated trace view"]
 
-    classDef run fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef span fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef view fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A run
     class B,C,D,E,F,G span
     class H view
@@ -807,10 +764,6 @@ flowchart TD
     F --> G["Context builder"]
     G --> H["Model step under<br/>application policy"]
 
-    classDef responsibility fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef implementation fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef context fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A responsibility
     class B,C,D,E,F implementation
     class G context
@@ -821,7 +774,7 @@ Managed memory reduces implementation work.
 The organization still defines allowed memory types, source precedence, privacy purpose, correction process, and release evidence.
 Validate those controls with the same journey tests regardless of provider.
 
-## Put the Pieces Into One Production Design
+## Follow One Memory Read-And-Write Cycle In Production
 <!-- section-summary: A production memory architecture joins an authorized context builder, transactional session state, governed memory records, derived indexes, domain tools, evaluation, and lifecycle workers. -->
 
 A practical production design starts each step with the authenticated task.
@@ -850,10 +803,6 @@ flowchart TD
     J --> K["Consolidation, indexing,<br/>expiry, and deletion workers"]
     K --> L["Evaluation and observability"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef lifecycle fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,C,D,E context
     class F,G,H,I action
@@ -869,7 +818,7 @@ If the memory index lags, the primary record remains available for repair and re
 Release evidence should prove more than a happy conversation.
 Test the read and write policies, cross-tenant isolation, correction, conflict, expiry, deletion, checkpoint recovery, provider outage, and the product response with memory disabled.
 
-## The Main Idea
+## Preserve Continuity Without Replacing Authoritative Data
 <!-- section-summary: Reliable memory comes from separating information layers and governing every transition from interaction to state, durable record, working context, and deletion. -->
 
 Agent memory is a continuity feature built on data lifecycle controls.

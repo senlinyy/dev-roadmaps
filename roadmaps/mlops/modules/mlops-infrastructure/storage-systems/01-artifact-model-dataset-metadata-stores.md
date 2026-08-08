@@ -1,7 +1,7 @@
 ---
 title: "ML Storage Systems"
 description: "Understand how artifact bytes, dataset snapshots, model records, run metadata, catalogs, and lineage work together."
-overview: "ML storage architecture separates durable bytes from the metadata and relationships that explain them. A supporting example follows one delay-risk model across object storage, dataset manifests, MLflow tracking, a model registry, a catalog, and an evidence graph."
+overview: "ML storage architecture gives durable bytes, changing datasets, model versions, lifecycle decisions, and production evidence separate homes while preserving the links between them."
 tags: ["MLOps", "production", "storage"]
 order: 1
 id: "article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores"
@@ -9,418 +9,377 @@ id: "article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores"
 
 ## Table of Contents
 
-1. [Why ML Needs Several Storage Responsibilities](#why-ml-needs-several-storage-responsibilities)
-2. [Separate Bytes From Records](#separate-bytes-from-records)
-3. [Give Each Fact One Owner](#give-each-fact-one-owner)
-4. [Build A Small Asset Catalog](#build-a-small-asset-catalog)
-5. [Implement And Test The Evidence Graph](#implement-and-test-the-evidence-graph)
-6. [Record Runs And Model Packages With MLflow](#record-runs-and-model-packages-with-mlflow)
-7. [Identify Dataset Snapshots And Lineage](#identify-dataset-snapshots-and-lineage)
-8. [Operate The Evidence Graph](#operate-the-evidence-graph)
-9. [References](#references)
+1. [What ML Storage Actually Has To Preserve](#what-ml-storage-actually-has-to-preserve)
+2. [Understand The Five Storage Jobs In An ML System](#understand-the-five-storage-jobs-in-an-ml-system)
+3. [Understand An Asset's Location, Exact Version, Details, And History](#understand-an-assets-location-exact-version-details-and-history)
+4. [Keep Model Files And Runtime Images Immutable](#keep-model-files-and-runtime-images-immutable)
+5. [Give Every Training Dataset An Exact, Rebuildable Version](#give-every-training-dataset-an-exact-rebuildable-version)
+6. [Keep Training Runs, Model Versions, And Production Releases Separate](#keep-training-runs-model-versions-and-production-releases-separate)
+7. [Store Approval, Deployment, And Production Evidence](#store-approval-deployment-and-production-evidence)
+8. [Link Records Across Storage And Metadata Systems](#link-records-across-storage-and-metadata-systems)
+9. [Publish Complete Assets Across Multiple Storage Systems](#publish-complete-assets-across-multiple-storage-systems)
+10. [Give Each Workload Narrow Access And Appropriate Retention](#give-each-workload-narrow-access-and-appropriate-retention)
+11. [Test That Models And Datasets Can Be Restored](#test-that-models-and-datasets-can-be-restored)
+12. [Build A Small Storage Stack That Covers Every Responsibility](#build-a-small-storage-stack-that-covers-every-responsibility)
+13. [The Main Idea](#the-main-idea)
+14. [References](#references)
 
-## Why ML Needs Several Storage Responsibilities
-<!-- section-summary: Production ML stores large immutable files, structured lifecycle records, searchable ownership data, and links that connect one model version to its evidence. -->
+## What ML Storage Actually Has To Preserve
+<!-- section-summary: An ML release depends on several kinds of durable content and records whose identities must remain connected. -->
 
-**ML storage systems** keep the files and records that explain how a model was created and where it is used. A model package by itself cannot tell you which data trained it, which code created it, which evaluation reviewed it, or which owner should respond when it fails. Production teams need durable bytes and structured records that stay connected.
+At a high level, **ML storage systems preserve the model, the evidence that explains it, and the production records that show how it was used.** The model file is only one part of that history.
 
-A supporting example follows **ParcelPilot**, a delivery platform that predicts whether a package will arrive more than twenty-four hours late. One training run reads Parquet files, uses a feature schema, writes a model package, records metrics, and produces an evaluation report. The team needs to replay the run six months later and investigate a production prediction without searching through personal folders.
+Imagine one training job that reads a customer-risk table and produces a classifier. By the end of the release, the team may have all of these records:
 
-This article owns the storage architecture and lineage questions. The next article explains object-storage mechanics such as versioning, integrity, access, and lifecycle rules. The final storage article owns promotion across development, staging, and production. Keeping those responsibilities separate gives the module a progressive path.
+- a precise version of the training and validation data;
+- the Git revision and container image used by the job;
+- parameters, metrics, and logs from the training attempt;
+- model weights, a signature, and an evaluation report;
+- a registered model version;
+- a release decision and the endpoint revision that received traffic;
+- prediction records and later outcomes.
 
-## Separate Bytes From Records
-<!-- section-summary: A data plane stores large files, while a metadata plane stores identities, relationships, ownership, and lifecycle state. -->
+Each record answers a different question. The object store can return the model bytes. The experiment tracker can explain which run produced them. The dataset platform can recover the rows read by that run. The model registry can identify a reviewed version. The deployment system can report what actually served traffic. Operational evidence can show how that release behaved.
 
-The clearest storage framework starts with two layers. The **data plane** stores large or immutable bytes. The **metadata plane** stores small structured records that help people and automation find, compare, and govern those bytes.
-
-| Layer | Typical content | Useful systems |
-| --- | --- | --- |
-| Data plane | Dataset files, model weights, tokenizers, plots, reports, and checkpoints (saved intermediate training state for resume) | S3, Azure Blob Storage, Cloud Storage, lakehouse tables, file or volume storage |
-| Metadata plane | Run parameters, metrics, owners, schemas, model versions, lineage links, review status | MLflow, W&B, managed ML platforms, model registries, catalogs, relational or warehouse tables |
-
-The layers can share infrastructure. MLflow may store run records in PostgreSQL and artifact files in S3. A lakehouse can store dataset bytes and table metadata together. The design boundary still matters because the team should know which system owns each fact.
-
-ParcelPilot defines four storage responsibilities across those layers:
-
-| Responsibility | Question it answers | Main record |
-| --- | --- | --- |
-| Artifact storage | Which exact files did a run create? | Immutable Uniform Resource Identifier (URI) plus digest |
-| Dataset identity | Which rows and label window trained or evaluated the model? | Snapshot or table version plus manifest |
-| Run and model metadata | Which code, parameters, metrics, schema, and model version belong together? | Run ID and registered model version |
-| Catalog and lineage | Who owns the asset and how do data, run, model, deployment, and prediction connect? | Stable asset IDs and typed links |
-
-These responsibilities avoid a common category error. A bucket can hold a model file, while it cannot supply a complete approval workflow or searchable lineage by itself. A registry can name a model version, while it usually points to artifact bytes stored elsewhere. A catalog can help people discover assets, while it should link to the systems that own run details and files.
+Keeping everything in one folder would preserve some files, although it would leave ownership and relationships implicit. Storing everything in one database would make large model and dataset payloads expensive and awkward. Production systems divide the work across specialized stores, then connect the stores with stable identities.
 
 ```mermaid
-flowchart LR
-    Dataset["Dataset snapshot and manifest"] --> Run["Run metadata"]
-    Code["Code, config, and environment"] --> Run
-    Run --> Artifact["Model and report bytes"]
-    Artifact --> Registry["Registered model version"]
-    Registry --> Deployment["Deployment record"]
-    Deployment --> Prediction["Prediction and outcome evidence"]
-    Catalog["Ownership and discovery catalog"] --- Dataset
-    Catalog --- Registry
-    Catalog --- Deployment
+flowchart TD
+    Data["Dataset State<br/>(exact rows and data contract)"] --> Run["Training Attempt<br/>(code, parameters, metrics, and status)"]
+    Runtime["Runtime Package<br/>(container image and dependencies)"] --> Run
+    Run --> Model["Model Artifact<br/>(weights, signature, and supporting files)"]
+    Model --> Registry["Model Version<br/>(governed identity and review metadata)"]
+    Registry --> Release["Release Record<br/>(decision and deployed revision)"]
+    Release --> Evidence["Production Evidence<br/>(predictions, telemetry, and outcomes)"]
 ```
 
-The large bytes can live in object or lakehouse storage while smaller records live in tracking, registry, deployment, and catalog systems. Stable links form the evidence graph. Each fact keeps one authoritative owner, and other systems carry references rather than conflicting copies.
+The storage architecture succeeds if an operator can move backward and forward through this chain. A production prediction should resolve to the release that served it. That release should resolve to the model, evaluation, run, code, runtime, and dataset state. A damaged dataset should also reveal every model and release that depended on it.
 
-## Give Each Fact One Owner
-<!-- section-summary: Storage stays trustworthy when each important fact has one authoritative system and other systems carry links rather than conflicting copies. -->
+## Understand The Five Storage Jobs In An ML System
+<!-- section-summary: Five storage responsibilities cover durable bytes, dataset states, development evidence, release identity, and production records. -->
 
-ParcelPilot writes an ownership table before choosing products:
+One ML system creates several record types because the records change at different speeds and serve different owners. A 12-gigabyte checkpoint behaves differently from a small approval record. A training table receives new rows, while an approved model package should keep the same bytes. A metric is searchable metadata; a prediction archive may contain sensitive business data.
 
-| Fact | Authoritative system | Referenced by |
-| --- | --- | --- |
-| Dataset file bytes | Object storage or lakehouse table version | Dataset manifest, training run |
-| Dataset schema and label window | Dataset manifest repository | Run metadata, evaluation packet |
-| Training parameters and metrics | MLflow run | Model version, catalog |
-| Model package bytes | Artifact store | Registered model version |
-| Model name and version | Model registry | Evaluation, deployment record |
-| Production deployment version | Serving or deployment control plane | Catalog, prediction logs |
-| Business owner and risk tier | AI or asset inventory | Registry tags, review packet |
+The first responsibility is **artifact storage**. It preserves large outputs such as model weights, tokenizers, checkpoints, plots, and evaluation files. These objects usually live in Amazon S3, Google Cloud Storage, Azure Data Lake Storage, or another durable object store.
 
-Links should copy stable identifiers instead of duplicating mutable facts. The model registry can store the MLflow run ID. The run can store the dataset snapshot ID. The deployment record can store the immutable model version. Prediction logs can store the deployment and model version. A catalog entry then links to those records rather than copying every metric and configuration field.
+The second responsibility is **dataset versioning**. It identifies one complete table state or released file collection. Delta Lake and Apache Iceberg provide transaction-backed table snapshots. Warehouses can provide their own snapshot or time-travel mechanisms. The record needs enough data meaning to explain the rows, schema, cutoff, and label window used for training.
 
-This rule prevents conflicting truth. If three systems each hold a manually edited `production_model_version`, an incident responder cannot know which value describes live traffic. The deployment control plane owns live state. The registry owns model identity and lifecycle metadata. The catalog indexes both.
+The third responsibility is **experiment and lineage metadata**. A training attempt produces parameters, metrics, status, code identity, dataset references, and output references. MLflow 3 or a managed experiment tracker makes that evidence searchable. Lineage systems connect the attempt to its inputs and outputs.
 
-## Build A Small Asset Catalog
-<!-- section-summary: A catalog gives every important dataset, run, model, and deployment a stable identity, owner, location, and relationship to other assets. -->
+The fourth responsibility is **model and release identity**. A model registry gives a trained artifact a governed name and version. A release record goes further: it records the decision to deploy a particular model package with a particular runtime configuration. The registry and deployment system may cooperate, while each still owns different facts.
 
-An **asset catalog** is a searchable index of ML assets and their relationships. It can live in a dedicated catalog, a managed platform, or a warehouse table. The first version can stay small as long as it uses stable IDs and points to authoritative evidence.
+The fifth responsibility is **operational decision and evidence storage**. Approval records, deployment events, prediction summaries, service telemetry, and later outcomes explain production behaviour. Release systems, observability platforms, and governed warehouses are common homes for these records. The model artifact directory remains focused on file payloads.
 
-ParcelPilot records the registered delay model like this:
+```mermaid
+flowchart TD
+    Question["Storage Question<br/>(what must this record prove?)"] --> Bytes["Artifact Bytes<br/>(preserve large immutable outputs)"]
+    Question --> Dataset["Dataset Snapshot<br/>(preserve one complete data state)"]
+    Question --> Experiment["Experiment Metadata<br/>(explain one training attempt)"]
+    Question --> Release["Model And Release Record<br/>(identify what may be deployed)"]
+    Question --> Operations["Operational Evidence<br/>(show what happened in production)"]
+```
+
+The product choice follows the responsibility. Object storage cannot answer which version served traffic. A registry cannot reconstruct rows that have expired from a table. An observability store should not receive unrestricted copies of training data. The links between these stores matter as much as the stores themselves.
+
+## Understand An Asset's Location, Exact Version, Details, And History
+<!-- section-summary: Addresses locate content, identities select an exact state, metadata explains it, and lineage connects it to other records. -->
+
+Four ideas often collapse into one field called `uri` or `model_version`. That shortcut works until a mutable name changes or an investigator needs to explain an old release. Imagine opening a six-month-old deployment record and finding only `model: champion`. The name still resolves, yet it now selects a newer model. The record needs separate answers to four questions: where is the asset, which exact state was used, what does that state mean, and how is it connected to the release?
+
+### Use An Address To Find The Asset
+
+An **address** is a location such as `s3://ml-artifacts/runs/8fb4/model/`, `models:/risk_score/17`, or `prod.features.accounts`. It tells a client which service and name to query.
+
+Addresses can move or resolve to changing content. A model alias such as `@champion` can point to version `17` today and version `18` after a release. A table name normally resolves to its latest state. A container tag such as `stable` can be reassigned. These names help people and automation discover current choices, but they are weak historical evidence by themselves.
+
+### Use An Identity To Select Exact Content
+
+An **identity** distinguishes the exact thing used. Useful identities include an object generation, a cryptographic digest, a Delta table version, an Iceberg snapshot ID, an MLflow Logged Model ID, a registered model version, and an OCI image digest.
+
+Suppose a deployment record stores `registry.example/risk-api:stable`. A later image push can move that tag. The incident investigator then pulls different code from the image that originally served requests. Recording `registry.example/risk-api@sha256:...` protects the historical link because the digest selects the exact OCI manifest.
+
+### Use Metadata To Explain The Asset
+
+**Metadata** is structured information about an asset. It includes the owner, creation time, schema, parameters, metrics, model signature, data classification, retention class, and review status. Metadata lets people search and interpret an identity without downloading every payload.
+
+Metadata should point to sensitive source data instead of copying it freely. A prediction record can retain a governed customer-reference key and a small allowlisted feature summary. Raw customer fields, credentials, complete prompts, and unrestricted exception payloads belong in approved restricted systems under explicit retention policy.
+
+### Record How Data, Runs, Models, And Releases Are Related
+
+**Lineage** records how identities relate. A training run `used` dataset snapshot `842`. The run `produced` Logged Model `m-91`. Evaluation `e-14` `assessed` that model. Release `r-27` `deployed` its registered version. These typed links form a path an investigator can follow.
+
+One compact release record can carry all four ideas:
 
 ```yaml
-asset_id: ml-model-delay-risk-0042
-asset_type: registered_model_version
-name: parcelpilot.delay_risk
-version: "42"
-owner: logistics-ml
-artifact_uri: s3://parcelpilot-ml/models/delay-risk/version=42/model/
-artifact_sha256: 7f8d3a...
-training_run_id: 8f3a2d90e0d94aa9a7c2
-dataset_snapshot_id: delay-risk-features-2026-07-01
-input_schema_id: delay-features-v6
-evaluation_id: delay-eval-2026-07-v42
-risk_tier: medium
-created_at: 2026-07-05T03:14:00Z
+releaseId: risk-score-r27
+model:
+  address: models:/prod.risk.score/17
+  loggedModelId: m-91
+  artifactDigest: sha256:76ac...
+runtime:
+  image: registry.example/risk-api@sha256:31d9...
+dataset:
+  table: prod.features.risk_training
+  deltaVersion: 842
+training:
+  runId: 8fb4c32
+  gitCommit: a1b2c3d
+evaluation:
+  reportId: e-14
+  policyVersion: risk-release-v6
 ```
 
-The entry identifies the asset and points to evidence. It does not decide whether version `42` may receive production traffic. That decision belongs to the promotion and deployment workflow taught later in the module.
+The addresses show which systems hold the records. The immutable IDs select exact states. The surrounding fields provide meaning. The nested references preserve lineage. A release system can validate these references before traffic changes.
 
-The catalog also needs reverse lookup. If a bad dataset snapshot is discovered, the team should find every run and model version that used it. If an image digest has a critical vulnerability, the team should find every training and serving workload that used the image. Typed relationships make those questions possible:
+## Keep Model Files And Runtime Images Immutable
+<!-- section-summary: Model outputs and runtime images use immutable identities so evaluation, deployment, and recovery all refer to the same bytes. -->
 
-```markdown
-dataset snapshot --used by--> training run
-training run --produced--> model version
-model version --evaluated by--> evaluation report
-model version --loaded by--> deployment
-deployment --generated--> prediction event
+Artifacts are the large files created or consumed by ML work. A model release often includes weights and a model signature. Tokenizer files, category labels, or preprocessing assets may also be required for a valid prediction. Evaluation reports preserve the evidence used during review. Training checkpoints serve a different purpose: they usually support recovery during the training job and may follow a shorter retention policy.
+
+### Store Large ML Files In Object Storage
+
+Object storage is the usual industrial home for model artifacts because independent jobs can read the same durable objects after their workers disappear. MLflow artifact stores commonly use S3, Google Cloud Storage, or Azure Blob Storage for this reason. The metadata database retains the run and artifact location; the object store retains the larger payload.
+
+An approved artifact receives an immutable path or object generation plus a digest. Writers use a unique run or attempt prefix. A manifest lists the files that form the complete model package. Consumers verify the manifest and required digests before loading the model. The next storage layer can then refer to one stable package instead of a folder whose contents may still be changing.
+
+### Store Training And Serving Images In An OCI Registry
+
+The model bytes and the serving runtime are separate release inputs. A model may be loaded by Python code, an ONNX runtime, Triton, or a managed endpoint container. The executable environment therefore needs its own identity.
+
+An **OCI registry** stores container images and other artifacts using the Open Container Initiative formats and distribution API. Amazon ECR, Google Artifact Registry, Azure Container Registry, and many independent registries support OCI images. An OCI image manifest points to configuration and filesystem layers by digest, so the image digest identifies the complete runtime package.
+
+Keep the model artifact identity and runtime image identity together in the release record. Updating only the image can change preprocessing or dependencies even if the model weights stay fixed. Updating only the weights can violate the model signature expected by the image. A rollback must restore the compatible pair.
+
+OCI registries can also store non-container artifacts through OCI manifests. That option works well if the organization has tooling for the chosen media type, signatures, access, and garbage collection. Ordinary object storage plus a model registry remains a simpler default for large model files in many ML platforms.
+
+```mermaid
+flowchart TD
+    Model["Model Package<br/>(weights, signature, and support files)"] --> ModelDigest["Artifact Identity<br/>(object generation and digest)"]
+    Image["Runtime Image<br/>(code, libraries, and operating files)"] --> ImageDigest["OCI Identity<br/>(manifest digest)"]
+    ModelDigest --> Release["Release Unit<br/>(compatible model and runtime pair)"]
+    ImageDigest --> Release
+    Release --> Verify["Load Verification<br/>(fixture request and observed identities)"]
 ```
 
-This connected set of records is the **evidence graph**. A graph database is optional. Stable IDs in relational tables, registry tags, manifests, and logs can provide the same relationships when the team validates them consistently.
+## Give Every Training Dataset An Exact, Rebuildable Version
+<!-- section-summary: A dataset snapshot identifies exact rows and records the data meaning required to reconstruct or validate them later. -->
 
-## Implement And Test The Evidence Graph
-<!-- section-summary: A small relational schema can store typed evidence links, traverse upstream dependencies, detect missing lineage or changed bytes, and prove a repair. -->
+A table name describes a dataset family. Training needs one particular state of that family. New events can arrive, late labels can mature, and feature logic can change between two runs that read the same table name.
 
-An evidence graph needs more than asset records with several optional ID columns. The relationships need their own schema because one model can use several datasets, one evaluation can review several models, and one deployment can depend on both a model package and an approval report. A typed edge records which asset was an input, which asset was the output, why they are connected, and which signed event or manifest supplied the relationship.
+A **dataset snapshot** identifies the complete data state used by a run. For immutable files, that may be a manifest listing object generations and digests. For Delta Lake, it can be a table version. For Apache Iceberg, it can be a snapshot ID or a retained tag. BigQuery table snapshots provide a read-only warehouse table state that can outlive the normal time-travel window.
 
-ParcelPilot starts with a relational implementation. `ml_asset` stores identity and the expected digest for byte-bearing assets. `ml_asset_edge` stores directed relationships. `artifact_verification` stores the digest observed by a verifier after it reads the actual bytes. The following SQLite-compatible test uses the same primary keys, foreign keys, and recursive query that the team deploys in PostgreSQL; the production schema changes the timestamp columns to `TIMESTAMPTZ` and keeps the relationship rules unchanged.
+The storage engine supplies a stable technical state. The ML record must also preserve data meaning. Record the schema or data-contract version and the transformation revision. Add the event-time cutoff and the label definition, including any label-maturity window. Filters and validation results explain which rows were accepted. The privacy classification determines who may use the snapshot and how long its row-level data may remain.
 
-```python
-import hashlib
-import sqlite3
+Consider a churn model trained from an accounts table at version `842`. The version fixes the files read from that table. It cannot explain that churn labels require thirty days to mature or that accounts closed after the prediction cutoff must be excluded. Those rules belong in the dataset contract and run evidence.
 
-
-connection = sqlite3.connect(":memory:")
-connection.execute("PRAGMA foreign_keys = ON")
-connection.executescript("""
-CREATE TABLE ml_asset (
-    asset_id TEXT PRIMARY KEY,
-    asset_type TEXT NOT NULL CHECK (asset_type IN (
-        'dataset_snapshot', 'training_run', 'model_version',
-        'evaluation', 'deployment', 'prediction'
-    )),
-    uri TEXT,
-    expected_sha256 TEXT,
-    owner TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE ml_asset_edge (
-    input_asset_id TEXT NOT NULL REFERENCES ml_asset(asset_id),
-    relation TEXT NOT NULL CHECK (relation IN (
-        'USED_BY', 'PRODUCED', 'EVALUATED_AS',
-        'APPROVED_FOR', 'LOADED_BY', 'GENERATED'
-    )),
-    output_asset_id TEXT NOT NULL REFERENCES ml_asset(asset_id),
-    evidence_uri TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (input_asset_id, relation, output_asset_id),
-    CHECK (input_asset_id <> output_asset_id)
-);
-
-CREATE TABLE artifact_verification (
-    asset_id TEXT PRIMARY KEY REFERENCES ml_asset(asset_id),
-    observed_sha256 TEXT NOT NULL,
-    verifier_run_id TEXT NOT NULL,
-    verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-""")
-
-approved_model_bytes = b"parcelpilot-delay-risk-v42-approved"
-approved_model_sha256 = hashlib.sha256(approved_model_bytes).hexdigest()
-
-connection.executemany(
-    "INSERT INTO ml_asset VALUES (?, ?, ?, ?, ?, ?)",
-    [
-        ("dataset-2026-07-01", "dataset_snapshot", "s3://parcelpilot-ml/datasets/delay/2026-07-01/", None, "logistics-data", "2026-07-01T02:00:00Z"),
-        ("run-8f3a2d90", "training_run", "mlflow://runs/8f3a2d90", None, "logistics-ml", "2026-07-05T03:00:00Z"),
-        ("model-v42", "model_version", "s3://parcelpilot-ml/models/delay/v42/model.bin", approved_model_sha256, "logistics-ml", "2026-07-05T03:14:00Z"),
-        ("evaluation-v42", "evaluation", "s3://parcelpilot-ml/evaluations/delay/v42/report.json", None, "model-risk", "2026-07-05T05:00:00Z"),
-        ("deployment-prod-731", "deployment", "k8s://prod/delay-risk/731", None, "ml-platform", "2026-07-06T09:00:00Z"),
-        ("prediction-9081", "prediction", "warehouse://prediction_events/9081", None, "logistics-product", "2026-07-06T09:03:00Z"),
-    ],
-)
-
-# The fixture deliberately omits dataset -> run and records changed model bytes.
-connection.executemany(
-    "INSERT INTO ml_asset_edge(input_asset_id, relation, output_asset_id, evidence_uri) VALUES (?, ?, ?, ?)",
-    [
-        ("run-8f3a2d90", "PRODUCED", "model-v42", "mlflow://runs/8f3a2d90"),
-        ("model-v42", "EVALUATED_AS", "evaluation-v42", "s3://parcelpilot-ml/evaluations/delay/v42/report.json"),
-        ("model-v42", "LOADED_BY", "deployment-prod-731", "deploy://events/731"),
-        ("evaluation-v42", "APPROVED_FOR", "deployment-prod-731", "approval://delay-risk/v42"),
-        ("deployment-prod-731", "GENERATED", "prediction-9081", "warehouse://prediction_events/9081"),
-    ],
-)
-connection.execute(
-    "INSERT INTO artifact_verification(asset_id, observed_sha256, verifier_run_id) VALUES (?, ?, ?)",
-    (
-        "model-v42",
-        hashlib.sha256(b"changed-model-bytes").hexdigest(),
-        "verify-before-release-731",
-    ),
-)
-
-
-def integrity_failures():
-    missing_links = connection.execute("""
-        SELECT run.asset_id, 'missing dataset_snapshot USED_BY edge'
-        FROM ml_asset AS run
-        WHERE run.asset_type = 'training_run'
-          AND NOT EXISTS (
-              SELECT 1
-              FROM ml_asset_edge AS edge
-              JOIN ml_asset AS source
-                ON source.asset_id = edge.input_asset_id
-              WHERE edge.output_asset_id = run.asset_id
-                AND edge.relation = 'USED_BY'
-                AND source.asset_type = 'dataset_snapshot'
-          )
-    """).fetchall()
-    digest_failures = connection.execute("""
-        SELECT asset.asset_id, 'digest mismatch or missing verification'
-        FROM ml_asset AS asset
-        LEFT JOIN artifact_verification AS verification
-          ON verification.asset_id = asset.asset_id
-        WHERE asset.expected_sha256 IS NOT NULL
-          AND (
-              verification.observed_sha256 IS NULL
-              OR verification.observed_sha256 <> asset.expected_sha256
-          )
-    """).fetchall()
-    return sorted(missing_links + digest_failures)
-
-
-def record_verification(asset_id, observed_bytes, verifier_run_id):
-    observed_sha256 = hashlib.sha256(observed_bytes).hexdigest()
-    connection.execute("""
-        INSERT INTO artifact_verification(
-            asset_id, observed_sha256, verifier_run_id
-        ) VALUES (?, ?, ?)
-        ON CONFLICT(asset_id) DO UPDATE SET
-            observed_sha256 = excluded.observed_sha256,
-            verifier_run_id = excluded.verifier_run_id,
-            verified_at = CURRENT_TIMESTAMP
-    """, (asset_id, observed_sha256, verifier_run_id))
-
-
-before = integrity_failures()
-assert before == [
-    ("model-v42", "digest mismatch or missing verification"),
-    ("run-8f3a2d90", "missing dataset_snapshot USED_BY edge"),
-]
-
-# Repair lineage from the signed run manifest and restore the protected object version.
-connection.execute("""
-    INSERT INTO ml_asset_edge(
-        input_asset_id, relation, output_asset_id, evidence_uri
-    ) VALUES (?, 'USED_BY', ?, ?)
-""", (
-    "dataset-2026-07-01",
-    "run-8f3a2d90",
-    "s3://parcelpilot-ml/runs/8f3a2d90/manifest.json",
-))
-record_verification(
-    "model-v42", approved_model_bytes, "verify-after-version-restore-732"
-)
-assert integrity_failures() == []
-
-upstream = connection.execute("""
-    WITH RECURSIVE lineage(
-        asset_id, asset_type, depth, via_relation, path
-    ) AS (
-        SELECT asset_id, asset_type, 0, 'ROOT', '|' || asset_id || '|'
-        FROM ml_asset
-        WHERE asset_id = ?
-        UNION ALL
-        SELECT parent.asset_id,
-               parent.asset_type,
-               child.depth + 1,
-               edge.relation,
-               child.path || parent.asset_id || '|'
-        FROM lineage AS child
-        JOIN ml_asset_edge AS edge
-          ON edge.output_asset_id = child.asset_id
-        JOIN ml_asset AS parent
-          ON parent.asset_id = edge.input_asset_id
-        WHERE child.depth < 8
-          AND instr(child.path, '|' || parent.asset_id || '|') = 0
-    )
-    SELECT depth, asset_type, asset_id, via_relation
-    FROM lineage
-    ORDER BY depth, asset_type, asset_id
-""", ("prediction-9081",)).fetchall()
-
-assert any(row[2] == "dataset-2026-07-01" for row in upstream)
-print("before_repair", before)
-print("after_repair", integrity_failures())
-for row in upstream:
-    print(row)
+```mermaid
+flowchart TD
+    Source["Changing Source Data<br/>(new events, corrections, and late labels)"] --> Transform["Versioned Transformation<br/>(code and data contract)"]
+    Transform --> Snapshot["Dataset Snapshot<br/>(table version or file manifest)"]
+    Cutoff["Time Rules<br/>(prediction cutoff and label maturity)"] --> Snapshot
+    Snapshot --> Validation["Validation Evidence<br/>(schema, quality, counts, and segments)"]
+    Validation --> Training["Training Input<br/>(resolved to a fixed recorded identity)"]
 ```
 
-The first audit reports both failures:
+Snapshot identity only works for as long as the underlying state remains retained. Delta time travel depends on retained transaction history and data files. Iceberg snapshot expiration removes unneeded snapshots and files. BigQuery snapshots can have their own expiration. The retention policy must cover the promised investigation and rebuilding period.
 
-```console
-before_repair [('model-v42', 'digest mismatch or missing verification'), ('run-8f3a2d90', 'missing dataset_snapshot USED_BY edge')]
-after_repair []
-(0, 'prediction', 'prediction-9081', 'ROOT')
-(1, 'deployment', 'deployment-prod-731', 'GENERATED')
-(2, 'evaluation', 'evaluation-v42', 'APPROVED_FOR')
-(2, 'model_version', 'model-v42', 'LOADED_BY')
-(3, 'model_version', 'model-v42', 'EVALUATED_AS')
-(3, 'training_run', 'run-8f3a2d90', 'PRODUCED')
-(4, 'dataset_snapshot', 'dataset-2026-07-01', 'USED_BY')
-(4, 'training_run', 'run-8f3a2d90', 'PRODUCED')
-(5, 'dataset_snapshot', 'dataset-2026-07-01', 'USED_BY')
+For critical releases, prove the snapshot before training. Resolve the immutable version, read it explicitly, record row counts and validation results, and attach that identity to the run. A later rebuild should use the recorded version directly instead of asking for whichever rows the table contains at that later time.
+
+## Keep Training Runs, Model Versions, And Production Releases Separate
+<!-- section-summary: Runs explain attempts, model records identify trained artifacts, registries govern versions, and release records identify deployment decisions. -->
+
+One successful training command can create several related records. The run reports what happened during that execution. The trained model needs an identity that survives after the run finishes. A registry version places that model inside a governed model family. A release record later binds the selected version to a runtime and deployment decision. Keeping these records distinct lets a failed experiment disappear without deleting a production model, and it lets a deployment roll back without rewriting training history.
+
+### Use A Run Record For One Training Attempt
+
+An **experiment run** records one execution of training or evaluation code. MLflow Tracking stores parameters, metrics, tags, start and end times, and references to output artifacts. In MLflow 3, a Logged Model gives a trained model its own first-class ID and can carry metrics tied to specific evaluation datasets.
+
+For a shared self-hosted MLflow deployment, the current architecture separates a database-backed backend store from a remote artifact store. PostgreSQL, MySQL, or another supported database keeps searchable metadata. Object storage keeps large artifacts. The local file backend remains useful for personal work, while current MLflow documentation places it in maintenance mode and recommends a database backend for shared reliability and registry support.
+
+This separation creates a real recovery requirement. A database backup without the artifact objects restores run rows that point to missing models. An object-store restore without the database loses the searchable run and registry identities. Backup and restore procedures must cover both sides and preserve their references.
+
+### Use A Model Registry For Governed Model Versions
+
+A **model registry** groups versions of a model used for the same task. Each version points to an exact trained artifact and can carry a description, signature, tags, aliases, and links to its source evidence. MLflow Model Registry, Models in Unity Catalog, SageMaker AI Model Registry, Vertex AI Model Registry, and Azure Machine Learning registries provide managed forms of this responsibility.
+
+MLflow's fixed model stages are deprecated. Current designs use immutable versions with aliases and tags. An alias such as `champion` or `candidate` is a mutable pointer used for discovery or automation. A deployment or incident record should still store the resolved version because an alias can move later.
+
+Managed catalogs add organizational controls around the model identity. Models in Unity Catalog use governed three-level names and permissions. SageMaker Model Registry organizes versioned model packages into model groups. Vertex AI Model Registry groups model versions under a model resource and supports mutable aliases. Azure Machine Learning registries can share models and other assets across workspaces. The provider object changes, while the responsibility stays the same: identify and govern a model version without pretending that the registry itself proves what served traffic.
+
+### Use A Release Record For The Production Decision
+
+A **release record** binds a model version to the runtime image, configuration, evaluation, approval, and target environment. The deployment control plane then reports the endpoint revision actually receiving traffic.
+
+This boundary matters during an incident. A registry alias may say version `18` is the champion, while an endpoint still serves version `17` after a failed rollout. The registry owns model identity. The deployment system owns observed traffic state. The release record connects the decision to both systems.
+
+```mermaid
+flowchart TD
+    Run["MLflow Run<br/>(one training attempt and its evidence)"] --> Logged["Logged Model<br/>(one trained artifact identity)"]
+    Logged --> Version["Registered Version<br/>(governed model identity)"]
+    Version --> Alias["Mutable Alias<br/>(current named reference)"]
+    Version --> Release["Immutable Release Record<br/>(model, runtime, evaluation, and target)"]
+    Release --> Deployment["Observed Deployment<br/>(revision and traffic actually running)"]
 ```
 
-The repeated model and run rows show two valid upstream branches: deployment depends directly on the model and on an evaluation that also points back to that model. A user interface can collapse repeated asset IDs after preserving both paths. The recursive query carries a visited path and depth limit so a bad cycle cannot recurse forever.
+## Store Approval, Deployment, And Production Evidence
+<!-- section-summary: Approval, deployment, prediction, telemetry, and outcome records explain why a release ran and whether it worked. -->
 
-The repair rules protect the evidence. The lineage worker adds the missing edge only after checking the signed run manifest. The storage operator restores the approved immutable object version, and the verifier hashes the bytes again. Nobody changes `expected_sha256` to match damaged bytes. If the protected version is unavailable, the model stays quarantined and the deployment rolls back to a version whose evidence graph passes. The integrity test runs before promotion and in a scheduled catalog audit, which catches both incomplete ingestion and storage corruption.
+Training evidence answers how a candidate was created. It cannot explain why a reviewer accepted its risks, whether the deployment completed, or which version actually handled a request. Production evidence fills that gap. It preserves the decision, the observed deployment state, and the later behaviour of the release. These records let an incident responder distinguish a weak model from a rollout error, a changed decision policy, or a broken outcome feed.
 
-## Record Runs And Model Packages With MLflow
-<!-- section-summary: MLflow connects structured run metadata to artifact files and registered model versions through stable run and artifact identifiers. -->
+A durable approval record contains the candidate identity, evidence references, policy version, reviewer or automated authority, decision, timestamp, and any expiry or conditions. A registry tag can expose the current review status, but a tag alone is a weak audit record because it may be overwritten. The tag should resolve to the decision record that explains the change.
 
-**MLflow Tracking** records parameters, metrics, tags, and artifact locations for one run. Its backend store owns the structured run records. Its artifact store holds larger files. ParcelPilot logs the dataset identity, code revision, container digest, metrics, model signature, and input example:
+The deployment record captures desired and observed state. Desired state names the approved release and traffic policy. Observed state reports the endpoint revision, loaded model identity, runtime image digest, and actual traffic split. Recording only the requested model can hide a partial or failed rollout.
 
-```python
-import mlflow
-import mlflow.sklearn
-from mlflow.models import infer_signature
+Prediction records connect production behaviour to that observed release. A typical record includes a prediction ID, model and release identity, event time, route, response class, policy version, and safe feature or score summaries. Later outcomes join through a governed key. Service telemetry remains in the observability platform; detailed prediction and outcome records usually belong in a governed warehouse or lakehouse.
 
-with mlflow.start_run(run_name="delay-risk-20260705"):
-    model.fit(X_train, y_train)
-    scores = model.predict_proba(X_valid)[:, 1]
-    signature = infer_signature(X_valid.head(20), scores[:20])
+Suppose an alert shows a rise in false declines for one region. The investigator first checks the outcome join and policy version. They then group affected predictions by observed release ID. If the rise starts only after release `r-27`, the graph identifies its model version, dataset snapshot, and evaluation. This path prevents an unrelated recent training run from becoming the target of the rollback.
 
-    mlflow.log_params({
-        "dataset_snapshot_id": "delay-risk-features-2026-07-01",
-        "feature_schema": "delay-features-v6",
-        "git_sha": "a1b2c3d",
-        "training_image_digest": "sha256:1111222233334444",
-    })
-    mlflow.log_metrics({
-        "auc": float(auc),
-        "precision_at_top_10_percent": float(precision_top_10),
-    })
-    mlflow.sklearn.log_model(
-        sk_model=model,
-        name="delay-risk-model",
-        registered_model_name="parcelpilot.delay_risk",
-        signature=signature,
-        input_example=X_valid.head(3),
-    )
+Operational stores need strong privacy boundaries. Keep raw inputs and direct identifiers out of general logs. Use allowlisted attributes for routine investigation and retain restricted source data only under an approved purpose. Hashing or encryption can reduce exposure, although those controls do not remove access, deletion, and retention obligations.
+
+## Link Records Across Storage And Metadata Systems
+<!-- section-summary: Stable asset identities and typed relationships let teams trace causes upstream and impact downstream without forcing every record into one database. -->
+
+The records now live in several systems. Copying all of them into one database would create another incomplete source of truth. Leaving the links inside dashboards would make automated impact analysis impossible. The storage design therefore needs stable relationships that cross system boundaries. An investigator should be able to start with a model, dataset, deployment, or prediction and follow the relevant evidence without guessing which names happen to match.
+
+An **evidence graph** is the connected set of dataset, run, model, evaluation, release, deployment, prediction, and outcome identities. Each edge has a meaning such as `used`, `produced`, `evaluated`, `approved`, `deployed`, or `generated`. The graph describes the lifecycle without requiring a graph database.
+
+```mermaid
+flowchart TD
+    Dataset["Dataset Snapshot<br/>(exact data state used)"] -->|used by| Run["Training Run<br/>(one execution of code)"]
+    Code["Code And Runtime<br/>(Git and OCI digests)"] -->|executed by| Run
+    Run -->|produced| Model["Model Version<br/>(trained artifact identity)"]
+    Model -->|assessed by| Evaluation["Evaluation Record<br/>(metrics, datasets, and policy)"]
+    Evaluation -->|supports| Decision["Release Decision<br/>(authority and reviewed evidence)"]
+    Decision -->|deployed as| Deployment["Deployment Revision<br/>(observed model and traffic)"]
+    Deployment -->|generated| Prediction["Prediction Evidence<br/>(safe operational record)"]
+    Prediction -->|joined to| Outcome["Outcome Record<br/>(later real-world result)"]
 ```
 
-The `name` parameter follows current MLflow 3 model-logging guidance. The signature describes the input and output contract. The input example gives validation and serving teams a concrete request shape. The dataset ID and image digest connect the model package to data and runtime evidence.
+Typed links can live in relational tables, catalog relations, registry tags, manifests, or lineage events. OpenLineage provides a standard event model around jobs, runs, and input or output datasets. A run event can carry the job, run ID, dataset versions, schema, and quality facets observed during execution. ML-specific model and release records can link to those same stable run and dataset identities.
 
-MLflow still needs operational design. The backend database needs backups and controlled migrations. The artifact store needs versioning, encryption, integrity checks, and retention. The tracking service needs authentication and environment boundaries. A model version whose metadata survives while its artifact files expire is an unusable record.
+Catalogs such as Unity Catalog can capture lineage for supported data and ML objects under governed permissions. Its captured relationships can include tables, jobs, notebooks, and models. External lineage platforms can ingest OpenLineage events from orchestration and processing tools. These systems reduce manual relationship entry, although automated capture still requires verification. Dynamic Python access and external APIs can leave gaps. Custom serving paths may need explicit release and prediction links.
 
-## Identify Dataset Snapshots And Lineage
-<!-- section-summary: Dataset identity records exact files or table versions, schema, label timing, provenance, and validation evidence used by a run. -->
+Reverse traversal gives the graph operational value. If snapshot `842` contains a faulty feature, the team asks which runs used it, which models those runs produced, and which releases deployed those models. If a container digest has a critical vulnerability, the team asks which training and serving revisions used that image. A scheduled completeness check can flag released models with no dataset link, missing artifact digest, or unresolved evaluation record.
 
-A **dataset snapshot** is a stable identity for the data used at one point in the lifecycle. It can refer to immutable files, a DVC revision, a lakeFS commit, a Delta or Iceberg table version, an object version, or a warehouse snapshot. The important property is that another engineer can resolve the same identity later.
+## Publish Complete Assets Across Multiple Storage Systems
+<!-- section-summary: Immutable preparation, verification, publication records, and reconciliation prevent partial multi-store writes from appearing as complete releases. -->
 
-ParcelPilot writes a manifest:
+One training attempt may write objects, commit a table, update MLflow, create a registry version, and publish lineage. Those systems do not usually share one database transaction. A worker can succeed in one store and fail before updating the next.
 
-```json
-{
-  "dataset_snapshot_id": "delay-risk-features-2026-07-01",
-  "owner": "logistics-data",
-  "source_tables": [
-    "warehouse.delivery_events",
-    "warehouse.merchant_profiles",
-    "warehouse.weather_alerts"
-  ],
-  "label": {
-    "name": "late_by_more_than_24h",
-    "maturity_days": 14,
-    "cutoff": "2026-06-17T00:00:00Z"
-  },
-  "schema_id": "delay-features-v6",
-  "files": [
-    {"path": "part-0000.parquet", "rows": 102938, "sha256": "3a7d9f..."},
-    {"path": "part-0001.parquet", "rows": 99821, "sha256": "91c2aa..."}
-  ],
-  "validation_report": "reports/delay-risk-features-2026-07-01.json"
-}
+The safe publication path has four stages. **Prepare** writes artifacts under a unique attempt identity and records the intended dataset version. **Verify** checks required files, digests, schema, evaluation, and resolvable links. **Publish** creates an immutable candidate or release record only after verification passes. **Reconcile** retries missing secondary records from the durable publication record.
+
+```mermaid
+flowchart TD
+    Prepare["Prepare Candidate<br/>(write unique artifacts and records)"] --> Verify["Verify Candidate<br/>(check completeness, identity, and policy)"]
+    Verify -->|valid| Publish["Publish Record<br/>(create immutable candidate or release)"]
+    Verify -->|invalid| Quarantine["Quarantine Attempt<br/>(keep evidence and block consumers)"]
+    Publish --> FanOut["Reconcile Indexes<br/>(registry, catalog, and lineage links)"]
+    FanOut --> Ready["Ready For Use<br/>(consumers resolve one complete identity)"]
+    FanOut -->|partial failure| Retry["Retry By Operation ID<br/>(repair missing secondary records)"]
+    Retry --> FanOut
 ```
 
-The label cutoff matters as much as the file hash. Delay labels need fourteen days to mature, so the manifest shows which outcomes were eligible. The schema ID and validation report explain the expected columns and checks. The hashes show which file bytes belonged to the snapshot.
+The publication boundary differs by store. A Delta or Iceberg commit exposes one complete table snapshot. A multi-file object package can publish its manifest last. A registry version should be created from a completed model artifact. A release record should reference completed evaluation and approval evidence. Consumers begin from the publication record and verify the identities they load.
 
-Lineage has two directions. Upstream lineage explains which sources and transforms created the snapshot. Downstream lineage shows which runs, models, evaluations, and deployments consumed it. ParcelPilot tests both directions during release review and incident exercises.
+Retries use one operation ID. If the registry request times out after creating version `17`, the retry searches for the version associated with that operation before creating another. If the bytes differ under the same operation, the attempt is quarantined and receives a new identity. This pattern prevents a harmless network timeout from creating ambiguous duplicate versions.
 
-## Operate The Evidence Graph
-<!-- section-summary: Storage operations verify resolvable links, recoverability, access boundaries, retention alignment, and the ability to trace a prediction through the evidence chain. -->
+Atomic publication does not guarantee every search index updates immediately. The immutable publication record serves as the recovery source. A reconciler can rebuild missing catalog links or lineage events without changing the released identities.
 
-Storage quality is visible through retrieval tests. ParcelPilot selects a recent prediction and follows its model version to the deployment, registry record, MLflow run, dataset manifest, source tables, code commit, and image digest. It also selects a dataset snapshot and lists every model version that used it.
+## Give Each Workload Narrow Access And Appropriate Retention
+<!-- section-summary: Workload identities constrain who may create or consume each record, while retention preserves the complete evidence needed for recovery and governance. -->
 
-The platform runs these checks:
+Storage contains both valuable software assets and sensitive data, so a single broad “ML platform” role creates unnecessary risk. The dataset publisher, training job, registry automation, deployment controller, and serving runtime perform different actions. Their credentials should express those differences. This design also improves incident evidence: an object-store audit event identifies the workload responsible for a write instead of reporting one shared service account used by the entire lifecycle.
 
-| Check | Failure it catches |
-| --- | --- |
-| Every catalog URI resolves | Metadata that points to deleted files |
-| Artifact digest matches the catalog | Replaced or corrupted package |
-| Run references one dataset snapshot | Training from a moving path |
-| Snapshot manifest carries schema and label cutoff | Reproduction without data meaning |
-| Model version links to run and evaluation | Registry used as a file list |
-| Deployment and prediction logs carry immutable model version | Live behavior cannot be traced |
-| Backup restore test covers metadata and artifact indexes | Tracking service cannot recover |
-| Retention policy keeps linked evidence together | Model survives after its data or report expires |
+### Give Writers Access Only To Their Required Destinations
 
-Access follows ownership. Training jobs write run artifacts. Dataset pipelines publish snapshots. Registry automation creates model versions from reviewed run outputs. Catalog sync jobs index the relationships. Serving identities read approved artifact locations through the deployment workflow. These boundaries keep storage responsibilities understandable before the next articles add object-store and promotion mechanics.
+A dataset pipeline writes new governed snapshots but cannot alter registered models. A training identity reads approved datasets and writes only to its run-specific artifact prefix. Registry automation can create model versions from verified artifacts. Deployment automation can read approved releases and update endpoints. Serving identities receive read access to the exact model location and no permission to overwrite it.
+
+Use the cloud provider's workload identity, an equivalent managed identity, or another short-lived service credential. Static keys embedded in notebooks create long-lived leakage and rotation risk. Separate development and production namespaces if they have different trust boundaries. Residency rules, encryption ownership, or retention policy can also justify that separation.
+
+MLflow deployments require a deliberate artifact-access mode. A tracking server can proxy artifact access using its own storage role, which means users with server access may inherit access to everything that role can read. Direct client access shifts credentials to each client. Choose the mode from the required isolation and audit boundary, then test it with identities from different teams.
+
+### Show Readers Only The Metadata And Files They May Access
+
+Catalog visibility does not imply permission to read every payload. Broad discovery can expose names, owners, and descriptions while restricted datasets and model artifacts keep narrower read policies. Unity Catalog lineage follows catalog permissions and masks objects a user cannot browse. Other catalogs need equivalent filtering so lineage does not leak sensitive asset names.
+
+### Keep Every File Required To Explain A Release
+
+Retention policy should keep a useful release closure: model package, runtime digest, signature, evaluation, approval, deployment history, and enough dataset evidence to meet the reproduction promise. Keeping a registry row after deleting its model artifact creates a broken record. Keeping weights after deleting the required tokenizer creates a broken release.
+
+Some records have a maximum lifetime because of privacy or licensing. Others have a minimum lifetime because of rollback, audit, or legal requirements. Resolve that tension explicitly. A team may retain aggregate validation evidence and transformation code longer than row-level source data, then document that exact row reconstruction expires after the governed retention window.
+
+Deletion is also an event. Tombstone the asset identity, record the authority and policy that allowed deletion, and remove or mark downstream links. Search and release systems should report “expired under policy” instead of presenting an unexplained broken URI.
+
+## Test That Models And Datasets Can Be Restored
+<!-- section-summary: Restore and rebuild drills test that retained identities, bytes, permissions, contracts, and software can still produce a usable release. -->
+
+Backups prove that copies exist. Recovery drills prove that the stored records still work together. A registry export can look healthy even though its model objects have expired. A dataset version can remain visible after cleanup removes the files needed to read it. A successful drill starts from the same identity an operator would receive during an incident, uses recovery credentials, and produces evidence that the restored or rebuilt asset is usable.
+
+### Restore An Existing Release
+
+Start from a release ID selected by the release system. Resolve the registered model version, object digest, runtime image digest, signature, and configuration. Retrieve the artifacts using the production recovery identity. Verify each digest, start the runtime, and score a fixed fixture set. The test passes after the service reports the expected release identities and its outputs match the reviewed fixture tolerance.
+
+This drill catches failures hidden by a bucket inventory. The object may exist while its encryption key is disabled. The registry record may survive while the tokenizer expired. The image may remain in the registry while the required architecture variant is missing. The test exercises the complete unit an operator would restore during an incident.
+
+### Rebuild A Training Dataset
+
+Choose a released model and retrieve its dataset identity, transformation revision, data contract, cutoff, label window, and source references. Read the retained Delta or Iceberg snapshot, BigQuery table snapshot, or file manifest. Re-run the transformation into a new verification location. Compare schema, row counts, partitions, validation results, and a content digest or deterministic sample against the recorded evidence.
+
+A snapshot may already contain the final training rows. In that case, the drill proves exact retrieval. A snapshot of upstream sources requires the transformation code and environment to recreate the training table. The release record should state which promise applies.
+
+### Reproduce Training To The Declared Level
+
+Exact model bytes are not always a realistic reproduction promise. GPU kernels, distributed reduction order, and library changes can introduce numerical variation even with saved seeds. Record the environment and determinism settings, then define the expected proof. Some workloads require the same artifact digest. Others require equivalent predictions on a fixture set and metrics inside reviewed tolerances.
+
+Suppose a rebuild finds that the recorded table version has expired. The release cannot honestly claim exact data reproduction. The team should keep the production model available for rollback if policy permits, mark the broken reconstruction link, and adjust retention for future releases. It should not rewrite the old run to point at a newer dataset.
+
+```mermaid
+flowchart TD
+    Release["Selected Release<br/>(start from durable production identity)"] --> Resolve["Resolve Dependencies<br/>(model, image, data, code, and policy)"]
+    Resolve --> Restore["Restore Package<br/>(verify bytes and run fixture inference)"]
+    Resolve --> Rebuild["Rebuild Dataset<br/>(replay retained state and transformations)"]
+    Rebuild --> Retrain["Reproduce Training<br/>(apply declared determinism and tolerance)"]
+    Restore --> Evidence["Recovery Evidence<br/>(identities, checks, outputs, and failures)"]
+    Retrain --> Evidence
+    Evidence --> Repair["Repair Policy<br/>(close retention, access, or lineage gaps)"]
+```
+
+## Build A Small Storage Stack That Covers Every Responsibility
+<!-- section-summary: A coherent stack gives every required storage responsibility one owner and adds catalogs or lineage platforms only for repeated organizational needs. -->
+
+A small team can cover the framework without building a metadata platform. Object storage holds run artifacts. An OCI registry holds training and serving images. A warehouse or Delta or Iceberg table provides addressable dataset states. MLflow records runs and registered model versions. The deployment workflow writes a small immutable release record, while prediction evidence lands in a governed analytics table.
+
+A provider-centered team can use the same framework through managed services. SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks each combine parts of tracking, registry, catalog, data, and deployment. Their internal integration reduces plumbing. Git identity, OCI image identity, data retention, production telemetry, and the observed release still cross product boundaries.
+
+Larger organizations add a catalog or lineage service after cross-system questions recur across teams. Those questions include asset discovery, downstream impact, ownership, and policy. OpenLineage provides portable run and dataset events across supported tools. Unity Catalog provides a managed governed catalog inside the Databricks platform. Evaluate connector coverage and permission filtering before adoption. Also prove that lost events can be recovered and links can be rebuilt from authoritative records.
+
+Count responsibilities and handoffs instead of products. A stack with one clear owner for each fact and a tested recovery path has stronger storage architecture than a larger stack with three incomplete catalogs.
+
+## The Main Idea
+<!-- section-summary: ML storage works through specialized stores, immutable identities, explicit relationships, controlled publication, and tested recovery. -->
+
+ML systems create several forms of durable evidence because data, model artifacts, metadata, release decisions, and production records have different sizes, lifecycles, and owners. Object and OCI storage preserve immutable bytes. Lakehouse and warehouse snapshots preserve data states. Experiment trackers and registries explain training and model identity. Release and operational stores record production decisions and behaviour.
+
+Addresses help clients find records. Immutable identities select the exact state. Metadata explains its meaning. Lineage connects it to the rest of the lifecycle. Those four ideas let specialized stores cooperate without copying every fact into one database.
+
+The practical test starts from either end of the evidence graph. A production prediction should lead back to the exact release, model, run, runtime, code, and dataset. A faulty dataset or image should reveal every downstream release at risk. Atomic publication, narrow permissions, aligned retention, and regular restore and rebuild drills keep those paths trustworthy.
 
 ## References
 
 - [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/)
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-- [MLflow Model Signatures](https://mlflow.org/docs/latest/ml/model/signatures/)
-- [OpenLineage specification](https://openlineage.io/docs/) - Primary reference for stable dataset, job, run, and event relationships across systems.
-- [TensorFlow ML Metadata](https://www.tensorflow.org/tfx/guide/mlmd) - Primary reference for artifacts, executions, events, contexts, and recursive lineage queries.
-- [DVC data and model versioning](https://dvc.org/doc/use-cases/versioning-data-and-model-files)
-- [lakeFS data versioning model](https://docs.lakefs.io/understand/model/)
-- [Apache Iceberg time travel](https://iceberg.apache.org/docs/latest/spark-queries/#time-travel)
+- [MLflow backend stores](https://mlflow.org/docs/latest/self-hosting/architecture/backend-store/)
+- [MLflow artifact stores](https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [OCI Image Manifest Specification](https://github.com/opencontainers/image-spec/blob/main/manifest.md)
+- [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md)
+- [Delta Lake time travel and retention](https://docs.delta.io/delta-batch/)
+- [Apache Iceberg documentation](https://iceberg.apache.org/docs/latest/)
+- [Apache Iceberg branching and tagging](https://iceberg.apache.org/docs/latest/branching/)
+- [BigQuery table snapshots](https://docs.cloud.google.com/bigquery/docs/table-snapshots-intro)
+- [OpenLineage object model](https://openlineage.io/docs/spec/object-model/)
+- [OpenLineage facets](https://openlineage.io/docs/spec/facets/)
+- [Models in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
+- [Unity Catalog lineage](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-lineage)
+- [SageMaker AI Model Registry concepts](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-models.html)
+- [Vertex AI model aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Azure Machine Learning registries](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-registries?view=azureml-api-2)

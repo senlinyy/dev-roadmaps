@@ -10,13 +10,13 @@ id: "article-mlops-model-evaluation-classification-metrics"
 ## Table of Contents
 
 1. [Classification Metrics Measure More Than Correct Labels](#classification-metrics-measure-more-than-correct-labels)
-2. [Accuracy Can Hide the Error That Matters](#accuracy-can-hide-the-error-that-matters)
-3. [The Confusion Matrix Turns Predictions Into Consequences](#the-confusion-matrix-turns-predictions-into-consequences)
+2. [Check Accuracy Against Class Imbalance And Error Costs](#check-accuracy-against-class-imbalance-and-error-costs)
+3. [Use A Confusion Matrix To Count Four Kinds Of Result](#use-a-confusion-matrix-to-count-four-kinds-of-result)
 4. [Precision, Recall, Specificity, and F1 Answer Different Questions](#precision-recall-specificity-and-f1-answer-different-questions)
-5. [The Threshold Decides What the Product Does](#the-threshold-decides-what-the-product-does)
-6. [Probability Quality Is a Different Layer of Evaluation](#probability-quality-is-a-different-layer-of-evaluation)
-7. [Multiclass Averages Need an Explicit Meaning](#multiclass-averages-need-an-explicit-meaning)
-8. [Segment Evaluation Finds Failures Hidden by the Average](#segment-evaluation-finds-failures-hidden-by-the-average)
+5. [Use A Threshold To Turn A Score Into An Action](#use-a-threshold-to-turn-a-score-into-an-action)
+6. [Check Whether Predicted Probabilities Match Real Outcomes](#check-whether-predicted-probabilities-match-real-outcomes)
+7. [Choose How To Average Metrics Across Several Classes](#choose-how-to-average-metrics-across-several-classes)
+8. [Compare Classification Results Across Important Segments](#compare-classification-results-across-important-segments)
 9. [Build a Repeatable Classification Report](#build-a-repeatable-classification-report)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
@@ -42,9 +42,7 @@ These layers feed a product decision. A fraud score may decide which payments en
 flowchart TD
     D["Product decision<br/>What action will the model influence?"] --> P["Positive class<br/>Which event requires attention?"] --> S["Model score or probability"] --> T["Decision threshold"] --> C["Confusion-matrix counts"] --> M["Decision metrics<br/>precision, recall, specificity, F1"] --> R["Release evidence by class and segment"]
     S --> Q["Score and probability checks<br/>AP, ROC AUC, log loss, Brier, calibration"] --> R
-    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+
     class D,P context
     class S,T,C mechanism
     class M,Q,R evidence
@@ -54,7 +52,7 @@ The positive class deserves an explicit definition before any calculation. In de
 
 The evaluation population matters just as much. A recall score from last month's completed reviews may say little about new regions, new devices, or cases whose labels have not matured. A trustworthy metric report states the label definition, evaluation population, time window, and decision rule beside every result.
 
-## Accuracy Can Hide the Error That Matters
+## Check Accuracy Against Class Imbalance And Error Costs
 <!-- section-summary: Accuracy counts every correct label equally, so a common class can dominate the result while the model fails on the rare class that drives the product decision. -->
 
 **Accuracy** is the share of examples whose predicted label matches the known label. It gives every evaluated example the same influence on the final percentage.
@@ -82,7 +80,7 @@ Accuracy can also hide a trade-off after the model improves. Suppose a second mo
 
 Balanced accuracy still remains a statistical summary. It does not know that a missed urgent message costs more than an unnecessary review. The report should preserve the actual error counts, class-specific rates, and operational workload beside any average.
 
-## The Confusion Matrix Turns Predictions Into Consequences
+## Use A Confusion Matrix To Count Four Kinds Of Result
 <!-- section-summary: A confusion matrix records the four possible outcomes of a binary decision and provides the counts used by most threshold-based classification metrics. -->
 
 A **confusion matrix** compares the known class with the class chosen by the model. For a binary decision, every evaluated example falls into one of four cells.
@@ -98,9 +96,7 @@ flowchart TD
     PY -- "No" --> FN["False negative<br/>Needed action and was missed"]
     A -- "No" --> PN{"Did the model predict positive?"} -- "Yes" --> FP["False positive<br/>Received unnecessary action"]
     PN -- "No" --> TN["True negative<br/>Correctly left alone"]
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef correct fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef error fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+
     class A,PY,PN question
     class TP,TN correct
     class FP,FN error
@@ -131,7 +127,7 @@ Pay close attention to matrix orientation. Scikit-learn's `confusion_matrix(y_tr
 
 The confusion matrix gives the facts. Metrics turn selected parts of those facts into rates that can be compared across evaluation sets.
 
-### Precision asks whether positive predictions deserve action
+### Use Precision To Measure How Often Positive Predictions Are Correct
 
 **Precision** starts from everything the model predicted as positive. It asks: *Of the cases that received the action, how many truly needed it?*
 
@@ -141,7 +137,7 @@ For the defect system, precision is `75 / (75 + 45) = 0.625`. About 62.5 percent
 
 Precision matters if false alarms are expensive. A manual review team has limited capacity. A customer may be harmed by an unnecessary block. An alert stream may lose trust if most alerts lead nowhere.
 
-### Recall asks how much of the positive class was found
+### Use Recall To Measure How Many Positive Cases The Model Finds
 
 **Recall**, also called **sensitivity** or the **true positive rate**, starts from every truly positive case. It asks: *Of all cases that needed action, how many did the model find?*
 
@@ -151,7 +147,7 @@ The defect system has recall `75 / (75 + 25) = 0.75`. It catches 75 percent of t
 
 Recall deserves priority if missing a positive case carries serious cost. Urgent-message routing, disease screening, fraud detection, and safety inspection often fit this pattern. High recall usually creates more positive predictions, so the team watches precision and workload beside it.
 
-### Specificity protects the negative class
+### Use Specificity To Measure How Many Negative Cases The Model Leaves Untouched
 
 **Specificity**, also called the **true negative rate**, starts from every truly negative case. It asks: *Of all cases that should remain untouched, how many did the model leave alone?*
 
@@ -161,7 +157,7 @@ The defect system has specificity `855 / (855 + 45) = 0.95`. It lets 95 percent 
 
 Specificity deserves attention in products where the negative class represents a large population that should avoid interruption. Screening systems often report sensitivity and specificity together because one protects detection and the other protects people from unnecessary follow-up.
 
-### F1 compresses precision and recall
+### F1 Combines Precision And Recall Into One Score
 
 **F1** is the harmonic mean of precision and recall.
 
@@ -193,7 +189,7 @@ mindmap
 
 No summary should erase support, which is the number of true examples for a class. A recall of 80 percent based on ten positive examples has a different evidence strength from the same rate based on ten thousand. Counts and uncertainty remain part of the release decision.
 
-## The Threshold Decides What the Product Does
+## Use A Threshold To Turn A Score Into An Action
 <!-- section-summary: A decision threshold converts scores into labels, changing precision, recall, false alarms, misses, and workload without changing the underlying model. -->
 
 Many binary classifiers produce a score or probability before they produce a class label. The **decision threshold** is the cutoff that turns that continuous output into an action.
@@ -208,9 +204,7 @@ flowchart TD
     LA --> LP["False alarms and workload may rise"]
     H --> HA["Fewer cases predicted positive"] --> HP["Precision may rise"]
     HA --> HM["More positive cases may be missed"]
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef effect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
+
     class S source
     class L,H choice
     class LA,LR,LP,HA,HP,HM effect
@@ -235,7 +229,7 @@ Score-based metrics answer a related question before the threshold is fixed. **R
 
 ROC AUC or AP can show that a candidate orders cases better overall. Neither metric says how many alerts the selected threshold produces. The release report needs the curve summary and the actual operating-point counts.
 
-## Probability Quality Is a Different Layer of Evaluation
+## Check Whether Predicted Probabilities Match Real Outcomes
 <!-- section-summary: Log loss, Brier score, and calibration curves evaluate probability estimates, while confusion-matrix metrics evaluate the labels created by a threshold. -->
 
 A class decision and a probability answer different questions about the same case. The decision says which action to take. The probability describes how uncertain the outcome is.
@@ -250,9 +244,7 @@ flowchart TD
     P --> F["Keep the probability"] --> B["Brier score and log loss"] --> R["Is the probability forecast useful?"]
     F --> C["Calibration curve"]
     C --> R
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef route fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
+
     class P input
     class D,L,F route
     class M,B,C,R evidence
@@ -268,7 +260,7 @@ A **calibration curve**, or reliability diagram, examines calibration more direc
 
 Probability quality matters if the number is shown to a person, used to price risk, divided into risk bands, or combined with changing decision costs. If the score is used only to order cases and the threshold is continually set by queue capacity, ranking and operating-point quality may matter more. The report should state how the product consumes the output.
 
-## Multiclass Averages Need an Explicit Meaning
+## Choose How To Average Metrics Across Several Classes
 <!-- section-summary: Multiclass precision, recall, and F1 are calculated per class and then combined, so macro, weighted, and micro averages can tell different stories. -->
 
 A binary problem has two classes. A **multiclass** problem chooses one class from three or more options, such as `scratch`, `dent`, `crack`, and `clean`. Precision, recall, and F1 still apply, but each class takes a turn as the positive class while the remaining classes form the comparison group.
@@ -308,7 +300,7 @@ Neither average decides whether crack detection is acceptable. If a missed crack
 
 **Multilabel** classification is different. One example may have several labels at once, such as an image containing both `helmet_missing` and `restricted_area`. Micro averaging is common because it pools label decisions. A samples average can also summarize quality per example. The report should identify whether the task is multiclass or multilabel because the same word *accuracy* can describe different calculations.
 
-## Segment Evaluation Finds Failures Hidden by the Average
+## Compare Classification Results Across Important Segments
 <!-- section-summary: Segment evaluation repeats the chosen metrics across meaningful populations so strong overall performance cannot conceal a weak device, language, region, or workflow route. -->
 
 Classes describe what the model predicts. **Segments** describe populations or operating conditions inside the evaluation set. A fraud classifier may predict `fraud` and `legitimate`, while its segments include payment type, device, region, customer tenure, and transaction-value band.
@@ -322,10 +314,7 @@ flowchart TD
     O["Overall metric and operating point"] --> S["Predefined important segments"] --> C["Check support, label maturity,<br/>coverage, and join quality"] --> P["Compute the same counts and metrics"] --> B["Compare candidate with production<br/>on the same segment"] --> G{"Evidence meets the segment rule?"}
     G -- "Yes" --> A["Include the supported segment"]
     G -- "No" --> N["Block, investigate, or narrow scope"]
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef analysis fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
+
     class O,S evidence
     class C,P,B analysis
     class G,A decision

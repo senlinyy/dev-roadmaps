@@ -12,32 +12,32 @@ aliases:
 
 ## Table of Contents
 
-1. [A/B Testing Answers a Causal Product Question](#ab-testing-answers-a-causal-product-question)
+1. [What A/B Testing Can Tell You About Product Impact](#what-ab-testing-can-tell-you-about-product-impact)
 2. [A Rollout and an Experiment Answer Different Questions](#a-rollout-and-an-experiment-answer-different-questions)
-3. [Learn the Language of a Controlled Experiment](#learn-the-language-of-a-controlled-experiment)
-4. [Choose the Unit That Receives the Experience](#choose-the-unit-that-receives-the-experience)
-5. [Separate Assignment, Exposure, and Outcome](#separate-assignment-exposure-and-outcome)
-6. [Turn the Hypothesis Into Decision Metrics](#turn-the-hypothesis-into-decision-metrics)
+3. [The Terms Used In A Controlled Experiment](#the-terms-used-in-a-controlled-experiment)
+4. [Choose What Gets Randomly Assigned](#choose-what-gets-randomly-assigned)
+5. [Record Assignment, Exposure, And Outcome Separately](#record-assignment-exposure-and-outcome-separately)
+6. [Choose Metrics That Can Decide The Experiment](#choose-metrics-that-can-decide-the-experiment)
 7. [Handle Delayed Outcomes and Decision Policies](#handle-delayed-outcomes-and-decision-policies)
-8. [Plan Sample Size, Power, and Duration](#plan-sample-size-power-and-duration)
-9. [Analyze the Population You Randomized](#analyze-the-population-you-randomized)
-10. [Check the Evidence Before Reading the Lift](#check-the-evidence-before-reading-the-lift)
-11. [Protect the Result From Time and Repeated Testing](#protect-the-result-from-time-and-repeated-testing)
-12. [Recognize Interference and Feedback Loops](#recognize-interference-and-feedback-loops)
-13. [Build the Experiment as a Production Data System](#build-the-experiment-as-a-production-data-system)
+8. [Plan How Many Units And How Long To Run The Test](#plan-how-many-units-and-how-long-to-run-the-test)
+9. [Analyze The Same Population That Was Randomized](#analyze-the-same-population-that-was-randomized)
+10. [Check Experiment Integrity Before Reading The Result](#check-experiment-integrity-before-reading-the-result)
+11. [Avoid Time Bias And Repeated-Testing Errors](#avoid-time-bias-and-repeated-testing-errors)
+12. [Detect Interference And Feedback Loops](#detect-interference-and-feedback-loops)
+13. [Build Reliable Assignment, Logging, And Outcome Pipelines](#build-reliable-assignment-logging-and-outcome-pipelines)
 14. [Write the Decision Rules Before Launch](#write-the-decision-rules-before-launch)
 15. [Know Where Randomized Testing Is Inappropriate](#know-where-randomized-testing-is-inappropriate)
 16. [The Main Idea](#the-main-idea)
 17. [References](#references)
 
-## A/B Testing Answers a Causal Product Question
+## What A/B Testing Can Tell You About Product Impact
 <!-- section-summary: An ML A/B test estimates whether a model-driven product change caused a meaningful change in user or business outcomes. -->
 
 At a high level, an **A/B test** is a fair comparison between two product experiences. Eligible users, accounts, devices, or other units are randomly placed into groups. One group receives the current experience and another receives the candidate. The team then compares outcomes such as purchases, successful searches, resolved support cases, or harmful actions.
 
 The word **causal** matters here. A causal question asks whether the candidate experience produced the observed change. A dashboard may show that users served by a new ranking model purchased more items. That pattern alone leaves several other explanations open: those users may come from a higher-spending region, the comparison may span different days, or a marketing campaign may have reached one group first. Random assignment gives every eligible unit the same chance of entering either group, so these background differences tend to balance.
 
-Consider a candidate search-ranking model with a higher offline relevance score. The product decision is still unresolved. Users may find answers faster, scroll through more irrelevant results, abandon the page, or receive slower responses. A useful experiment turns that uncertainty into a precise question.
+Consider a candidate search-ranking model with a higher offline relevance score. The product decision is still unresolved. Users may find answers faster, scroll through more irrelevant results, abandon the page, or receive slower responses. The experiment turns that uncertainty into a precise question.
 
 **Experiment question:** Does the candidate ranker increase successful searches per eligible user while search abandonment, harmful-result reports, and response latency remain inside agreed limits?
 
@@ -65,9 +65,9 @@ A baseline-versus-canary dashboard also gives weak causal evidence. Canary traff
 
 An A/B test adds the missing experimental controls: a declared population, random assignment, stable group membership, exposure records, outcome definitions, and a statistical decision plan. The release system still owns health checks and rollback. The experiment system owns the product comparison.
 
-Cloud endpoints from SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks Model Serving can distribute requests across deployments. Their traffic weights are valuable delivery controls. Stable user cohorts, exposure-to-outcome joins, and statistical analysis still require an experiment layer or equivalent application logic.
+Cloud endpoints from SageMaker AI, Gemini Enterprise Agent Platform Endpoints, Azure Machine Learning, and Databricks Model Serving can distribute requests across deployments. Their traffic weights are valuable delivery controls. Stable user cohorts, exposure-to-outcome joins, and statistical analysis still require an experiment layer or equivalent application logic.
 
-## Learn the Language of a Controlled Experiment
+## The Terms Used In A Controlled Experiment
 <!-- section-summary: A small set of terms describes who enters the experiment, what changes, what is measured, and how a decision is made. -->
 
 Experiment discussions get confusing if “user,” “request,” and “exposure” are used as though they mean the same thing. The following terms describe separate parts of the design.
@@ -96,7 +96,7 @@ A **hypothesis** predicts a direction and a reason: “The candidate ranker will
 
 An **analysis population** defines whose outcomes enter the estimate. This choice deserves a written rule before launch because filtering people after observing their behavior can destroy the balance created by randomization.
 
-## Choose the Unit That Receives the Experience
+## Choose What Gets Randomly Assigned
 <!-- section-summary: The randomization unit should match the boundary across which the treatment can remain consistent and outcomes can remain reasonably independent. -->
 
 The best randomization unit follows the product interaction. In essence, ask two questions: “Which entity needs a consistent experience?” and “Can one assigned entity affect another entity’s outcome?”
@@ -127,7 +127,7 @@ flowchart TD
 
 The unit choice should also account for repeated sessions, shared inventory, and social effects. A pricing experiment can change remaining inventory for later shoppers. A feed-ranking experiment can change what creators produce. A fraud model can alter attacker behavior. Each case creates links between units that a simple user-level design may miss.
 
-## Separate Assignment, Exposure, and Outcome
+## Record Assignment, Exposure, And Outcome Separately
 <!-- section-summary: Trustworthy experiments preserve stable assignment and record the actual product exposure that connects a model release to later outcomes. -->
 
 Stable assignment is the foundation. You can think of it as attaching a durable experiment label to the chosen unit. A person assigned to treatment on one visit receives treatment again on later visits. This consistency protects the product experience and keeps behavior connected to one experimental group.
@@ -169,7 +169,7 @@ flowchart TD
     X --> V["Delivery and triggered-analysis checks"]
 ```
 
-## Turn the Hypothesis Into Decision Metrics
+## Choose Metrics That Can Decide The Experiment
 <!-- section-summary: A primary metric expresses the intended benefit, while guardrails and counter-metrics reveal unacceptable costs. -->
 
 A metric is a rule for turning events into a number. “Engagement” is a topic. “Completed searches per eligible user during seven days after assignment” is a metric definition. The second version identifies the unit, event, denominator, and time window.
@@ -209,7 +209,7 @@ features -> model score -> threshold -> business rule -> fallback -> action
 
 Suppose treatment uses a new fraud model while a risk-policy service changes the review threshold halfway through the test. The resulting effect mixes two changes, so attribution is difficult. Freeze decision-policy versions during the experiment, include them in exposure logs, or design separate randomized factors under statistical review.
 
-## Plan Sample Size, Power, and Duration
+## Plan How Many Units And How Long To Run The Test
 <!-- section-summary: Sample size depends on the smallest valuable effect, normal outcome variation, desired power, error tolerance, and randomization unit. -->
 
 An experiment needs enough independent units to distinguish a meaningful effect from ordinary variation. Three planning terms make this practical.
@@ -229,7 +229,7 @@ This planning illustration provides no universal sample count. Unequal allocatio
 
 Duration adds product context that sample size alone misses. The run should cover relevant weekly cycles, delayed-outcome maturity, and expected learning or novelty. A high-traffic site may collect the planned sample in one afternoon while still producing a misleading result if weekday and weekend behavior differ.
 
-## Analyze the Population You Randomized
+## Analyze The Same Population That Was Randomized
 <!-- section-summary: Intent-to-treat analysis preserves the balance created by random assignment and measures the effect of offering the treatment. -->
 
 The usual primary analysis follows **intent to treat (ITT)**. Every eligible unit stays in its assigned group, including units that never reached the model-driven surface. ITT estimates the effect of assigning or offering the candidate experience under real product usage.
@@ -261,7 +261,7 @@ GROUP BY a.variant;
 
 Here, absent completed-action events count as zero only after the pipeline has verified outcome-feed completeness. Exposure coverage appears beside the ITT metric so delivery failures stay visible.
 
-## Check the Evidence Before Reading the Lift
+## Check Experiment Integrity Before Reading The Result
 <!-- section-summary: Assignment balance, identifier integrity, exposure delivery, outcome freshness, and join coverage must pass before a metric difference is trusted. -->
 
 The first experiment readout should test the evidence itself. A polished lift chart built from broken assignments or missing events can create a confident wrong decision.
@@ -295,7 +295,7 @@ models:
                 values: [control, treatment]
 ```
 
-## Protect the Result From Time and Repeated Testing
+## Avoid Time Bias And Repeated-Testing Errors
 <!-- section-summary: Novelty, learning, peeking, and multiple comparisons can make an early positive result look stronger than the lasting effect. -->
 
 User behavior can change during a test. A **novelty effect** is an early response to a new experience that fades. A **learning effect** grows as users discover how to use a new workflow. Plotting treatment effect by enrollment cohort and time since first exposure can reveal both patterns. The planned duration should cover the period needed for the product claim.
@@ -306,7 +306,7 @@ Multiple metrics create a related problem. Twenty independent tests at a 5% thre
 
 Concurrent launches can also contaminate interpretation. Experiment layers or mutual-exclusion groups prevent units from entering combinations with known interactions. Teams should record overlapping experiment assignments so unexpected interactions can be investigated.
 
-## Recognize Interference and Feedback Loops
+## Detect Interference And Feedback Loops
 <!-- section-summary: Some ML treatments change the environment shared by control and treatment, weakening the assumption that units act independently. -->
 
 Some products connect participants through shared resources or direct interaction. A change delivered to one participant can therefore alter the experience available to someone in the other group. **Interference** is the name for this cross-group effect.
@@ -330,7 +330,7 @@ flowchart TD
     S --> B
 ```
 
-## Build the Experiment as a Production Data System
+## Build Reliable Assignment, Logging, And Outcome Pipelines
 <!-- section-summary: Industrial experiments connect assignment, immutable release identity, governed event tables, data-quality tests, statistical analysis, and decision records. -->
 
 An industrial experiment is a small production system. Its job is to preserve the causal comparison from product configuration through the final decision. Every layer carries a different piece of evidence, and those pieces must join through stable identities.
@@ -418,6 +418,7 @@ The practical lesson is to treat the experiment record as part of the release ev
 - [NIST: Selecting sample sizes](https://www.itl.nist.gov/div898/handbook/prc/section2/prc222.htm)
 - [NIST: AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
 - [Amazon SageMaker AI: Test models with production variants](https://docs.aws.amazon.com/sagemaker/latest/dg/model-ab-testing.html)
-- [Vertex AI: Endpoint traffic split](https://docs.cloud.google.com/vertex-ai/docs/reference/rpc/google.cloud.aiplatform.v1#endpoint)
+- [Gemini Enterprise Agent Platform: Deploy a Model and Split Endpoint Traffic](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/deploy-model-api)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning: Managed online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
 - [Databricks Model Serving: Serve multiple models from one endpoint](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)

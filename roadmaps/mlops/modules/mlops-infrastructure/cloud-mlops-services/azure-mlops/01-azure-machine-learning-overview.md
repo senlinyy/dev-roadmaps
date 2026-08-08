@@ -11,31 +11,31 @@ aliases:
 
 ## Table of Contents
 
-1. [See The Platform As Four Connected Planes](#see-the-platform-as-four-connected-planes)
-2. [The Workspace Defines A Collaboration Boundary](#the-workspace-defines-a-collaboration-boundary)
-3. [Assets Give Moving Data And Code Stable Identities](#assets-give-moving-data-and-code-stable-identities)
-4. [Jobs And Pipelines Create Repeatable Executions](#jobs-and-pipelines-create-repeatable-executions)
-5. [Registry And Environments Separate Creation From Release](#registry-and-environments-separate-creation-from-release)
-6. [Choose The Prediction Boundary From The Workload](#choose-the-prediction-boundary-from-the-workload)
-7. [Identity, Networking, And Observability Complete The System](#identity-networking-and-observability-complete-the-system)
-8. [Trace One Release Across The Planes](#trace-one-release-across-the-planes)
-9. [Decide Whether Azure ML Fits The Organisation](#decide-whether-azure-ml-fits-the-organisation)
-10. [The Durable Picture](#the-durable-picture)
+1. [Understand The Four Jobs Azure Machine Learning Performs](#understand-the-four-jobs-azure-machine-learning-performs)
+2. [Use A Workspace To Organize Shared ML Resources](#use-a-workspace-to-organize-shared-ml-resources)
+3. [Use Versioned Assets For Data, Models, Code, And Environments](#use-versioned-assets-for-data-models-code-and-environments)
+4. [Run Repeatable Training With Jobs And Pipelines](#run-repeatable-training-with-jobs-and-pipelines)
+5. [Share Approved Models And Environments Through Registries](#share-approved-models-and-environments-through-registries)
+6. [Choose Online Or Batch Prediction For The Workload](#choose-online-or-batch-prediction-for-the-workload)
+7. [Protect And Monitor Azure ML With Identity, Networking, And Observability](#protect-and-monitor-azure-ml-with-identity-networking-and-observability)
+8. [Follow One Model Release Through Azure ML](#follow-one-model-release-through-azure-ml)
+9. [Decide Whether Azure Machine Learning Fits The Organisation](#decide-whether-azure-machine-learning-fits-the-organisation)
+10. [Follow The Complete Azure Machine Learning Lifecycle](#follow-the-complete-azure-machine-learning-lifecycle)
 11. [References](#references)
 
 **Azure Machine Learning** is Microsoft's managed platform for building, training, registering, deploying, and operating machine-learning models on Azure. It provides a control plane around model development: workspaces, versioned assets, managed jobs, pipeline components, registries, endpoints, identities, and monitoring integrations.
 
-The shortest product tour lists those resources. A useful beginner explanation shows why they exist and how they connect. Azure ML should make a production run easier to identify, repeat, review, release, and recover. It cannot decide whether the data represents the business problem, whether the metric protects the right groups, or whether the product should act on the prediction.
+The shortest product tour lists those resources. A beginner first needs to understand why they exist and how they connect. Azure ML gives each production run identifiable inputs, execution state, review evidence, and release resources. It cannot decide whether the data represents the business problem, whether the metric protects the right groups, or whether the product should act on the prediction.
 
-This article covers Azure ML CLI and SDK **v2**, the current interface family. The earlier v1 CLI has already reached end of support, and SDK v1 support ends on June 30, 2026. For generative-AI application and agent development, Microsoft currently directs teams toward Microsoft Foundry; Azure Machine Learning remains a comprehensive platform for traditional predictive ML, custom training, and end-to-end MLOps.
+The examples use Azure ML CLI and SDK **v2**, the current interface family. Support has ended for the earlier CLI and SDK v1 interfaces. For generative-AI application and agent development, Microsoft currently directs teams toward Microsoft Foundry; Azure Machine Learning remains a comprehensive platform for traditional predictive ML, custom training, and end-to-end MLOps.
 
-## See The Platform As Four Connected Planes
+## Understand The Four Jobs Azure Machine Learning Performs
 <!-- section-summary: Azure ML combines control, execution, evidence, and release planes, each with a different responsibility and failure mode. -->
 
-Group Azure ML resources by purpose so their relationships stay clear.
+Azure Machine Learning covers four broad jobs. It stores shared assets and evidence, coordinates requests and permissions, runs training or inference compute, and manages model releases. Grouping resources by these jobs shows how a model moves through the platform without requiring a beginner to memorize every Azure resource first.
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph C["Control plane"]
         W["Workspace"]
         I["RBAC, identity, policy"]
@@ -69,7 +69,7 @@ The **control plane** says where the work belongs and who may change it. The **e
 
 These planes can fail independently. A training job may run successfully with a moving data path. A model asset may exist with no useful evaluation evidence. An endpoint may be technically healthy while the product receives poor predictions. Separating the planes helps an operator ask the right question.
 
-## The Workspace Defines A Collaboration Boundary
+## Use A Workspace To Organize Shared ML Resources
 <!-- section-summary: A workspace groups Azure ML resources for a product or team, while Azure subscriptions, resource groups, regions, and policies define the wider platform boundary. -->
 
 An Azure ML **workspace** is the main container for jobs, experiments, compute, environments, data assets, models, endpoints, and connections. It gives these resources a shared discovery and access boundary.
@@ -80,10 +80,10 @@ The workspace does not contain all underlying bytes. A data asset may reference 
 
 That distinction is important for incident work. “I can see the model in Azure ML” does not prove the serving identity can read its storage path. “The job is in the workspace” does not prove its identity has only the minimum permissions.
 
-## Assets Give Moving Data And Code Stable Identities
+## Use Versioned Assets For Data, Models, Code, And Environments
 <!-- section-summary: Versioned data, environment, component, and model assets let jobs refer to reviewed inputs instead of mutable paths and local setup. -->
 
-Azure ML uses **assets** to make important ML inputs and outputs discoverable and versioned.
+Azure ML uses **assets** to give important ML inputs and outputs stable names and versions. Jobs can then refer to a reviewed data version, environment, component, or model instead of depending on a developer's local files or a mutable storage path.
 
 A **data asset** identifies data used by jobs. Depending on its type, it may point to files, folders, or tabular data. The asset version should resolve to a stable snapshot. Versioning a pointer to a mutable folder does not freeze the underlying data, so the storage and publishing process still matter.
 
@@ -93,7 +93,7 @@ A **component** packages one reusable pipeline step with its command, inputs, ou
 
 A **model asset** identifies a trained artifact and associated metadata. Registration should connect the model to its training job, data version, code commit, environment, signature, evaluation report, owner, and intended use. Without that chain, the registry is only a file catalogue.
 
-## Jobs And Pipelines Create Repeatable Executions
+## Run Repeatable Training With Jobs And Pipelines
 <!-- section-summary: Command jobs run one declared unit of work, while pipeline jobs coordinate component contracts and preserve the run graph. -->
 
 A **command job** runs a command in a declared environment on selected compute with named inputs and outputs. It is the fundamental execution boundary for custom training. The job record captures status and metadata while Azure manages compute allocation and logs.
@@ -130,16 +130,16 @@ outputs:
 
 This fragment declares code, environment, compute, a versioned data input, and a named output. A production version should replace mutable environment labels with a controlled version or immutable build identity and attach source and policy metadata to the submitted job.
 
-## Registry And Environments Separate Creation From Release
+## Share Approved Models And Environments Through Registries
 <!-- section-summary: Workspace model assets support local lifecycle work, while registries support controlled reuse and promotion across workspaces. -->
 
-Azure ML **registries** provide a shared store for model, component, and environment assets across workspaces. They are useful when several teams or environments need governed reuse. A development workspace can produce and validate a candidate; a production deployment process can consume a version copied or shared through a controlled registry boundary.
+Azure ML **registries** provide a shared store for model, component, and environment assets across workspaces. Use them where several teams or environments need governed reuse. A development workspace can produce and validate a candidate; a production deployment process can consume a version copied or shared through a controlled registry boundary.
 
 Promotion should move the same reviewed asset identity. Rebuilding the container, retraining the model, or resolving a new dependency during production deployment creates a different candidate. The release packet should therefore identify the model asset version, environment or inference image, signature, evaluation evidence, source run, and approval.
 
 Environment separation also applies to configuration and identity. Development jobs may read sampled data and allow rapid iteration. Production training may use governed data and a managed identity. Production deployment should require a distinct authority. Reusing code is desirable; reusing broad permissions is not.
 
-## Choose The Prediction Boundary From The Workload
+## Choose Online Or Batch Prediction For The Workload
 <!-- section-summary: Managed online endpoints serve interactive requests, while batch endpoints suit asynchronous jobs over bounded inputs. -->
 
 Azure ML **managed online endpoints** host low-latency request-response inference. An endpoint provides a stable invocation boundary, and one or more deployments behind it hold model and environment combinations. Traffic allocation between deployments supports canary or blue-green release patterns.
@@ -159,7 +159,7 @@ flowchart TD
 
 For an online release, keep the previous deployment available while a candidate receives a small traffic share. Watch technical signals and product guardrails. A rollback changes traffic back to the known deployment, then reconciles the declared configuration. Deleting the previous deployment immediately removes the fastest recovery path.
 
-## Identity, Networking, And Observability Complete The System
+## Protect And Monitor Azure ML With Identity, Networking, And Observability
 <!-- section-summary: Managed identities and Azure controls establish access paths, while Azure Monitor and prediction evidence show whether the workload and model remain healthy. -->
 
 Use **managed identities** for jobs and endpoints so workloads can access Azure resources without long-lived credentials in code. Training, serving, and deployment workflows usually deserve different identities because their powers differ. The training identity reads approved data and writes run outputs. The endpoint identity reads approved model or reference data. The release identity may update endpoint traffic.
@@ -168,7 +168,7 @@ Private networking changes the full path: workspace dependencies, storage, conta
 
 Azure Monitor and workspace logs can expose job and endpoint operations, latency, failures, and resource health. Prediction-quality monitoring needs additional application evidence: model version, request schema version, safe input summaries, output, later label or outcome, and cohort. Service health and model usefulness should appear together in a release dashboard, with owners and response actions named.
 
-## Trace One Release Across The Planes
+## Follow One Model Release Through Azure ML
 <!-- section-summary: A release trace verifies that workspace assets, approval, endpoint configuration, and runtime evidence refer to the same candidate. -->
 
 The four-plane framework controls a release. The evidence plane supplies a concrete model version, environment version, source job, evaluation report, and input signature. The control plane verifies that the release identity has permission to change the production endpoint. The release plane creates a candidate deployment and assigns a small traffic share. The execution plane starts containers and reports health.
@@ -202,16 +202,16 @@ sequenceDiagram
 
 Rollback changes traffic to the retained deployment, then verifies request success and reported model identity. Deleting the failed deployment and evidence comes later, after the incident record links the resource IDs and the team understands the failure.
 
-## Decide Whether Azure ML Fits The Organisation
+## Decide Whether Azure Machine Learning Fits The Organisation
 <!-- section-summary: Azure ML earns its platform weight when Azure-native managed lifecycle resources solve recurring collaboration, governance, and operations problems. -->
 
 Azure ML is a strong fit when data and applications already use Azure, teams need managed custom training and prediction endpoints, Entra identity and Azure Policy are important, or shared assets and registries reduce repeated integration work.
 
 A lighter stack can be enough for a few scheduled models. Existing Azure Batch, AKS, Databricks, MLflow, storage, and CI/CD systems may already cover the needed responsibilities. Platform adoption should solve a visible constraint such as reproducible compute, asset handoff, regulated access, endpoint operations, or multi-team governance.
 
-Evaluate one real lifecycle. Can the team identify the data, code, environment, job, model, approval, deployment, loaded version, monitoring evidence, and rollback target? Measure setup, operator effort, latency, quota, network complexity, cost attribution, and recovery. The answer should make the ownership boundary clearer.
+Evaluate one real lifecycle. Can the team identify the data, code, environment, job, model, approval, deployment, loaded version, monitoring evidence, and rollback target? Measure setup, operator effort, latency, quota, network complexity, cost attribution, and recovery. The answers expose the ownership boundary and its operational cost.
 
-## The Durable Picture
+## Follow The Complete Azure Machine Learning Lifecycle
 <!-- section-summary: Azure ML supplies managed lifecycle resources; production quality comes from the identities, contracts, policies, and evidence that connect them. -->
 
 The workspace groups the work. Assets identify inputs and outputs. Jobs and pipelines execute declared contracts. Registries carry reviewed versions across boundaries. Endpoints operate prediction workloads. Managed identities and Azure controls restrict access. Monitoring connects resource health with later model outcomes.
@@ -221,6 +221,7 @@ Azure ML forms a coherent system when those resources share one traceable chain.
 ## References
 
 - [Azure Machine Learning CLI and SDK v2 concepts](https://learn.microsoft.com/en-us/azure/machine-learning/concept-v2?view=azureml-api-2)
+- [Upgrade Azure Machine Learning client code from v1 to v2](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-migrate-from-v1?view=azureml-api-2)
 - [How Azure Machine Learning works](https://learn.microsoft.com/en-us/azure/machine-learning/concept-azure-machine-learning-v2?view=azureml-api-2)
 - [Azure Machine Learning jobs](https://learn.microsoft.com/en-us/azure/machine-learning/concept-train-machine-learning-model?view=azureml-api-2)
 - [Machine learning pipelines](https://learn.microsoft.com/en-us/azure/machine-learning/concept-ml-pipelines?view=azureml-api-2)

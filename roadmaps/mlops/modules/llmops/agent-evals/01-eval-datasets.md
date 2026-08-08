@@ -12,17 +12,17 @@ id: "article-mlops-llmops-eval-datasets"
 1. [An Agent Eval Dataset Recreates Real Work](#an-agent-eval-dataset-recreates-real-work)
 2. [The Objects Inside an Eval Case](#the-objects-inside-an-eval-case)
 3. [Good Cases Come From Several Evidence Sources](#good-cases-come-from-several-evidence-sources)
-4. [Coverage Needs Strata and a Failure Taxonomy](#coverage-needs-strata-and-a-failure-taxonomy)
+4. [Cover Important User Groups And Failure Types](#cover-important-user-groups-and-failure-types)
 5. [Deterministic Environments Make Runs Comparable](#deterministic-environments-make-runs-comparable)
 6. [Multi-Turn Cases Need State and Time](#multi-turn-cases-need-state-and-time)
 7. [Expected Behaviour Can Allow Several Good Answers](#expected-behaviour-can-allow-several-good-answers)
 8. [Choose Graders for the Claim Being Tested](#choose-graders-for-the-claim-being-tested)
-9. [Leakage Can Manufacture an Improvement](#leakage-can-manufacture-an-improvement)
-10. [Frozen and Rolling Suites Answer Different Questions](#frozen-and-rolling-suites-answer-different-questions)
+9. [Prevent Test Cases From Leaking Into Development](#prevent-test-cases-from-leaking-into-development)
+10. [Use Frozen Suites For Comparison And Rolling Suites For New Failures](#use-frozen-suites-for-comparison-and-rolling-suites-for-new-failures)
 11. [Privacy and Governance Begin During Case Creation](#privacy-and-governance-begin-during-case-creation)
-12. [Version the Whole Evaluation Bundle](#version-the-whole-evaluation-bundle)
-13. [Connect the Dataset to Industrial Eval Infrastructure](#connect-the-dataset-to-industrial-eval-infrastructure)
-14. [Operate the Dataset as a Product](#operate-the-dataset-as-a-product)
+12. [Version Cases, Graders, Tools, And Environment Together](#version-cases-graders-tools-and-environment-together)
+13. [Run Evaluation Datasets With Current Eval Platforms](#run-evaluation-datasets-with-current-eval-platforms)
+14. [Maintain The Evaluation Dataset Over Time](#maintain-the-evaluation-dataset-over-time)
 15. [References](#references)
 
 ## An Agent Eval Dataset Recreates Real Work
@@ -56,7 +56,7 @@ The dataset therefore supports a precise claim. It might show that an agent comp
 
 The word *dataset* can make agent evaluation sound like a spreadsheet of prompts. In practice, a single row may point to several files and services. Separating the objects shows which change caused a score to move and which owner should investigate it.
 
-### The case is the container
+### An Eval Case Holds One Complete Test
 
 A **case** is one reproducible test situation with a stable identifier. It groups the task, fixtures, expected behaviour, graders, provenance, and slice labels. A case can run many times against different agent versions. The case itself should stay unchanged during a comparison.
 
@@ -64,7 +64,7 @@ A **case** is one reproducible test situation with a stable identifier. It group
 
 The **task** includes the user request and any conversation history that legitimately belongs to the request. It also states the completion boundary. “Help with this invoice” is too vague for reliable grading. “Explain the duplicate charge and prepare a refund request if policy permits” tells reviewers which work the agent owns.
 
-### The starting state and tool environment recreate the world
+### Starting State And Tools Recreate The Test Environment
 
 The **starting state** contains records, documents, files, permissions, feature flags, and time-dependent facts available at the beginning. The **tool environment** defines the callable tools and their behaviour. It may use a simulator, a disposable sandbox, or recorded responses with sensitive data removed. Tool schemas alone are insufficient because the same `issue_refund` call can succeed, time out, reject a permission, or report an already-completed operation.
 
@@ -80,7 +80,7 @@ A **reference** can supply trusted facts or a sample answer. It can also preserv
 
 The **outcome** covers the terminal response and the environment after the run. For a coding task, the outcome can include a patch and passing tests. For a support task, it may include a correctly created escalation record. This is the closest layer to the user’s actual goal.
 
-### Graders turn evidence into judgements
+### Graders Compare The Run With Expected Behaviour
 
 A **grader** reads some part of the case and run, then returns a score or label with a reason. Different graders inspect different evidence. A schema check reads the output. A policy grader reads the trace. An environment grader inspects the final sandbox. A human reviewer may resolve cases whose quality depends on domain judgement.
 
@@ -100,21 +100,21 @@ Keeping these objects separate prevents a common source of confusion. A poor out
 
 A dataset built from one source inherits that source’s blind spots. Production traffic reflects real language and real workflows, but it rarely contains enough rare safety failures. Expert cases cover important rules, but experts may write cleaner prompts than users. Synthetic generation can explore variations quickly, but it can repeat the assumptions embedded in its seed examples.
 
-### Production traces reveal actual use
+### Create Cases From Production Traces
 
 Sample both successful and unsuccessful traces. Complaints and thumbs-down signals are valuable, yet they mainly reveal visible failures. Successful traces show common intents, natural phrasing, tool combinations, and the paths users already depend on. Useful selection signals include manual feedback, long latency, repeated tool calls, guardrail activation, abandonment, and unusually high cost.
 
 A trace supplies raw evidence for a case. Converting it into a safe fixture requires removing unnecessary personal data and replacing live identifiers. The documents and tool responses also need frozen versions. A domain reviewer can then define the expected behaviour. The result should replay safely without access to the original account.
 
-### Incidents preserve expensive lessons
+### Turn Past Incidents Into Regression Cases
 
 An incident case preserves a failure that mattered. The source may be an unauthorized action, a bad handoff, an incorrect policy answer, or a timeout that caused duplicate work. Reconstruct the smallest state that still produces the failure. Add the case to a protected regression suite and record the incident category as provenance. This creates a durable test for the underlying control, even after production logs expire.
 
-### Experts design boundaries before production finds them
+### Ask Experts To Define Important Edge Cases
 
 Domain, safety, security, and operations experts can describe situations that have low traffic and high impact. A payments reviewer may design cases around approval thresholds. A security reviewer may embed instructions inside an untrusted document. An operations engineer may simulate a tool that succeeds but returns its acknowledgement late. These cases test boundaries that ordinary sampling can miss.
 
-### Synthetic generation expands a reviewed seed
+### Use Synthetic Generation To Expand Reviewed Seed Cases
 
 Synthetic cases are useful for paraphrases, language variants, long-context combinations, malformed tool results, and adversarial mutations. Begin with trusted seed cases and ask the generator to vary named dimensions. Deduplicate the output, run basic validity checks, and review a sample from every generated slice. A generated expectation should never become ground truth solely because another model wrote it.
 
@@ -128,7 +128,7 @@ flowchart TD
 
 Every accepted case should retain its source category, original review owner, and transformation history. Provenance helps the team explain what the dataset represents. It also reveals an unhealthy mix, such as a release suite dominated by synthetic paraphrases with very little production evidence.
 
-## Coverage Needs Strata and a Failure Taxonomy
+## Cover Important User Groups And Failure Types
 
 <!-- section-summary: Coverage comes from a deliberate mix of ordinary work, decision boundaries, operational faults, and rare high-impact risks. -->
 
@@ -286,7 +286,7 @@ def grade_refund_control(events: list[dict]) -> dict:
 
 OpenAI’s current agent workflow guidance recommends trace grading for questions about tool selection, handoffs, instructions, safety policy, and routing changes. LangSmith calls similar components evaluators, while MLflow uses scorers and judges. The product names differ; the design principle remains stable. Preserve individual grader outputs and reasons so an overall score never conceals a release-blocking control failure.
 
-## Leakage Can Manufacture an Improvement
+## Prevent Test Cases From Leaking Into Development
 
 <!-- section-summary: Evals lose independence if their cases or close variants enter prompts, training data, synthetic seeds, or repeated manual tuning. -->
 
@@ -313,7 +313,7 @@ The development suite supports fast iteration. The release suite offers a more s
 
 Contamination can also flow in the other direction. A production-derived case may contain text that already appeared in the model’s pretraining data. For proprietary workflows, this risk is usually lower than direct application leakage, though public benchmarks require special care. Record source and publication status, use newly created domain cases where practical, and avoid treating a famous public benchmark as the sole proof of production quality.
 
-## Frozen and Rolling Suites Answer Different Questions
+## Use Frozen Suites For Comparison And Rolling Suites For New Failures
 
 <!-- section-summary: A frozen suite measures long-term progress, while a rolling suite tracks current traffic, tools, policies, and recently observed failures. -->
 
@@ -364,7 +364,7 @@ Deletion and retention must propagate. If a source record is removed under polic
 
 The NIST Generative AI Profile provides a useful governance frame: evaluation belongs inside the broader lifecycle of mapping risks, measuring them, managing findings, and documenting responsibility. The dataset is part of that system of evidence.
 
-## Version the Whole Evaluation Bundle
+## Version Cases, Graders, Tools, And Environment Together
 
 <!-- section-summary: Reproducible results identify the agent, dataset, environment, grader bundle, simulator, and runner independently. -->
 
@@ -393,7 +393,7 @@ These identifiers make comparisons interpretable. If only the agent bundle chang
 
 Case edits also need history. A corrected expectation can change historical scores, so retain the old case version, the reviewer decision, and the reason. Reports should link to an immutable dataset snapshot. A mutable dataset name such as `latest-agent-evals` is useful for discovery but insufficient for audit evidence.
 
-## Connect the Dataset to Industrial Eval Infrastructure
+## Run Evaluation Datasets With Current Eval Platforms
 
 <!-- section-summary: Production teams combine versioned manifests, secure fixture storage, trace collection, evaluation runners, result stores, and review interfaces. -->
 
@@ -437,7 +437,7 @@ The snippet only handles storage. Case quality still depends on the task, expect
 
 Choose a platform based on existing observability, governance, and deployment boundaries. A team already using MLflow for experiments may benefit from keeping eval runs there. A team using LangSmith for agent traces may prefer its dataset-to-experiment workflow. Provider tools can grade provider-native traces conveniently. The dataset contract should remain portable enough to preserve tasks, fixtures, labels, and history if the execution platform changes.
 
-## Operate the Dataset as a Product
+## Maintain The Evaluation Dataset Over Time
 
 <!-- section-summary: A mature eval dataset has owners, intake and review workflows, coverage goals, calibrated graders, and a feedback loop from production. -->
 

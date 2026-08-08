@@ -10,24 +10,24 @@ aliases: ["model-versions-stages-promotion"]
 
 ## Table of Contents
 
-1. [Promotion Changes Production Intent](#promotion-changes-production-intent)
-2. [Learn the Lifecycle Identities](#learn-the-lifecycle-identities)
-3. [Keep the Candidate Identity Stable](#keep-the-candidate-identity-stable)
-4. [Use Aliases as Movable Pointers](#use-aliases-as-movable-pointers)
-5. [Attach Validation Evidence to One Version](#attach-validation-evidence-to-one-version)
+1. [Decide Which Model Version May Enter Production](#decide-which-model-version-may-enter-production)
+2. [Understand Models, Versions, Aliases, And Deployments](#understand-models-versions-aliases-and-deployments)
+3. [Keep A Model Version Unchanged During Review](#keep-a-model-version-unchanged-during-review)
+4. [Use Aliases To Point To Approved Versions](#use-aliases-to-point-to-approved-versions)
+5. [Validate One Exact Model Version](#validate-one-exact-model-version)
 6. [Record Approval Separately From Deployment](#record-approval-separately-from-deployment)
 7. [Move Beyond Deprecated MLflow Stages](#move-beyond-deprecated-mlflow-stages)
-8. [Choose an Environment Promotion Pattern](#choose-an-environment-promotion-pattern)
-9. [Run Promotion as a Governed Workflow](#run-promotion-as-a-governed-workflow)
-10. [Pin the Deployment Reference](#pin-the-deployment-reference)
+8. [Choose How Models Move Between Environments](#choose-how-models-move-between-environments)
+9. [Automate Promotion With Approval Controls](#automate-promotion-with-approval-controls)
+10. [Deploy The Exact Approved Model Version](#deploy-the-exact-approved-model-version)
 11. [Verify the Version That Entered Service](#verify-the-version-that-entered-service)
-12. [Read Managed-Provider Terms Carefully](#read-managed-provider-terms-carefully)
-13. [Roll Back to a Known Immutable Version](#roll-back-to-a-known-immutable-version)
-14. [Preserve the Release Record](#preserve-the-release-record)
+12. [Map Each Cloud Registry To The Same Lifecycle](#map-each-cloud-registry-to-the-same-lifecycle)
+13. [Roll Back To A Tested Model Version](#roll-back-to-a-tested-model-version)
+14. [Record What Was Approved, Deployed, And Verified](#record-what-was-approved-deployed-and-verified)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
 
-## Promotion Changes Production Intent
+## Decide Which Model Version May Enter Production
 <!-- section-summary: Model promotion is a governed decision to let a specific validated version become the intended input to a production workflow. -->
 
 At 10:00, a release owner receives the evaluation results for version `42` of a payment-fraud model. The current version, `41`, is blocking too many legitimate prepaid-card transactions. Version `42` improves that cohort without pushing the fraud-loss metric beyond its approved limit. A production change is scheduled for 15:00, so the release owner must decide which exact model the deployment controller may use.
@@ -48,10 +48,10 @@ flowchart TD
 
 Approval, selection, and actual runtime state are separate claims. Each one needs its own evidence.
 
-## Learn the Lifecycle Identities
+## Understand Models, Versions, Aliases, And Deployments
 <!-- section-summary: Logged models, registered versions, aliases, and deployments identify different parts of the lifecycle and change at different rates. -->
 
-A registry workflow is much clearer once every identifier has one job. You can think of the system as a library: a logged model is one completed manuscript, a registered model is the series name, a version is a numbered edition, and an alias is a sign pointing readers toward the edition currently preferred.
+A registry workflow uses several identifiers because training, review, and deployment refer to different objects. A logged model identifies one training output. A registered model groups versions of the same capability. A version identifies one reviewed entry, while an alias points to the version currently intended for a named role.
 
 **A logged model** identifies one model output created during training. In MLflow 3, each logged model receives a unique `model_id`. Model artifacts live under that model identity, and model-specific metrics can be linked to it. This matters because one training run may log several checkpoints or model variants. The run explains the execution; the logged-model identity tells reviewers which output they are discussing.
 
@@ -74,7 +74,7 @@ flowchart TD
 
 During an incident, these identifiers answer different questions. The run explains how training happened. The version identifies what reviewers approved. The alias shows current registry intent. The deployment revision and runtime telemetry show what served requests.
 
-## Keep the Candidate Identity Stable
+## Keep A Model Version Unchanged During Review
 <!-- section-summary: A reviewed version must keep the same model bytes and load contract so every later decision refers to the behavior that validation measured. -->
 
 An immutable candidate is a model whose meaningful contents stay fixed after registration. In essence, the version acts as a sealed subject for testing and approval. If its tokenizer, preprocessing state, dependency requirements, label map, or weights change, the behavior under review has changed too.
@@ -100,7 +100,7 @@ The registry version should retain that `model_id` or an equally strong source r
 
 A clean-environment load test provides the first useful check. Fetch the exact version, load its packaged dependencies or approved runtime, score a small fixture, and verify the input and output schema. This check catches missing tokenizers, changed class order, and incomplete packaging before promotion reaches a serving system.
 
-## Use Aliases as Movable Pointers
+## Use Aliases To Point To Approved Versions
 <!-- section-summary: Release automation resolves a candidate alias once, stores the concrete version, and uses that version throughout the release. -->
 
 An alias gives humans and automation a stable word for a changing choice. `Candidate` can point to the version under review, and `Champion` can point to the version intended for normal production use. MLflow resolves an alias through `models:/<registered-model>@<alias>` or `get_model_version_by_alias()`.
@@ -129,7 +129,7 @@ Consider two releases running close together. The first job resolves `Candidate`
 
 Aliases also behave differently across workloads. A batch job that loads `@Champion` at startup can record the resolved version for that run. An online service may keep a model in memory for hours. Its running workers retain the loaded model until a deployment integration observes the alias change and creates a new serving revision.
 
-## Attach Validation Evidence to One Version
+## Validate One Exact Model Version
 <!-- section-summary: Validation evidence explains why one exact version is suitable for a defined use, population, and operating boundary. -->
 
 Validation asks a concrete question: *does this version meet the requirements for this intended use?* A single aggregate accuracy score rarely answers it. The release owner needs evidence about the important cohorts, the current baseline, runtime behavior, and the limits of the evaluation.
@@ -189,7 +189,7 @@ For example, old loading code may use `models:/fraud_detection/Production`. A cu
 
 Legacy migration needs more than renaming `Production` to `Champion`. First determine whether the stage helped people discover a model or authorized an environment change. Then trace any deployment trigger attached to it. Replace each responsibility with its current mechanism before retiring `transition_model_version_stage()` and stage-based model URIs.
 
-## Choose an Environment Promotion Pattern
+## Choose How Models Move Between Environments
 <!-- section-summary: Teams either produce models inside each controlled environment or copy an exact validated version across an environment boundary. -->
 
 An **environment-qualified registered model** includes the environment in its governed name or namespace. `staging.risk.fraud_detection` and `prod.risk.fraud_detection` are separate model families with separate permissions. This design makes production write access explicit instead of treating a label inside one shared registry as the security boundary.
@@ -227,7 +227,7 @@ flowchart TD
 
 The copy is part of promotion. The deployment update and runtime verification establish that the destination endpoint uses the copied version.
 
-## Run Promotion as a Governed Workflow
+## Automate Promotion With Approval Controls
 <!-- section-summary: A reliable promotion resolves the candidate once, checks evidence, records approval, changes controlled references, and verifies the outcome. -->
 
 Promotion works best as one idempotent workflow owned by release automation. *Idempotent* means a retry with the same release ID produces the same intended result instead of selecting a newer candidate or creating duplicate decisions.
@@ -258,7 +258,7 @@ flowchart TD
 
 A failed step leaves the prior production reference intact whenever possible. The workflow records the failure and can resume from verified state. A retry never goes back to the `Candidate` alias to discover a different version.
 
-## Pin the Deployment Reference
+## Deploy The Exact Approved Model Version
 <!-- section-summary: Deployment automation uses a concrete model version so the running release cannot change through an unrelated alias update. -->
 
 The deployment specification should name the exact version that passed the release gate. This is the bridge between registry intent and running infrastructure.
@@ -291,14 +291,14 @@ Suppose `Champion` points to version `42`, while the endpoint still reports rele
 
 Prediction logging should preserve the model version or release ID for later outcome analysis. Without that field, a team can see that performance changed after a promotion but cannot reliably separate decisions made by the old and new versions.
 
-## Read Managed-Provider Terms Carefully
+## Map Each Cloud Registry To The Same Lifecycle
 <!-- section-summary: Managed registries use different names for versions, approval, aliases, lifecycle state, and deployments, so teams should map each object to its actual responsibility. -->
 
 Cloud platforms implement the same lifecycle responsibilities with different objects. Copying their vocabulary without checking its behavior can blur approval and deployment again.
 
 **Amazon SageMaker AI** groups numbered model packages inside a Model Package Group. `ModelApprovalStatus` can move through states such as `PendingManualApproval`, `Approved`, and `Rejected`, and an approval event can trigger CI/CD if the team configures that integration. SageMaker also has a configurable `ModelLifeCycle` stage and stage status with IAM controls and EventBridge events. This current SageMaker construct is separate from MLflow’s deprecated fixed stages. A release record should still keep the exact model-package ARN or version and the endpoint deployment that consumed it.
 
-**Vertex AI Model Registry** stores versions under a model and supports mutable version aliases. One version owns the `default` alias. An operation that omits the version can therefore select whichever version currently owns `default`. Release automation should pass the intended version explicitly, treat alias movement as a governed selection, and record deployment evidence separately.
+**Gemini Enterprise Agent Platform Model Registry (formerly Vertex AI Model Registry)** stores versions under a model and supports mutable version aliases. One version owns the `default` alias. An operation that omits the version can therefore select whichever version currently owns `default`. Release automation should pass the intended version explicitly, treat alias movement as a governed selection, and record deployment evidence separately.
 
 **Azure Machine Learning** stores registered model assets with explicit versions such as `azureml:<name>:<version>`. An online deployment points to a model asset, while the endpoint controls traffic across deployments. This separation is useful: the model version, serving deployment, and traffic decision remain visible as different resources.
 
@@ -306,7 +306,7 @@ Cloud platforms implement the same lifecycle responsibilities with different obj
 
 The product names differ, but the review questions stay stable: Which identity is immutable? Which pointer can move? Who may approve or change it? Which deployment consumed the version? Which telemetry proves that it ran?
 
-## Roll Back to a Known Immutable Version
+## Roll Back To A Tested Model Version
 <!-- section-summary: Rollback restores a previously verified release by changing the deployment reference or traffic, then confirming that the prior version is running again. -->
 
 A rollback target is a known compatible release. The previous number in a registry qualifies only if its artifact remains available, its serving image and feature contract still work, and production evidence shows that it previously met the required operating limits. Version `41` satisfies those conditions in the payment-fraud release.
@@ -326,7 +326,7 @@ For the payment-fraud release, operators direct traffic back to release `41`, co
 
 Rollback history must remain visible. Keep the failed version, its evidence, the triggering alert, the actor, and the recovery result. Deleting the candidate removes the material needed to explain the incident and improve the next gate.
 
-## Preserve the Release Record
+## Record What Was Approved, Deployed, And Verified
 <!-- section-summary: A durable release record connects immutable model identity, validation, approval, reference changes, runtime verification, and rollback. -->
 
 The release record is the lifecycle narrative in machine-readable form. It answers what changed, why the change was allowed, who authorized it, what the system actually ran, and how recovery would work.
@@ -373,6 +373,7 @@ A reliable review can follow five questions: Which exact version is under consid
 - [Amazon SageMaker AI: Model Registry models and versions](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-models.html)
 - [Amazon SageMaker AI: Update model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
 - [Amazon SageMaker AI: Model lifecycle staging construct](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-staging-construct.html)
-- [Vertex AI: Model version aliases](https://cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Gemini Enterprise Agent Platform: Model version aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias)
+- [Google Cloud: Gemini Enterprise Agent Platform name changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning: Work with registered models](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-models?view=azureml-api-2)
 - [Azure Machine Learning: Deploy a model as an online endpoint](https://learn.microsoft.com/en-us/azure/machine-learning/tutorial-deploy-model?view=azureml-api-2)

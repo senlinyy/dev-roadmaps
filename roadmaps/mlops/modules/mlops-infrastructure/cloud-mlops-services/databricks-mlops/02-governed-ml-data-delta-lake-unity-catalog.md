@@ -9,25 +9,25 @@ id: "article-mlops-mlops-infrastructure-databricks-governed-ml-data"
 
 ## Table of Contents
 
-1. [The Two Layers Around ML Data](#the-two-layers-around-ml-data)
+1. [How Delta Lake And Unity Catalog Protect Training Data](#how-delta-lake-and-unity-catalog-protect-training-data)
 2. [Why Machine Learning Data Needs These Controls](#why-machine-learning-data-needs-these-controls)
 3. [Delta Lake Makes Files Behave Like Reliable Tables](#delta-lake-makes-files-behave-like-reliable-tables)
-4. [Unity Catalog Governs The Assets Around Those Tables](#unity-catalog-governs-the-assets-around-those-tables)
+4. [Use Unity Catalog To Govern Tables And Other ML Assets](#use-unity-catalog-to-govern-tables-and-other-ml-assets)
 5. [How Delta Lake And Unity Catalog Work Together](#how-delta-lake-and-unity-catalog-work-together)
-6. [Data Contracts Protect Meaning As Well As Structure](#data-contracts-protect-meaning-as-well-as-structure)
-7. [Lakeflow Pipelines Turn The Contract Into A Repeatable Process](#lakeflow-pipelines-turn-the-contract-into-a-repeatable-process)
-8. [Catalog Structure And Permissions Create Production Boundaries](#catalog-structure-and-permissions-create-production-boundaries)
-9. [Lineage Explains Where Training Data Came From](#lineage-explains-where-training-data-came-from)
+6. [Define What The Training Data Means](#define-what-the-training-data-means)
+7. [Build And Validate Training Data With Lakeflow Pipelines](#build-and-validate-training-data-with-lakeflow-pipelines)
+8. [Use Catalogs And Permissions To Separate Environments](#use-catalogs-and-permissions-to-separate-environments)
+9. [Trace Where Training Data Came From](#trace-where-training-data-came-from)
 10. [Rebuilding The Exact Dataset Used By A Model](#rebuilding-the-exact-dataset-used-by-a-model)
-11. [What Governance Still Cannot Guarantee](#what-governance-still-cannot-guarantee)
+11. [Understand What Governance Cannot Guarantee](#understand-what-governance-cannot-guarantee)
 12. [A Practical Production Design](#a-practical-production-design)
-13. [The Complete Governed Data Path](#the-complete-governed-data-path)
+13. [Follow The Complete Governed Data Path](#follow-the-complete-governed-data-path)
 14. [References](#references)
 
-## The Two Layers Around ML Data
+## How Delta Lake And Unity Catalog Protect Training Data
 <!-- section-summary: Delta Lake provides reliable versioned tables, while Unity Catalog governs what those tables are, who can use them, and how they connect to other assets. -->
 
-Start with the object this article is trying to protect: a training dataset. To a data scientist, it looks like a table of examples, features, and labels. Underneath that table are files in cloud storage. Around it are the people, pipelines, training jobs, and models that read or change the data.
+Start with the object that needs protection: a training dataset. To a data scientist, it looks like a table of examples, features, and labels. Underneath that table are files in cloud storage. Around it are the people, pipelines, training jobs, and models that read or change the data.
 
 Those parts create two different problems. The files need to form one dependable table state, even while pipelines are updating them. The organisation also needs to know what the table means, who may use it, who owns it, and what depends on it.
 
@@ -48,7 +48,7 @@ Unity Catalog answers organisational questions around that table:
 - Which pipeline produced it?
 - Which models and dashboards depend on it?
 
-In plain language, **Delta Lake is the reliable table layer. Unity Catalog is the governance layer around those tables.** This article follows one training dataset through both layers: from its physical files, to a governed table, to a validated release that a training run can recover later.
+In plain language, **Delta Lake is the reliable table layer. Unity Catalog is the governance layer around those tables.** The complete path follows one training dataset through both layers: from its physical files, to a governed table, to a validated release that a training run can recover later.
 
 ![Delta Lake provides reliable versioned tables while Unity Catalog surrounds them with names, permissions, ownership, discovery, lineage, and audit](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/delta-lake-unity-catalog-two-layers.png)
 
@@ -120,10 +120,6 @@ flowchart TD
     C --> F["Version 842"]
     F --> G["Readers receive one<br/>complete table state"]
 
-    classDef table fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef data fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef log fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef version fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A table
     class B data
     class C log
@@ -132,7 +128,7 @@ flowchart TD
 
 The data files hold the records. The transaction log records which files belong to each committed version. A query against version `842` therefore has a precise set of files to read.
 
-### Atomic writes prevent half-finished training data
+### Prevent Partly Written Training Tables
 
 An **atomic write** is an update that appears as one complete success or one complete failure. Readers continue to see the previous committed table until the new update has finished and committed.
 
@@ -142,7 +138,7 @@ Delta Lake commits the update as one table version. A reader sees the previous c
 
 This protection matters greatly for ML because broken data often fails silently. The training process may accept the mixed rows, produce a model file, and report normal-looking metrics. The damage appears later through unstable predictions or poor performance for a missing segment.
 
-### Schema enforcement catches structural mistakes
+### Reject Training Data With The Wrong Columns Or Types
 
 A **schema** defines the columns and data types a table expects. For example:
 
@@ -166,7 +162,7 @@ ADD CONSTRAINT valid_churn_label CHECK (churned IN (0, 1));
 
 The constraint rejects a transaction containing an impossible label. Primary-key and foreign-key declarations can describe relationships for supported tables, although Databricks treats those relationships as informational. Duplicate and referential checks still need pipeline logic.
 
-### Schema evolution makes change deliberate
+### Review And Control Schema Changes
 
 Production schemas do change. A team may add `device_trust_score`, replace a numeric identifier with a string, or split one address field into several fields.
 
@@ -176,7 +172,7 @@ A source that is expected to add well-governed fields may use controlled evoluti
 
 The team should review the effect on readers before changing or removing a field. Unity Catalog lineage helps identify those readers, while the data contract explains whether the change is compatible.
 
-### Table versions give past data an address
+### Read The Exact Table Version Used For Training
 
 Every committed change creates another Delta table version. Delta numbering starts at `0`, so version `842` means the state recorded by commit version `842`.
 
@@ -208,7 +204,7 @@ This is **time travel**: reading a retained historical table version. It support
 
 Time travel has a retention boundary. Old data files can be removed by `VACUUM`, and transaction history follows its own retention settings. A saved version number cannot recover files that no longer exist. The required investigation period must therefore shape the table's retention or snapshot policy.
 
-### Change Data Feed exposes row-level changes
+### Read Only The Rows That Changed
 
 Some downstream systems need the rows that changed rather than the complete new table. Delta Lake **Change Data Feed** can record inserted, updated, and deleted rows between table versions after the feature is enabled.
 
@@ -216,14 +212,14 @@ This is useful for incremental work. A feature pipeline may update only customer
 
 Change Data Feed does not replace the final table version. The feed explains the changes between states, while the table version identifies the complete state used by training.
 
-## Unity Catalog Governs The Assets Around Those Tables
+## Use Unity Catalog To Govern Tables And Other ML Assets
 <!-- section-summary: Unity Catalog gives data and AI assets governed names, ownership, permissions, discovery, lineage, policy, and audit across workspaces. -->
 
 Delta Lake can maintain a dependable table without knowing the organisation's teams or policies. It does not decide whether an analyst may see a national identifier, which group owns a feature definition, or which production model depends on a column.
 
 **Unity Catalog is the Databricks governance layer that handles those responsibilities.** It governs data and AI assets through a central object model shared across connected workspaces.
 
-### The three-level name identifies the asset
+### Identify Each Asset With A Three-Part Name
 
 Unity Catalog uses a three-level namespace:
 
@@ -248,10 +244,6 @@ flowchart TD
     S2 --> T2["fraud_examples table"]
     S3 --> T3["prediction_outcomes table"]
 
-    classDef metastore fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef catalog fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef schema fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef object fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class M metastore
     class C1,C2 catalog
     class S1,S2,S3 schema
@@ -260,7 +252,7 @@ flowchart TD
 
 Catalogs often represent an environment, a business domain, or a combination such as `risk_prod`. Schemas create smaller areas for prepared data, features, labels, training inputs, and monitoring evidence. The naming scheme should follow ownership and access boundaries that actually exist.
 
-### Permissions belong to governed assets
+### Grant Permissions On Governed Assets
 
 Unity Catalog grants privileges to users, groups, and service principals.
 
@@ -278,7 +270,7 @@ The identity can discover the catalog, use the schema, and read the table. It do
 
 This is a major improvement over attaching one broad cloud role to every cluster. A shared storage role often allows any user of that compute to read a large part of the bucket. Unity Catalog evaluates the actual identity and requested asset.
 
-### Fine-grained policies protect sensitive rows and columns
+### Protect Sensitive Rows And Columns
 
 Table-level access may still be too broad. One team may be allowed to see only records from its region. An analyst may need transaction amounts while receiving masked email addresses.
 
@@ -286,7 +278,7 @@ Unity Catalog supports row filters, column masks, and attribute-based access-con
 
 The people allowed to change governed tags need careful control. A tag can activate a security policy, so changing the tag can change the access boundary.
 
-### Discovery helps teams reuse approved data
+### Help Teams Find And Reuse Approved Data
 
 Governance also helps authorised users find the right asset. Unity Catalog can expose table descriptions, column comments, owners, schemas, tags, usage information, and related lineage.
 
@@ -294,7 +286,7 @@ Suppose several teams need `customer_lifetime_value`. Without discovery, each te
 
 Discovery depends on useful metadata. A table called `final_table_2` with no comments remains difficult to trust even after registration. The catalog name, table grain, important column meanings, freshness expectation, and owner should all be visible.
 
-### Managed and external tables assign storage responsibility
+### Decide Who Owns The Table Files
 
 Unity Catalog governs both managed and external tables, but the owner of the files differs.
 
@@ -309,7 +301,7 @@ Storage credentials and external locations provide governed objects for external
 ## How Delta Lake And Unity Catalog Work Together
 <!-- section-summary: Unity Catalog authorizes and records access to a named asset, while Delta Lake supplies the consistent table state that the authorized query reads. -->
 
-The two systems participate in the same table request at different moments.
+The two systems participate in the same table request at different moments. Delta Lake decides which committed rows and schema form the table version. Unity Catalog resolves the governed name, checks the caller's permissions, and records the asset relationship around that version.
 
 Suppose a production training job asks for `prod_ml.training.churn_examples` at version `842`.
 
@@ -348,7 +340,7 @@ The table below is useful only after those responsibilities are clear:
 | Discovery and ownership | Outside the table protocol | Provides governed metadata |
 | Lineage and audit | Supplies versioned read and write activity | Captures supported relationships and access evidence |
 
-## Data Contracts Protect Meaning As Well As Structure
+## Define What The Training Data Means
 <!-- section-summary: A data contract explains the row grain, field meaning, time rules, quality limits, freshness, ownership, and change policy that schemas alone cannot express. -->
 
 Delta schema enforcement can prove that `monthly_spend` is a number. It cannot tell a data scientist whether the number includes refunds, which currency it uses, or whether it covers the calendar month or the last thirty days.
@@ -371,7 +363,7 @@ A useful ML data contract covers six areas.
 
 The contract may live partly in catalog comments and tags, partly in reviewed source control, and partly in executable checks. The exact storage matters less than keeping the human explanation and technical enforcement aligned.
 
-### Different failures need different responses
+### Choose A Response For Each Data-Quality Failure
 
 A production pipeline should decide what to do after a rule fails. The consequence to training data guides that decision.
 
@@ -383,7 +375,7 @@ An unexpected but valid channel might remain in the table while the team measure
 
 The final publication gate checks that all required inputs succeeded. This matters because a failed expectation stops its target flow; independent flows in a triggered pipeline may continue.
 
-### Row checks and dataset checks solve different problems
+### Check Individual Rows And The Complete Dataset
 
 Row-level rules evaluate one record. Dataset-level rules evaluate the complete population.
 
@@ -391,7 +383,7 @@ Every row can have a valid customer ID while a failed join removes an entire reg
 
 Before publication, a training-data pipeline should check source freshness, input and output counts, duplicate rate, feature-to-label join coverage, label balance, segment coverage, and historical time boundaries. A major failure keeps the previous approved dataset version in use while the team repairs the source or transformation.
 
-## Lakeflow Pipelines Turn The Contract Into A Repeatable Process
+## Build And Validate Training Data With Lakeflow Pipelines
 <!-- section-summary: Lakeflow pipelines declare tables, transformations, dependencies, and expectations, then expose the evidence needed to approve a training-data release. -->
 
 A data contract describes the agreement. A **Lakeflow pipeline** runs the transformations and checks that implement that agreement on Databricks.
@@ -419,10 +411,6 @@ flowchart TD
     G --> H["Publication job writes<br/>managed Delta table"]
     H --> I["Training reads a<br/>pinned table version"]
 
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef transform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef output fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,C input
     class B,D,E,F transform
     class G gate
@@ -431,7 +419,7 @@ flowchart TD
 
 The ordinary managed Delta table at the end is the training release artifact. The pipeline-managed materialized view remains a candidate. This boundary is important because Lakeflow materialized views and streaming tables cannot serve as `CLONE` sources, while the published ordinary Delta table supports the version and preservation workflow used later.
 
-### Expectations enforce selected contract rules
+### Apply Data-Quality Rules With Lakeflow Expectations
 
 Lakeflow expectations attach a name, condition, and violation action to a pipeline dataset:
 
@@ -450,7 +438,7 @@ The first rule keeps unfamiliar channels and measures them. The second excludes 
 
 `expect_or_drop` does not create a quarantine table. Preserving rejected rows requires a separate filtered dataset or flow. The pipeline event log and quality metrics provide evidence for retained and dropped violations.
 
-### Streaming tables and materialized views serve different purposes
+### Choose A Streaming Table Or Materialized View
 
 A **streaming table** incrementally processes arriving records. It fits event ingestion and transformations that advance as new data appears.
 
@@ -458,7 +446,7 @@ A **materialized view** stores the refreshed result of a query. It fits joins, a
 
 The published training release uses an ordinary managed Delta table written by a separate task after the gates pass. Training then reads a stable, cloneable, versioned input while the pipeline remains free to refresh its candidate materialized view.
 
-### Environment configuration needs a reviewed path
+### Review Configuration Changes Across Environments
 
 Development and production use different catalogs, storage boundaries, and quality thresholds. The same transformation code should run with reviewed environment configuration.
 
@@ -466,10 +454,10 @@ Stable pipeline properties can set the target `catalog` and `schema`. Additional
 
 Lakeflow pipeline parameters can supply run-time values to SQL pipeline source, although that capability is currently Beta. Teams avoiding preview features can use the stable configuration path for production.
 
-## Catalog Structure And Permissions Create Production Boundaries
+## Use Catalogs And Permissions To Separate Environments
 <!-- section-summary: Catalogs, schemas, groups, service principals, policy controls, and workspace bindings separate exploratory work from automated production writes. -->
 
-The Unity Catalog hierarchy should reflect real ownership and isolation. A small design might use:
+The Unity Catalog hierarchy should reflect real ownership and isolation. Catalogs can separate environments or major governance domains, while schemas group assets with related owners and access rules. A small design might use:
 
 - `dev_ml` for development assets;
 - `prod_ml` for production prepared data, features, labels, training inputs, and monitoring;
@@ -477,13 +465,13 @@ The Unity Catalog hierarchy should reflect real ownership and isolation. A small
 
 Within `prod_ml`, schemas can separate `prepared`, `features`, `labels`, `training`, and `monitoring`. The catalog provides the stronger environment boundary. Schemas group assets with similar purpose and privileges.
 
-This layout is only useful after its permissions match the workflow.
+The permissions must match the workflow before the layout can enforce a production boundary.
 
 The ingestion service writes raw tables. The transformation service reads raw data and writes prepared tables. The training-data pipeline reads prepared features and labels and publishes candidate data. A separate publication identity writes the approved training table. The training identity reads that table without gaining permission to rewrite labels.
 
 Ownership should belong to groups rather than individuals. A group such as `ml-data-platform-owners` survives staff changes and gives the organisation a reviewed membership process.
 
-### Workspace bindings add a location boundary
+### Limit Which Workspaces Can Access A Catalog
 
 Catalog grants answer who may access an object. Workspace bindings answer where that catalog may be accessed.
 
@@ -491,7 +479,7 @@ A production catalog can be bound to production workspaces and excluded from an 
 
 Identity and workspace location then work together. A user's table grant does not automatically make the production catalog available from every cluster they can create.
 
-## Lineage Explains Where Training Data Came From
+## Trace Where Training Data Came From
 <!-- section-summary: Unity Catalog lineage records supported relationships across tables, columns, jobs, pipelines, notebooks, models, and downstream consumers. -->
 
 **Data lineage is the recorded path from source data to downstream use.** For a training table, it can show which upstream tables supplied the rows, which pipeline transformed them, and which model consumed the result.
@@ -502,7 +490,7 @@ Lineage also supports incident investigation. If a retraining run loses one regi
 
 Unity Catalog captures supported Databricks SQL and Spark DataFrame lineage down to column level and aggregates it across workspaces attached to the metastore. Named Unity Catalog tables provide stronger lineage than direct storage paths.
 
-### Lineage has important boundaries
+### Understand The Limits Of Lineage
 
 Lineage is a dependency map. It does not replace the exact evidence stored by a training run.
 
@@ -510,7 +498,7 @@ The graph may show that a job read a table without identifying the exact version
 
 The training evidence must still record the table version, code revision, configuration, cutoffs, and contract version. Lineage provides the broader path around those exact identifiers.
 
-### Lineage should lead to a human owner
+### Connect Every Important Dataset To A Human Owner
 
 A graph that ends at an unexplained table gives the investigator only half of the answer. Table comments should state the row grain and purpose. Important columns should explain their meaning and time semantics. Catalog and schema ownership should lead to a durable group.
 
@@ -527,19 +515,19 @@ The first requirement is a published ordinary managed Delta table such as `prod_
 
 *The version identifies the table state. Retention keeps that state available. Historical code, configuration, time cutoffs, and validation evidence explain and verify the recovered rows.*
 
-### Step 1: Recover the published table version
+### Step 1: Recover The Published Table Version
 
 The model run should store the fully qualified table name and version. Verify that the version still exists, then read it explicitly through time travel.
 
 If the data files disappeared after retention cleanup, the version number alone cannot recover them. The result may be an approximation from surviving sources, and the investigation should label it that way.
 
-### Step 2: Recover code and configuration
+### Step 2: Recover Code And Configuration
 
 The evidence should identify the Git commit or released bundle that produced the dataset. It should also identify the Lakeflow pipeline, publication job, and their configuration.
 
 Historical code matters because a newer branch may use a different window, join, deduplication rule, or label definition. Two successful runs can create different rows while using the same table names.
 
-### Step 3: Recover time rules
+### Step 3: Recover Time Rules
 
 ML data has several clocks.
 
@@ -549,13 +537,13 @@ The **label-maturity rule** waits until the outcome window has completed. If chu
 
 The **split rule** decides which prediction times belong to train, validation, and test sets. Changing any of these rules changes the dataset.
 
-### Step 4: Reapply the recorded contract
+### Step 4: Reapply The Recorded Contract
 
 Recover the expectations and dataset-level thresholds used by the original update. If the pipeline dropped rows without customer identifiers, that action is part of the historical data state.
 
 Compare the recovered row count, schema, null counts, label rate, segment counts, join coverage, and time boundaries with the original evidence. A matching row count by itself is weak; two datasets can contain the same number of different rows.
 
-### Step 5: Preserve the result and its evidence
+### Step 5: Save The Rebuilt Dataset And Verification Record
 
 The reconstruction is an auditable run. Record who requested it, which assets it used, which checks matched, and where any difference remained.
 
@@ -573,7 +561,7 @@ The training pipeline can keep one small evidence record per approved dataset:
 
 The record points to governed assets, so the evidence stays small and sensitive training rows remain inside their controlled data store.
 
-### Time travel and durable snapshots serve different horizons
+### Choose Time Travel Or Durable Snapshots By Retention Need
 
 Time travel is efficient for a bounded operational investigation period. The table's log and deleted-file retention must cover that period.
 
@@ -588,7 +576,7 @@ The clone needs its own owner, permissions, retention, and deletion policy. It p
 
 The team should choose the preservation horizon before release. Waiting for an incident may mean the required source files have already been removed.
 
-## What Governance Still Cannot Guarantee
+## Understand What Governance Cannot Guarantee
 <!-- section-summary: Platform governance supplies control and evidence, while semantic correctness, responsible feature use, model quality, and human judgement still require separate work. -->
 
 Governance tells the team that an asset is controlled and traceable. Correctness asks whether its contents, meaning, and use are actually right for the ML problem. Those are separate responsibilities.
@@ -606,7 +594,7 @@ Governance gives the team a controlled asset and an evidence path. Data-quality 
 ## A Practical Production Design
 <!-- section-summary: A practical design moves source data through reliable Delta tables and Lakeflow checks, then publishes one governed version for training and later reconstruction. -->
 
-A production implementation can follow this sequence:
+A production implementation needs a controlled path from raw source records to a versioned training table. The path below names the transformations, quality checks, permissions, lineage, and retained evidence required to rebuild that table later.
 
 1. Register sources in Unity Catalog and limit raw access to approved identities.
 2. Store new curated outputs as Unity Catalog managed Delta tables.
@@ -626,7 +614,7 @@ The first useful milestone is simple. A training run should answer four question
 - Which checks approved it?
 - Which group owns the data definition?
 
-## The Complete Governed Data Path
+## Follow The Complete Governed Data Path
 <!-- section-summary: Unity Catalog governs the full path while Delta Lake, contracts, Lakeflow pipelines, publication gates, and evidence records create a recoverable training input. -->
 
 The complete path starts with changing source records and ends with an exact training input that the team can explain and recover.

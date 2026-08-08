@@ -9,21 +9,21 @@ id: "article-mlops-data-for-ml-systems-training-data-labels-features-targets"
 
 ## Table of Contents
 
-1. [A Training Row Reconstructs A Past Decision](#a-training-row-reconstructs-a-past-decision)
-2. [Define The Population, Entity, Grain, And Clock](#define-the-population-entity-grain-and-clock)
-3. [Features Preserve The Evidence Available At Prediction Time](#features-preserve-the-evidence-available-at-prediction-time)
-4. [Labels And Targets Describe The Later Answer](#labels-and-targets-describe-the-later-answer)
-5. [Incomplete Outcomes Need Their Own State](#incomplete-outcomes-need-their-own-state)
-6. [Leakage Crosses The Time Or Answer Boundary](#leakage-crosses-the-time-or-answer-boundary)
-7. [A Dataset Contract Connects The Product Question To The Rows](#a-dataset-contract-connects-the-product-question-to-the-rows)
-8. [Build The Dataset As A Reproducible Data Product](#build-the-dataset-as-a-reproducible-data-product)
-9. [Give Every Dataset Release An Immutable Identity](#give-every-dataset-release-an-immutable-identity)
-10. [Validate Meaning As Well As Shape](#validate-meaning-as-well-as-shape)
+1. [A Training Row Describes One Past Decision](#a-training-row-describes-one-past-decision)
+2. [Define Which Cases Become Rows And What Each Row Represents](#define-which-cases-become-rows-and-what-each-row-represents)
+3. [Use Only Information Available At The Prediction Time](#use-only-information-available-at-the-prediction-time)
+4. [Use Later Outcomes As The Answer The Model Learns](#use-later-outcomes-as-the-answer-the-model-learns)
+5. [Keep Pending Outcomes Separate From Negative Outcomes](#keep-pending-outcomes-separate-from-negative-outcomes)
+6. [Keep Future Information And Answers Out Of Features](#keep-future-information-and-answers-out-of-features)
+7. [Write Down How The Product Question Maps To Dataset Rows](#write-down-how-the-product-question-maps-to-dataset-rows)
+8. [Build The Dataset So The Same Version Can Be Recreated](#build-the-dataset-so-the-same-version-can-be-recreated)
+9. [Give Every Published Dataset A Fixed Version](#give-every-published-dataset-a-fixed-version)
+10. [Check Both Data Shape And Real-World Meaning](#check-both-data-shape-and-real-world-meaning)
 11. [Verify One Example From Source To Training](#verify-one-example-from-source-to-training)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
-## A Training Row Reconstructs A Past Decision
+## A Training Row Describes One Past Decision
 <!-- section-summary: A supervised training row recreates what the production system could have known at one historical decision and attaches the answer observed later. -->
 
 At 09:00, a support system has to decide whether a newly opened ticket needs a specialist. At that moment it knows the ticket category, the customer plan, the current queue size, and the customer's earlier support history. The ticket is escalated at 16:00.
@@ -42,7 +42,7 @@ The target comes from a **label**, meaning an observed, inferred, or human-revie
 A collection of rows needs several shared definitions. The team decides who belongs, what one row represents, and which clock separates past evidence from future outcomes. It also records how the rows can be rebuilt. Those choices encode the product problem before any learning algorithm sees the data.
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+
 flowchart TD
     A["Product decision<br/>What action needs support?"] --> B["Eligible population<br/>Which cases could receive that action?"]
     B --> C["Historical decision points<br/>One example at one prediction time"]
@@ -53,10 +53,6 @@ flowchart TD
     F --> G
     G --> H["Validated input to training"]
 
-    classDef question fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef define fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A question
     class B,C define
     class D,E,F evidence
@@ -65,16 +61,16 @@ flowchart TD
 
 The flow has a deliberate time boundary. Features look backward from the historical decision. The label looks forward. Dataset engineering joins those two views without allowing the future answer to leak into the earlier evidence.
 
-## Define The Population, Entity, Grain, And Clock
+## Define Which Cases Become Rows And What Each Row Represents
 <!-- section-summary: Population, entity, grain, and prediction time define which historical cases exist and what each row means. -->
 
 Before choosing columns, describe the cases that the product could actually score. This description prevents a technically valid table from representing the wrong decision.
 
-### Population decides which cases can enter
+### Choose Which Cases Can Enter The Dataset
 
 The **population** is the full set of cases eligible for the prediction. A delivery-delay model may cover parcels accepted by a particular service, while excluding cancelled shipments and routes outside the supported network. Those rules affect what the model learns. If training quietly excludes difficult rural deliveries while production scores them, the training population and serving population disagree.
 
-### Entity, grain, and clock define one row
+### Define The Object, Level Of Detail, And Time For Each Row
 
 An **entity** is the real thing being described, such as an account, device, parcel, patient, document, or transaction. The entity key connects data from several sources. It also reveals repeated history: one account can create many transactions, and one device can produce many maintenance observations.
 
@@ -97,12 +93,12 @@ A short design record should answer six questions before extraction starts:
 
 These answers define the rows. Features and labels can now attach to a stable decision point.
 
-## Features Preserve The Evidence Available At Prediction Time
+## Use Only Information Available At The Prediction Time
 <!-- section-summary: Features are model inputs whose meaning, source, transformation, and availability rule reproduce what production could know at the decision. -->
 
 A **feature** is an input value supplied to the model. A raw field such as parcel weight can serve directly as a feature. A transformed value such as deliveries delayed on the same route during the previous seven days combines several events into one feature.
 
-### Event and availability clocks protect the cutoff
+### Separate When An Event Happened From When It Became Available
 
 The important property is availability. An event may occur before prediction time and still reach the system afterward. Suppose a payment happened at 08:50, the model scored an account at 09:00, and a correction containing the final amount arrived at 11:00. A historical warehouse queried today can see the corrected value. The live model lacked that corrected value at 09:00.
 
@@ -117,7 +113,7 @@ Each feature definition connects the value to an entity and source. Its calculat
 
 “Orders in the last month” leaves several choices hidden. “Count completed orders available by prediction time in `(prediction_time - 30 days, prediction_time]`” gives both historical and serving implementations a testable meaning.
 
-### Retrieval implements the feature definition
+### Retrieve Historical Values Using The Feature Definition
 
 Warehouse-scale batch data often uses SQL with dbt. Spark handles larger distributed histories, while Polars fits data that can run on one machine. The workload and the team's operating environment determine the engine.
 
@@ -125,18 +121,18 @@ A feature platform such as Feast earns its operating cost after several models n
 
 A **point-in-time join** selects the feature value that belonged to each entity at that row's prediction time. Feast historical retrieval scans backward from the timestamps in an entity dataframe and applies each Feature View's time-to-live limit. The source still has to preserve the required arrival and availability semantics; the retrieval layer cannot infer that a late record was absent from the live system. A warehouse query can implement the same responsibility with temporal conditions and deterministic tie-breaking. Either path needs tests for late records, duplicate timestamps, window boundaries, and missing history.
 
-## Labels And Targets Describe The Later Answer
+## Use Later Outcomes As The Answer The Model Learns
 <!-- section-summary: Labels preserve outcome evidence and its provenance, while targets turn that evidence into the exact value optimized during training. -->
 
 The label answers the historical prediction question after enough time has passed. For a ticket-routing model, the outcome might be escalation within 24 hours. For a demand model, it might be the number of units sold during the next seven days. For image classification, it may come from a reviewer who examined the image.
 
-### Labels preserve outcome evidence
+### A Label Records What Happened Later
 
 Labels can come directly from the event the product cares about, or from a proxy. A **direct label** records the desired outcome itself, such as a verified payment chargeback. A **proxy label** uses another signal, such as a customer clicking “helpful” to approximate satisfaction. A proxy may arrive sooner or cover more examples, yet it can teach the model to optimize the proxy's quirks.
 
 Label provenance records where the answer came from and how it was produced. For an event-derived label, useful evidence includes the source table, event type, event time, arrival time, deduplication rule, correction policy, and extraction version. For a human label, provenance also includes the annotation guide, reviewer or reviewer pool, adjudication state, and label-set version. Sensitive identities stay in a restricted evidence system; the training record can carry a governed reference.
 
-### Targets encode that evidence for learning
+### A Target Converts The Outcome Into A Learnable Value
 
 The **target** is the training representation derived from that evidence. A cancellation event may produce a binary target called `cancelled_30d`. A qualifying cancellation maps to `1`. A fully observed 30-day period with no cancellation maps to `0`. A ranking task may derive pairwise preferences. A regression task may cap, transform, or normalize a measured quantity.
 
@@ -144,12 +140,12 @@ That derivation deserves its own version. A longer outcome window changes the le
 
 Labels are observations with known limitations. Events can be missing, joins can fail, reviewers can disagree, and product actions can influence what happens next. If an earlier model sent the riskiest accounts to a retention team, their later cancellation labels reflect both customer intent and the intervention. Provenance and population analysis make those limitations visible.
 
-## Incomplete Outcomes Need Their Own State
+## Keep Pending Outcomes Separate From Negative Outcomes
 <!-- section-summary: Pending, censored, and invalid outcomes must remain separate from confirmed negative labels. -->
 
 A future outcome takes time to observe. A row created yesterday cannot yet answer whether an event will happen during the next 30 days. Assigning `0` today would teach the model that “still pending” means “negative.”
 
-### Pending and negative are different states
+### Pending And Negative Mean Different Things
 
 An example has a **mature label** after its full outcome window and normal processing delay have passed. The delay matters because a qualifying event may reach the label source several hours or days after it occurred. The dataset release therefore needs a fixed **label as-of time**: the latest arrival time the build is allowed to use.
 
@@ -158,7 +154,7 @@ Some rows never receive a complete observation window. An account may leave the 
 One explicit label state prevents these cases from collapsing together:
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#111827", "primaryColor": "#2DD4BF", "primaryTextColor": "#0F172A", "primaryBorderColor": "#536A9A", "lineColor": "#93C5FD", "secondaryColor": "#FFE04F", "tertiaryColor": "#FB7185", "fontFamily": "Nunito, sans-serif"}}}%%
+
 stateDiagram-v2
     direction TB
     [*] --> Pending
@@ -175,9 +171,9 @@ stateDiagram-v2
 
 Ordinary binary training usually admits the mature positive and mature negative states. Pending rows wait for a later dataset release. Invalid rows enter a quarantine path for repair.
 
-### Censoring changes population coverage
+### Account For Outcomes That Have Not Had Time To Appear
 
-Censored rows may be excluded with coverage reported. A survival or time-to-event method offers another choice because it is designed to use partial follow-up.
+Some rows have only partial follow-up because the observation period ended, the entity left the system, or data collection stopped. These are **censored** outcomes. The dataset may exclude them while reporting coverage, or use a survival or time-to-event method designed for partial follow-up.
 
 The choice can change the population. If customers with poor connectivity are censored more often, dropping every censored row underrepresents them. The build report should compare maturity and censoring rates across important segments before training proceeds.
 
@@ -200,7 +196,7 @@ GROUP BY d.example_id, d.prediction_ts;
 
 The `WHERE` clause admits only mature examples. The join looks forward solely for the target. Feature retrieval remains a separate backward-looking operation. A production implementation also records cancelled decisions, source outages, and censoring rules instead of silently converting them to zero.
 
-## Leakage Crosses The Time Or Answer Boundary
+## Keep Future Information And Answers Out Of Features
 <!-- section-summary: Leakage occurs when a feature reveals future information, the target itself, or evidence unavailable to the production decision. -->
 
 Training metrics can look excellent for the wrong reason. **Data leakage** occurs if the model learns from information that would be unavailable or forbidden at the real prediction moment.
@@ -215,7 +211,7 @@ Suppose a delivery model uses `latest_driver_status`. Historical inspection find
 
 Leakage has several deeper forms involving splits, related entities, preprocessing, and policy feedback. The foundational rule remains stable: every feature must reproduce evidence the deployed model could legally and operationally receive for that decision.
 
-## A Dataset Contract Connects The Product Question To The Rows
+## Write Down How The Product Question Maps To Dataset Rows
 <!-- section-summary: A dataset contract records the population, grain, time boundaries, features, target, provenance, and acceptance rules shared by product and engineering owners. -->
 
 Several teams may touch a training dataset. Product defines the action, domain experts define meaningful outcomes, data engineering builds sources, and ML engineering trains the model. A **dataset contract** gives them one reviewable statement of the problem encoded by the rows.
@@ -256,22 +252,22 @@ The contract gives each review a concrete object. Product can challenge the popu
 
 A mature contract also records permitted use, sensitive fields, retention, deletion rules, and owners for each source. Dataset documentation such as a datasheet can explain collection history, known gaps, intended uses, and excluded uses in more depth. The executable contract protects the pipeline; the documentation preserves the human context needed to use the data responsibly.
 
-## Build The Dataset As A Reproducible Data Product
+## Build The Dataset So The Same Version Can Be Recreated
 <!-- section-summary: A production build uses versioned sources, reviewed transformations, deterministic parameters, and an immutable output instead of an ad hoc notebook export. -->
 
 The contract now needs a repeatable build. Reviewed code creates rows from pinned inputs under fixed parameters. Tests decide whether the result may be released. A named owner handles failures and approves the new output.
 
-### Transformations assemble a time-correct row
+### Join Each Row Using Its Historical Cutoff
 
 The build starts from a table of eligible historical decisions. This anchor table contains the example key, entity key, prediction time, and population evidence. Feature jobs join backward from those rows using availability cutoffs. The label job joins forward within the outcome window, waits for maturity, and records provenance. The final projection keeps feature columns separate from target and evidence columns.
 
-### Choose the engine from the workload
+### Choose A Processing Tool That Fits The Data
 
 SQL and dbt are a strong default if the source data already lives in a warehouse. dbt model contracts can enforce column names and data types for supported materializations. Data tests then check row content such as uniqueness, nulls, accepted values, and relationships.
 
 Spark fits large distributed joins and feature histories. Polars offers a lighter local engine for data that fits one machine. Orchestration can use the team's existing Airflow or Dagster estate, or a managed ML pipeline inside the selected platform.
 
-### Storage and lineage preserve build evidence
+### Record The Data Version, Code, And Build Run
 
 Storage should preserve one complete, addressable dataset state. A cloud warehouse can provide immutable tables or snapshots. Object storage may use S3, Google Cloud Storage, or Azure Data Lake Storage. Delta Lake and Apache Iceberg add transactional snapshots and time travel over those files. Snapshot retention must cover the model's audit and reproduction horizon; an expired version cannot support a later rebuild.
 
@@ -279,7 +275,7 @@ Point-in-time feature retrieval belongs in the build only after time-varying reu
 
 Lineage connects the output back to the jobs and input datasets that produced it. Native catalogs cover this inside many managed platforms. OpenLineage provides a vendor-neutral event model and dataset facets for source identity, schema, versions, and data-quality evidence. Lineage identifies dependencies; it still needs contract versions and runtime parameters to explain the exact row logic.
 
-## Give Every Dataset Release An Immutable Identity
+## Give Every Published Dataset A Fixed Version
 <!-- section-summary: A dataset release binds the resulting rows to source snapshots, transformation code, contract, parameters, label cutoff, and validation evidence. -->
 
 A path such as `s3://ml-data/training/latest/` identifies a location whose contents can change. A query string identifies logic without freezing the tables it read. Reproducing a model requires an identity for the output and the evidence used to create it.
@@ -317,24 +313,24 @@ with mlflow.start_run():
 
 MLflow records the dataset name, digest, source, schema, profile, and training context where available. The run should also carry the contract version, code revision, label as-of time, and validation reference. The table snapshot supplies the durable data state; MLflow connects that state to the training attempt and resulting model evidence.
 
-## Validate Meaning As Well As Shape
+## Check Both Data Shape And Real-World Meaning
 <!-- section-summary: Release validation checks structure, row meaning, time boundaries, label maturity, population coverage, distributions, and reproducibility before training consumes the data. -->
 
 A training framework will happily fit a model to duplicated rows, immature negatives, missing segments, or leaked answers. Dataset validation needs to ask whether the release still represents the contract.
 
-### Row checks enforce the contract
+### Check Every Row Against The Dataset Rules
 
 Start with **structural checks**. Required columns exist and types match. The example key is unique at the declared grain. Target values use the allowed domain, and required fields contain no nulls. Database constraints and dbt contracts catch some failures during table construction.
 
 Then check **row semantics**. Every row belongs to the eligible population. Feature availability is at or before prediction time. Positive outcomes fall inside the target window. Negative targets have a completed observation window. Join multiplicity preserves the declared one-example grain.
 
-### Dataset checks protect population coverage
+### Check Population Size, Coverage, And Distributions
 
 **Dataset-level checks** reveal failures spread across many valid-looking rows. Compare row count, label rate, missingness, feature coverage, censoring, and key segments with an approved reference. A sudden loss of one region may barely affect the global row count while leaving that population absent from training.
 
 Native warehouse queries and dbt data tests are usually the smallest credible starting point. Great Expectations adds reusable expectation suites across supported dataframe and SQL data sources. TensorFlow Data Validation can compute statistics, compare them with a reviewed schema, and detect anomalies across training and serving datasets. Choose the tool from the data engine and existing operating model; the contract decides what must be checked.
 
-### Fail closed and publish a new version
+### Block Failed Data And Publish Repairs As A New Version
 
 A failed critical check stops publication. The pipeline quarantines the bad partition or release, keeps the previous approved snapshot available, and routes evidence to the source or transformation owner. After repair, it backfills the affected range and rebuilds under the same fixed parameters. Every gate runs again before a new immutable release is published. Editing a failed release in place would destroy the evidence needed for investigation.
 

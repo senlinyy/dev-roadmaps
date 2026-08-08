@@ -10,15 +10,15 @@ id: "article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluati
 ## Table of Contents
 
 1. [What MLflow 3 Experiments, Logged Models, And Evaluation Mean](#what-mlflow-3-experiments-logged-models-and-evaluation-mean)
-2. [Five Kinds Of Evidence Around A Model](#five-kinds-of-evidence-around-a-model)
+2. [Understand The Five Records MLflow Keeps Around A Model](#understand-the-five-records-mlflow-keeps-around-a-model)
 3. [Design Experiments Around Questions](#design-experiments-around-questions)
 4. [Give Every Trained Model Its Own Identity](#give-every-trained-model-its-own-identity)
-5. [Make Model Comparisons Fair With Dataset Context](#make-model-comparisons-fair-with-dataset-context)
-6. [Evaluate The Decision The Model Will Support](#evaluate-the-decision-the-model-will-support)
-7. [Build A Candidate Evidence Packet](#build-a-candidate-evidence-packet)
-8. [Repair Experiment Evidence Without Rewriting History](#repair-experiment-evidence-without-rewriting-history)
+5. [Compare Models On The Same Data And Evaluation Rules](#compare-models-on-the-same-data-and-evaluation-rules)
+6. [Evaluate How The Model Will Support A Real Decision](#evaluate-how-the-model-will-support-a-real-decision)
+7. [Gather The Information Needed To Review A Trained Model](#gather-the-information-needed-to-review-a-trained-model)
+8. [Correct Faulty Evaluation Evidence Without Rewriting History](#correct-faulty-evaluation-evidence-without-rewriting-history)
 9. [Operate Shared Experiments On Databricks](#operate-shared-experiments-on-databricks)
-10. [The Complete Model Evidence Path](#the-complete-model-evidence-path)
+10. [Follow The Complete MLflow Evidence Path](#follow-the-complete-mlflow-evidence-path)
 11. [References](#references)
 
 ## What MLflow 3 Experiments, Logged Models, And Evaluation Mean
@@ -77,7 +77,7 @@ MLflow 3 makes the model identity especially important. Earlier workflows often 
 
 A **Logged Model** gives the model a durable ID of its own. Training runs can produce it. Evaluation runs can consume it. Metrics can be associated with both that model ID and a particular dataset. Deep-learning checkpoints can each receive a separate identity even though one training run created all of them.
 
-This article focuses on the evidence between trustworthy features and production training:
+The workflow below focuses on the evidence between trustworthy features and production training:
 
 ```mermaid
 flowchart TD
@@ -89,27 +89,22 @@ flowchart TD
     F --> G["Candidate evidence packet"]
     G --> H["Ready for an automated<br/>production training workflow"]
 
-    classDef data fill:#2DD4BF,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
-    classDef thought fill:#93C5FD,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
-    classDef model fill:#FFE04F,stroke:#7C8EC6,stroke-width:3px,color:#111827
-    classDef evidence fill:#FB7185,stroke:#7C8EC6,stroke-width:3px,color:#111827
     class A data
     class B,C,D thought
     class E model
     class F,G,H evidence
-    linkStyle default stroke:#AAB9E8,stroke-width:3px
 ```
 
 MLflow provides the structure that lets a team record model-development decisions and inspect them later. Feature meaning, production representativeness, and the business cost of an error still come from domain knowledge and deliberate review.
 
-## Five Kinds Of Evidence Around A Model
+## Understand The Five Records MLflow Keeps Around A Model
 <!-- section-summary: An experiment, run, Logged Model, dataset, and evaluation answer different questions, and together they make a model result understandable. -->
 
 The Iris example already contains several kinds of evidence: a place that groups the work, one recorded execution, one fitted model, training data, and a held-out test result. MLflow separates these responsibilities because they have different lifetimes and answer different questions.
 
 Experiments, runs, Logged Models, and datasets are tracked records. Evaluation works slightly differently. It is the activity that tests a model; its durable metrics, plots, dataset references, and policy tags live in an evaluation run. The Python `EvaluationResult` returned by MLflow is a convenient in-memory view of those results rather than a separately identified lifecycle object.
 
-### An experiment holds one continuing line of investigation
+### Group Related Model-Development Runs In An Experiment
 
 An **experiment** is a container for related model-development work. It tells MLflow which runs belong to the same problem and should be compared together. In the example, `/Shared/ml/iris-classification` can hold the baseline run, a regularized variant, and a tree-based alternative without mixing them with an unrelated forecasting project.
 
@@ -121,7 +116,7 @@ A useful experiment scope is stable enough to survive many training attempts. Fo
 
 An experiment named after a temporary notebook or a single parameter value usually has the wrong scope. It fragments one investigation across many containers and makes comparison harder.
 
-### A run records one execution
+### Record One Execution As A Run
 
 A **run** is one execution of code inside an experiment. The `logistic-regression-baseline` run records what happened during that particular fit: its parameter values, metrics, model output, time, status, and source context.
 
@@ -136,7 +131,7 @@ A run can record:
 
 If two runs use the same code and parameter values but read different table versions, they are different attempts. If one run fails halfway through training, that failure is also useful evidence. It can reveal an invalid parameter range, memory limit, or data problem.
 
-### A Logged Model identifies one model output
+### Give Each Trained Model Its Own Logged Model Record
 
 A **Logged Model** is MLflow 3's first-class record for a model artifact. It identifies the exact trained model under discussion. In the example, it refers to the fitted logistic-regression model rather than the experiment as a whole or the Python process that trained it.
 
@@ -144,7 +139,7 @@ This distinction solves a common ambiguity. One run can train multiple artifacts
 
 Each Logged Model has its own `model_id`. MLflow can link parameters, metrics, artifacts, inputs, outputs, and later evaluation work to that ID. The model can be loaded through a URI such as `models:/<model_id>` without pretending that it is already an approved registry version.
 
-### A dataset describes the evidence source
+### Record The Data Used For Training Or Evaluation
 
 An MLflow **dataset** is a tracked description of data used for training or evaluation. It can record a name, source, digest, schema, profile, target column, and context such as `training` or `validation`.
 
@@ -152,7 +147,7 @@ The dataset record usually points to data rather than copying the full dataset i
 
 The dataset digest is a compact fingerprint. It helps detect that two runs used different inputs, although it does not replace a durable Delta version or retention policy. Exact reconstruction still depends on the source data remaining available.
 
-### Evaluation produces evidence about model behaviour
+### Record How The Model Performed
 
 **Evaluation** applies a model to agreed data and records the resulting metrics and diagnostics in a run. It explains how that model behaved on a particular population under a particular evaluation policy. The Iris example logs one held-out accuracy value; production evaluation adds the threshold, segments, baseline, diagnostics, and domain-specific costs needed for a real decision.
 
@@ -179,7 +174,7 @@ The first design decision is the **question** the experiment is meant to answer.
 
 “Try XGBoost” is an activity. “Can a model predict late payment seven days earlier while keeping false alerts below the operations team's limit?” is an investigation. The second form gives the experiment a target population, outcome, horizon, and practical constraint.
 
-### Keep the experiment stable and let runs carry the variations
+### Keep The Experiment Stable And Record Variations In Runs
 
 Parameters, random seeds, feature sets, and algorithms normally belong to runs. The experiment should remain stable while those variations change.
 
@@ -206,7 +201,7 @@ mindmap
 
 This structure keeps the theory at the centre. Individual model runs become evidence for the same decision rather than unrelated demonstrations.
 
-### Choose workspace experiments for shared or scheduled work
+### Use Workspace Experiments For Shared Or Scheduled Work
 
 Databricks supports **workspace experiments** and **notebook experiments**.
 
@@ -237,7 +232,7 @@ The path gives related runs a shared home. The run name gives a human a quick cl
 
 For scheduled notebook tasks, Databricks recommends an explicit workspace experiment. A notebook experiment can follow the notebook's lifecycle and permissions, which makes it a fragile home for long-running production evidence.
 
-### Use autologging as a baseline, then add domain evidence
+### Start With Autologging And Add Domain-Specific Evidence
 
 Manual tracking is easy to apply inconsistently. One run records the learning rate and forgets the random seed. Another records the final metric and omits the input schema. A third logs a model file whose dependency versions are unclear. The comparison page may still look complete even though the evidence underneath each row differs.
 
@@ -315,18 +310,14 @@ flowchart TD
     C --> F["Evaluation run<br/>validation dataset A"]
     D --> G["Evaluation run<br/>validation dataset A"]
 
-    classDef run fill:#93C5FD,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
-    classDef model fill:#FFE04F,stroke:#7C8EC6,stroke-width:3px,color:#111827
-    classDef eval fill:#2DD4BF,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
     class A run
     class B,C,D model
     class E,F,G eval
-    linkStyle default stroke:#AAB9E8,stroke-width:3px
 ```
 
 The run answers “how did training execute?” Each model ID answers “which checkpoint produced these predictions?”
 
-### Log the contract beside the model weights
+### Log The Model Interface And Dependencies With The Weights
 
 An artifact needs more than weights. A reviewer or inference job also needs to understand the expected input and output.
 
@@ -356,13 +347,13 @@ The `log_model()` call in the training run does four important things:
 
 The environment files are a starting point for reproducibility. Teams still pin the project environment in source control and test loading in clean compute. Automatically inferred dependencies can miss packages imported dynamically, private wheels, system libraries, or external services.
 
-### Treat framework support as a real compatibility boundary
+### Check MLflow Support For The Model Framework
 
 Most current MLflow flavors create the MLflow 3 Logged Model object. Databricks documents an important exception: `mlflow.spark.log_model()` continues to use the older run-artifact path and therefore lacks the new Logged Model object.
 
 That limitation changes the evidence design for Spark MLlib models. The run can still store and load the model. Model-ID-based comparison is unavailable because the chosen flavor has not created a model ID. The compatibility check belongs in the training template and upgrade test so the team discovers it before release review.
 
-## Make Model Comparisons Fair With Dataset Context
+## Compare Models On The Same Data And Evaluation Rules
 <!-- section-summary: A model metric becomes comparable only after the team fixes the evaluation dataset, label policy, split, time period, and calculation rules. -->
 
 At a high level, **a fair model comparison asks two candidates the same question**. The evaluation dataset and policy define that question: which population, time period, labels, prediction threshold, and metric calculation are being used.
@@ -382,7 +373,7 @@ The numerical comparison has collapsed. The models were tested under different c
 
 *Models become comparable after they share the evaluation population, source version, label policy, split, prediction threshold, and metric calculation. A larger score from a less demanding dataset can mislead a reviewer.*
 
-### Track data identity as carefully as model identity
+### Record The Exact Evaluation Dataset
 
 MLflow dataset tracking can record a dataset name, digest, source, schema, profile, target column, and usage context. On Databricks, a Spark dataset can refer to a Unity Catalog Delta table and a specific table version.
 
@@ -425,7 +416,7 @@ The word **validation** needs a stable meaning. A useful contract records:
 
 These rules are part of the evaluation evidence. A table named `validation_latest` gives none of them and changes meaning over time.
 
-### Link metrics to both the model and the dataset
+### Link Each Metric To A Model And Dataset
 
 MLflow 3 can associate a metric with a Logged Model and a dataset. The resulting record states that model `m-94` achieved this metric on the `late-payment-validation` dataset with this digest.
 
@@ -446,7 +437,7 @@ That association supports dataset-aware search. A team can ask for models above 
 
 A biased or leaky validation set can be tracked perfectly. Dataset appropriateness comes from combining MLflow evidence with the governed-data, point-in-time, and label-maturity controls established earlier.
 
-## Evaluate The Decision The Model Will Support
+## Evaluate How The Model Will Support A Real Decision
 <!-- section-summary: Production evaluation tests the model under the threshold, population, costs, segments, and operating constraints of the real decision. -->
 
 At a high level, **model evaluation asks whether a candidate can support an acceptable real-world decision**. Algorithm metrics describe part of that answer. The production evaluation also brings in the decision threshold, error costs, capacity, important segments, and operating limits.
@@ -455,7 +446,7 @@ A fraud classifier may rank risky transactions well and still overwhelm investig
 
 In essence, **the evaluation should recreate the decision the model will support, not merely score the mathematical function in isolation**.
 
-### Start with the task and the cost of mistakes
+### Start With The Task And The Cost Of Mistakes
 
 For binary classification, a confusion matrix separates four outcomes:
 
@@ -472,7 +463,7 @@ Consider a review team that can investigate 2,000 alerts per day. A threshold th
 
 Regression has the same issue in another form. MAE gives the average absolute error. It may hide a strong under-forecasting bias on peak days. The evaluation should add residual plots, error by horizon, error by high-value segment, and the business cost of over- and under-prediction.
 
-### Use MLflow's evaluator for repeatable diagnostics
+### Use MLflow's Evaluator For Repeatable Diagnostics
 
 For classic classification and regression models, `mlflow.models.evaluate()` can calculate built-in metrics and produce artifacts such as confusion matrices, ROC curves, precision-recall curves, residual plots, and evaluation tables.
 
@@ -520,7 +511,7 @@ For Spark DataFrame evaluation, the default evaluator currently uses at most 10,
 
 The numbers in the snippet are illustrative. A real threshold comes from the risk, capacity, baseline, and policy of the application. Teams usually store the approved threshold policy in versioned configuration so changing the code does not quietly change the release rule.
 
-### Compare against a baseline, not only an absolute floor
+### Compare The Model With A Baseline And An Absolute Threshold
 
 An absolute floor answers, “Is this model acceptable at all?” A baseline comparison answers, “Is this candidate a worthwhile change?”
 
@@ -534,7 +525,7 @@ Useful baselines include:
 
 A candidate can pass an absolute metric floor and still offer no improvement over production. It can also improve one metric while adding latency, cost, instability, or segment harm. The evaluation record should make those trade-offs visible.
 
-### Inspect segments and error examples
+### Inspect Segments And Error Examples
 
 Overall averages combine groups with different difficulty, frequency, and impact. Segment evaluation asks whether the improvement survives in the places that matter.
 
@@ -552,7 +543,7 @@ A practical review usually includes:
 
 MLflow can log the segment table and plots as artifacts. Aggregate segment metrics can also be logged with clear names. If a segment carries a release floor, the validation code should calculate and enforce it explicitly rather than relying on a reviewer to notice a bad chart.
 
-### Keep classic ML and GenAI evaluation paths distinct
+### Use Different Evaluation Methods For Predictive ML And GenAI
 
 Imagine applying a classifier evaluator to a support-answering agent. Precision and recall expect known labels and predictions. The agent needs a different kind of evidence: whether the answer followed the supplied context, satisfied a rubric, avoided unsafe content, and completed a multi-step task.
 
@@ -563,7 +554,7 @@ These are two different evaluation jobs. MLflow represents them through separate
 
 Classic metric objects receive predictions and targets in the classic evaluator. GenAI scorers can inspect inputs, outputs, expectations, traces, and feedback. Their objects use separate APIs because their evidence has a different shape. A shared template should route each workload to the correct evaluator and keep the resulting acceptance policy explicit.
 
-## Build A Candidate Evidence Packet
+## Gather The Information Needed To Review A Trained Model
 <!-- section-summary: A candidate evidence packet gathers the model identity, data lineage, environment, evaluation results, limitations, and ownership needed for an informed next decision. -->
 
 At a high level, **a candidate evidence packet is the handoff record for a trained model**. It gathers the information that would otherwise remain scattered across a notebook, run page, data catalog, Git repository, and review conversation.
@@ -585,7 +576,7 @@ A useful packet contains:
 
 The packet is intentionally broader than a leaderboard row. A model with the best F1 score may have an unacceptable memory footprint. A candidate with a small average improvement may be valuable because it removes a serious failure in one high-risk segment. Reviewers need the whole shape of the decision.
 
-### Search the model evidence, then inspect the details
+### Find The Model Record And Inspect Its Evidence
 
 MLflow 3 can search Logged Models by model attributes, parameters, tags, and dataset-associated metrics.
 
@@ -613,13 +604,13 @@ The reviewer still examines precision, segment results, plots, limitations, and 
 
 The Databricks experiment page provides a Models tab for the same work. It helps people compare model parameters and metrics visually. Programmatic search is better for repeatable gates; the UI is better for exploration and review.
 
-### Keep the candidate separate from the approved release
+### Keep A Trained Model Separate From An Approved Release
 
 A Logged Model records a trained artifact and its evidence. A registered model version in Unity Catalog represents a later lifecycle step: a governed model has entered the shared release system.
 
 This separation is healthy. Development can produce many Logged Models. Only candidates that pass the required evaluation should move toward registration, review, aliases, and deployment. Logging a model should never silently mean that production approval has happened.
 
-## Repair Experiment Evidence Without Rewriting History
+## Correct Faulty Evaluation Evidence Without Rewriting History
 <!-- section-summary: After an evaluation defect is found, preserve the original record, mark its status, create corrected evidence, and trace any decisions that depended on it. -->
 
 At a high level, **evidence repair corrects a faulty model claim while preserving the history of how the claim was produced**. This matters because an evaluation defect may already have influenced a candidate review, a registry action, or a production release.
@@ -691,20 +682,15 @@ flowchart TD
     D --> G["system.mlflow tables<br/>run and experiment reporting"]
     G --> H["Dynamic view<br/>narrow domain access"]
 
-    classDef identity fill:#FFE04F,stroke:#7C8EC6,stroke-width:3px,color:#111827
-    classDef governed fill:#2DD4BF,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#7C8EC6,stroke-width:3px,color:#0F172A
-    classDef report fill:#FB7185,stroke:#7C8EC6,stroke-width:3px,color:#111827
     class A identity
     class B,C governed
     class D,E,F evidence
     class G,H report
-    linkStyle default stroke:#AAB9E8,stroke-width:3px
 ```
 
 The job identity needs permission to write MLflow evidence and separate permission to read governed data. Domain reviewers use the experiment permissions. Platform reporting uses a broader system-table permission path, so it should expose narrower views to ordinary teams.
 
-### Give production code an explicit experiment path
+### Give Production Code An Explicit Experiment Path
 
 Every scheduled training or evaluation task should call `mlflow.set_experiment()` with an approved workspace experiment path. Relying on whichever notebook experiment happens to be active makes evidence placement depend on execution context.
 
@@ -718,13 +704,13 @@ The naming convention should reveal the owner and purpose without encoding every
 
 Development and production evidence may use separate experiments if their permissions, retention, or operational meaning differ. Tags can then connect the related question, codebase, and evaluation policy across environments.
 
-### Use service identities for scheduled writers
+### Use Service Identities For Scheduled Writers
 
 Interactive users need permission to explore and compare. Scheduled jobs need stable service identities with permission to write only to their intended experiments and read the required Unity Catalog inputs.
 
 This separation helps answer who produced a run. It also prevents a personal account change from breaking production tracking. Experiment permissions protect MLflow records, while Unity Catalog permissions protect the datasets and governed model assets. The two permission systems serve different objects and need separate review.
 
-### Treat retention and cleanup as evidence policy
+### Set Retention And Cleanup Rules For Experiment Evidence
 
 Runs, models, plots, and checkpoints consume storage and make search noisy. Cleanup should follow an explicit evidence policy:
 
@@ -736,7 +722,7 @@ Runs, models, plots, and checkpoints consume storage and make search noisy. Clea
 
 Notebook experiments deserve extra care because their lifecycle is tied to the notebook. Shared and scheduled evidence belongs in workspace experiments.
 
-### Use MLflow system tables carefully for estate-wide reporting
+### Use MLflow System Tables For Workspace-Wide Reporting
 
 The experiment UI works well for investigating one experiment. A platform team faces broader questions: Which scheduled experiments fail most often? Which domains create unusually expensive runs? Are production jobs still writing evidence to personal notebook experiments?
 
@@ -754,7 +740,7 @@ Only account administrators have access by default. An administrator can grant U
 
 Current MLflow system-table retention is 180 days. A compliance or investigation requirement that reaches further needs its own governed retention design. The experiment UI and MLflow APIs remain the direct surfaces for model-development work. System tables serve platform-level reporting rather than replacing the primary tracking records.
 
-### Know where MLflow ends
+### Understand What MLflow Does Not Manage
 
 MLflow is a strong default on Databricks because it connects naturally to Databricks compute, Delta data, Unity Catalog models, jobs, and serving. An organisation may also use Weights & Biases for experiment collaboration or another evaluation platform for specialised workloads.
 
@@ -770,7 +756,7 @@ The tool choice can change. The responsibilities remain:
 
 A second tool should solve a clear collaboration, governance, or evaluation need. Duplicating every run into several systems without an ownership model usually creates conflicting sources of truth.
 
-## The Complete Model Evidence Path
+## Follow The Complete MLflow Evidence Path
 <!-- section-summary: Trustworthy model development moves from a stable question through recorded attempts and model identities to dataset-aware evaluation and a reviewable candidate. -->
 
 At a high level, the complete path turns exploratory model development into a connected evidence trail. It starts with a clear decision question and ends with a candidate another engineer can understand, reproduce, and challenge.

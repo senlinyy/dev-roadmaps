@@ -1,7 +1,7 @@
 ---
-title: "Google Cloud Vertex AI"
-description: "Understand Vertex AI as a managed Google Cloud lifecycle for training, pipelines, model registration, prediction, identity, and operations."
-overview: "Vertex AI connects managed execution, ML metadata, Model Registry, and prediction resources. This article explains the architecture and ownership boundaries before using one compact release record to connect the pieces."
+title: "Google Cloud Gemini Enterprise Agent Platform"
+description: "Understand Gemini Enterprise Agent Platform as a managed Google Cloud lifecycle for training, pipelines, model registration, prediction, identity, and operations."
+overview: "Gemini Enterprise Agent Platform connects managed execution, ML metadata, Model Registry, and prediction resources through explicit architecture and ownership boundaries."
 tags: ["MLOps", "advanced", "cloud"]
 order: 1
 id: "article-mlops-mlops-infrastructure-google-vertex-ai-overview"
@@ -11,38 +11,38 @@ aliases:
 
 ## Table of Contents
 
-1. [Follow The Evidence Chain](#follow-the-evidence-chain)
-2. [Separate Managed Resources From Team Decisions](#separate-managed-resources-from-team-decisions)
-3. [Custom Training Creates A Managed Run Boundary](#custom-training-creates-a-managed-run-boundary)
-4. [Pipelines Coordinate Contracts, Not Arbitrary Scripts](#pipelines-coordinate-contracts-not-arbitrary-scripts)
-5. [Model Registry Is The Release Handoff](#model-registry-is-the-release-handoff)
+1. [Follow A Model From Training To Production](#follow-a-model-from-training-to-production)
+2. [Decide What Google Cloud Manages And What The ML Team Owns](#decide-what-google-cloud-manages-and-what-the-ml-team-owns)
+3. [Run Training On Managed Compute](#run-training-on-managed-compute)
+4. [Coordinate Multi-Step ML Work With Managed Pipelines](#coordinate-multi-step-ml-work-with-managed-pipelines)
+5. [Register Trained Models For Release](#register-trained-models-for-release)
 6. [Batch And Online Prediction Solve Different Problems](#batch-and-online-prediction-solve-different-problems)
-7. [Monitoring Must Join Cloud Signals With Product Outcomes](#monitoring-must-join-cloud-signals-with-product-outcomes)
-8. [Design Recovery Across Managed Resource Boundaries](#design-recovery-across-managed-resource-boundaries)
-9. [Decide Whether Vertex AI Is The Right Weight](#decide-whether-vertex-ai-is-the-right-weight)
-10. [The Durable Picture](#the-durable-picture)
+7. [Monitor Cloud Health And Product Outcomes Together](#monitor-cloud-health-and-product-outcomes-together)
+8. [Recover Across Training, Registry, And Prediction Resources](#recover-across-training-registry-and-prediction-resources)
+9. [Decide Whether Gemini Enterprise Agent Platform Fits The Workload](#decide-whether-gemini-enterprise-agent-platform-fits-the-workload)
+10. [Follow The Complete Google Cloud ML Lifecycle](#follow-the-complete-google-cloud-ml-lifecycle)
 11. [References](#references)
 
-**Vertex AI** is Google Cloud's managed platform for training and deploying ML models and AI applications. For predictive ML, its main production resources include custom training jobs, pipeline jobs, experiment and metadata records, Model Registry versions, batch prediction jobs, and online endpoints.
+**Gemini Enterprise Agent Platform**, formerly Vertex AI, is Google Cloud's managed platform for training and deploying ML models and AI applications. For predictive ML, its main production resources include custom training jobs, pipeline jobs, experiment and metadata records, Model Registry versions, batch prediction jobs, and online endpoints.
 
-The product surface is large because it covers several kinds of work. A beginner does not need to memorize every service. The first task is to see the boundary: Vertex AI coordinates managed ML resources inside a wider Google Cloud system. Data may live in Cloud Storage or BigQuery. Containers may live in Artifact Registry. Identities come from IAM. Logs and metrics flow into Cloud Logging and Cloud Monitoring. Product outcomes usually live in application databases or analytics systems.
+The product surface is large because it covers several kinds of work. A beginner does not need to memorize every service. The first task is to see the boundary: Gemini Enterprise Agent Platform coordinates managed ML resources inside a wider Google Cloud system. Data may live in Cloud Storage or BigQuery. Containers may live in Artifact Registry. Identities come from IAM. Logs and metrics flow into Cloud Logging and Cloud Monitoring. Product outcomes usually live in application databases or analytics systems.
 
-Vertex AI manages infrastructure and resource state. The team defines data meaning, evaluation policy, access, release authority, request contracts, outcome monitoring, and recovery.
+Gemini Enterprise Agent Platform manages infrastructure and resource state. The team defines data meaning, evaluation policy, access, release authority, request contracts, outcome monitoring, and recovery.
 
-## Follow The Evidence Chain
-<!-- section-summary: Vertex AI resources form a chain from a stable data reference through managed execution and review to an operated prediction workload. -->
+## Follow A Model From Training To Production
+<!-- section-summary: Gemini Enterprise Agent Platform resources form a chain from a stable data reference through managed execution and review to an operated prediction workload. -->
 
 The central MLOps question is: can the team connect the prediction in production to the exact evidence that allowed it to ship?
 
 ```mermaid
-flowchart LR
+flowchart TD
     D["Versioned data reference"] --> J["Custom training job"]
     C["Pinned training container"] --> J
     J --> A["Model artifact"]
     J --> E["Evaluation and run metadata"]
     A --> G{"Release policy"}
     E --> G
-    G -->|Accepted| R["Vertex AI Model Registry version"]
+    G -->|Accepted| R["Model Registry Version<br/>(reviewed model identity)"]
     G -->|Rejected| H["Experiment history"]
     R --> B["Batch prediction job"]
     R --> O["Endpoint deployment"]
@@ -52,16 +52,18 @@ flowchart LR
 
 Each transition needs a contract. Training consumes identified data and code. Evaluation consumes the candidate produced by that run. Registration preserves the same artifact identity and its evidence. Deployment resolves an approved model version. Monitoring records which version produced each prediction.
 
-Vertex AI can store and connect much of this metadata. It cannot repair an architecture that passes mutable names such as `latest.csv`, `main`, or `model:latest` between stages. Stable identities are a team design choice.
+Gemini Enterprise Agent Platform can store and connect much of this metadata. It cannot repair an architecture that passes mutable names such as `latest.csv`, `main`, or `model:latest` between stages. Stable identities are a team design choice.
 
-## Separate Managed Resources From Team Decisions
-<!-- section-summary: Google operates the Vertex AI control plane, while the customer owns the model's purpose, contracts, release rules, and response to harm. -->
+## Decide What Google Cloud Manages And What The ML Team Owns
+<!-- section-summary: Google operates the Gemini Enterprise Agent Platform control plane, while the customer owns the model's purpose, contracts, release rules, and response to harm. -->
 
-| Lifecycle area | Managed Vertex AI capability | Team-owned decision |
+Gemini Enterprise Agent Platform operates managed resource state, while the ML team remains responsible for the meaning and safety of the model. The following comparison shows where those responsibilities meet during development, training, release, prediction, and monitoring.
+
+| Lifecycle area | Managed platform capability | Team-owned decision |
 | --- | --- | --- |
 | Development | Workbench and experiment integrations | Research method, code review, data access |
 | Training | Custom jobs, managed compute, hyperparameter tuning | Dataset snapshot, image, resources, stopping rule |
-| Orchestration | Vertex AI Pipelines and task state | Component contracts, retry safety, gates |
+| Orchestration | Managed Pipelines and task state | Component contracts, retry safety, gates |
 | Registration | Model Registry versions and aliases | Evidence completeness, approval authority |
 | Prediction | Batch jobs and managed endpoints | Serving pattern, schema, capacity, traffic policy |
 | Monitoring | Logs, metrics, Model Monitoring capabilities | Baseline, cohorts, label join, action threshold |
@@ -69,7 +71,7 @@ Vertex AI can store and connect much of this metadata. It cannot repair an archi
 
 The ownership split is operationally useful. If a custom job fails to start, inspect resource, quota, image, and identity evidence. If it completes with a weak model, inspect data and evaluation. If an endpoint reports healthy instances while users receive bad decisions, inspect the model-quality and product-outcome loop.
 
-## Custom Training Creates A Managed Run Boundary
+## Run Training On Managed Compute
 <!-- section-summary: A custom training job combines code, container, data references, compute, identity, outputs, and status into one managed execution. -->
 
 A **custom training job** runs user-supplied training code on managed compute. The code can use a prebuilt training container or a custom container from Artifact Registry. The job specification selects machine and accelerator types, worker topology, region, service account, and output locations.
@@ -83,14 +85,14 @@ For repeatability, capture more than the successful job ID. Record:
 - output artifact URI and evaluation report;
 - the service account and relevant data boundary.
 
-The service account is part of the run's capability boundary. A training job that reads curated features should not also have permission to deploy endpoints or overwrite governed source data. Separate training and release identities make the lifecycle easier to review.
+The service account is part of the run's capability boundary. A training job that reads curated features should not also have permission to deploy endpoints or overwrite governed source data. Separate training and release identities leave a narrower permission record for review.
 
-Distributed training adds another layer. The job spec declares several worker pools or replicas, while the training framework coordinates them. Vertex AI can allocate the workers; the team still owns checkpointing, collective behaviour, failure recovery, and whether the selected topology is efficient for the model.
+Distributed training adds another layer. The job spec declares several worker pools or replicas, while the training framework coordinates them. Gemini Enterprise Agent Platform can allocate the workers; the team still owns checkpointing, collective behaviour, failure recovery, and whether the selected topology is efficient for the model.
 
-## Pipelines Coordinate Contracts, Not Arbitrary Scripts
-<!-- section-summary: Vertex AI Pipelines records a component graph and run state, while the author defines deterministic inputs, outputs, cache behaviour, and side-effect safety. -->
+## Coordinate Multi-Step ML Work With Managed Pipelines
+<!-- section-summary: Gemini Enterprise Agent Platform Pipelines records a component graph and run state, while the author defines deterministic inputs, outputs, cache behaviour, and side-effect safety. -->
 
-**Vertex AI Pipelines** runs ML workflows described using Kubeflow Pipelines or TensorFlow Extended-compatible pipeline definitions. A pipeline compiles component contracts into a graph that Vertex AI executes and records.
+**Gemini Enterprise Agent Platform Pipelines** runs ML workflows described using Kubeflow Pipelines or TensorFlow Extended-compatible pipeline definitions. A pipeline compiles component contracts into a graph that the managed platform executes and records.
 
 The useful abstraction is a component with named inputs and outputs. A preparation component emits a dataset reference. Training emits a model artifact. Evaluation emits a report and decision inputs. Registration consumes the exact artifact and report. The graph exposes the handoff instead of relying on hidden shared paths.
 
@@ -100,10 +102,10 @@ Retries deserve the same reasoning. Recomputing an evaluation file in a run-spec
 
 Pipeline schedules and event triggers should reflect data readiness. A daily timer does not prove the latest partition is complete. A production trigger should identify the input snapshot and validate its completeness before expensive training starts.
 
-## Model Registry Is The Release Handoff
+## Register Trained Models For Release
 <!-- section-summary: Model Registry gives candidates durable versions and aliases, while release policy decides which version may receive traffic. -->
 
-**Vertex AI Model Registry** stores model resources and versions, including custom-trained models and supported models from other Google Cloud workflows. A registered version can later be deployed to an endpoint or used for batch prediction.
+**Gemini Enterprise Agent Platform Model Registry** stores model resources and versions, including custom-trained models and supported models from other Google Cloud workflows. A registered version can later be deployed to an endpoint or used for batch prediction.
 
 A good registry entry answers:
 
@@ -114,12 +116,12 @@ A good registry entry answers:
 - Who or what approved the candidate?
 - Which previous version is the recovery target?
 
-Aliases such as a default or production label make consumers easier to configure, yet the audit record must retain the concrete version. Alias movement should be an explicit release event. A service that loads a model only during deployment will not change merely because a registry alias changes; the release design has to match the runtime loading mechanism.
+Aliases such as a default or production label give consumers a stable logical reference, yet the audit record must retain the concrete version. Alias movement should be an explicit release event. A service that loads a model only during deployment will not change merely because a registry alias changes; the release design has to match the runtime loading mechanism.
 
 One release record can connect the important identities without a full SDK walkthrough:
 
 ```yaml
-release_id: fraud-graph-2026-07-15-a1b2c3d
+release_id: fraud-graph-release-1842
 project: payments-ml-prod
 region: europe-west4
 training_job: fraud-graph-train-20260715
@@ -155,16 +157,16 @@ flowchart TD
 
 For an endpoint release, deploy the candidate beside the current model and send it a controlled traffic share where the product and model semantics permit. Watch latency, errors, saturation, score distribution, guardrail outcomes, and later labels. Keep the previous deployed model available until the rollback window closes.
 
-## Monitoring Must Join Cloud Signals With Product Outcomes
+## Monitor Cloud Health And Product Outcomes Together
 <!-- section-summary: Cloud Monitoring shows resource and request health, while prediction records and later outcomes show whether the model remains useful. -->
 
-Cloud Logging and Cloud Monitoring capture job, endpoint, and infrastructure evidence. Vertex AI Model Monitoring can help detect supported forms of feature skew and drift. Those signals reveal changes; they do not by themselves establish business harm or model correctness.
+Cloud Logging and Cloud Monitoring capture job, endpoint, and infrastructure evidence. Gemini Enterprise Agent Platform Model Monitoring can help detect supported forms of feature skew and drift. Those signals reveal changes; they do not by themselves establish business harm or model correctness.
 
 A prediction record should carry a request or entity key, timestamp, concrete model version, feature or schema version, safe input summaries, output, and latency. Later, a controlled pipeline joins it to labels or product outcomes. Quality is then calculated by cohort and time window with enough sample size to support a decision.
 
 The release dashboard should show both clocks. Service errors and latency arrive immediately. Fraud confirmation, returns, churn, or demand accuracy may arrive later. An alert needs an owner and action: hold traffic, route to the previous model, disable an automated action, investigate data, or schedule retraining.
 
-## Design Recovery Across Managed Resource Boundaries
+## Recover Across Training, Registry, And Prediction Resources
 <!-- section-summary: Recovery follows the concrete data, job, model, endpoint, and identity resources because each managed boundary can fail independently. -->
 
 Managed resources remove infrastructure work, yet they can still disagree about lifecycle state. A pipeline may finish after registration fails. A model version may exist while its artifact path is unreadable by the endpoint service account. An endpoint operation may report success while traffic still reaches the previous deployed model. A monitoring job may run against the wrong baseline.
@@ -196,17 +198,17 @@ Rollback should reference the previous deployed model and its complete release u
 
 Quota and regional capacity also belong in recovery planning. A candidate may request unavailable accelerator capacity, or a regional control-plane issue may block updates. Teams that require a strict recovery time need tested capacity, a safe previous deployment, and a regional strategy that matches their availability goal.
 
-## Decide Whether Vertex AI Is The Right Weight
-<!-- section-summary: Vertex AI fits teams that benefit from Google Cloud-native managed execution and lifecycle integration more than they pay in coupling and platform complexity. -->
+## Decide Whether Gemini Enterprise Agent Platform Fits The Workload
+<!-- section-summary: Gemini Enterprise Agent Platform fits teams that benefit from Google Cloud-native managed execution and lifecycle integration more than they pay in coupling and platform complexity. -->
 
-Vertex AI is a strong fit when governed data already lives in BigQuery or Cloud Storage, teams need managed custom training and endpoints, IAM and regional controls are central, or several models need a shared pipeline and registry path.
+Gemini Enterprise Agent Platform is a strong fit when governed data already lives in BigQuery or Cloud Storage, teams need managed custom training and endpoints, IAM and regional controls are central, or several models need a shared pipeline and registry path.
 
-Existing systems may already cover the need. GKE, Cloud Run, Batch, Composer, MLflow, and data-platform tooling can form a capable MLOps architecture. Vertex AI should remove recurring work or improve governance; adopting it only to follow a reference diagram creates extra concepts without solving a real constraint.
+Existing systems may already cover the need. GKE, Cloud Run, Batch, Composer, MLflow, and data-platform tooling can form a capable MLOps architecture. Gemini Enterprise Agent Platform should remove recurring work or improve governance; adopting it only to follow a reference diagram creates extra concepts without solving a real constraint.
 
-Test one representative lifecycle. Follow data identity, training isolation, metadata, evaluation, registration, prediction, monitoring, rollback, permissions, quota, and cost. The platform is justified when that path is clearer and easier to operate.
+Test one representative lifecycle. Follow data identity, training isolation, metadata, evaluation, registration, prediction, monitoring, rollback, permissions, quota, and cost. The platform is justified if that path reduces recurring integration and operational work while preserving the required evidence.
 
-## The Durable Picture
-<!-- section-summary: Vertex AI is the managed ML resource layer; stable identities and explicit policies turn those resources into an MLOps system. -->
+## Follow The Complete Google Cloud ML Lifecycle
+<!-- section-summary: Gemini Enterprise Agent Platform is the managed ML resource layer; stable identities and explicit policies turn those resources into an MLOps system. -->
 
 Custom jobs execute declared training work. Pipelines connect component contracts. Metadata and experiments preserve run evidence. Model Registry carries reviewed versions. Batch jobs and endpoints deliver predictions. IAM, logging, monitoring, and product data complete the production boundary.
 
@@ -214,13 +216,10 @@ The architecture works when one traceable chain connects those resources. The pl
 
 ## References
 
-- [Introduction to Vertex AI](https://cloud.google.com/vertex-ai/docs/start/introduction-unified-platform)
-- [Vertex AI custom training overview](https://cloud.google.com/vertex-ai/docs/training/overview)
-- [Introduction to Vertex AI Pipelines](https://cloud.google.com/vertex-ai/docs/pipelines/introduction)
-- [Vertex ML Metadata](https://cloud.google.com/vertex-ai/docs/ml-metadata/introduction)
-- [Vertex AI Model Registry introduction](https://cloud.google.com/vertex-ai/docs/model-registry/introduction)
-- [Deploy a model to an endpoint](https://cloud.google.com/vertex-ai/docs/predictions/deploy-model-api)
-- [Get batch predictions](https://cloud.google.com/vertex-ai/docs/predictions/get-batch-predictions)
-- [Vertex AI Model Monitoring overview](https://cloud.google.com/vertex-ai/docs/model-monitoring/overview)
-- [Use custom service accounts for custom training](https://cloud.google.com/vertex-ai/docs/training/custom-service-account)
+- [Gemini Enterprise Agent Platform name changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
+- [Gemini Enterprise Agent Platform custom training overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/overview)
+- [Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
+- [Gemini Enterprise Agent Platform Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction)
+- [Gemini Enterprise Agent Platform online inference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/get-online-predictions)
+- [Gemini Enterprise Agent Platform batch inference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/get-batch-predictions)
 - [Google Cloud MLOps: continuous delivery and automation pipelines](https://cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)

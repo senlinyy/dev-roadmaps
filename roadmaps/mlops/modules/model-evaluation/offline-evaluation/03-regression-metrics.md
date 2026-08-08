@@ -10,14 +10,14 @@ id: "article-mlops-model-evaluation-regression-metrics"
 ## Table of Contents
 
 1. [Regression Predicts a Number](#regression-predicts-a-number)
-2. [Residuals Preserve the Size and Direction of Error](#residuals-preserve-the-size-and-direction-of-error)
-3. [MAE and Median Absolute Error Describe Typical Misses](#mae-and-median-absolute-error-describe-typical-misses)
-4. [MSE and RMSE Give Large Misses More Influence](#mse-and-rmse-give-large-misses-more-influence)
+2. [A Residual Shows How Far And In Which Direction A Prediction Missed](#a-residual-shows-how-far-and-in-which-direction-a-prediction-missed)
+3. [Use MAE And Median Absolute Error To Describe Typical Misses](#use-mae-and-median-absolute-error-to-describe-typical-misses)
+4. [MSE And RMSE Penalize Large Errors More Heavily](#mse-and-rmse-penalize-large-errors-more-heavily)
 5. [R-Squared and Explained Variance Need Context](#r-squared-and-explained-variance-need-context)
 6. [Percentage Error Can Distort Small Targets](#percentage-error-can-distort-small-targets)
-7. [Quantile Loss Represents Asymmetric Costs](#quantile-loss-represents-asymmetric-costs)
-8. [Residual Distributions and Segments Reveal Concentrated Harm](#residual-distributions-and-segments-reveal-concentrated-harm)
-9. [Build Product-Aligned Regression Gates](#build-product-aligned-regression-gates)
+7. [Use Quantile Loss When Underprediction And Overprediction Have Different Costs](#use-quantile-loss-when-underprediction-and-overprediction-have-different-costs)
+8. [Check Error Distributions And Segments For Concentrated Harm](#check-error-distributions-and-segments-for-concentrated-harm)
+9. [Set Release Limits That Match The Cost Of Regression Errors](#set-release-limits-that-match-the-cost-of-regression-errors)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
@@ -41,21 +41,21 @@ You can think of the metric choice through five questions:
 ```mermaid
 flowchart TD
     T["Numeric target<br/>quantity, unit, horizon"] --> P["Prediction and observed outcome"] --> E["Residual and absolute error"] --> C["Product consequence<br/>ordinary, large, under, or over"] --> M["Metric family"] --> S["Distribution and segment checks"] --> G["Candidate-versus-production gate"]
-    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class T,P context
-    classDef mechanism fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E,C,M mechanism
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class S,G decision
+    class T,P context
+    class E,C,M mechanism
+    class S,G decision
 ```
 
 Units come before formulas. A model trained on standardized targets may report a small training loss that has no product meaning. The release evaluation should transform predictions back to the product scale. A log-price model should be inverse-transformed before reviewers read errors in currency. A multi-horizon demand model should report each horizon because an error tomorrow and an error twelve weeks ahead support different decisions.
 
 The label policy also needs a precise meaning. Delivery time might start at checkout, dispatch, or pickup. Energy demand might mean gross load or load after local generation. Two teams can calculate identical MAE code over targets that describe different events. A trustworthy report pins the target definition and unit beside every result. It also records the horizon and eligible population. Label maturity and any target transformation complete the comparison contract.
 
-## Residuals Preserve the Size and Direction of Error
+## A Residual Shows How Far And In Which Direction A Prediction Missed
 <!-- section-summary: A residual records the signed gap between an observed value and its prediction, while absolute and squared errors transform that gap for different metric families. -->
 
 Every aggregate regression metric starts from row-level error. The most informative first object is the **residual**. It preserves the gap for one prediction before an average hides its direction or size.
 
-### Keep the sign convention explicit
+### Choose And Record One Residual Sign Convention
 
 The calculations below use one explicit convention:
 
@@ -82,9 +82,9 @@ flowchart TD
     R --> D["Signed residual<br/>direction and bias"]
     R --> A["Absolute error<br/>distance in target units"]
     R --> Q["Squared error<br/>large misses amplified"]
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class O,P input
-    classDef base fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class R base
-    classDef transform fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class D,A,Q transform
+    class O,P input
+    class R base
+    class D,A,Q transform
 ```
 
 Signed residuals reveal systematic bias. If the average residual is `+4 megawatts`, the energy forecast usually runs four megawatts below observed load. Positive and negative residuals can cancel, so a mean residual near zero never proves that the predictions are close. A model that alternates between `+50` and `-50` has zero mean residual and severe error.
@@ -95,7 +95,7 @@ The raw residual distribution should remain in the report. Useful summaries incl
 
 Individual residuals also expose data problems. A 20,000-minute delivery error may represent a real operational failure, a timestamp bug, or a cancelled order that violates the label policy. The team should investigate the row before excluding it. Removing genuine hard cases narrows the evaluation population and overstates expected production quality.
 
-## MAE and Median Absolute Error Describe Typical Misses
+## Use MAE And Median Absolute Error To Describe Typical Misses
 <!-- section-summary: MAE averages absolute errors in product units, while median absolute error describes the middle miss and resists the influence of a small number of extreme values. -->
 
 **Mean absolute error (MAE)** adds the absolute errors and divides by the number of examples. It answers how far a prediction misses on average in the same unit as the target.
@@ -119,9 +119,9 @@ flowchart TD
     M --> C["Read together"]
     D --> C
     C --> G["Add signed bias, upper quantiles,<br/>segments, and support"]
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E source
-    classDef metric fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class M,D metric
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class C,G evidence
+    class E source
+    class M,D metric
+    class C,G evidence
 ```
 
 The difference between MAE and MedAE is evidence. Similar values suggest a relatively compact distribution. A much larger MAE suggests that large errors pull the average upward. The team then inspects p90 or p95 absolute error, a histogram, and the responsible examples.
@@ -132,7 +132,7 @@ MAE also connects to the statistical target. Minimizing expected absolute error 
 
 Neither MAE nor MedAE should stand alone as a release gate. MAE can hide a dangerous tail. MedAE can remain excellent while a substantial minority receives severe errors. The primary metric should travel with bias, tail, coverage, and segment guardrails.
 
-## MSE and RMSE Give Large Misses More Influence
+## MSE And RMSE Penalize Large Errors More Heavily
 <!-- section-summary: MSE squares every residual and RMSE returns the square root to the target unit, so both react strongly to large errors. -->
 
 **Mean squared error (MSE)** averages squared residuals. Squaring changes the influence of every row, so the metric gives large misses far more weight than small misses.
@@ -157,9 +157,9 @@ flowchart TD
     A2 --> MAE
     S1 --> RMSE["MSE and RMSE amplify large misses"]
     S2 --> RMSE
-    classDef error fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E1,E2 error
-    classDef transform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class A1,A2,S1,S2 transform
-    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class MAE,RMSE result
+    class E1,E2 error
+    class A1,A2,S1,S2 transform
+    class MAE,RMSE result
 ```
 
 RMSE deserves attention in systems where one very large miss creates disproportionate cost. Underestimating a peak electricity load can trigger expensive emergency purchases. A severe arrival-time error may cause a customer to miss a connection. A large demand miss can create a stockout across an entire region.
@@ -186,9 +186,9 @@ flowchart TD
     B --> R["R² compares model error<br/>with baseline error"]
     E --> R
     R --> U["Keep MAE, RMSE, bias,<br/>and segment errors beside it"]
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class Y,P input
-    classDef comparison fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class B,E,R comparison
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class U evidence
+    class Y,P input
+    class B,E,R comparison
+    class U evidence
 ```
 
 R² has no target unit. That makes it convenient for a statistical comparison and weak for explaining product impact. An R² of `0.90` cannot tell a dispatcher whether the average ETA miss is three minutes or thirty minutes.
@@ -220,9 +220,9 @@ flowchart TD
     L --> C["MAPE weights rows by target size"]
     S --> C
     Z --> G["Zero and near-zero policy required"]
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class E source
-    classDef case fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class L,S,C case
-    classDef warning fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827; class Z,G warning
+    class E source
+    class L,S,C case
+    class Z,G warning
 ```
 
 The library returns a relative value. A result of `0.18` represents 18 percent, so reports that display a percent multiply it by 100. Failing to record this convention can create a hundredfold reporting error.
@@ -233,7 +233,7 @@ Negative targets make percentage meaning harder to defend. Price changes, profit
 
 Teams can use unit-based MAE by target band, scale errors by a meaningful capacity or business baseline, or calculate an aggregate ratio such as total absolute error divided by total actual volume for non-negative targets. Every alternative changes the weighting. The report should state the denominator, zero policy, aggregation level, and segments.
 
-## Quantile Loss Represents Asymmetric Costs
+## Use Quantile Loss When Underprediction And Overprediction Have Different Costs
 <!-- section-summary: Pinball loss evaluates a chosen conditional quantile and assigns different penalties to underprediction and overprediction. -->
 
 Many products experience underprediction and overprediction differently. Underforecasting demand can cause a stockout. Overforecasting can create holding cost and waste. An ETA that is too optimistic frustrates a waiting customer, while a slightly conservative ETA may be acceptable.
@@ -255,9 +255,9 @@ flowchart TD
     A --> P["Evaluate with matching pinball loss"]
     Q --> P
     D --> P
-    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class C context
-    classDef target fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class M,H,L,A,Q,D target
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class P evidence
+    class C context
+    class M,H,L,A,Q,D target
+    class P evidence
 ```
 
 `alpha = 0.50` treats both directions equally and targets the conditional median, the same central target associated with absolute-error optimization. A 90th-percentile model needs `mean_pinball_loss(..., alpha=0.90)`. Evaluating it with ordinary MAE asks whether it predicts the median well, which is a different question.
@@ -266,7 +266,7 @@ Quantiles can also form an interval. A 10th- and 90th-percentile pair describes 
 
 The chosen quantile should trace to a product decision. A warehouse may stock to a high demand quantile because the cost of running out exceeds holding cost. A conservative capacity planner may use the upper load quantile. A price estimate shown as the most typical transaction may stay near the median.
 
-## Residual Distributions and Segments Reveal Concentrated Harm
+## Check Error Distributions And Segments For Concentrated Harm
 <!-- section-summary: Residual plots, target bands, time slices, and product segments expose bias, heavy tails, changing variance, and failures hidden by one aggregate metric. -->
 
 An aggregate metric compresses many rows into one number. The compression can hide systematic bias, heavy tails, and failures concentrated in one part of production.
@@ -293,9 +293,9 @@ flowchart TD
     B --> E
     H --> E
     G --> E
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; class R input
-    classDef analysis fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; class D,V,T,S,F,B,H,G analysis
-    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; class E result
+    class R input
+    class D,V,T,S,F,B,H,G analysis
+    class E result
 ```
 
 Plot residuals against predictions, observed targets, and time. A widening fan shape suggests that large targets carry larger error variance. A wave pattern over time may reveal seasonality. A cluster of positive residuals during peak hours indicates systematic underprediction.
@@ -308,10 +308,10 @@ Every segment row should include support, candidate and production values, cover
 
 Segment searches also need discipline. Predefine important slices from product boundaries, domain risk, and incident history. Exploratory slices can reveal hypotheses. Confirm a newly discovered problem with appropriate fresh evidence before granting or denying broad authority.
 
-## Build Product-Aligned Regression Gates
+## Set Release Limits That Match The Cost Of Regression Errors
 <!-- section-summary: A regression release gate compares candidate and production on identical rows, combines one primary product metric with bias, tail, segment, and coverage guardrails, and records the supported scope. -->
 
-A regression gate starts from the product cost of error. Delivery-time promises may use MAE as the primary metric, with underprediction bias and p95 absolute error as guardrails. Energy planning may use RMSE or high-quantile pinball loss because peak misses carry disproportionate cost. Property estimates may use median absolute error, MAE by price band, and a relative metric with an explicit denominator policy.
+Release limits for a regression model should start from the product cost of error. Delivery-time promises may use MAE as the primary metric, with underprediction bias and p95 absolute error as safety limits. Energy planning may use RMSE or high-quantile pinball loss because peak misses carry disproportionate cost. Property estimates may use median absolute error, MAE by price band, and a relative metric with an explicit denominator policy.
 
 The candidate and production paths need the same eligible rows, labels, target transformation, horizon, and sample weights. A candidate evaluated only on rows where it returned a prediction can gain an unfair advantage. Join coverage and null-prediction rate belong in the gate.
 

@@ -13,16 +13,16 @@ aliases:
 
 1. [Ranking Evaluation Measures An Ordered Experience](#ranking-evaluation-measures-an-ordered-experience)
 2. [Understand The Ranking Pipeline Before Choosing A Metric](#understand-the-ranking-pipeline-before-choosing-a-metric)
-3. [Define What Relevance Evidence Means](#define-what-relevance-evidence-means)
+3. [Decide What Counts As A Relevant Result](#decide-what-counts-as-a-relevant-result)
 4. [Build A Time-Valid Evaluation Set](#build-a-time-valid-evaluation-set)
 5. [Precision At K And Recall At K Measure Different Misses](#precision-at-k-and-recall-at-k-measure-different-misses)
-6. [MRR And MAP Describe Different Search Tasks](#mrr-and-map-describe-different-search-tasks)
-7. [NDCG Handles Graded Relevance And Position](#ndcg-handles-graded-relevance-and-position)
-8. [Aggregate Per Request And Keep The Weighting Visible](#aggregate-per-request-and-keep-the-weighting-visible)
-9. [Guardrails Protect The Rest Of The Product](#guardrails-protect-the-rest-of-the-product)
+6. [Use MRR For First-Success Tasks And MAP For Several Relevant Results](#use-mrr-for-first-success-tasks-and-map-for-several-relevant-results)
+7. [Use NDCG For Graded Relevance And Position](#use-ndcg-for-graded-relevance-and-position)
+8. [Calculate Metrics Per Request Before Averaging Them](#calculate-metrics-per-request-before-averaging-them)
+9. [Check Latency, Diversity, Coverage, And Eligibility Alongside Relevance](#check-latency-diversity-coverage-and-eligibility-alongside-relevance)
 10. [Offline Evaluation Cannot Recreate A New Ranking Policy](#offline-evaluation-cannot-recreate-a-new-ranking-policy)
-11. [Connect The Evaluation Job To Industrial Tooling](#connect-the-evaluation-job-to-industrial-tooling)
-12. [Turn The Report Into Release Gates And A Runbook](#turn-the-report-into-release-gates-and-a-runbook)
+11. [How Current Tools Run And Record Ranking Evaluation](#how-current-tools-run-and-record-ranking-evaluation)
+12. [Use Ranking Results To Approve, Limit, Or Reject A Release](#use-ranking-results-to-approve-limit-or-reject-a-release)
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
@@ -72,10 +72,6 @@ flowchart TD
     E --> F["Check coverage, diversity,<br/>latency, and safety guardrails"]
     F --> G["Choose the next evidence stage<br/>or release scope"]
 
-    classDef need fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef review fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A need
     class B,C,D work
     class E,F review
@@ -124,10 +120,6 @@ flowchart TD
     D -. "Ranking evaluation" .-> H["Were available relevant items<br/>ordered near the top?"]
     E -. "End-to-end evaluation" .-> I["Did the final list satisfy<br/>quality and product constraints?"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef output fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef question fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,D,E stage
     class C,F output
@@ -151,7 +143,7 @@ Teams usually run two complementary comparisons:
 
 Both results belong in a release report. The first helps locate a change. The second supports the production decision.
 
-## Define What Relevance Evidence Means
+## Decide What Counts As A Relevant Result
 <!-- section-summary: Relevance labels approximate user usefulness, and every label source brings coverage limits, bias, or delay. -->
 
 A ranking metric needs a reference answer that says which items were useful for each request.
@@ -174,7 +166,7 @@ One team may treat availability as part of relevance.
 Another may evaluate semantic relevance first and protect availability through a separate guardrail.
 Either design can work if the definition matches the product decision and remains stable across candidates.
 
-### Human judgments cover items the old system never exposed
+### Use Human Judgments To Evaluate Items The Old System Never Exposed
 
 Human assessors can judge a query-item pair without relying on a production click.
 This makes judged sets valuable for new items, tail queries, and candidate changes that retrieve previously unseen results.
@@ -187,7 +179,7 @@ The pipeline should measure agreement and adjudicate important disagreements.
 It should preserve the judgment-policy version as well.
 A stale judgment can also become invalid after a document, price, inventory state, or policy changes.
 
-### Implicit feedback is abundant and biased by the old experience
+### Correct For Exposure Bias In Clicks And Other Implicit Feedback
 
 Clicks, watch time, saves, add-to-cart events, purchases, reformulations, and successful task completion provide large amounts of behavioural evidence.
 They describe what users did, which is valuable.
@@ -203,7 +195,7 @@ For example, an unclicked result at position 40 may be irrelevant, or the user m
 
 Controlled exploration can estimate observation propensities for some systems. Inverse-propensity weighting then gives more weight to interactions that were unlikely to be observed. This approach needs logged propensities, adequate overlap between policies, variance controls, and careful review of its assumptions. It is a specialised correction with narrow assumptions and cannot repair every problem in click data.
 
-### Delayed outcomes need time to mature
+### Wait For Delayed Outcomes To Mature
 
 A click arrives quickly. A purchase, repayment, completed course, retained subscriber, or resolved support case may arrive much later. Evaluation should wait until the defined outcome window closes.
 
@@ -221,10 +213,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef policy fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef check fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A policy
     class B,C,D source
     class E,F,G check
@@ -270,10 +258,6 @@ flowchart TD
     E -->|"No"| W["Expand retrieval or judgments"]
     E -->|"Yes"| F["Calculate per-request metrics"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef gate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef repair fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef ready fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A input
     class B,C,D,E gate
     class X,Y,Z,W repair
@@ -345,12 +329,12 @@ result = precision_recall_at_k(
 
 The short function illustrates the metric. Production code should also validate uniqueness, returned-list length, and the no-known-relevant policy.
 
-## MRR And MAP Describe Different Search Tasks
+## Use MRR For First-Success Tasks And MAP For Several Relevant Results
 <!-- section-summary: MRR rewards the first relevant result, while MAP rewards finding multiple relevant results early across the list. -->
 
 Some tasks end as soon as the user finds one good answer. Others require several useful results. MRR and MAP represent those two shapes.
 
-### MRR focuses on the first success
+### Use MRR To Reward An Early First Success
 
 For one request, **reciprocal rank** is `1 / r`, where `r` is the position of the first relevant item.
 
@@ -369,7 +353,7 @@ $$
 
 MRR fits a navigational query, known-answer retrieval, or support lookup where one early success satisfies the need. It ignores every relevant item after the first. Two systems receive the same reciprocal rank if both place their first answer at position 2. Additional useful results receive no MRR credit.
 
-### MAP rewards repeated success through the list
+### Use MAP To Reward Several Useful Results Through The List
 
 **Average precision (AP)** looks at every position containing a relevant item. At each such position, it calculates precision up to that point and then averages those precision values.
 
@@ -398,7 +382,7 @@ Here, \(R_q\) is the number of known relevant items and \(\text{rel}_i\) is 1 fo
 
 MAP fits tasks with multiple binary-relevant results, such as legal-document search or retrieving several useful knowledge passages. It assumes binary relevance. NDCG is usually a better fit once “excellent,” “useful,” and “partly useful” need different credit.
 
-## NDCG Handles Graded Relevance And Position
+## Use NDCG For Graded Relevance And Position
 <!-- section-summary: NDCG gives more credit to highly relevant items near the top and normalizes against the best possible order for the same request. -->
 
 **Normalized discounted cumulative gain (NDCG)** measures an ordered list whose relevance labels have meaningful grades. It rewards putting the strongest results near the top and gives progressively less credit to useful items placed lower down.
@@ -471,7 +455,7 @@ The metric choice now follows the user task:
 
 The table summarizes the theory. Product guardrails and online outcomes still complete the decision.
 
-## Aggregate Per Request And Keep The Weighting Visible
+## Calculate Metrics Per Request Before Averaging Them
 <!-- section-summary: Ranking metrics are calculated within requests and then aggregated with an explicit policy for queries, users, traffic, and uncertainty. -->
 
 Ranking metrics start inside a request group. Averaging item rows first destroys the ordering and gives requests with many candidates more influence.
@@ -505,10 +489,6 @@ flowchart TD
     E --> F["Aggregate with declared weights"]
     F --> G["Report overall, distribution,<br/>segments, counts, and uncertainty"]
 
-    classDef rows fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef calculate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef compare fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef report fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A rows
     class B,C,D calculate
     class E,F compare
@@ -517,7 +497,7 @@ flowchart TD
 
 Counts belong beside every average. A locale with ten judged requests provides weaker evidence than one with ten thousand. Missing labels, excluded requests, and zero-candidate groups should remain visible throughout aggregation.
 
-## Guardrails Protect The Rest Of The Product
+## Check Latency, Diversity, Coverage, And Eligibility Alongside Relevance
 <!-- section-summary: Ranking quality needs segment, coverage, diversity, latency, safety, and business guardrails because one relevance average cannot represent the whole system. -->
 
 A candidate can improve NDCG and still damage the product. It may slow every request, repeatedly show the same popular items, exclude new content, violate eligibility rules, or fail badly for one language.
@@ -603,10 +583,10 @@ Offline and online metrics should tell a coherent story without being identical.
 
 Counterfactual estimators such as inverse-propensity scoring can help in systems with logged action probabilities and adequate policy overlap. Large weights can create unstable estimates, and missing support cannot be repaired statistically. High-impact releases still need controlled production evidence.
 
-## Connect The Evaluation Job To Industrial Tooling
+## How Current Tools Run And Record Ranking Evaluation
 <!-- section-summary: Production evaluation combines metric libraries, versioned datasets, experiment artifacts, and search-platform relevance tools without giving any vendor ownership of the framework. -->
 
-The framework stays the same across tools. It preserves request groups, versions relevance evidence, calculates per-request metrics, publishes segments and examples, and compares a candidate against production.
+Current tools can preserve request groups, version the relevance labels, calculate per-request metrics, publish segment results and examples, and compare a candidate against production. The evaluation design stays the same even though each platform records the work differently.
 
 Python libraries provide focused metric implementations. Scikit-learn includes `ndcg_score` and explicit tie behaviour. Teams often implement precision@k, recall@k, MRR, and MAP in a small tested evaluation library because edge-case policies vary. Tests should cover duplicates, ties, short lists, missing judgments, no-known-relevant requests, and multiple request groups.
 
@@ -652,10 +632,10 @@ In practice, the stack may look like:
 
 The components can change. The evidence contract should survive those changes.
 
-## Turn The Report Into Release Gates And A Runbook
+## Use Ranking Results To Approve, Limit, Or Reject A Release
 <!-- section-summary: Release gates translate ranking evidence into enforceable thresholds, an approved scope, stop conditions, and component-specific recovery actions. -->
 
-A release report should lead to a decision. “NDCG improved” is too weak because it omits uncertainty, retrieval coverage, affected segments, runtime behaviour, and the scope users will receive.
+Ranking results should tell reviewers whether to approve, limit, or reject a release. “NDCG improved” is too weak because it omits uncertainty, retrieval coverage, affected segments, runtime behaviour, and the scope users will receive.
 
 Start with a declared release question. For example: does the candidate improve NDCG@10 for eligible search traffic? Does it also preserve exact-match success, tail-query quality, retrieval recall, result diversity, permission correctness, and p95 latency?
 
@@ -721,10 +701,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef incident fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef inspect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef repair fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A incident
     class B decision
     class C,D,E,F,G inspect

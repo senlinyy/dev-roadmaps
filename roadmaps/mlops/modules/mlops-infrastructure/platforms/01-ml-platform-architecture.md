@@ -1,7 +1,7 @@
 ---
 title: "ML Platform Architecture"
 description: "Understand the product, control-plane, workload, data, serving, security, observability, and cost layers of an internal ML platform."
-overview: "An ML platform gives teams supported paths for developing, training, releasing, serving, and operating models. This guide maps the platform layers, interfaces, ownership boundaries, and operating measures before later articles introduce Kubernetes and specific tools."
+overview: "An ML platform gives teams supported paths for developing, training, releasing, serving, and operating models. This guide maps its interfaces, control plane, execution plane, evidence, governance, operations, and ownership boundaries."
 tags: ["MLOps", "advanced", "platform"]
 order: 1
 id: "article-mlops-mlops-infrastructure-ml-platform-architecture"
@@ -11,397 +11,351 @@ aliases:
 
 ## Table of Contents
 
-1. [What An ML Platform Is](#what-an-ml-platform-is)
-2. [Platform Product And Interfaces](#platform-product-and-interfaces)
-3. [Control Plane And Workload Plane](#control-plane-and-workload-plane)
-4. [Follow One Request Through Reconciliation](#follow-one-request-through-reconciliation)
-5. [Data, Artifact, And Serving Planes](#data-artifact-and-serving-planes)
-6. [Guardrails, Reliability, And Cost](#guardrails-reliability-and-cost)
-7. [Measure The Platform As A Product](#measure-the-platform-as-a-product)
-8. [Putting It Together](#putting-it-together)
-9. [References](#references)
+1. [What An ML Platform Solves](#what-an-ml-platform-solves)
+2. [The Six Jobs Of An ML Platform](#the-six-jobs-of-an-ml-platform)
+3. [Give Teams Supported Ways To Train And Release Models](#give-teams-supported-ways-to-train-and-release-models)
+4. [Validate And Coordinate Every Platform Request](#validate-and-coordinate-every-platform-request)
+5. [Run ML Work On Managed Compute](#run-ml-work-on-managed-compute)
+6. [Store ML Data, Models, And Their History](#store-ml-data-models-and-their-history)
+7. [Apply Access And Policy Rules Across The ML Lifecycle](#apply-access-and-policy-rules-across-the-ml-lifecycle)
+8. [Operate, Monitor, And Recover The Platform](#operate-monitor-and-recover-the-platform)
+9. [Choose A Managed Platform Or A Composable Stack](#choose-a-managed-platform-or-a-composable-stack)
+10. [Measure Whether The Platform Helps Teams Ship Reliable Models](#measure-whether-the-platform-helps-teams-ship-reliable-models)
+11. [Add Platform Capabilities To Solve Repeated Team Problems](#add-platform-capabilities-to-solve-repeated-team-problems)
+12. [The Main Idea](#the-main-idea)
+13. [References](#references)
 
-## What An ML Platform Is
-<!-- section-summary: An ML platform is an internal product that gives ML teams supported, self-service paths across the model lifecycle. -->
+## What An ML Platform Solves
+<!-- section-summary: An ML platform gives many teams a supported way to train, release, serve, and operate models without rebuilding the same production machinery. -->
 
-An **ML platform** is an internal product that helps teams develop, train, evaluate, release, serve, and operate models through supported interfaces. It combines workflow services, compute, storage, security, observability, and governance into paths that a model team can use without assembling every system for every project.
+One data scientist can train a model from a notebook, save a file, and test a prediction locally. That workflow proves that the model can learn. It says very little about production.
 
-A supporting example follows **FreshRoute**, a grocery delivery company with forecasting, search ranking, delivery-time, and support-routing models. Its first teams shared scripts and a tracking server. As the number of models grew, every team created its own buckets, training jobs, deployment manifests, service accounts, and dashboards. The company now needs a platform that keeps useful differences between model workloads while standardizing the repeated engineering work.
+A production team also needs repeatable data and controlled compute. Evaluation evidence must follow the candidate into an approved release. A dependable prediction path and useful telemetry then support daily operation and investigation.
 
-The framework in this article has seven connected parts:
+The same requirements repeat across projects. Without a shared platform, each team invents its own training job, storage layout, access policy, deployment script, dashboard, and rollback procedure. The organization then spends more time integrating and repairing the surrounding system. A security fix must be repeated in many repositories. A GPU shortage has no shared queue. An incident responder cannot reliably connect a prediction to the model and data that produced it.
 
-| Part | Question it answers |
-| --- | --- |
-| Platform product and interfaces | How do model teams request and use supported capabilities? |
-| Control plane | Which APIs, metadata, policies, and controllers coordinate the lifecycle? |
-| Workload plane | Where do pipelines, training, evaluation, and batch jobs run? |
-| Data and artifact plane | Where do datasets, features, runs, models, and evidence live? |
-| Serving plane | How do approved versions answer online, batch, streaming, or edge requests? |
-| Guardrails and operations | How are identity, policy, observability, reliability, and incidents handled? |
-| Cost and product feedback | Does the platform improve delivery while using people and compute responsibly? |
+An **ML platform** is the internal product that supplies these repeated capabilities through supported interfaces. In essence, it turns production ML from a collection of custom integrations into a set of dependable paths that teams can use and the organization can operate.
 
-This map gives later tool choices a place. Kubernetes can run workloads. Kubeflow Pipelines can coordinate steps. MLflow can record runs and versions. Triton can execute models efficiently. Each tool fills a responsibility inside the platform instead of defining the whole platform.
+Consider a fraud model that has passed evaluation. Releasing it involves much more than copying a model file to a server. The release process identifies the exact artifact and verifies its evaluation evidence. It records the approval, allocates serving capacity, shifts traffic safely, and watches production health. The model team supplies the model-specific meaning. The platform supplies the repeated production machinery.
 
 ```mermaid
-flowchart TB
-    Users["ML, data, application, review, and operations users"] --> Interfaces["CLI, SDK, templates, portal, and APIs"]
-    Interfaces --> Control["Control plane: policy, metadata, reconciliation"]
-    Control --> Workloads["Workload plane: pipelines, training, evaluation"]
-    Control --> Serving["Serving plane: batch and online releases"]
-    Workloads --> Assets["Data, artifacts, registry, and lineage"]
-    Serving --> Assets
-    Guardrails["Identity, observability, reliability, governance, and cost"] --- Control
-    Guardrails --- Workloads
-    Guardrails --- Serving
+flowchart TD
+    Need["Product Decision<br/>(define the prediction and its consequence)"] --> Build["Model Development<br/>(prepare data and train candidates)"]
+    Build --> Evidence["Evaluation Evidence<br/>(measure quality and risk)"]
+    Evidence --> Release["Controlled Release<br/>(approve and deploy one version)"]
+    Release --> Operate["Production Operation<br/>(serve, observe, and recover)"]
+    Operate --> Learn["Outcome Feedback<br/>(connect predictions to later results)"]
+    Learn --> Need
+
+    class Need,Build,Learn product
 ```
 
-Users enter through product interfaces instead of manipulating every controller directly. The control plane records intent and policy. Workload and serving planes execute that intent. Shared asset systems preserve evidence, while guardrails apply across every path. This structure helps a platform team define ownership before selecting products.
+The platform supports this lifecycle. Product and model owners decide how to balance fraud loss, false declines, fairness, and customer friction. The platform makes those decisions executable, traceable, and operable.
 
-## Platform Product And Interfaces
-<!-- section-summary: Platform teams treat model developers as users and provide supported golden paths, APIs, templates, and documentation around real lifecycle tasks. -->
+## The Six Jobs Of An ML Platform
+<!-- section-summary: A useful architecture separates interfaces, coordination, execution, evidence, governance, and operations before products are selected. -->
 
-Platform engineering guidance from the CNCF emphasizes **platform as a product**, **self-service capabilities**, **golden paths**, and **guardrails**. For an ML platform, the users include data scientists, ML engineers, data engineers, application teams, reviewers, and on-call operators. Each group needs an interface that matches its work.
+Product names are a poor starting point for architecture. A team can install Kubernetes, MLflow, Airflow, and a model server and still lack a coherent path from an experiment to a safe production release. The first design task is to separate the jobs the platform must perform.
 
-A **golden path** is a supported way to complete a common task. FreshRoute starts with three:
+Six responsibilities give the architecture a stable shape:
 
-1. Create a training pipeline from a reviewed template.
-2. Register an evaluated model and request a release.
-3. Deploy an approved model behind a standard online endpoint with logs, metrics, and rollback.
+- **Interfaces** let users request common outcomes through a CLI, SDK, repository template, portal, Git workflow, or API.
+- **Control plane** records intent, applies workflow rules, coordinates state changes, and reports progress.
+- **Execution plane** supplies the compute that prepares data, trains models, evaluates candidates, scores batches, and serves predictions.
+- **Data and evidence plane** preserves datasets, features, parameters, metrics, artifacts, lineage, approvals, and deployment records.
+- **Governance plane** applies identity, permissions, policy, environment boundaries, audit, and retention rules.
+- **Operations plane** monitors the platform, manages capacity and cost, restores failed services, and gives incidents a clear owner.
 
-The interface can be a CLI, Python SDK, repository template, portal, Git pull request, or API. The platform should expose the user intent and keep infrastructure details behind the interface where that reduces repeated work. A model owner might submit this small contract:
+You can think of the platform as a railway system. Interfaces are the stations where users state where work should go. The control plane sets routes and checks that a movement is allowed. The execution plane provides the trains and tracks. The evidence plane records the cargo and journey. Governance sets the operating rules. Operations keeps the whole system available and responds to disruptions.
+
+```mermaid
+flowchart TD
+    Users["Platform Users<br/>(ML, data, application, review, and operations teams)"] --> Interfaces["Interfaces<br/>(CLI, SDK, templates, portal, and APIs)"]
+    Interfaces --> Control["Control Plane<br/>(workflow, policy decisions, and lifecycle state)"]
+    Control --> Execution["Execution Plane<br/>(data jobs, training, evaluation, and serving)"]
+    Execution --> Evidence["Data And Evidence Plane<br/>(datasets, runs, models, lineage, and releases)"]
+    Governance["Governance Plane<br/>(identity, permissions, policy, and audit)"] --> Interfaces
+    Governance --> Control
+    Governance --> Execution
+    Operations["Operations Plane<br/>(telemetry, capacity, cost, incidents, and recovery)"] --> Control
+    Operations --> Execution
+    Operations --> Evidence
+
+    class Governance,Operations guard
+```
+
+These are architectural responsibilities rather than mandatory services. A managed cloud platform may implement several of them behind one API. A composable stack may assign them to separate products. Keeping the responsibilities visible prevents gaps and unclear ownership in either design.
+
+## Give Teams Supported Ways To Train And Release Models
+<!-- section-summary: Platform interfaces capture user intent in a stable contract and provide a supported path for common ML work. -->
+
+The first part a user sees is the interface. A training interface might accept a source revision, a container image, a governed dataset reference, a compute profile, and an output location. A release interface might accept a model identifier, evaluation evidence, a target environment, and a rollout policy.
+
+A **supported path**, often called a golden or paved path, packages the organization’s preferred way to complete a common task. It combines a stable interface with defaults and documentation. Policy checks, telemetry, ownership, and a working recovery procedure support the path in production. A repository template by itself is only a starting file. The platform team must maintain the complete journey before users can depend on it.
+
+Suppose a team needs a scheduled training run for a risk model. They should be able to describe the workload without choosing a Kubernetes node pool, creating a cloud service account, or rebuilding logging. A compact request could look like this:
 
 ```yaml
-model_workload:
-  name: delivery-eta
-  owner: logistics-ml
-  training:
-    image: registry.freshroute.example/delivery-eta-train@sha256:4a12...
-    dataset_manifest: delivery-features/2026-07-10
-    compute_profile: gpu-l4-small
-  release:
-    evaluation_policy: customer-eta-v3
-    serving_profile: online-cpu-autoscaled
-    rollback_window_hours: 24
+kind: TrainingRequest
+metadata:
+  name: checkout-risk-weekly
+  owner: risk-ml
+spec:
+  sourceRevision: 4f93c20
+  image: registry.example.com/risk-trainer@sha256:8d2e...
+  dataset:
+    table: prod_ml.training.checkout_risk
+    version: 418
+  computeProfile: cpu-large
+  output:
+    experiment: /production/checkout-risk
 ```
 
-The platform resolves `gpu-l4-small` to a reviewed queue, node pool, quota, and runtime policy. It resolves `online-cpu-autoscaled` to an endpoint template with readiness, telemetry, identity, and traffic controls. The model team still owns the training code, metric choice, data contract, and product decision.
+The request contains the decisions the model team understands. The platform maps `cpu-large` to reviewed infrastructure and submits the job with a workload identity. It captures logs and metrics, records the dataset version, and links the output model to the run.
 
-## Control Plane And Workload Plane
-<!-- section-summary: The control plane records intent and applies policy, while the workload plane runs the containers and compute that perform ML work. -->
+A GPU workload selects an approved GPU profile. The model team can then request the required capacity without learning every scheduling label.
 
-The **control plane** coordinates the platform. It includes APIs, workflow definitions, metadata, registry state, policy checks, queue admission, deployment controllers, and audit events. The control plane answers which version should run, who requested it, which policy applies, and which controller should act.
+Good interfaces provide escape hatches with ownership. An uncommon distributed-training job may need extra topology settings. The platform can expose a reviewed extension field or direct that workload to an advanced API. Unlimited pass-through configuration would leak the underlying infrastructure into every user contract and make upgrades dangerous.
 
-The **workload plane** performs the compute. It includes data validation jobs, pipeline components, training workers, evaluation jobs, batch scoring, and model-serving replicas. Kubernetes, managed cloud jobs, Ray clusters, Spark, and serverless processing can all provide workload capacity.
+The interface is also an operating boundary. A stable `TrainingRequest` can continue to work while the platform team changes the scheduler, moves from one storage backend to another, or introduces a new telemetry collector. Users depend on the contract; the platform team owns its implementation and migration.
 
-Separating the two prevents an important design error. A training container should train and write a candidate. It should not grant itself production approval or update live traffic. The control plane checks evaluation evidence and approval, then a release identity updates a pinned deployment. The workload plane runs that deployment under a serving identity.
+## Validate And Coordinate Every Platform Request
+<!-- section-summary: The control plane turns a stored request into governed lifecycle changes and maintains trustworthy status throughout the process. -->
 
-FreshRoute records the handoff:
+The **control plane** is the coordinating layer of the platform. It receives a request, validates it, applies policy, creates or calls the required resources, watches their state, and records the result. Workflow services, model registries, policy engines, metadata services, queues, deployment controllers, and release APIs may all participate in this layer.
 
-```yaml
-release_event:
-  model: delivery-eta
-  candidate_version: "84"
-  evaluation_run: eval-20260712-188
-  policy_result: passed
-  approved_by: logistics-release
-  deployment_target: delivery-eta-prod
-  previous_version: "81"
+The central concept is **intent**. A user declares the result they want: train this revision on this dataset, or release this model to this endpoint. The control plane compares that desired state with the state it can observe and decides the next action. Kubernetes calls this pattern reconciliation. Managed services implement a similar idea behind job and endpoint APIs even if users never see a Kubernetes controller.
+
+```mermaid
+flowchart TD
+    Request["Desired State<br/>(training or release request)"] --> Validate["Contract Validation<br/>(required fields and supported profiles)"]
+    Validate --> Policy["Policy Decision<br/>(identity, data, compute, and release rules)"]
+    Policy --> Create["Resource Coordination<br/>(create a job, pipeline, or endpoint change)"]
+    Create --> Observe["Observed State<br/>(queued, running, succeeded, failed, or rolled back)"]
+    Observe --> Record["Durable Status<br/>(reason, owner, timestamps, and evidence links)"]
+    Record --> Observe
+
+    class Create,Observe state
 ```
 
-The event is control-plane evidence. The running pods or managed endpoint belong to the workload plane. Operations checks both because intended state and live state can differ during a failed rollout.
+This separation matters during failure. An API can accept a training request even though no worker has started. The stored request proves only that the control plane received it. A useful status then distinguishes policy rejection, queue admission, resource placement, container startup, model-code execution, and output publication.
 
-## Follow One Request Through Reconciliation
-<!-- section-summary: A controller repeatedly compares declared workload intent with observed runtime state, performs one safe action, and writes status that users and other controllers can trust. -->
+For example, a run can remain queued because the GPU quota is exhausted. The control plane should report a placement or quota reason and retain the request. Retrying the training code would waste time because the code has not run. A failed Python process needs a different owner and a different recovery step. Durable status routes those cases to the right team.
 
-The control plane needs a mechanism that carries a submitted contract all the way to running work. A **controller** watches a kind of request, such as `ModelWorkload`, and a **reconciler** handles one request at a time. Reconciliation means reading the desired specification and the observed state, deciding the next safe action, then recording the result. The controller repeats that work after a request changes, a child workload changes, or a retry timer fires.
+The control plane also protects separation of duties. A training process writes a candidate model and evidence. It should not grant itself permission to update production traffic. A release service verifies the policy and approval, then changes the deployment through a narrower identity. This design limits the effect of a compromised or faulty training job.
 
-This loop matters because API acceptance only proves that the request was stored. It gives no proof that policy allowed it, a Kubernetes Job was created, quota admitted the Job, or training completed. The request therefore needs a durable `spec` for user intent and a controller-owned `status` for observed progress. `status.observedGeneration` tells the reader which revision of the specification the status describes.
+Control-plane services should keep their own work small. They coordinate long-running jobs instead of performing the training inside an API process. This keeps user compute failures away from the services that admit and track every team’s work.
 
-A production reconciliation path usually has six stages:
+## Run ML Work On Managed Compute
+<!-- section-summary: The execution plane provides distinct runtime profiles for data preparation, training, evaluation, batch inference, and online serving. -->
 
-1. The API validates field shape and stores the request with a new generation.
-2. Admission policy checks identity, immutable image digests, approved compute profiles, and allowed data locations.
-3. The reconciler renders a deterministic child workload and applies it with an owner reference.
-4. Kubernetes and the queue place the child workload on capacity.
-5. The reconciler observes child conditions and copies a smaller, stable status onto the platform request.
-6. Pipeline and user interfaces watch that status instead of guessing progress from pod names.
+The **execution plane** is where ML computation actually runs. It includes SQL or Spark transformations, validation jobs, training containers, distributed workers, evaluation tasks, batch scoring, stream processing, and online inference replicas.
 
-The following executable planner makes those transitions visible. A real controller would call the Kubernetes API through a typed client and retry conflicts through a work queue. Keeping the decision function pure gives the platform team a fast contract test for policy, child identity, and status transitions.
+These workloads have different shapes. Training may use a large GPU allocation for two hours and then release it. Batch inference may process thousands of partitions with restartable tasks. Online inference may run continuously with low latency, health checks, autoscaling, and traffic shifting. Treating them as one generic compute pool often produces poor scheduling and unclear reliability targets.
 
-```python
-from hashlib import sha256
-import re
+```mermaid
+flowchart TD
+    Control["Control Plane Request<br/>(approved work and runtime profile)"] --> DataJobs["Data And Validation Jobs<br/>(SQL, Spark, or container tasks)"]
+    Control --> Training["Training And Evaluation<br/>(managed jobs, Kubernetes, or Ray)"]
+    Control --> Batch["Batch Inference<br/>(partitioned and restartable work)"]
+    Control --> Online["Online Serving<br/>(replicas, autoscaling, and traffic control)"]
+    DataJobs --> Evidence["Published Evidence<br/>(tables, metrics, artifacts, and status)"]
+    Training --> Evidence
+    Batch --> Evidence
+    Online --> Telemetry["Runtime Telemetry<br/>(requests, latency, errors, resources, and versions)"]
 
-
-COMPUTE_PROFILES = {
-    "cpu-medium": {
-        "nodeSelector": {"workload": "cpu"},
-        "resources": {
-            "requests": {"cpu": "4", "memory": "16Gi"},
-            "limits": {"cpu": "8", "memory": "24Gi"},
-        },
-    },
-    "gpu-l4-small": {
-        "nodeSelector": {"accelerator": "nvidia-l4"},
-        "resources": {
-            "requests": {"cpu": "8", "memory": "48Gi", "nvidia.com/gpu": "1"},
-            "limits": {"cpu": "12", "memory": "64Gi", "nvidia.com/gpu": "1"},
-        },
-    },
-}
-IMMUTABLE_IMAGE = re.compile(r"^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$")
-
-
-def status(request, phase, reason, message, child_name=None):
-    return {
-        "observedGeneration": request["metadata"]["generation"],
-        "phase": phase,
-        "reason": reason,
-        "message": message,
-        "childRef": child_name,
-    }
-
-
-def render_job(request):
-    metadata = request["metadata"]
-    training = request["spec"]["training"]
-    profile = COMPUTE_PROFILES[training["compute_profile"]]
-    suffix = sha256(
-        f'{metadata["uid"]}:{metadata["generation"]}'.encode()
-    ).hexdigest()[:8]
-    child_name = f'{metadata["name"]}-train-{suffix}'
-    job = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "metadata": {
-            "name": child_name,
-            "namespace": metadata["namespace"],
-            "labels": {
-                "platform.freshroute.example/request": metadata["name"],
-                "platform.freshroute.example/generation": str(
-                    metadata["generation"]
-                ),
-            },
-            "ownerReferences": [{
-                "apiVersion": "platform.freshroute.example/v1alpha1",
-                "kind": "ModelWorkload",
-                "name": metadata["name"],
-                "uid": metadata["uid"],
-                "controller": True,
-            }],
-        },
-        "spec": {
-            "backoffLimit": 2,
-            "template": {
-                "spec": {
-                    "restartPolicy": "Never",
-                    "serviceAccountName": "ml-training-runner",
-                    "nodeSelector": profile["nodeSelector"],
-                    "containers": [{
-                        "name": "trainer",
-                        "image": training["image"],
-                        "args": [
-                            f'--dataset={training["dataset_manifest"]}',
-                            f'--run-id={metadata["uid"]}',
-                        ],
-                        "resources": profile["resources"],
-                    }],
-                }
-            },
-        },
-    }
-    return child_name, job
-
-
-def reconcile(request, observed_child=None):
-    training = request["spec"]["training"]
-    denials = []
-    if IMMUTABLE_IMAGE.fullmatch(training["image"]) is None:
-        denials.append("training image must use an immutable digest")
-    if training["compute_profile"] not in COMPUTE_PROFILES:
-        denials.append("compute profile is not approved")
-    if not training["dataset_manifest"].startswith(
-        "s3://freshroute-ml/manifests/"
-    ):
-        denials.append("dataset manifest is outside the governed prefix")
-
-    if denials:
-        return {
-            "action": "WriteStatus",
-            "status": status(
-                request, "Denied", "PolicyDenied", "; ".join(denials)
-            ),
-        }
-
-    child_name, desired_job = render_job(request)
-    if observed_child is None:
-        return {
-            "action": "ApplyChild",
-            "object": desired_job,
-            "status": status(
-                request,
-                "Creating",
-                "ChildApplyRequested",
-                "training Job submitted",
-                child_name,
-            ),
-        }
-
-    if observed_child["phase"] == "Pending" and observed_child.get(
-        "pending_seconds", 0
-    ) > 900:
-        return {
-            "action": "WriteStatus",
-            "status": status(
-                request,
-                "Stalled",
-                "PlacementTimeout",
-                observed_child["message"],
-                child_name,
-            ),
-        }
-
-    transitions = {
-        "Pending": ("Queued", "WaitingForPlacement"),
-        "Running": ("Running", "ChildRunning"),
-        "Succeeded": ("Succeeded", "ChildCompleted"),
-        "Failed": ("Failed", "ChildFailed"),
-    }
-    phase, reason = transitions[observed_child["phase"]]
-    return {
-        "action": "WriteStatus",
-        "status": status(
-            request, phase, reason, observed_child["message"], child_name
-        ),
-    }
+    class Evidence,Telemetry output
 ```
 
-The deterministic child name makes repeated reconciliations **idempotent**, which means the same request can be processed again without creating another training Job. The owner reference lets Kubernetes garbage collection identify the child as part of the platform request. The controller writes only fields under `status`; users continue to own `spec`. Production implementations also use optimistic concurrency, retry temporary API failures, and emit an audit event for each policy or phase change.
+For ordinary teams, managed training jobs and managed endpoints are a strong default. The provider handles worker provisioning, host maintenance, basic scaling, logs, and service integration.
 
-The contract test starts with one accepted request, proves that a Job is created exactly once, exercises a policy denial, simulates a placement stall, and then proves recovery after queue capacity is available:
+The model team still supplies reproducible images and data contracts. Evaluation, release policy, and model monitoring also remain part of the production design.
 
-```python
-request = {
-    "metadata": {
-        "name": "delivery-eta",
-        "namespace": "logistics-ml",
-        "uid": "mw-7f293",
-        "generation": 3,
-    },
-    "spec": {
-        "training": {
-            "image": "registry.freshroute.example/eta@sha256:" + "a" * 64,
-            "dataset_manifest": (
-                "s3://freshroute-ml/manifests/eta/2026-07-14.json"
-            ),
-            "compute_profile": "gpu-l4-small",
-        }
-    },
-}
+Kubernetes fits organizations that already operate it well and need portable workload contracts, custom scheduling, shared accelerators, or several specialized runtimes. Ray can coordinate Python-native distributed training and batch work. Spark remains common for large data transformations. These choices solve specific execution problems; they do not supply the complete platform lifecycle.
 
-created = reconcile(request)
-assert created["action"] == "ApplyChild"
-assert created["object"]["metadata"]["name"] == (
-    "delivery-eta-train-fb5e6c6a"
-)
-pod_spec = created["object"]["spec"]["template"]["spec"]
-assert pod_spec["nodeSelector"] == {"accelerator": "nvidia-l4"}
-assert pod_spec["containers"][0]["resources"]["requests"][
-    "nvidia.com/gpu"
-] == "1"
-assert created["object"]["metadata"]["ownerReferences"][0]["uid"] == (
-    request["metadata"]["uid"]
-)
-assert reconcile(request)["object"] == created["object"]
+Capacity management belongs here too. A platform should expose named compute profiles, team quotas, queue policy, workload priority, and resource telemetry. An urgent production retraining job may receive a higher priority than an exploratory sweep. The policy must be visible so teams understand why work is waiting and who can change that decision.
 
-mutable_image = {
-    **request,
-    "spec": {"training": {**request["spec"]["training"], "image": "eta:latest"}},
-}
-denied = reconcile(mutable_image)
-assert denied["status"]["phase"] == "Denied"
-assert "immutable digest" in denied["status"]["message"]
+## Store ML Data, Models, And Their History
+<!-- section-summary: The data and evidence plane connects every production model to the exact inputs, code, run, evaluation, approval, and deployment that created it. -->
 
-stalled = reconcile(request, {
-    "phase": "Pending",
-    "pending_seconds": 1_200,
-    "message": "insufficient nvidia.com/gpu quota in logistics-gpu",
-})
-assert stalled["status"]["reason"] == "PlacementTimeout"
+ML systems produce two broad kinds of durable material. The first is the large content: tables, feature snapshots, checkpoints, model files, evaluation reports, and prediction outputs. The second is the metadata that explains those objects: identity, owner, schema, version, lineage, parameters, metrics, approval, and lifecycle state.
 
-recovered = reconcile(request, {
-    "phase": "Running",
-    "pending_seconds": 0,
-    "message": "1 of 1 worker ready after quota admission",
-})
-assert recovered["status"]["phase"] == "Running"
-print(recovered["status"])
+Object storage, a warehouse, or a lakehouse usually holds the large content. Experiment tracking, catalogs, model registries, lineage systems, and release records hold or connect the meaning. Storing a model file in a bucket preserves bytes. A production evidence chain explains where the model came from and why it was released.
+
+```mermaid
+flowchart TD
+    Source["Source Revision<br/>(training code and environment)"] --> Run["Training Run<br/>(parameters, logs, and status)"]
+    Dataset["Dataset Version<br/>(table snapshot and schema)"] --> Run
+    Run --> Model["Model Artifact<br/>(immutable model identifier)"]
+    Model --> Evaluation["Evaluation Record<br/>(metrics, segments, and policy result)"]
+    Evaluation --> Release["Release Record<br/>(approval, target, and previous version)"]
+    Release --> Deployment["Deployment Record<br/>(endpoint, traffic, and observed version)"]
+    Deployment --> Outcomes["Production Evidence<br/>(telemetry, predictions, and later outcomes)"]
+
+    class Release,Deployment,Outcomes production
 ```
 
-The expected output is a status record with generation `3`, phase `Running`, reason `ChildRunning`, and the same child reference created during the first reconciliation. The policy denial creates no child workload. The stalled state keeps the request and its evidence visible while the queue owner adds capacity or corrects placement policy. Once the child reports `Running`, the next reconciliation replaces the stalled condition with current progress. A controller restart causes no special recovery sequence because the durable request and child state supply everything the loop needs.
+Imagine an incident in which approvals fall sharply after a model release. The responder first identifies the deployed model and policy version. From there, they follow the evaluation and training run to the exact dataset snapshot and code revision. A dashboard showing only the endpoint name cannot distinguish a model change from a feature change, routing rule, or broken outcome join.
 
-This mechanism also defines the control-plane failure boundary. A rejected request needs a user correction. A valid request stuck before child creation points to the platform API or controller. A child stuck in placement points to queue, quota, node, or scheduling policy. A running child that later fails points to workload code or runtime. Status reasons route each failure to the right owner without exposing every low-level event through the platform API.
+Stable identifiers make this investigation possible. The training run records an immutable source revision and container digest. The dataset reference points to a table version, snapshot, or manifest rather than a mutable path. Each logged model receives its own identifier.
 
-## Data, Artifact, And Serving Planes
-<!-- section-summary: Persistent ML evidence and live prediction paths have different storage, latency, consistency, and operating needs. -->
+The release record names the model and its evaluation. It also records the approver, target, and previous production version. Prediction records carry the deployed model and policy identifiers used in later joins.
 
-The **data and artifact plane** keeps durable evidence. It usually includes object storage for large files, warehouse or lakehouse tables for datasets, a metadata store for runs and lineage, a model registry for named versions and release intent, and a catalog for discovery and ownership. Immutable identifiers connect dataset snapshot, code commit, image digest, run, model version, evaluation, and deployment.
+Current MLflow 3 tracking treats logged models as first-class records, allowing a run to produce several separately identified model artifacts and linking metrics to models and datasets. Databricks adds Unity Catalog governance around registered models and related data. Similar evidence can be built with another registry and catalog. The architectural requirement is the connected chain, not a particular product name.
 
-The **serving plane** delivers predictions. It may provide online APIs, batch jobs, stream processors, edge packages, or embedded libraries. Online serving needs request validation, latency and availability targets, scaling, traffic control, fallback, and version telemetry. Batch serving needs partitioning, restartability, output manifests, and cost control. A platform can support several profiles without pretending one runtime fits every model.
+Retention and recovery also belong in this plane. A model registry is not a backup of every dependent asset. The platform needs retention policies for model artifacts, table history, metadata databases, release records, and telemetry. Recovery tests should prove that the team can reconstruct the evidence required for a rollback or audit.
 
-FreshRoute publishes a small service contract:
+## Apply Access And Policy Rules Across The ML Lifecycle
+<!-- section-summary: Governance gives every platform action an identity, a permitted scope, an auditable policy decision, and a controlled environment boundary. -->
 
-```yaml
-serving_profile:
-  name: online-cpu-autoscaled
-  request_timeout_ms: 250
-  minimum_replicas: 2
-  authentication: workload_identity
-  required_endpoints:
-    - /predict
-    - /ready
-    - /version
-  telemetry:
-    - request_count
-    - error_count
-    - latency_histogram
-    - model_version
-  rollout:
-    strategy: canary
-    rollback: previous_pinned_version
+Governance is the system of rules that determines who can perform an action, which assets they can use, and what evidence must exist. It includes identity and access management, secrets, network boundaries, data classification, catalog permissions, policy checks, approvals, audit logs, and retention.
+
+A common mistake is to add governance as a final approval screen. Effective governance starts with the first data access and continues through training, registration, release, serving, and investigation. The supported path should carry these controls automatically so each model team does not rebuild them.
+
+```mermaid
+flowchart TD
+    Author["Developer Identity<br/>(submit code and request a run)"] --> Training["Training Identity<br/>(read approved data and write run outputs)"]
+    Training --> Candidate["Candidate Record<br/>(model and evaluation evidence)"]
+    Reviewer["Reviewer Identity<br/>(approve or reject the release)"] --> Candidate
+    Candidate --> Release["Release Identity<br/>(change the governed deployment target)"]
+    Release --> Runtime["Runtime Identity<br/>(read the approved artifact and serve predictions)"]
+    Audit["Audit Trail<br/>(record access, policy, approval, and deployment changes)"] --> Training
+    Audit --> Candidate
+    Audit --> Release
+    Audit --> Runtime
+
+    class Training,Release,Runtime identity
 ```
 
-The profile gives application teams a stable interface and gives the platform team an upgrade boundary. The implementation may move from a raw Deployment to KServe or a managed endpoint while the product contract stays recognizable.
+The identities in this path should have narrow permissions. A training identity may read governed feature tables and write to its experiment location. A release identity may update a specific production endpoint after policy passes. A runtime identity may read the approved artifact and required online features. None of them needs general administrative access.
 
-## Guardrails, Reliability, And Cost
-<!-- section-summary: Security, policy, observability, reliability, and cost controls cross every platform layer and need named owners. -->
+Environment boundaries deserve the same care. Development work may use sampled or masked data and flexible compute. Production training may require reviewed code, pinned dependencies, protected data, and an auditable scheduler. Production serving needs a separate release path and runtime identity. Copying a development credential into all three environments removes the boundary the platform was meant to provide.
 
-Guardrails work across the platform. Workload identity limits data and artifact access. Network policy limits service paths. Admission policy blocks privileged containers and unpinned production images. Evaluation policy blocks a weak model. Audit events record changes to data, registry state, permissions, and deployments. These controls belong in the supported path so users receive them automatically.
+Policy should explain rejection in language a user can act on. “Denied” is insufficient. A useful result identifies the rule, such as an unapproved data classification, mutable image tag, missing evaluation segment, or forbidden deployment region. The record should also identify the policy version because governance rules change over time.
 
-Reliability also crosses layers. The platform team operates the control plane, shared compute, storage integration, queue, and serving templates. Model teams operate model quality, data contracts, use-case alerts, and product fallback with application owners. Shared incident runbooks identify the first owner for pipeline failure, capacity shortage, endpoint error, data drift, and business-quality regression.
+Managed catalogs and registries can supply integrated permissions and lineage. Cloud IAM can govern jobs, storage, and endpoints. Kubernetes policy tools can restrict workload configuration.
 
-Cost needs the same clarity. GPU queue wait time, accelerator utilization, idle endpoint replicas, artifact growth, prediction cost, and platform engineer time all influence the architecture. FreshRoute tags workloads by team and model, sets quotas, records requested and actual resources, and reviews unit measures such as cost per training run and cost per thousand predictions. A cheaper tool that creates months of integration and on-call work can still be an expensive platform decision.
+The platform team designs the identities and ownership that connect those systems. It also defines the exception and review process for work outside the normal path.
 
-## Measure The Platform As A Product
-<!-- section-summary: A platform succeeds when supported paths improve user outcomes, reliability, governance, and cost rather than merely increasing the number of installed tools. -->
+## Operate, Monitor, And Recover The Platform
+<!-- section-summary: Platform operations distinguishes coordination failures, capacity failures, workload failures, serving failures, and model-quality failures so each reaches the right owner. -->
 
-FreshRoute measures whether teams use the golden paths and whether those paths help. The platform dashboard includes time from approved change to training run, time from candidate to production, failed-run recovery time, endpoint rollback time, policy failure reasons, platform availability, support load, GPU queue delay, and cost by model.
+A platform is useful only if teams trust it during routine work and incidents. The **operations plane** supplies telemetry, service objectives, capacity management, cost attribution, alerting, runbooks, recovery tests, and ownership.
 
-User feedback supplies the missing context. A high template adoption rate can hide a painful workflow if teams copy the template and then work around it. The platform team interviews model teams, reviews abandoned pipeline runs, tracks repeated support questions, and removes steps that create no useful control or evidence.
+Platform telemetry covers more than model APIs. Operators track submission availability, controller errors, queue age, job startup time, worker failures, and artifact publication. They also watch endpoint health, storage errors, and metadata services.
 
-The first platform release stays narrow. FreshRoute supports one training template, one evaluation packet, one online-serving profile, one batch profile, and one incident path. It adds a capability after several teams need it and the ownership is clear. This approach keeps the platform smaller than a catalog of every available MLOps product.
+Model teams use a different set of signals. Feature health, prediction distributions, delayed labels, and outcome quality describe the behavior of the ML system itself.
 
-## Putting It Together
-<!-- section-summary: The platform framework connects user interfaces, lifecycle control, workload execution, persistent evidence, serving, guardrails, operations, cost, and feedback. -->
+OpenTelemetry is a vendor-neutral framework for generating, collecting, and exporting traces, metrics, and logs. It is an instrumentation layer rather than the storage and visualization backend. A common composable design sends OpenTelemetry data through a collector to cloud monitoring or an observability product, while Prometheus-compatible metrics and Grafana dashboards cover infrastructure and service views.
 
-FreshRoute treats the ML platform as an internal product. Golden paths let teams express training and serving intent. The control plane records that intent, applies policy, and coordinates releases. Workload systems run training and inference. Storage and metadata keep the evidence. Cross-cutting identity, observability, reliability, governance, and cost controls support production operation.
+Consider a training request that was accepted fifteen minutes ago and has not started. The investigation should follow the state transitions instead of immediately rerunning the job:
 
-This framework also creates a clear learning path for the rest of the module. The Kubernetes article explains one workload foundation. The tool article maps orchestration, distributed compute, packaging, inference, and serving controllers to their roles. The build-versus-buy article decides which responsibilities the company should operate and which a managed service should own.
+```mermaid
+flowchart TD
+    Accepted["Request Accepted<br/>(intent stored successfully)"] --> ChildCheck{"Execution Resource<br/>created?"}
+    ChildCheck -->|No| Controller["Control-Plane Incident<br/>(inspect controller and API errors)"]
+    ChildCheck -->|Yes| Placement{"Worker Placed<br/>on capacity?"}
+    Placement -->|No| Capacity["Capacity Incident<br/>(inspect queue, quota, and scheduler reason)"]
+    Placement -->|Yes| Process{"Training Process<br/>started successfully?"}
+    Process -->|No| Runtime["Runtime Incident<br/>(inspect image, identity, data access, and startup logs)"]
+    Process -->|Yes| Model["Model Work<br/>(inspect code, data, metrics, and output publication)"]
+
+    class Controller,Capacity,Runtime incident
+```
+
+This path separates three teams’ concerns. A controller that failed to create the child resource belongs to the platform control-plane owner. A workload waiting for accelerators belongs to the capacity or queue owner. A Python process that exits during feature loading belongs to the model team, with platform support if storage or identity caused the failure.
+
+Service objectives should reflect user journeys. Submission API availability matters, but a healthier measure is the proportion of valid training requests that start within a target time. Endpoint availability matters alongside rollback time and evidence freshness. Cost measures should include accelerator utilization, idle endpoint capacity, artifact growth, and platform-engineering effort. Cheap infrastructure with constant manual recovery is not a cheap platform.
+
+Recovery needs regular proof. Back up metadata stores, protect artifact and table history, and rehearse restoration. Test a release rollback with a pinned previous model. Confirm that the platform can recover its control plane without losing the durable requests and statuses that describe active work.
+
+## Choose A Managed Platform Or A Composable Stack
+<!-- section-summary: Managed platforms and composable stacks implement the same responsibilities with different ownership boundaries. -->
+
+After the responsibilities are clear, products can be placed deliberately. The main distinction is ownership. A managed platform operates more of the control and execution machinery. A composable stack gives the organization more control and more integration work.
+
+### Use A Managed Platform
+
+Amazon SageMaker AI supplies managed training jobs, pipelines, a model registry, projects, and managed deployment capabilities. Azure Machine Learning supplies jobs, components, registries, pipelines, and managed online endpoints through its current v2 CLI and SDK. Google Cloud now calls its platform **Gemini Enterprise Agent Platform**, formerly Vertex AI. Its managed ML pipelines, training, metadata, model management, and endpoint capabilities now live under that platform. Databricks connects lakehouse data, Lakeflow Jobs, MLflow 3, Models in Unity Catalog, and Model Serving.
+
+These services cover substantial parts of the framework, but their boundaries differ. A managed training API still depends on a source and data strategy. A managed endpoint still depends on release policy, product fallback, and outcome monitoring. A registry still depends on clear candidate, approved, and deployed states. The platform team turns provider capabilities into an organization-specific path.
+
+For a team already centered on one cloud, the practical default is usually the provider’s managed jobs, storage, identity, registry, and endpoints. Databricks is often a strong managed center for organizations whose data, feature engineering, governance, and ML work already live in its lakehouse. This reduces the number of control planes the organization must operate.
+
+### Build A Composable Stack
+
+A composable platform may use GitHub Actions for repository automation, Airflow or Dagster for workflows, managed cloud jobs or Kubernetes for execution, Ray for specialized distributed Python work, object storage with Delta Lake or Apache Iceberg for durable data, MLflow 3 for experiment and model records, and OpenTelemetry with cloud monitoring or Prometheus and Grafana for operations. Terraform commonly manages cloud resources, while Argo CD or Flux commonly manages Kubernetes delivery.
+
+This design can support portability, existing enterprise integrations, or specialized scheduling. It also creates seams. The platform must connect identity, workload status, dataset and model identifiers, release evidence, telemetry, and recovery across several APIs. Installing each product does not create those contracts automatically.
+
+```mermaid
+flowchart TD
+    Framework["Platform Responsibilities<br/>(interfaces, control, execution, evidence, governance, operations)"] --> Managed["Managed Platform<br/>(provider operates more shared services)"]
+    Framework --> Composable["Composable Stack<br/>(organization integrates specialized services)"]
+    Managed --> ProductLayer["Internal Product Layer<br/>(supported paths, policy, ownership, and user experience)"]
+    Composable --> ProductLayer
+    ProductLayer --> Teams["Model Teams<br/>(model logic, data meaning, evaluation, and product outcomes)"]
+
+    class ProductLayer product
+```
+
+Both approaches need the internal product layer. A cloud console exposes resources. A platform exposes a supported journey with clear defaults, evidence, ownership, and recovery. Every chosen service must have a named responsibility and owner.
+
+## Measure Whether The Platform Helps Teams Ship Reliable Models
+<!-- section-summary: Platform measures should show whether supported paths improve delivery, reliability, governance, cost, and the daily work of model teams. -->
+
+An internal platform succeeds through user and production outcomes rather than the number of installed tools. Adoption is useful only if teams complete real work through the supported path. Reliability is useful only if failures can be understood and recovered. Governance is useful only if controls protect the system without turning every change into a manual project.
+
+Start with a few journey measures:
+
+- **Time to first successful run** measures the effort needed for a new project to use governed data and compute.
+- **Candidate-to-production lead time** shows how long evaluation, review, and release take.
+- **Valid-request start time** exposes control-plane, queue, and capacity delays.
+- **Failure recovery time** shows whether status, logs, ownership, and runbooks help teams restore work.
+- **Rollback time** tests the release path under pressure.
+- **Supported-path adoption** shows which capabilities teams trust and where they build workarounds.
+- **Unit cost** connects resource use to a useful output, such as a completed training run or one thousand predictions.
+
+Suppose most training jobs succeed, yet users wait two days for a service account and then thirty minutes for a worker. Job success hides the largest friction. Time to first run and queue delay reveal it. If teams frequently bypass the release interface, support tickets and user interviews may reveal a missing batch-serving path or an approval rule that has no clear owner.
+
+The platform team should review quantitative measures alongside user research. Repository forks, abandoned runs, repeated manual commands, and copied deployment manifests are evidence that the official path does not cover real work. The response may be an interface that exposes the missing operation, a safer extension point, a new runtime profile, or removal of a control that produces no decision evidence.
+
+## Add Platform Capabilities To Solve Repeated Team Problems
+<!-- section-summary: A platform should begin with one complete production path and add capabilities after repeated needs and ownership are understood. -->
+
+The first useful platform can be small. One reviewed training path, one evidence record, one release path, one serving profile, and one incident route may help more than a large catalog of partially connected tools.
+
+Start by tracing one real model from source data to production outcome. Mark each manual handoff, repeated integration, missing identifier, unclear approval, and incident dead end. Choose the friction shared by several teams. Build a supported path around it, assign an owner, document the contract, instrument the journey, and measure adoption. Add the next capability after the first path works in routine operation and recovery.
+
+This sequence keeps platform work connected to demand. A feature store belongs on the roadmap after teams repeatedly need consistent online and offline features. A Kubernetes-based training layer belongs there after managed jobs cannot meet scheduling, portability, or runtime needs. A new portal belongs there after it can simplify a proven workflow rather than hide an unfinished one.
+
+Platform capabilities also need retirement plans. Interfaces accumulate over time, and every supported version carries operational cost. Publish compatibility boundaries, measure remaining use, provide migrations, and remove old paths after their consumers have moved.
+
+## The Main Idea
+<!-- section-summary: ML platform architecture is the deliberate separation and connection of user paths, lifecycle coordination, computation, evidence, governance, and operations. -->
+
+An ML platform gives teams a dependable route from model work to production operation. Its architecture starts with six responsibilities: interfaces, control, execution, data and evidence, governance, and operations. Each responsibility has a clear contract and owner.
+
+Managed services and open tools can implement those responsibilities in many combinations. The platform itself is the connected product: users can request work, policy can govern it, compute can execute it, evidence can explain it, and operators can recover it. Product selection follows that framework.
+
+The practical test is a complete journey. A team can submit a governed workload, see why it is waiting, identify the exact output, release it through policy, observe the production version, and reach the correct owner during failure. An architecture that cannot support that journey still has a missing connection, even if every individual service is healthy.
 
 ## References
 
 - [CNCF Platform Engineering Technical Community Group](https://contribute.cncf.io/community/tcgs/platform-engineering/)
 - [CNCF: What is platform engineering?](https://www.cncf.io/blog/2025/11/19/what-is-platform-engineering/)
-- [Kubernetes Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of desired state, observed state, control loops, child resources, and status updates.
-- [Google Cloud MLOps architecture and automation](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)
-- [Azure Architecture Center: Machine learning operations](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/machine-learning-operations-v2)
+- [Kubernetes Controllers](https://kubernetes.io/docs/concepts/architecture/controller/)
+- [Amazon SageMaker AI: Train a model](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html)
+- [Amazon SageMaker AI Pipelines](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-overview.html)
+- [Amazon SageMaker AI Projects](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-projects-whatis.html)
+- [Azure Machine Learning pipelines](https://learn.microsoft.com/en-us/azure/machine-learning/concept-ml-pipelines?view=azureml-api-2)
+- [Azure Machine Learning registries for MLOps](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2)
+- [Azure Machine Learning managed online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online?view=azureml-api-2)
+- [Google Cloud Gemini Enterprise Agent Platform naming changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes)
+- [Google Cloud Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
+- [Databricks MLflow](https://docs.databricks.com/aws/en/mlflow/)
+- [Databricks Lakeflow Jobs](https://docs.databricks.com/aws/en/jobs/)
+- [Databricks Models in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
+- [Databricks Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)
+- [MLflow 3 Tracking](https://mlflow.org/docs/latest/ml/tracking/)
+- [OpenTelemetry overview](https://opentelemetry.io/docs/what-is-opentelemetry/)

@@ -9,23 +9,23 @@ id: "article-mlops-llmops-permissions-and-data"
 
 ## Table of Contents
 
-1. [Permissions and Data Start With Three Questions](#permissions-and-data-start-with-three-questions)
-2. [Principals Carry Authority Through the Run](#principals-carry-authority-through-the-run)
-3. [Authorization Evaluates Principal, Action, Resource, and Context](#authorization-evaluates-principal-action-resource-and-context)
-4. [Tool Exposure and Tool Execution Are Separate Boundaries](#tool-exposure-and-tool-execution-are-separate-boundaries)
-5. [Tenant Isolation Must Continue Through Every Data Layer](#tenant-isolation-must-continue-through-every-data-layer)
-6. [Classify Data Before Giving It to the Agent](#classify-data-before-giving-it-to-the-agent)
-7. [Secrets and Credentials Belong to the Tool Executor](#secrets-and-credentials-belong-to-the-tool-executor)
-8. [Purpose, Consent, Retention, and Deletion Govern Data Over Time](#purpose-consent-retention-and-deletion-govern-data-over-time)
-9. [High-Impact Actions Need Approval for One Exact Proposal](#high-impact-actions-need-approval-for-one-exact-proposal)
-10. [Audit Evidence Comes From the Components That Enforce the Rules](#audit-evidence-comes-from-the-components-that-enforce-the-rules)
-11. [Common Failures Point to Specific Repairs](#common-failures-point-to-specific-repairs)
-12. [Verification Exercises the Complete Boundary](#verification-exercises-the-complete-boundary)
-13. [Incident Response Revokes Authority First](#incident-response-revokes-authority-first)
+1. [Start With Who Can Act On Which Data](#start-with-who-can-act-on-which-data)
+2. [Track Which Identity Acts At Every Step](#track-which-identity-acts-at-every-step)
+3. [Authorize Each Action From Identity, Resource, And Context](#authorize-each-action-from-identity-resource-and-context)
+4. [Control Tool Visibility And Tool Execution Separately](#control-tool-visibility-and-tool-execution-separately)
+5. [Preserve Tenant Isolation Across Every Data Layer](#preserve-tenant-isolation-across-every-data-layer)
+6. [Classify Data Before The Agent Can Access It](#classify-data-before-the-agent-can-access-it)
+7. [Keep Secrets And Credentials In The Tool Executor](#keep-secrets-and-credentials-in-the-tool-executor)
+8. [Define Purpose, Consent, Retention, And Deletion](#define-purpose-consent-retention-and-deletion)
+9. [Require Approval For The Exact High-Impact Action](#require-approval-for-the-exact-high-impact-action)
+10. [Collect Audit Evidence From Enforcement Points](#collect-audit-evidence-from-enforcement-points)
+11. [Match Permission And Data Failures To Repairs](#match-permission-and-data-failures-to-repairs)
+12. [Test The Complete Permission And Data Boundary](#test-the-complete-permission-and-data-boundary)
+13. [Revoke Authority First During An Incident](#revoke-authority-first-during-an-incident)
 14. [Main Idea](#main-idea)
 15. [References](#references)
 
-## Permissions and Data Start With Three Questions
+## Start With Who Can Act On Which Data
 
 <!-- section-summary: Safe agent systems identify who is acting, which exact actions and resources are allowed, and which data may cross each boundary. -->
 
@@ -57,7 +57,7 @@ flowchart TD
 
 This layout creates defense in depth. The gateway establishes identity, the policy layer evaluates permission, the executor holds credentials, the domain service enforces its own rules, and the data layer filters records. One faulty prompt or missing check then faces another independent boundary.
 
-## Principals Carry Authority Through the Run
+## Track Which Identity Acts At Every Step
 
 <!-- section-summary: A principal is the verified person or workload whose authority travels with a request and remains separate from model-generated arguments. -->
 
@@ -88,7 +88,7 @@ sequenceDiagram
 
 Long-running runs need one more safeguard. Authorization can change while a worker is paused. A user may leave the organization, lose a role, or close the relevant case. Resumed work should verify the session and policy again before each protected action. A checkpoint preserves progress; it never freezes permission forever.
 
-## Authorization Evaluates Principal, Action, Resource, and Context
+## Authorize Each Action From Identity, Resource, And Context
 
 <!-- section-summary: Production authorization evaluates a verified principal, one requested action, an exact resource, and relevant runtime conditions on every protected call. -->
 
@@ -124,7 +124,7 @@ OPA is one implementation choice. AWS IAM, Google Cloud IAM, Azure role and attr
 
 Teams should also return machine-readable denial reasons such as `tenant_mismatch`, `case_inactive`, or `approval_expired`. The user-facing response can remain simple. Operators and tests gain a precise explanation without exposing sensitive policy internals to the model.
 
-## Tool Exposure and Tool Execution Are Separate Boundaries
+## Control Tool Visibility And Tool Execution Separately
 
 <!-- section-summary: A task-specific tool set guides model behavior, while server-side authorization protects every tool call at execution time. -->
 
@@ -149,7 +149,7 @@ Suppose an agent is helping investigate a failed order. It may receive `read_ord
 
 Tool wrappers should validate schemas, normalize identifiers, cap query ranges, enforce idempotency, and reject unknown fields. The domain service repeats the business authorization using the verified caller. Prompt injection inside a document can request a larger scope, yet it cannot add a tool, mint a credential, or override the service rule.
 
-## Tenant Isolation Must Continue Through Every Data Layer
+## Preserve Tenant Isolation Across Every Data Layer
 
 <!-- section-summary: Tenant isolation filters records at retrieval, storage, caching, memory, and service boundaries before protected content reaches the model. -->
 
@@ -174,7 +174,7 @@ Retrieval introduces additional traps. A shared vector index can work if every c
 
 A concrete cache failure shows why every layer matters. If a retrieval result is cached under `query_hash` alone, two tenants asking the same question can receive the same cached chunks. The repair includes `tenant_id`, user access group, data classification, and policy version in the key, followed by invalidation after permission changes. The cache should store protected references or sanitized results according to the same retention policy as the source.
 
-## Classify Data Before Giving It to the Agent
+## Classify Data Before The Agent Can Access It
 
 <!-- section-summary: Data classification maps information sensitivity to allowed models, tools, destinations, logging fields, retention periods, and review requirements. -->
 
@@ -201,7 +201,7 @@ Classification metadata needs its own governance. A model may suggest that text 
 
 Teams also need an explicit policy for third-party tools and hosted models. Data use and retention may differ by endpoint or feature. Regional processing, subprocessors, and zero-data-retention eligibility also deserve separate checks. Verify the exact service configuration before routing confidential data, then capture that decision in policy rather than relying on a general vendor statement.
 
-## Secrets and Credentials Belong to the Tool Executor
+## Keep Secrets And Credentials In The Tool Executor
 
 <!-- section-summary: Tool executors obtain narrow, short-lived credentials while the model receives only the result fields needed for its next decision. -->
 
@@ -229,7 +229,7 @@ Kubernetes Secrets need careful handling. Base64 encoding supplies no confidenti
 
 Secrets can leak through debug endpoints, environment dumps, shell history, exception payloads, or model traces. Redaction should happen before telemetry export. Secret scanning in repositories and CI catches committed values. Runtime detection should alert on unusual secret reads, expired-token reuse, access from a new workload, or a large burst of secret retrieval.
 
-## Purpose, Consent, Retention, and Deletion Govern Data Over Time
+## Define Purpose, Consent, Retention, And Deletion
 
 <!-- section-summary: Data governance records why information is processed, which authority permits it, how long copies remain, and how correction or deletion propagates. -->
 
@@ -245,7 +245,7 @@ The GDPR illustrates several broadly useful engineering principles: purpose limi
 
 Provider settings also matter. Hosted model endpoints and third-party MCP services can have different storage behavior and retention controls. OpenAI documents data-control eligibility by endpoint and capability, for example. Platform policy should map each data class to a verified provider configuration and keep evidence of that configuration.
 
-## High-Impact Actions Need Approval for One Exact Proposal
+## Require Approval For The Exact High-Impact Action
 
 <!-- section-summary: Human approval binds an authorized reviewer to one visible proposal, expires under defined conditions, and still receives execution-time authorization. -->
 
@@ -273,7 +273,7 @@ Execution performs fresh authorization because roles, account state, limits, and
 
 Low-risk requests may use policy-based automatic approval. High-risk requests can require one or two named roles. The decision belongs to a risk policy with explicit thresholds. Leaving every action to manual review creates alert fatigue; approving entire future runs creates excessive authority.
 
-## Audit Evidence Comes From the Components That Enforce the Rules
+## Collect Audit Evidence From Enforcement Points
 
 <!-- section-summary: Authoritative services record identity, policy, approval, execution, and outcome events while sensitive payloads remain in governed stores. -->
 
@@ -300,7 +300,7 @@ Reliable timestamps and alerts reveal gaps in the evidence. Central platforms co
 
 Monitor evidence quality as well as security events. Missing policy versions, unmatched tool calls, duplicate effect IDs, unexpected raw payload fields, or a sudden drop in authorization-denial events can all reveal broken instrumentation. A complete trace with incomplete audit events still leaves a security blind spot.
 
-## Common Failures Point to Specific Repairs
+## Match Permission And Data Failures To Repairs
 
 <!-- section-summary: Each permission or data failure maps to an authoritative control that can block recurrence without depending on model obedience. -->
 
@@ -326,7 +326,7 @@ A **stale approval** appears after the proposal or policy changes. Bind approval
 
 A **secret exposure** calls for immediate revocation or rotation, followed by log review and affected-workload isolation. Downstream credential analysis checks how far the exposure reached. Remove the secret from prompts and telemetry, repair its delivery path, and add repository plus runtime detection. Deleting the value from the latest source tree leaves earlier history untouched and the active credential valid.
 
-## Verification Exercises the Complete Boundary
+## Test The Complete Permission And Data Boundary
 
 <!-- section-summary: Verification combines policy tests, cross-tenant system tests, adversarial prompts, credential inspection, audit checks, and production monitoring. -->
 
@@ -351,7 +351,7 @@ Production monitoring extends that proof. Track authorization denials by reason,
 
 Alert thresholds should reflect risk. One cross-tenant success or an administrator tool called by an unexpected workload deserves immediate attention. A gradual increase in ordinary denials may indicate a deployment or policy mismatch. Runbooks should link the alert to revocation, containment, evidence, and recovery steps.
 
-## Incident Response Revokes Authority First
+## Revoke Authority First During An Incident
 
 <!-- section-summary: Permission incidents reduce further harm by revoking access, pausing effects, preserving evidence, reconciling outcomes, and repairing the failed boundary. -->
 

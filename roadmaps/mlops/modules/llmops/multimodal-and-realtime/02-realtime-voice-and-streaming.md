@@ -9,23 +9,23 @@ id: "article-mlops-llmops-realtime-voice-streaming"
 
 ## Table of Contents
 
-1. [Realtime Voice Is a Stateful Duplex Session](#realtime-voice-is-a-stateful-duplex-session)
-2. [Give the Session an Explicit Lifecycle](#give-the-session-an-explicit-lifecycle)
-3. [Choose WebRTC, WebSocket, or SIP by Boundary](#choose-webrtc-websocket-or-sip-by-boundary)
-4. [Carry Audio from Microphone to Speaker](#carry-audio-from-microphone-to-speaker)
-5. [Order Events and Absorb Network Jitter](#order-events-and-absorb-network-jitter)
+1. [What A Realtime Voice Session Does](#what-a-realtime-voice-session-does)
+2. [Define The Voice Session Lifecycle](#define-the-voice-session-lifecycle)
+3. [Choose WebRTC, WebSocket, Or SIP For The Connection](#choose-webrtc-websocket-or-sip-for-the-connection)
+4. [Move Audio From The Microphone To The Speaker](#move-audio-from-the-microphone-to-the-speaker)
+5. [Handle Network Delay And Out-Of-Order Audio](#handle-network-delay-and-out-of-order-audio)
 6. [Detect Turns Without Cutting People Off](#detect-turns-without-cutting-people-off)
-7. [Treat Interruption as a State Change](#treat-interruption-as-a-state-change)
-8. [Keep Partial Transcripts Provisional](#keep-partial-transcripts-provisional)
-9. [Put Tool Effects Behind the Server](#put-tool-effects-behind-the-server)
-10. [Budget the Whole Conversational Loop](#budget-the-whole-conversational-loop)
-11. [Reconnect from Durable State](#reconnect-from-durable-state)
+7. [Handle User Interruptions As State Changes](#handle-user-interruptions-as-state-changes)
+8. [Do Not Treat Partial Transcripts As Final](#do-not-treat-partial-transcripts-as-final)
+9. [Run Tool Actions Behind A Trusted Server](#run-tool-actions-behind-a-trusted-server)
+10. [Measure Delay Across The Full Conversation](#measure-delay-across-the-full-conversation)
+11. [Reconnect From Saved Session State](#reconnect-from-saved-session-state)
 12. [Build Safety, Consent, and Accessibility into the Session](#build-safety-consent-and-accessibility-into-the-session)
-13. [Observe and Evaluate the Voice Experience](#observe-and-evaluate-the-voice-experience)
-14. [Control Cost and Scale by Concurrent Session](#control-cost-and-scale-by-concurrent-session)
-15. [Degrade Gracefully and Transfer Cleanly](#degrade-gracefully-and-transfer-cleanly)
-16. [Fit Current Provider APIs Behind the Runtime](#fit-current-provider-apis-behind-the-runtime)
-17. [A Production Voice Runtime in One View](#a-production-voice-runtime-in-one-view)
+13. [Monitor And Evaluate The Voice Experience](#monitor-and-evaluate-the-voice-experience)
+14. [Plan Cost And Capacity Per Concurrent Session](#plan-cost-and-capacity-per-concurrent-session)
+15. [Degrade Safely And Transfer To A Person](#degrade-safely-and-transfer-to-a-person)
+16. [Use A Common Runtime Across Provider APIs](#use-a-common-runtime-across-provider-apis)
+17. [How A Production Voice Runtime Fits Together](#how-a-production-voice-runtime-fits-together)
 18. [References](#references)
 
 At a high level, a realtime voice application keeps listening, reasoning, and speaking inside one live connection. Audio travels in both directions, events keep arriving, and the user may interrupt at any moment. The application has to remember which turn is active, which audio reached the speaker, which transcript is still changing, and whether a tool has already changed the outside world.
@@ -34,7 +34,7 @@ This is the central difference from an ordinary API request. A normal request ha
 
 The production design therefore starts with session state and events. Voice models and provider transports fit inside that runtime.
 
-## Realtime Voice Is a Stateful Duplex Session
+## What A Realtime Voice Session Does
 
 <!-- section-summary: Realtime voice keeps a two-way media channel open while session state coordinates audio, turns, responses, tools, and recovery. -->
 
@@ -65,7 +65,7 @@ This explains several failures that look surprising in a demo. The model can fin
 
 A robust runtime records these as separate facts. “Generated,” “received,” “queued,” and “played” are four different audio states. “Proposed,” “authorized,” “started,” and “committed” are four different tool states.
 
-## Give the Session an Explicit Lifecycle
+## Define The Voice Session Lifecycle
 
 <!-- section-summary: A session lifecycle defines legal transitions from authentication and connection setup through listening, responding, interruption, recovery, transfer, and closure. -->
 
@@ -103,7 +103,7 @@ Some state belongs only in memory. Raw input buffers, queued output audio, and p
 
 A connection close is also a state transition. The server revokes short-lived credentials, stops accepting tool calls, flushes safe metrics, releases session capacity, and applies the audio-retention policy. Relying on a browser tab to perform cleanup will leave abandoned sessions after crashes and network loss.
 
-## Choose WebRTC, WebSocket, or SIP by Boundary
+## Choose WebRTC, WebSocket, Or SIP For The Connection
 
 <!-- section-summary: WebRTC suits interactive client media, WebSocket suits trusted server streams, and SIP brings telephone calls into the voice runtime. -->
 
@@ -142,7 +142,7 @@ flowchart TD
 
 The transport does not decide business authority. WebRTC, WebSocket, and SIP carry media and control events. The application server still owns identity, authorization, tool execution, retention, and transfer policy.
 
-## Carry Audio from Microphone to Speaker
+## Move Audio From The Microphone To The Speaker
 
 <!-- section-summary: A stable audio path controls capture, channel layout, sample rate, encoding, resampling, buffering, playback, and device failure. -->
 
@@ -177,7 +177,7 @@ Playback needs its own state. Incoming audio chunks enter a bounded queue and le
 
 Echo deserves special attention. The microphone can capture the agent's own speaker output and make the model answer itself. WebRTC echo cancellation helps, as do headsets and careful speaker placement. A loop detector can alert on repeated assistant phrases appearing in input transcripts.
 
-## Order Events and Absorb Network Jitter
+## Handle Network Delay And Out-Of-Order Audio
 
 <!-- section-summary: Event identities, sequence rules, bounded queues, and jitter buffers keep concurrent audio and control streams coherent. -->
 
@@ -236,7 +236,7 @@ Manual controls remain valuable. Push-to-talk lets the user mark the start and e
 
 A strong evaluation includes short acknowledgements, long pauses, false starts, coughs, background speakers, and double talk. **Double talk** means user and agent speech overlap. Measure false starts, clipped first sounds, premature turn ends, and end-of-turn delay rather than reporting one VAD accuracy number.
 
-## Treat Interruption as a State Change
+## Handle User Interruptions As State Changes
 
 <!-- section-summary: Barge-in stops playback, cancels generation, records delivered audio, truncates unheard context, and reviews any tool already in flight. -->
 
@@ -272,7 +272,7 @@ Tools need separate handling. Canceling speech does not automatically reverse a 
 
 A focused test plays 2,400 milliseconds of generated audio, reports 1,480 milliseconds as delivered, and injects speech start. It should observe stopped playback, canceled generation, truncation at 1,480 milliseconds, and no delivery marker for later words. Another test interrupts during a tool call and verifies that the tool state remains accurate.
 
-## Keep Partial Transcripts Provisional
+## Do Not Treat Partial Transcripts As Final
 
 <!-- section-summary: Transcript deltas support responsive interfaces, while final text and explicit confirmation protect durable facts and tool arguments. -->
 
@@ -299,7 +299,7 @@ Tool execution must never start from an unstable text fragment. The runtime wait
 
 The transcript and model's direct audio understanding can also disagree. Keep the original audio reference under the approved retention policy, the transcript revision, and the final interpreted entity as separate evidence. General logs should receive identifiers and safe summaries rather than raw speech.
 
-## Put Tool Effects Behind the Server
+## Run Tool Actions Behind A Trusted Server
 
 <!-- section-summary: The model proposes a tool call, while the server authenticates, validates, authorizes, deduplicates, executes, and reports the durable result. -->
 
@@ -330,7 +330,7 @@ Interruption introduces a race. The user may say “stop” after the tool start
 
 Current OpenAI Realtime supports a server **sideband** channel for WebRTC and SIP sessions. Sideband means the user has a media connection while the application server has another control connection to the same session. The server can keep tool logic private, monitor events, and update allowed session behavior.
 
-## Budget the Whole Conversational Loop
+## Measure Delay Across The Full Conversation
 
 <!-- section-summary: Voice latency includes capture, network, buffering, turn detection, inference, tools, synthesis, delivery, and playback. -->
 
@@ -362,7 +362,7 @@ Each stage receives a product-specific budget. For one application, turn detecti
 
 Perceived latency can improve without pretending that work finished. The interface can show listening and processing state immediately. The voice can acknowledge a long tool only after execution begins. Short first sentences can start playback while the rest is generated, provided they do not claim an unverified result.
 
-## Reconnect from Durable State
+## Reconnect From Saved Session State
 
 <!-- section-summary: Reconnection creates a new transport epoch, restores confirmed application state, and uses idempotency to reconcile uncertain tool outcomes. -->
 
@@ -417,7 +417,7 @@ For example, a user may speak a reference number and see the recognized value be
 
 Safety policy must account for the persuasive effect of a natural voice. The agent states uncertainty, avoids false claims of completed work, and transfers according to defined risk triggers. Emergency or regulated use cases need explicit supported-task boundaries and tested human escalation.
 
-## Observe and Evaluate the Voice Experience
+## Monitor And Evaluate The Voice Experience
 
 <!-- section-summary: Session, turn, media, tool, and product measurements explain whether the voice system remains responsive, understandable, safe, and useful. -->
 
@@ -457,7 +457,7 @@ Evaluate product outcomes as well as components. Measure whether users complete 
 
 Synthetic calls belong to a sandbox tenant with non-production tools. A load generator that can reach live payments, messages, or dispatch systems creates unacceptable risk.
 
-## Control Cost and Scale by Concurrent Session
+## Plan Cost And Capacity Per Concurrent Session
 
 <!-- section-summary: Realtime capacity depends on open connections, media throughput, conversation growth, tool concurrency, and regional headroom. -->
 
@@ -483,7 +483,7 @@ Silence bugs and reconnect loops deserve separate alerts. A session that remains
 
 Context also needs a budget. Long sessions may truncate old conversation items or replace completed turns with an approved summary. Confirmed business facts remain in structured server state. Evaluate summary and truncation behavior on corrections, negation, names, and unresolved commitments.
 
-## Degrade Gracefully and Transfer Cleanly
+## Degrade Safely And Transfer To A Person
 
 <!-- section-summary: A fallback ladder preserves user control through text, push-to-talk, specialist transcription, callback, and human transfer. -->
 
@@ -514,7 +514,7 @@ If no operator is available, the product follows an approved callback or emergen
 
 Release drills should test provider outage, region loss, full operator queue, old client versions, and a deployment draining active connections. The drill succeeds only if new sessions follow the intended admission path, active tool authority is revoked, and committed effects remain consistent.
 
-## Fit Current Provider APIs Behind the Runtime
+## Use A Common Runtime Across Provider APIs
 
 <!-- section-summary: Current OpenAI, AWS, Google Cloud Agent Platform, and Microsoft Foundry services expose different transports and event contracts behind the same session responsibilities. -->
 
@@ -561,7 +561,7 @@ Microsoft recommends a Microsoft Foundry resource for full Voice Live feature av
 
 Model IDs, event fields, codecs, limits, regions, pricing, and preview status change. Release automation should check official documentation and run a representative connection probe. The capability registry records only routes that the team has tested.
 
-## A Production Voice Runtime in One View
+## How A Production Voice Runtime Fits Together
 
 <!-- section-summary: A reliable voice runtime coordinates transport, audio, turns, playback, tools, durable state, recovery, and fallback throughout one live session. -->
 

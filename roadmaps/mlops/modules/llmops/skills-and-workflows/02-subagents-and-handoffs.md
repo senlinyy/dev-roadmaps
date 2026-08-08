@@ -9,21 +9,21 @@ id: "article-mlops-llmops-subagents-and-handoffs"
 
 ## Table of Contents
 
-1. [One Agent Can Accumulate Too Much Work](#one-agent-can-accumulate-too-much-work)
-2. [Each Multi-Agent Concept Owns a Different Boundary](#each-multi-agent-concept-owns-a-different-boundary)
-3. [Delegation Is an Explicit Contract](#delegation-is-an-explicit-contract)
-4. [Context Isolation Gives Each Worker a Focused View](#context-isolation-gives-each-worker-a-focused-view)
-5. [Authority Must Stay Narrow After Delegation](#authority-must-stay-narrow-after-delegation)
-6. [Coordination Patterns Follow Ownership and Dependency](#coordination-patterns-follow-ownership-and-dependency)
-7. [Durable State Keeps the Work Alive](#durable-state-keeps-the-work-alive)
-8. [Merge Turns Worker Results Into One Decision](#merge-turns-worker-results-into-one-decision)
-9. [Recovery Handles Cancellation, Timeouts, and Partial Failure](#recovery-handles-cancellation-timeouts-and-partial-failure)
-10. [Human Approval Binds Authority to an Exact Action](#human-approval-binds-authority-to-an-exact-action)
-11. [Trace and Evaluate the Whole Delegation System](#trace-and-evaluate-the-whole-delegation-system)
-12. [Keep One Agent Where the Boundary Is Weak](#keep-one-agent-where-the-boundary-is-weak)
+1. [Why One Agent Should Not Own Every Task](#why-one-agent-should-not-own-every-task)
+2. [Understand Delegation, Routing, Handoffs, And Review](#understand-delegation-routing-handoffs-and-review)
+3. [Define The Delegated Task And Expected Result](#define-the-delegated-task-and-expected-result)
+4. [Give Each Worker Focused Context](#give-each-worker-focused-context)
+5. [Limit Worker Authority](#limit-worker-authority)
+6. [Choose The Multi-Agent Pattern From Ownership And Dependencies](#choose-the-multi-agent-pattern-from-ownership-and-dependencies)
+7. [Store Delegated Work In Durable State](#store-delegated-work-in-durable-state)
+8. [Merge Worker Results Into One Decision](#merge-worker-results-into-one-decision)
+9. [Handle Cancellation, Timeouts, And Partial Failure](#handle-cancellation-timeouts-and-partial-failure)
+10. [Require Approval For The Exact Multi-Agent Action](#require-approval-for-the-exact-multi-agent-action)
+11. [Trace And Evaluate The Complete Delegation System](#trace-and-evaluate-the-complete-delegation-system)
+12. [Use One Agent If The Delegation Boundary Is Unclear](#use-one-agent-if-the-delegation-boundary-is-unclear)
 13. [References](#references)
 
-## One Agent Can Accumulate Too Much Work
+## Why One Agent Should Not Own Every Task
 <!-- section-summary: Subagents divide complex work after one agent can no longer hold the required context, authority, and independent tasks inside one clear operating boundary. -->
 
 At a high level, **subagents are bounded workers that help another agent or workflow complete a larger task**. Each worker receives a smaller job, a focused view of the evidence, and only the capabilities required for its part. A coordinator keeps track of the overall objective and decides what to do with the results.
@@ -56,12 +56,11 @@ flowchart TD
     S2 --> M
     S3 --> M
     M --> O["One outcome with<br/>clear ownership"]
-
 ```
 
 The useful question is therefore, “Which boundary should this worker own?” A job title in a prompt supplies no isolation by itself. The assignment, context, runtime identity, result contract, and coordinator create the production boundary.
 
-## Each Multi-Agent Concept Owns a Different Boundary
+## Understand Delegation, Routing, Handoffs, And Review
 <!-- section-summary: Subagents, specialist agents, agent tools, handoffs, routers, skills, ordinary tools, and orchestrators solve different parts of a coordinated system. -->
 
 Multi-agent discussions use several similar terms. A beginner can separate them by following two questions: **who makes the next decision, and who owns the user-facing task?**
@@ -96,14 +95,13 @@ flowchart TD
     O["Durable orchestrator<br/>persists lifecycle and authority"] -. "controls" .-> R
     O -. "controls" .-> M
     O -. "controls" .-> H
-
 ```
 
 Consider a request to investigate a failed data pipeline. A diagnostics skill can teach one agent the investigation method. Metrics and log tools supply live evidence. A specialist subagent can examine Spark execution while the manager investigates the upstream data source. A handoff fits after the issue clearly belongs to the data-platform team and that specialist should continue with the user. A durable workflow fits after the investigation can pause for hours, survive a restart, or trigger an approved repair.
 
 The boundaries can compose. A router selects an incident coordinator. The coordinator calls two specialists as tools. One specialist loads a domain skill. The surrounding workflow records their assignments and pauses before a production change.
 
-## Delegation Is an Explicit Contract
+## Define The Delegated Task And Expected Result
 <!-- section-summary: A delegation contract tells one worker exactly what outcome it owns, which evidence and authority it receives, and when it must stop or escalate. -->
 
 “Investigate the problem” sounds clear to the person who already knows the system. A worker can interpret it in many ways. It may inspect the wrong time window, call an expensive tool repeatedly, return a polished summary with no evidence, or change a resource that the coordinator only wanted reviewed.
@@ -150,7 +148,7 @@ The objective names a decision the parent can use. The scope prevents the specia
 
 Permissions and limits belong inside the job contract. This worker can run an explain plan in staging and has no production-write capability. If the staging schema differs, continuing would produce evidence about the wrong system. The stop condition sends that mismatch back to the coordinator.
 
-### Evidence makes the result reviewable
+### Require Evidence With The Worker Result
 
 A worker result should separate established facts, interpretation, recommendations, and unknowns. A migration specialist might return:
 
@@ -162,13 +160,13 @@ A worker result should separate established facts, interpretation, recommendatio
 
 The parent can inspect that chain. A confidence score alone cannot reveal whether the worker queried the right database or inferred the answer from general knowledge.
 
-### Acknowledgement catches bad assignments early
+### Confirm The Assignment Before Work Begins
 
 Before expensive work starts, the worker can acknowledge the contract: restate the objective, list missing inputs, and confirm the authority boundary. This short exchange catches ambiguity while it is cheap to fix.
 
 If the worker needs a new tool or wider data access, it returns an escalation request. It cannot silently expand its own scope. The coordinator can amend the assignment, create a separate worker, or ask a person for approval.
 
-## Context Isolation Gives Each Worker a Focused View
+## Give Each Worker Focused Context
 <!-- section-summary: Context isolation selects the smallest complete view for each assignment and keeps authoritative run state outside individual agent transcripts. -->
 
 The main reason to create a specialist is often context control. Copying the parent's entire transcript into every worker throws away that advantage.
@@ -199,7 +197,6 @@ flowchart TD
     X["Restricted source stores"] -. "scoped reads" .-> A
     X -. "scoped reads" .-> D
     X -. "scoped reads" .-> S
-
 ```
 
 Three kinds of state should remain distinct:
@@ -216,7 +213,7 @@ Privacy follows the projection. A specialist can read governed source data throu
 
 Context can also go stale. Record a context version or digest with the assignment. A worker that returns after the release commit changes should be marked stale, re-run against the new candidate, or treated as historical evidence. Quietly merging the old finding would connect a valid analysis to the wrong object.
 
-## Authority Must Stay Narrow After Delegation
+## Limit Worker Authority
 <!-- section-summary: The runtime gives each worker the minimum credentials and effects required for its assignment, while policy and human approval retain control of consequential actions. -->
 
 Delegating reasoning never grants authority by itself. A sentence such as “you may deploy this fix” is only model input. The runtime decides which identity, tools, network routes, and data scopes the worker can actually use.
@@ -240,7 +237,6 @@ flowchart TD
     E -->|yes| G["Policy and approval gate"]
     G -->|approved| X["Trusted executor performs<br/>the exact authorised action"]
     G -->|denied| N["Return denial or<br/>safer alternative"]
-
 ```
 
 Credential propagation deserves explicit design. Passing the parent's broad token into every nested call gives every specialist the parent's power. A better runtime exchanges the parent identity for a short-lived, assignment-scoped credential or calls a policy-enforcing service on the worker's behalf. The audit record keeps both the requesting parent and the executing workload identity.
@@ -249,7 +245,7 @@ Trust also applies to the worker package. A specialist can contain instructions,
 
 Current OpenAI Agents SDK supports approval gates around agents exposed as tools and around tools used inside nested agents. A sensitive request appears as an interruption on the outer run, where application code can approve or reject it before resuming. That mechanism supplies a pause point. Business policy still decides which requests qualify, who may approve them, and how long the decision remains valid.
 
-## Coordination Patterns Follow Ownership and Dependency
+## Choose The Multi-Agent Pattern From Ownership And Dependencies
 <!-- section-summary: Manager-worker, routing, parallel fan-out, sequential handoff, and independent review patterns fit different ownership and dependency shapes. -->
 
 The pattern should follow the shape of the work. Start with ownership: does one coordinator keep the final answer, or should another specialist take over? Then inspect dependencies: can tasks run independently, or does one result define the next assignment?
@@ -272,10 +268,9 @@ flowchart TD
     R --> J
     V --> J
     H --> N["Receiving agent owns<br/>the next response"]
-
 ```
 
-### Manager-worker keeps one owner for the final result
+### Use Manager-Worker For One Final Owner
 
 In the **manager-worker pattern**, a central agent calls specialists and receives their results. The manager keeps the user conversation, decides whether another worker is needed, and produces the final answer.
 
@@ -283,7 +278,7 @@ This pattern fits a research synthesis, release review, or incident assessment w
 
 Current OpenAI Agents SDK implements the pattern through `Agent.as_tool()`. The callable can expose structured parameters, a turn limit, hooks, and an approval requirement. The important production contract lives around that API: build a focused brief, validate the nested result, and retain the manager's authority boundary.
 
-### Specialist routing selects one destination
+### Route Work To One Specialist
 
 A **router** classifies a request and sends it to a specialist. It fits stable categories such as account access, billing, data quality, and deployment support.
 
@@ -291,7 +286,7 @@ Use ordinary code after an authoritative field already identifies the destinatio
 
 Routing evaluation needs near misses and an explicit unknown path. A low-confidence request can return to a general coordinator or human triage. Forcing every input into a known category creates confident misroutes.
 
-### Parallel fan-out and join shortens independent work
+### Run Independent Work In Parallel
 
 **Fan-out** creates several assignments. **Join** waits for the required results and combines them. The pattern saves wall-clock time after branches are genuinely independent.
 
@@ -299,7 +294,7 @@ A production-readiness review can run security, load, and rollback checks togeth
 
 Parallel work raises cost and conflict risk. Set a concurrency limit, cancel branches whose results are no longer needed, and define whether the join requires all workers or a named subset.
 
-### Sequential handoff transfers active ownership
+### Use Sequential Handoff To Transfer Ownership
 
 A **sequential handoff** fits work whose next stage needs a different specialist to continue the interaction. A general support agent may establish that an account is locked, then transfer to an identity specialist who gathers the required verification and answers the user directly.
 
@@ -307,7 +302,7 @@ The handoff needs an acknowledgement and a safe return path. If the receiver is 
 
 Current OpenAI Agents SDK represents handoffs as tools available to the model. The receiving agent takes over inside the same run, and handoff inputs can carry a small structured reason or priority. An input filter controls the history it receives.
 
-### Independent review separates creation from challenge
+### Use Independent Review To Challenge The Work
 
 An **independent review pattern** sends a proposed result to a second worker with review criteria and source evidence. The reviewer looks for unsupported claims, missing cases, policy violations, or unsafe actions. It returns findings to a merge gate, which decides whether the proposal needs revision.
 
@@ -315,7 +310,7 @@ For example, one worker drafts an infrastructure change while another receives t
 
 Independence is strongest after the reviewer receives a fresh context and can inspect primary evidence. Reusing the maker's complete reasoning history encourages the reviewer to follow the same assumptions. A different prompt can help, although real independence comes from context, evidence, authority, and evaluation boundaries.
 
-## Durable State Keeps the Work Alive
+## Store Delegated Work In Durable State
 <!-- section-summary: A durable orchestrator records assignments and transitions so delegated work can resume after waits, failures, restarts, and human decisions. -->
 
 An ordinary agent loop can call a model, execute tools, process a handoff, and stop after a final answer. That is enough for short work inside one process. A release investigation that lasts an hour or pauses overnight needs a stronger lifecycle.
@@ -359,7 +354,7 @@ Current OpenAI Agents SDK supports in-run handoffs and serializable run state fo
 
 Durable state also separates assignment history from conversation history. A compact user-facing summary can change over time. The assignment record retains the worker version, brief digest, context version, attempt count, result digest, and transition history needed for an audit or retry.
 
-## Merge Turns Worker Results Into One Decision
+## Merge Worker Results Into One Decision
 <!-- section-summary: Merge validates worker contracts, checks evidence and coverage, preserves disagreement, and applies final authority before producing one outcome. -->
 
 Several plausible worker responses still require validation and comparison. **Merge** is the stage that turns those outputs into one supported decision.
@@ -383,7 +378,6 @@ flowchart TD
     F --> Q["Request targeted evidence,<br/>independent review, or human decision"]
     Q --> A
     A --> O["Final answer, artifact,<br/>or approved action proposal"]
-
 ```
 
 The synthesis model should receive structured findings and selected evidence. Full worker transcripts usually stay outside its context. This focused view prevents a verbose worker from dominating the decision.
@@ -392,7 +386,7 @@ A partial result needs an explicit status. An incident coordinator can publish a
 
 Deterministic code should enforce assignment IDs, required branches, approvals, and schema checks. Model judgement can compare explanations, summarize compatible evidence, and identify questions for a follow-up worker. This division keeps mechanical guarantees outside probabilistic synthesis.
 
-## Recovery Handles Cancellation, Timeouts, and Partial Failure
+## Handle Cancellation, Timeouts, And Partial Failure
 <!-- section-summary: Recovery classifies failures, reconciles uncertain effects, and retries bounded work without repeating external actions or accepting stale results. -->
 
 Delegated work rarely fails as one clean event. One worker may succeed while another times out. A user may cancel after a write has started. The parent may restart while a specialist is waiting for approval. Recovery needs to preserve the completed evidence and identify the smallest safe action.
@@ -420,7 +414,6 @@ flowchart TD
     D -->|yes| A["Record existing effect<br/>and continue"]
     D -->|no| I["Retry with the same<br/>idempotency key"]
     D -->|unknown| H["Escalate for<br/>human reconciliation"]
-
 ```
 
 An **idempotency key** gives repeated attempts one stable operation identity. Suppose a worker asks a ticket service to create a change record and the response times out. The runtime queries the ticket service using the key. If the record exists, it stores that result. If it is absent, it repeats the request with the same key. A new key could create a duplicate record.
@@ -429,7 +422,7 @@ Cancellation is cooperative for running work. The orchestrator first records `ca
 
 Partial failure policy belongs to the parent task. A research summary may proceed with two of three optional sources and disclose the gap. A production change should stop after a required safety review fails. These choices should be encoded before an incident tests them.
 
-## Human Approval Binds Authority to an Exact Action
+## Require Approval For The Exact Multi-Agent Action
 <!-- section-summary: Human approval pauses the run at a consequential boundary and authorizes one reviewed action with a known scope, digest, and expiry. -->
 
 Human approval matters after the system reaches a decision that software should not take alone. Typical examples include deploying to production, sending external communication, moving money, deleting data, or accepting a high-risk exception.
@@ -471,7 +464,7 @@ Current OpenAI Agents SDK human-in-the-loop flow pauses sensitive tool calls as 
 
 A rejected action is a normal workflow outcome. The worker may offer a read-only report, revise the proposal, or stop. The system should preserve the rejection reason without pressuring the reviewer through repeated equivalent requests.
 
-## Trace and Evaluate the Whole Delegation System
+## Trace And Evaluate The Complete Delegation System
 <!-- section-summary: Multi-agent evaluation separates routing, worker execution, merge, safety, cost, and recovery so the team can identify the layer that failed. -->
 
 A final answer can look correct even though the system chose the wrong specialist, leaked excess context, retried an effect, or ignored a failed branch. Observability needs to show the path that produced the outcome.
@@ -503,7 +496,6 @@ flowchart TD
     M --> G
     S --> G
     E --> G
-
 ```
 
 Evaluation should separate the layers. **Routing evaluation** measures correct destination, false delegation, missed delegation, and escalation. **Worker evaluation** measures factual quality, contract compliance, source support, and useful unknowns. **Merge evaluation** measures required coverage, conflict detection, and final decision quality. **Recovery evaluation** exercises timeouts, unavailable receivers, stale results, cancellation, uncertain writes, and restart.
@@ -516,7 +508,7 @@ Current OpenAI Agents SDK tracing records model generations, tool calls, handoff
 
 Compare every multi-agent candidate against a simpler baseline. Test one agent with a focused skill first. Deferred tools or a deterministic workflow provide two other useful baselines. A multi-agent release should improve at least one important outcome, such as quality, isolation, parallel speed, or risk control. The measured gain needs to cover its extra operating cost.
 
-## Keep One Agent Where the Boundary Is Weak
+## Use One Agent If The Delegation Boundary Is Unclear
 <!-- section-summary: A task should remain with one agent when splitting creates more context transfer, shared state, and merge work than independent value. -->
 
 A task can be large and still need one continuous line of reasoning. Splitting that work adds briefs, context transfer, and merge decisions while providing little independent progress. The design goal is the smallest topology that preserves a clear path from evidence to outcome.
@@ -544,7 +536,6 @@ flowchart TD
     P -->|yes| D{"Merge and recovery costs<br/>fit the expected value?"}
     D -->|no| A
     D -->|yes| S["Create a bounded subagent<br/>under durable coordination"]
-
 ```
 
 A sound multi-agent system has the smallest topology that creates a real boundary. Every worker receives a contract, selected context, narrow authority, and a measurable result. The orchestrator preserves state and ownership. Merge protects evidence. Recovery protects effects. Human approval protects consequential decisions. Evaluation then proves whether the extra coordination improves the product.

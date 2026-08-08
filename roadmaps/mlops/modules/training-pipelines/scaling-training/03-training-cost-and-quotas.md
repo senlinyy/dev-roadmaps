@@ -10,26 +10,26 @@ id: "article-mlops-training-pipelines-training-cost-and-quotas"
 ## Table of Contents
 
 1. [What Training Cost and Quotas Mean](#what-training-cost-and-quotas-mean)
-2. [Define the Unit of Useful Work](#define-the-unit-of-useful-work)
-3. [Map the Full Cost Boundary](#map-the-full-cost-boundary)
-4. [Separate Quota, Capacity, Allocation, Queue, and Budget](#separate-quota-capacity-allocation-queue-and-budget)
-5. [Model Time to Result and Accelerator-Hours](#model-time-to-result-and-accelerator-hours)
+2. [Decide What Result The Training Spend Must Produce](#decide-what-result-the-training-spend-must-produce)
+3. [Count Every Cost Required To Finish Training](#count-every-cost-required-to-finish-training)
+4. [Understand Quota, Capacity, Allocation, Queue, And Budget](#understand-quota-capacity-allocation-queue-and-budget)
+5. [Measure Waiting Time, Training Time, And Accelerator Use](#measure-waiting-time-training-time-and-accelerator-use)
 6. [Choose Resources, Precision, and Parallelism](#choose-resources-precision-and-parallelism)
-7. [Choose a Capacity and Purchase Model](#choose-a-capacity-and-purchase-model)
+7. [Choose How To Buy And Reserve Training Capacity](#choose-how-to-buy-and-reserve-training-capacity)
 8. [Make Interruptible Training Recoverable](#make-interruptible-training-recoverable)
-9. [Govern Cloud and Kubernetes Capacity](#govern-cloud-and-kubernetes-capacity)
-10. [Attribute Spend to Training Outcomes](#attribute-spend-to-training-outcomes)
-11. [Enforce Budgets Without Destroying Useful Work](#enforce-budgets-without-destroying-useful-work)
-12. [Run Matched Cost and Scaling Experiments](#run-matched-cost-and-scaling-experiments)
+9. [Control Training Capacity In The Cloud And Kubernetes](#control-training-capacity-in-the-cloud-and-kubernetes)
+10. [Connect Training Costs To Runs And Results](#connect-training-costs-to-runs-and-results)
+11. [Decide What Happens When A Training Budget Is Reached](#decide-what-happens-when-a-training-budget-is-reached)
+12. [Compare Training Costs With Controlled Experiments](#compare-training-costs-with-controlled-experiments)
 13. [Investigate Cost and Capacity Incidents](#investigate-cost-and-capacity-incidents)
-14. [Use an Operational Cost Checklist](#use-an-operational-cost-checklist)
+14. [Use A Checklist Before, During, And After Training](#use-a-checklist-before-during-and-after-training)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
 
 ## What Training Cost and Quotas Mean
 <!-- section-summary: Training economics measures the full cost and completion time required to produce a useful model result under real capacity constraints. -->
 
-**Training cost management is the practice of buying a useful ML result with an explicit amount of time, compute, and money.** A production retrain may count as useful after the model passes its release gate. Pretraining may use a target loss, while a tuning study may need to identify an approved configuration.
+**Training cost management is the practice of buying a useful ML result with an explicit amount of time, compute, and money.** A production retrain produces its required result only if the model passes its release gate. Pretraining may use a target loss, while a tuning study may need to identify an approved configuration.
 
 An hourly GPU price answers only one part of the problem. A lower-priced accelerator can take longer, require more devices, or wait several hours for capacity. A high-throughput cluster can also waste money. Poor data loading, frequent checkpoint pauses, or an oversized global batch may prevent it from reaching the quality target efficiently.
 
@@ -43,10 +43,6 @@ flowchart TD
     D --> E["Full Cost Boundary<br/>(Run, Shared, Idle, and Recovery Cost)"]
     E --> F["Unit Economics<br/>(Cost per Useful Result)"]
 
-    classDef objective fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef system fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B objective
     class C system
     class D control
@@ -57,7 +53,7 @@ Suppose a model retrain must complete evaluation before the morning release wind
 
 The central question is therefore: **How much does it cost to produce an acceptable result by the required time, with a recovery path the team has tested?**
 
-## Define the Unit of Useful Work
+## Decide What Result The Training Spend Must Produce
 <!-- section-summary: A useful-work unit connects infrastructure spend to a completed training result that has passed a stated quality gate. -->
 
 A cost metric needs a denominator. The denominator is the unit produced for the money spent. GPU-hours alone describe consumed capacity; they do not say whether the run created value.
@@ -66,7 +62,7 @@ For a routine retrain, one useful unit may be **one model candidate that complet
 
 The quality condition matters. If ten low-cost runs all fail the segment regression gate, their cost per accepted candidate is still undefined because they produced zero accepted candidates. The spend belongs in failed-experiment or learning cost, and the team should record what decision that evidence enabled.
 
-### Define the completion objective
+### Define What Counts As A Completed Run
 
 A **completion objective** states how soon the result is needed and what counts as complete. “Train the model” leaves evaluation, artifact publication, and recovery outside the boundary. A stronger objective might say:
 
@@ -93,36 +89,36 @@ quality_gate:
 
 `checkpoint_grace_cost` reserves a small amount for a safe checkpoint and shutdown after the normal budget is exhausted. `hard_runtime_hours` protects against a stuck loop even if billing data arrives late. The quality gate gives the spend a concrete outcome.
 
-### Separate exploration from production commitments
+### Separate Exploration Budgets From Production Commitments
 
 An exploratory run may produce useful evidence without creating a releasable model. Its useful unit can be a completed ablation or a rejected hypothesis with enough evidence to stop further spending. Production retraining has a stricter unit because it must finish evaluation and publish a governed artifact.
 
 Using separate objectives prevents exploratory GPU-hours from appearing as failed production work. It also prevents an open-ended search from inheriting the release pipeline's capacity priority.
 
-## Map the Full Cost Boundary
+## Count Every Cost Required To Finish Training
 <!-- section-summary: The full cost boundary includes allocated infrastructure, platform charges, data movement, shared idle capacity, failures, and recovery work. -->
 
 The **cost boundary** defines which charges belong to the training decision. A narrow boundary contains only accelerator runtime. A production boundary follows the complete path from queued job to evaluated artifact.
 
-### Direct run costs
+### Direct Training Costs
 
 Accelerators are usually the largest direct charge. The worker also reserves CPU and memory for data loading. Datasets and checkpoints consume local or network storage, while distributed communication and cross-zone access consume network bandwidth. Managed platforms may add service units or control-plane charges on top of the underlying cloud compute.
 
 The training image, logs, metrics, profiler traces, checkpoints, and final artifacts continue to use registry and object-storage capacity after compute has stopped. Retention policies should keep the evidence required for reproducibility and audit while expiring temporary shards and failed-run outputs.
 
-### Shared and idle costs
+### Shared And Idle Costs
 
 A reserved GPU node incurs cost even if no workload is running on it. A Kubernetes cluster also has system Pods, networking, observability, and autoscaling overhead. Shared pools need an explicit policy for allocating those costs to teams or reporting them as platform overhead.
 
 OpenCost provides a vendor-neutral Kubernetes allocation model. It separates workload cost, cluster idle cost, and shared overhead, and can aggregate allocation by namespace, workload, label, or annotation. For GPU workloads, allocation should follow the requested or allocated accelerator resource because the node is billed even during a data-loading stall.
 
-### Failure and recovery costs
+### Failure And Recovery Costs
 
 Failed attempts, Spot interruptions, repeated data downloads, and work since the last checkpoint consume real capacity. A retry does not erase the first attempt from the bill. Record every attempt under one logical run ID so cost per completed result includes recomputation.
 
 Queue time has a different treatment. A queued job usually has no allocated compute charge, although it delays the result. Warm pools, persistent resources, and reservations may continue billing while the workload waits elsewhere. Completion metrics and financial metrics therefore need separate clocks.
 
-## Separate Quota, Capacity, Allocation, Queue, and Budget
+## Understand Quota, Capacity, Allocation, Queue, And Budget
 <!-- section-summary: Five different controls determine whether a job is permitted, physically available, assigned, waiting, and financially approved. -->
 
 Several words describe “how many GPUs we have,” but they refer to different system states. Keeping them separate shortens capacity incidents.
@@ -145,10 +141,6 @@ flowchart TD
     D --> E["Budget Control<br/>(Spend Observed and Action Applied)"]
     E --> F["Useful Result<br/>(Completed Outcome Meets the Gate)"]
 
-    classDef permission fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef supply fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A permission
     class B supply
     class C,D,E control
@@ -157,7 +149,7 @@ flowchart TD
 
 Increasing namespace quota cannot create a missing cloud GPU. Purchasing a capacity reservation cannot bypass an account service quota. Raising a budget cannot fix an impossible node selector. Each control has a distinct owner and source of evidence.
 
-## Model Time to Result and Accelerator-Hours
+## Measure Waiting Time, Training Time, And Accelerator Use
 <!-- section-summary: Time to result includes waiting and recovery, while accelerator-hours measure the allocated devices consumed during running attempts. -->
 
 Two measurements answer different questions. **Time to result** is the elapsed time from submission to the completed useful outcome. **Accelerator-hours** measure how much accelerator capacity the running attempts consumed.
@@ -174,9 +166,11 @@ After these terms are clear, the basic formulas are:
 
 **cost per useful result = full cost boundary ÷ number of useful results**
 
+Accelerator-hours should remain separated by device class. One H100-hour and one TPU-hour are both one allocated hour, yet they provide different memory, throughput, and prices. The financial comparison converts each allocation through its own billed rate; the engineering comparison keeps the device type beside the throughput and quality result.
+
 Suppose an eight-GPU job waits two hours and then runs for five allocated hours. An interruption loses twenty minutes of progress, followed by one additional allocated hour after restart. The two attempts consume 48 GPU-hours. Time to result also includes the queue wait, restart gap, evaluation, and publication, so it exceeds the six allocated hours.
 
-### Measure the time inside each allocated hour
+### Measure How Each Allocated Hour Is Spent
 
 Break training steps into input wait, forward compute, backward compute, collective communication, optimizer work, and checkpoint time. Low accelerator utilization can mean insufficient CPU, slow storage, uneven data, or synchronization stalls. It does not automatically justify a cheaper GPU.
 
@@ -191,7 +185,7 @@ Memory fit alone does not make a good training configuration. CPU workers must p
 
 After fit, compare throughput and time to quality. A newer accelerator may cost more per hour and finish with fewer total accelerator-hours. A less expensive device may win for small models whose input pipeline or CPU preprocessing limits speed. Benchmark the complete training step on the intended node and interconnect.
 
-### Use precision as a measured systems choice
+### Choose Numeric Precision From Measurements
 
 **Precision** describes how many bits represent model values and calculations. FP32 offers a wide numerical range and is a common baseline. BF16 and FP16 use fewer bits, reduce memory traffic, and can use specialised accelerator units. PyTorch Automatic Mixed Precision selects lower precision for supported operations while keeping sensitive calculations at a safer precision.
 
@@ -210,22 +204,22 @@ FP16 training may need gradient scaling to prevent small gradients from underflo
 
 FP8 can improve throughput and memory use for supported Transformer operations. NVIDIA Transformer Engine supports FP8 on Hopper, Ada, and Blackwell GPUs. Its value depends on model coverage, framework release, kernel path, and numerical validation. Treat FP8 as a model-and-hardware-specific optimisation with its own quality and checkpoint tests.
 
-### Add parallelism only for a measured limit
+### Add Parallelism Only To Solve A Measured Limit
 
 Data parallelism can reduce completion time if the full training state fits on every device. FSDP or ZeRO can reduce per-device state memory. Tensor and pipeline parallelism solve larger model constraints but add communication and operational complexity.
 
 Every scaling step should report throughput, exposed communication, peak memory, time to the target quality, total accelerator-hours, and full cost. More GPUs can reduce wall time while increasing cost per accepted model.
 
-## Choose a Capacity and Purchase Model
+## Choose How To Buy And Reserve Training Capacity
 <!-- section-summary: Commitments reduce rates, reservations secure supply, on-demand capacity handles variable work, and Spot capacity trades reliability for a discount. -->
 
 Cloud purchase terms mix two separate benefits: price reduction and capacity assurance. A **commitment** promises a level of future usage or spend in return for a discount. A **capacity reservation** holds matching hardware for the customer. Some products combine parts of both, while others provide only one.
 
-### Commitments cover predictable baseline usage
+### Use Commitments For Predictable Baseline Usage
 
 Savings Plans, reserved-instance discounts, and committed-use discounts suit stable demand with high utilisation. Unused commitment can still cost money. AWS and Azure distinguish these financial discounts from capacity reservations. A discounted rate therefore does not prove that a GPU will be available at launch time.
 
-### Capacity reservations protect important windows
+### Use Capacity Reservations For Important Training Windows
 
 Reservations are useful for release-critical training, planned large-scale pretraining, or scarce accelerator families. They trade flexibility for a stronger capacity expectation and can charge for unused reserved time.
 
@@ -235,11 +229,11 @@ Google Compute Engine reservations provide zonal capacity assurance. Vertex AI s
 
 Azure on-demand capacity reservations secure matching VM capacity in a region or zone. Azure Reserved VM Instances and savings plans provide billing discounts and do not by themselves guarantee capacity.
 
-### On-demand capacity handles uncertain demand
+### Use On-Demand Capacity For Uncertain Demand
 
 On-demand resources suit irregular jobs, new workloads without a stable baseline, and overflow above committed capacity. They avoid a long financial commitment, yet launch still depends on quota and physical supply.
 
-### Spot capacity handles recoverable work
+### Use Spot Capacity For Recoverable Work
 
 AWS Spot, Google Cloud Spot VMs, and Azure Spot VMs use spare capacity that the provider can reclaim. They fit checkpointable training with flexible completion time. A blended fleet may keep the coordinator or critical workers on stable capacity. Replaceable workers can use Spot if the training framework supports that topology.
 
@@ -251,9 +245,6 @@ flowchart TD
     B -->|"Variable or New Work"| E["On-Demand Capacity<br/>(Flexible Usage Without Long Commitment)"]
     B -->|"Recoverable and Flexible"| F["Spot Capacity<br/>(Discounted Supply with Interruption Risk)"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef choice fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A input
     class B decision
     class C,D,E,F choice
@@ -268,7 +259,7 @@ A resumable checkpoint stores more than model weights. It also records optimizer
 
 Distributed training may write one checkpoint shard per worker. A completion manifest tells the restore process that every required shard arrived successfully. Store these files in durable object storage outside the interruptible node, because its local disk may disappear with the instance.
 
-### Choose the checkpoint interval from loss exposure
+### Choose A Checkpoint Interval That Limits Lost Work
 
 Frequent checkpoints spend more time writing state. Infrequent checkpoints risk more recomputation. Measure checkpoint duration, checkpoint size, interruption history, and storage throughput. A twenty-minute interval may be sensible for a multi-hour run if the write takes under a minute; the same interval may dominate a short job with a ten-minute checkpoint.
 
@@ -276,7 +267,7 @@ Provider notices are a final signal, not the primary checkpoint strategy. AWS EC
 
 A large distributed checkpoint may not finish inside those windows. Use periodic committed checkpoints during normal training. The termination handler can stop new steps, complete a small manifest or pointer update, and report the interruption.
 
-### Bound recovery attempts
+### Limit The Number And Cost Of Recovery Attempts
 
 After an interruption, the orchestrator should locate the latest complete checkpoint, acquire a supported worker topology, restore, and verify the next step. Record the previous attempt's allocated hours and the new attempt number under the same logical run ID.
 
@@ -284,12 +275,12 @@ Set a maximum wait and retry count. SageMaker Managed Spot Training exposes `Max
 
 Test the interruption path before assigning routine work to Spot. Trigger a controlled termination, restore on a replacement worker group, and compare several steps with an uninterrupted baseline.
 
-## Govern Cloud and Kubernetes Capacity
+## Control Training Capacity In The Cloud And Kubernetes
 <!-- section-summary: Cloud quotas control permission, Kubernetes quotas limit tenant requests, and Kueue admits whole workloads against real accelerator pools. -->
 
 Capacity governance needs controls at both the provider and cluster layers. The provider decides whether the account may request the resource and whether the hardware exists. Kubernetes decides which tenant and workload may use nodes already present or provisionable for the cluster.
 
-### Verify provider quota and supply
+### Verify Provider Quota And Hardware Supply
 
 SageMaker training quotas are regional and specific to training instance types. Reserved capacity in SageMaker training plans has additional quotas, and the training job or HyperPod quota still needs to cover the planned instance count.
 
@@ -301,15 +292,15 @@ A useful quota request describes the exact resource pressure instead of asking f
 
 The request should also explain how often the capacity is needed and why demand is growing. A recurring capacity window may justify a reservation, while occasional bursts may only require a quota increase and a queue policy.
 
-### Use Kubernetes ResourceQuota for tenant ceilings
+### Limit Each Kubernetes Tenant With ResourceQuota
 
 Kubernetes exposes GPUs as extended resources such as `nvidia.com/gpu`. A namespace `ResourceQuota` can cap the sum of requested GPUs, CPU, memory, Pods, and other resources. It limits a tenant's maximum request but does not order jobs, reserve nodes, or admit a multi-worker group together.
 
-### Use Kueue for batch admission
+### Queue Batch Training With Kueue
 
 Kueue adds queue admission around Kubernetes Jobs and supported training workloads. A namespaced **LocalQueue** points to a cluster-wide **ClusterQueue**. A **ResourceFlavor** maps a logical class such as H100 on-demand GPUs to node labels or taints. The ClusterQueue defines nominal quota, borrowing, lending, priority, and preemption policy.
 
-Current Kueue examples use the `v1beta2` API, so teams should pin a compatible Kueue and Kubernetes release. Fair Sharing is stable in Kueue; advanced features still need their individual maturity checked before adoption.
+Current Kueue examples use the `v1beta2` API, so teams should pin a compatible Kueue and Kubernetes release. Cohort-level Fair Sharing and its preemption rules are stable. Admission Fair Sharing, which orders LocalQueue workloads from their historical usage inside one ClusterQueue, is a separate beta feature. Other advanced controls need the same maturity check before adoption.
 
 ```yaml
 apiVersion: kueue.x-k8s.io/v1beta2
@@ -339,14 +330,14 @@ A distributed job should remain queued until the required worker group can start
 
 Queue policy should account for useful work. Priority classes represent release impact or incident urgency. Fair-share weights prevent one tenant from consuming every borrowable GPU. Preemption policy should consider checkpoint age because evicting an uncheckpointed job can destroy more value than the incoming job creates.
 
-## Attribute Spend to Training Outcomes
+## Connect Training Costs To Runs And Results
 <!-- section-summary: Cost attribution joins billing records and shared-cluster allocation with run IDs, owners, datasets, attempts, and final outcomes. -->
 
 Cost attribution answers who spent the money, which run consumed it, and what outcome the run produced. Cloud resource tags alone rarely contain enough ML context, while experiment tracking alone lacks final billed cost. Join the two through stable identifiers.
 
 Every training attempt should carry a logical run ID, attempt ID, owner, team, cost centre, environment, model purpose, dataset version, and purchase model. Keep sensitive or personal data out of tags because billing exports and platform metadata can have broad visibility.
 
-### Use billing exports for final cost
+### Use Billing Exports For Final Cost
 
 AWS Data Exports CUR 2.0 is the recommended detailed AWS cost export. It has a consistent schema, tag data, capacity-reservation fields, and optional EKS split cost allocation including accelerators. Google Cloud detailed billing export sends resource-level cost and labels to BigQuery. Azure Cost Management exports provide detailed cost records for analysis and chargeback.
 
@@ -358,7 +349,7 @@ curl "$OPENCOST_URL/allocation/compute?window=7d&aggregate=label:ml_run_id&inclu
 
 Reconcile the fast estimate with the provider bill after discounts, credits, reservation allocation, and corrections arrive. Keep both `estimated_cost` and `billed_cost` instead of overwriting history.
 
-### Include Databricks platform and cloud cost
+### Include Databricks Platform And Cloud Cost
 
 Databricks records billable platform usage in `system.billing.usage`. Joining it with `system.billing.list_prices` produces list-cost estimates by job, workspace, product, or custom tag:
 
@@ -382,7 +373,7 @@ Serverless usage policies can apply attribution tags to serverless workloads. Da
 
 Databricks compute policies can require custom tags, constrain node types and worker counts, and enforce job-oriented compute settings. They act before allocation, which makes them more useful for preventive governance than a delayed billing report.
 
-## Enforce Budgets Without Destroying Useful Work
+## Decide What Happens When A Training Budget Is Reached
 <!-- section-summary: Budget enforcement blocks new risk first, preserves a bounded checkpoint path, and uses hard termination for runaway or unsafe workloads. -->
 
 A budget needs an action policy. Email alone creates awareness; it does not decide whether an active job should finish, checkpoint, or stop.
@@ -398,10 +389,6 @@ flowchart TD
     C -->|"Finish Recovery State"| F["Checkpoint Grace<br/>(Bounded Spend Saves Valid Progress)"]
     C -->|"Runaway or Unsafe"| G["Hard Termination<br/>(Allocation Stops Immediately)"]
 
-    classDef signal fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B signal
     class C decision
     class D,E,F action
@@ -410,7 +397,7 @@ flowchart TD
 
 Cloud controls have different enforcement behaviour. AWS Budgets actions can apply IAM or service-control policies that deny new provisioning. They can also target selected EC2 resources. Azure budgets can notify action groups that run organisation-defined automation.
 
-Google Cloud budget alerts provide notifications. Project spend-cap budgets can restrict new spend, although ongoing fixed resources such as compute and storage can continue accruing charges.
+Google Cloud budget alerts provide notifications. Spend cap budgets are currently Preview and cover only listed eligible services. For a covered service, enforcement blocks new usage after the threshold, while in-flight work can finish and persistent compute or storage can continue accruing charges. A training platform still needs its own admission, runtime, and retry limits whenever the training service or its supporting resources fall outside that scope.
 
 Databricks budgets primarily track usage and send alerts, and those notifications may arrive after the underlying usage occurred. General training control therefore needs earlier safeguards. Compute policies restrict allowed cluster shapes, and permissions control who may launch them. Job timeouts bound runtime, while workflow admission decides whether a new run may start.
 
@@ -418,7 +405,7 @@ Databricks provides blocking modes for specific AI Gateway and Genie budgets. Th
 
 Billing signals can lag behind live use. Pair them with limits on allocated hours, retry attempts, worker count, and approved accelerator flavors. The controller should also check checkpoint age and be able to suspend new queue admissions. Preserve an emergency override with a named approver and an audit record.
 
-## Run Matched Cost and Scaling Experiments
+## Compare Training Costs With Controlled Experiments
 <!-- section-summary: A matched experiment changes one systems choice at a time and compares completion, quality, full cost, and recovery evidence. -->
 
 Price calculators estimate rates. A **matched cost experiment** measures the workload under controlled conditions. Keep the code, data manifest, model initialisation, global batch, optimizer, and precision fixed. Apply the same quality gate, checkpoint policy, and evaluation path unless one of those is the variable under study.
@@ -427,7 +414,7 @@ Start with one accelerator. Test additional worker counts such as two, four, and
 
 Suppose four high-throughput GPUs finish an approved fine-tuning run in 3.2 allocated hours. Eight lower-cost GPUs take 5.1 hours because communication and data loading scale poorly. The second option has a lower per-GPU hourly rate and consumes 40.8 accelerator-hours, compared with 12.8 for the first option. The final decision uses the real bill, quality result, and queue delay for both configurations.
 
-### Compare purchase models across repeated runs
+### Compare Purchase Models Across Repeated Runs
 
 Spot needs several observations because one uninterrupted run understates risk. Run controlled interruption tests and collect actual interruption rate, time since last checkpoint, restore duration, retry wait, and completion rate. Compare effective cost per completed result with on-demand.
 
@@ -453,38 +440,35 @@ flowchart TD
     B -->|"Workload Running"| F["Runtime Evidence<br/>(Utilisation, Checkpoints, Retries, and Progress)"]
     B -->|"Spend Crossed Limit"| G["Budget Evidence<br/>(Estimate Lag, Active Allocation, and Policy Action)"]
 
-    classDef incident fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A incident
     class B decision
     class C,D,E,F,G evidence
 ```
 
-### Quota exists but hardware is unavailable
+### Quota Exists But Hardware Is Unavailable
 
 Confirm the exact region, zone, accelerator type, count, and purchase model. Check provider stockout events and autoscaler failures. The safe options are a supported alternative zone or flavor, an existing reservation, a later start, or a smaller topology that still meets the objective. A busy retry loop can create noisy failures without improving supply.
 
 Moving to another region may violate data residency or add large transfer time and cost. Re-run the completion and cost model before changing location.
 
-### Spot interruptions consume the saving
+### Spot Interruptions Consume The Saving
 
 Group attempts by logical run ID and measure recomputation, checkpoint age, restore success, and wait for replacement capacity. Shorten the interval only if the write overhead remains acceptable. Move the job to on-demand after the retry boundary or if the release deadline no longer has enough recovery margin.
 
-### A budget threshold fires near completion
+### A Budget Threshold Fires Near Completion
 
 Read live progress before stopping the job. If a valid checkpoint is recent and the run has little useful work remaining, a named owner can approve bounded continuation. If progress has stalled, stop after committing recoverable state. Freeze new exploratory admissions first so they do not compete with the recovery path.
 
-### GPUs are allocated but mostly idle
+### GPUs Are Allocated But Mostly Idle
 
 Break down step time. Slow object storage, insufficient CPU, repeated data decoding, an imbalanced distributed worker, or long checkpoint writes can all lower utilisation. Fix the limiting path and rerun a matched benchmark before resizing the accelerator fleet.
 
-## Use an Operational Cost Checklist
+## Use A Checklist Before, During, And After Training
 <!-- section-summary: A production checklist verifies useful outcome, cost boundary, capacity, recovery, attribution, and enforcement before and after allocation. -->
 
 A checklist turns the cost model into repeatable admission and closure decisions. It gives the training owner and platform owner shared evidence before allocation, during active spend, and after cost reconciliation. Any exception should name its approver, scope, and expiry. This prevents a temporary deadline decision from quietly becoming the default policy.
 
-### Before admission
+### Before The Training Job Starts
 
 - Define the useful-work unit, quality gate, completion objective, and owner.
 - Estimate queue time, allocated runtime, accelerator-hours, and full cost boundary.
@@ -495,7 +479,7 @@ A checklist turns the cost model into repeatable admission and closure decisions
 - Attach run, attempt, team, owner, cost-centre, and dataset identifiers.
 - Set maximum runtime, retries, workers, spend, and checkpoint grace.
 
-### During execution
+### While The Training Job Is Running
 
 - Monitor queue reason, allocation state, useful progress, and estimated completion.
 - Track accelerator allocation and utilisation, input wait, communication, and checkpoint age.
@@ -503,7 +487,7 @@ A checklist turns the cost model into repeatable admission and closure decisions
 - Stop repeated failures after the approved retry boundary.
 - Suspend new low-priority admissions before removing recovery capacity from active useful work.
 
-### After completion
+### After The Training Job Finishes
 
 - Join all attempts into one logical run cost.
 - Reconcile runtime estimates with provider billing and platform charges.
@@ -537,6 +521,7 @@ A mature platform can explain what every training run produced and how long the 
 - [Kueue ClusterQueue](https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/)
 - [Kueue ResourceFlavor](https://kueue.sigs.k8s.io/docs/concepts/resource_flavor/)
 - [Kueue preemption and Fair Sharing](https://kueue.sigs.k8s.io/docs/concepts/preemption/)
+- [Kueue Admission Fair Sharing](https://kueue.sigs.k8s.io/docs/concepts/admission_fair_sharing/)
 - [AWS EC2 purchasing options](https://docs.aws.amazon.com/decision-guides/latest/ec2-purchasing-options-aws-how-to-choose/ec2-purchasing-options-aws-how-to-choose.html)
 - [AWS EC2 Capacity Blocks for ML](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-capacity-blocks.html)
 - [Amazon SageMaker AI training plans](https://docs.aws.amazon.com/sagemaker/latest/dg/reserve-capacity-with-training-plans.html)

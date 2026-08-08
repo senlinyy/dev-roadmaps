@@ -9,22 +9,22 @@ id: "article-mlops-mlops-foundations-simple-mlops-architecture"
 
 ## Table of Contents
 
-1. [Why an ML Product Is a Connected System](#why-an-ml-product-is-a-connected-system)
-2. [The Seven Responsibilities in an MLOps Architecture](#the-seven-responsibilities-in-an-mlops-architecture)
-3. [1. Data and Features Create Trustworthy Examples](#1-data-and-features-create-trustworthy-examples)
-4. [2. Training and Evaluation Create a Candidate](#2-training-and-evaluation-create-a-candidate)
-5. [3. Registry and Evidence Explain the Candidate](#3-registry-and-evidence-explain-the-candidate)
-6. [4. Delivery Moves an Approved Change](#4-delivery-moves-an-approved-change)
-7. [5. Serving Connects Predictions to the Product](#5-serving-connects-predictions-to-the-product)
-8. [6. Monitoring Shows What Is Happening](#6-monitoring-shows-what-is-happening)
-9. [7. Feedback Connects Predictions to Outcomes](#7-feedback-connects-predictions-to-outcomes)
-10. [Orchestration, Governance, and Lineage Cross Every Boundary](#orchestration-governance-and-lineage-cross-every-boundary)
-11. [How Current Production Stacks Fit the Framework](#how-current-production-stacks-fit-the-framework)
-12. [Build the Minimum Complete Architecture](#build-the-minimum-complete-architecture)
+1. [Why An ML Product Needs More Than A Model](#why-an-ml-product-needs-more-than-a-model)
+2. [What Every Production ML System Must Do](#what-every-production-ml-system-must-do)
+3. [1. What Data And Features Mean To A Model](#1-what-data-and-features-mean-to-a-model)
+4. [2. How Training Produces A Model](#2-how-training-produces-a-model)
+5. [3. How A Trained Model And Its Results Are Recorded](#3-how-a-trained-model-and-its-results-are-recorded)
+6. [4. When A Model Is Ready For Production](#4-when-a-model-is-ready-for-production)
+7. [5. How Serving Delivers Predictions](#5-how-serving-delivers-predictions)
+8. [6. How Monitoring Detects Production Problems](#6-how-monitoring-detects-production-problems)
+9. [7. How Outcomes Improve The Next Model](#7-how-outcomes-improve-the-next-model)
+10. [How Work, Access, And History Are Coordinated Across The System](#how-work-access-and-history-are-coordinated-across-the-system)
+11. [How Real Teams Put The Architecture Together](#how-real-teams-put-the-architecture-together)
+12. [What A Small Production Architecture Needs](#what-a-small-production-architecture-needs)
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
-## Why an ML Product Is a Connected System
+## Why An ML Product Needs More Than A Model
 
 <!-- section-summary: A production ML product depends on a connected path from real-world events to training, release, prediction, monitoring, and later outcomes. -->
 
@@ -32,7 +32,7 @@ At a high level, **an MLOps architecture is the set of systems and boundaries th
 
 Imagine a payment service that asks a fraud model for a risk score. The user sees one quick decision: approve the payment, request another check, or decline it. That decision depends on work spread across several parts of the organization.
 
-Long before the request arrives, data pipelines collect past payments and confirmed fraud outcomes. Feature code turns those events into training examples. A training job learns a candidate model. Evaluation checks overall quality and important segments. A registry records the candidate and its evidence. A delivery pipeline approves and releases one version.
+Long before the request arrives, data pipelines collect past payments and confirmed fraud outcomes. Feature code turns those events into training examples. A training job produces a proposed model. Evaluation checks overall quality and important segments. A registry records the trained model and its results. A delivery pipeline approves and releases one version.
 
 During the request, the payment service supplies current features to a model endpoint. The endpoint returns a score under a latency target. Policy code turns the score into an action.
 
@@ -40,19 +40,15 @@ Afterward, service metrics show whether the endpoint stayed fast and available. 
 
 ```mermaid
 flowchart TD
-    A["Real-world events and later outcomes"] --> B["Data and feature preparation"]
-    B --> C["Training and evaluation"]
-    C --> D["Registry and release evidence"]
-    D --> E["Delivery pipeline"]
-    E --> F["Prediction serving"]
-    F --> G["Product decision"]
-    G --> H["Monitoring and feedback"]
+    A["Real-World Events And Outcomes"] --> B["Data And Feature Preparation"]
+    B --> C["Training And Evaluation"]
+    C --> D["Model Records And Release Evidence"]
+    D --> E["Delivery Pipeline"]
+    E --> F["Prediction Serving"]
+    F --> G["Product Decision"]
+    G --> H["Monitoring And Feedback"]
     H --> A
 
-    classDef world fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef build fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef operate fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,G world
     class B,C build
     class D,E control
@@ -65,9 +61,9 @@ Architecture makes the responsibilities and handoffs visible. Each handoff needs
 
 For example, the data-to-training contract identifies a dataset snapshot and its schema. The registry-to-delivery contract identifies an approved model version and evaluation report. The serving-to-monitoring contract carries the model version, latency, prediction record, and release metadata.
 
-In essence, MLOps architecture is less about drawing every vendor service and more about making the production path understandable, reproducible, and recoverable.
+The central architectural principle is to make the production path understandable, reproducible, and recoverable across every service boundary.
 
-## The Seven Responsibilities in an MLOps Architecture
+## What Every Production ML System Must Do
 
 <!-- section-summary: Seven architectural responsibilities separate the creation, release, operation, and improvement of a production model. -->
 
@@ -75,11 +71,11 @@ A durable architecture can be understood through seven responsibilities. A small
 
 **Data and features** create trustworthy examples for training and trustworthy inputs for prediction. This responsibility owns meaning, time, quality, privacy, and reproducible snapshots.
 
-**Training and evaluation** run versioned code against versioned data. Their output is a candidate model plus evidence about its quality, limitations, performance, and resource use.
+**Training and evaluation** run versioned code against versioned data. Their output is a proposed model plus results about its quality, limitations, performance, and resource use.
 
-**Registry and evidence** give the candidate a stable identity. They connect the model artifact to the run, dataset, code, evaluation, approvals, and deployment history.
+**Registry and evidence** give the trained model a stable identity. They connect the model artifact to the run, dataset, code, evaluation, approvals, and deployment history.
 
-**Delivery** moves reviewed code, configuration, infrastructure, and model references through controlled environments. It checks the candidate and controls production exposure.
+**Delivery** moves reviewed code, configuration, infrastructure, and model references through controlled environments. It checks the proposed model and controls production exposure.
 
 **Serving** runs the approved release in batch, online, streaming, or edge workflows. It owns the production input and output contract, capacity, fallback, and product handoff.
 
@@ -91,9 +87,9 @@ A durable architecture can be understood through seven responsibilities. A small
 
 *The seven responsibilities form one operating loop. Stable identities connect the model created during training to the predictions and outcomes seen in production.*
 
-### Three flows move through the architecture
+### How The System Handles Data, Instructions, And Records
 
-The architecture carries three distinct flows: data, control, and evidence.
+The seven responsibilities exchange three kinds of information. One carries the material being processed. Another tells work to begin or change. The third records what happened so the result can be checked later. MLOps calls these the data, control, and evidence flows.
 
 The **data flow** carries datasets, features, model artifacts, prediction inputs, predictions, and outcomes. These objects can be large and often live in object storage, a warehouse, a lakehouse, a feature store, or a serving database.
 
@@ -103,11 +99,11 @@ The **evidence flow** carries identities and explanations: dataset versions, run
 
 Confusing the flows creates fragile designs. An orchestrator should coordinate a training task, while the training code remains a testable component. A registry should record the artifact and approval, while object storage holds the large model files. A monitoring system should report an issue, while a reviewed workflow decides whether retraining is appropriate.
 
-## 1. Data and Features Create Trustworthy Examples
+## 1. What Data And Features Mean To A Model
 
 <!-- section-summary: The data boundary turns production events into versioned training examples and prediction inputs with explicit meaning, time, quality, and ownership. -->
 
-The data responsibility answers a basic question: **what did the model learn from, and what information will it receive in production?**
+Before a model can learn, product events have to be turned into examples that describe the past. Before the trained model can make a prediction, the production system has to calculate the same kinds of input values from current events. This part of the architecture answers two basic questions: **what did the model learn from, and what information will it receive in production?**
 
 Raw product data usually exists for operational reasons. Orders support fulfilment. Sensor readings support equipment control. Claims support insurance processing. Machine learning reuses those events to create features and labels.
 
@@ -139,9 +135,9 @@ checks:
 
 `prediction_time` marks the moment the production decision would have occurred. Feature joins must select values available by that time. `maturity_delay` explains how long the team waits before treating the fraud outcome as dependable. `label_join_coverage` shows how many prediction records received a usable outcome.
 
-### Common production data platforms
+### How Teams Store And Prepare ML Data
 
-Object storage such as Amazon S3, Google Cloud Storage, or Azure Data Lake Storage is a common durable foundation. Teams often place Apache Iceberg or Delta Lake tables above it to gain table transactions, schema handling, and snapshot history. Warehouses such as Snowflake and BigQuery, along with lakehouse platforms such as Databricks, can also provide the main analytical data layer.
+Teams need a durable place for raw events, prepared features, labels, and reproducible training snapshots. Object storage such as Amazon S3, Google Cloud Storage, or Azure Data Lake Storage is a common foundation. Apache Iceberg or Delta Lake can add table transactions, schema handling, and snapshot history above those files. Warehouses such as Snowflake and BigQuery, along with lakehouse platforms such as Databricks, can also provide the main analytical data layer.
 
 Transformations commonly use SQL and dbt, Spark for distributed processing, or Polars for efficient single-node workloads. Data tests may begin with dbt tests and expand to Great Expectations, Soda, or Deequ for richer validation.
 
@@ -149,21 +145,23 @@ A feature store such as Feast or a managed platform feature store helps when man
 
 The architecture boundary matters more than the product name. Training needs a versioned historical view. Serving needs a compatible current view. Both paths need the same feature meaning and a way to trace values back to their source.
 
-## 2. Training and Evaluation Create a Candidate
+## 2. How Training Produces A Model
 
-<!-- section-summary: Training runs versioned code on versioned data, while evaluation produces the evidence required to compare a candidate with a baseline. -->
+<!-- section-summary: Training runs versioned code on versioned data, while evaluation produces the results required to compare a proposed model with a baseline. -->
 
-Training turns a dataset into a model artifact. Evaluation decides how that artifact behaves on held-out examples, important subgroups, operational constraints, and product requirements.
+**Training** is the process that lets an algorithm learn patterns from prepared examples and saves the learned result as a model. That model is still a proposed version. The team has to test it on data that training did not use and check whether it fits the product's operational and risk requirements.
+
+MLOps teams often call this proposed version a **candidate model**. Evaluation measures how the candidate behaves on held-out examples, important subgroups, operational constraints, and product requirements before anyone approves it for production.
 
 A **training job** is a repeatable execution with declared inputs, code, configuration, environment, compute, and output locations. A notebook may help discover an approach. The production training path should run as a job that another engineer or automated workflow can reproduce.
 
 The job needs an isolated environment. Python projects commonly use `uv` or Poetry for dependency management and package the runtime in an OCI container. The environment image, source commit, resolved configuration, and dataset snapshot should appear in the run record.
 
-Managed training jobs are a practical default. Amazon SageMaker AI, Google Vertex AI, Azure Machine Learning, and Databricks provide job execution, identity, logs, and accelerator access without requiring a team to operate a general Kubernetes training platform. Kubernetes and Ray fit teams with specialized distributed workloads or an existing platform that already supports them.
+Managed training jobs are a practical default. Amazon SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks provide job execution, identity, logs, and accelerator access without requiring a team to operate a general Kubernetes training platform. Kubernetes and Ray fit teams with specialized distributed workloads or an existing platform that already supports them.
 
-### Evaluation creates a decision packet
+### What Evaluation Checks Before Production
 
-One metric rarely tells the whole story. A candidate for loan prioritization may improve overall precision while performing poorly for a small region. A demand forecast may reduce average error while missing holiday peaks that matter most to inventory teams.
+Evaluation answers a practical release question: does this trained model perform well enough, for the right cases, under the conditions the production system will impose? One metric rarely provides that answer. A candidate for loan prioritization may improve overall precision while performing poorly for a small region. A demand forecast may reduce average error while missing holiday peaks that matter most to inventory teams.
 
 Evaluation should compare the candidate with a current production model, a business rule, or another approved baseline. The comparison can include:
 
@@ -178,60 +176,56 @@ Each check needs an explanation alongside its pass/fail field. A reviewer should
 
 ```mermaid
 flowchart TD
-    A["Versioned dataset snapshot"] --> C["Managed training job"]
-    B["Source commit, config, and environment"] --> C
-    C --> D["Candidate model"]
-    D --> E["Evaluation against baseline,<br/>important slices, and operating limits"]
-    E --> F{"Release criteria pass?"}
-    F -->|"Yes"| G["Candidate plus evaluation evidence"]
-    F -->|"No"| H["Rejected candidate plus failure report"]
+    A["Dataset Snapshot<br/>(versioned training examples)"] --> C["Managed Training Job"]
+    B["Training Inputs<br/>(source commit, configuration, and environment)"] --> C
+    C --> D["Candidate Model<br/>(trained artifact proposed for release)"]
+    D --> E["Evaluation<br/>(compare baseline, slices, and operating limits)"]
+    E --> F{"Release Criteria Pass?"}
+    F -->|"Yes"| G["Approved Candidate<br/>(model plus evaluation evidence)"]
+    F -->|"No"| H["Rejected Candidate<br/>(model plus failure report)"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B input
     class C,D,E work
     class F decision
     class G,H result
 ```
 
-### The orchestrator coordinates; the component performs the work
+### How Training Jobs Are Coordinated And Repeated
 
-Airflow, Dagster, Prefect, and managed ML pipeline services can schedule dependencies, retries, and alerts. The orchestrator should call a training component with explicit inputs and collect explicit outputs. Hiding all feature, training, and evaluation logic inside one large orchestration task makes local testing and migration difficult.
+A production training run usually contains several steps: load a fixed dataset, train the model, evaluate it, save the results, and report failure. A workflow orchestrator such as Airflow, Dagster, Prefect, or a managed ML pipeline service schedules those dependencies, retries bounded failures, and sends alerts.
+
+The orchestrator should call a training component with explicit inputs and collect explicit outputs. Hiding all feature, training, and evaluation logic inside one large orchestration task makes local testing and migration difficult.
 
 For example, a failed evaluation can stop the workflow without deleting the candidate or its evidence. The team can inspect the report, change the code, and create a new run. Re-running the same successful task should either reuse an immutable output or write a new version; it should never overwrite an approved artifact silently.
 
-## 3. Registry and Evidence Explain the Candidate
+## 3. How A Trained Model And Its Results Are Recorded
 
 <!-- section-summary: The evidence boundary connects a model version to the run, data, code, evaluation, approval, and production releases that give it meaning. -->
 
-A model file contains learned parameters. It rarely explains where the parameters came from or why the model was approved.
+A training run can leave behind a model file and a page of metrics. Weeks later, the team still needs to identify the exact model, recover the data and code that produced it, inspect its evaluation, and see whether anyone approved it for production. The saved file cannot answer those questions by itself.
 
-**Artifact storage** holds the physical files: model weights, serialized preprocessing, environment files, evaluation reports, and plots. **Experiment tracking** records runs, parameters, metrics, tags, and artifacts. A **model registry** organizes model versions and the metadata used to discover, compare, govern, and deploy them.
+MLOps records the model together with its history. The physical files go into artifact storage. Experiment tracking records the run, parameters, metrics, tags, and outputs. A model registry gives each trained model a stable version so teams can discover, compare, govern, and deploy it.
+
+**Artifact storage** holds model weights, serialized preprocessing, environment files, evaluation reports, and plots. These three systems may be part of one platform or separate services, but their records need to point to the same trained model.
 
 MLflow is a common open-source default for experiment tracking and model registry. Weights & Biases and managed cloud tracking systems cover similar responsibilities. Databricks provides a hosted MLflow registry through Models in Unity Catalog, adding centralized access control, auditing, lineage, and discovery.
 
 Current MLflow workflows use model version aliases and tags for deployment and review status. Legacy model stages are deprecated. A production design should avoid building new automation around stage transitions.
 
-### The evidence chain should survive tool boundaries
+### How Records Connect Training To Production
 
-A model version should link backward to its creation and forward to its use:
+A model may pass through a training platform, registry, delivery system, and serving platform. Stable identifiers connect those tools. The model version should link backward to its creation and forward to its production use:
 
 ```mermaid
 flowchart TD
-    A["Dataset snapshot and feature definitions"] --> B["Training run"]
-    C["Source commit, config, and environment"] --> B
-    B --> D["Model artifact and signature"]
-    D --> E["Evaluation report"]
-    E --> F["Approval and release record"]
-    F --> G["Deployment revision"]
-    G --> H["Predictions and outcomes"]
+    A["Data Inputs<br/>(dataset snapshot and feature definitions)"] --> B["Training Run"]
+    C["Code Inputs<br/>(source commit, configuration, and environment)"] --> B
+    B --> D["Model Package<br/>(artifact and signature)"]
+    D --> E["Evaluation Report"]
+    E --> F["Release Decision<br/>(approval and release record)"]
+    F --> G["Deployment Revision"]
+    G --> H["Production Results<br/>(predictions and outcomes)"]
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef prod fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,C source
     class B,D run
     class E,F evidence
@@ -255,11 +249,13 @@ The immutable model version supports reproducibility. The `champion` alias gives
 
 A registry entry is not proof of quality by itself. Registration says that a version exists. The evaluation and approval records explain whether the version may receive production traffic.
 
-## 4. Delivery Moves an Approved Change
+## 4. When A Model Is Ready For Production
 
 <!-- section-summary: Delivery promotes reviewed ML code, infrastructure, configuration, and model references through controlled environments and into production exposure. -->
 
-Delivery connects the learning system to the operating system. It turns reviewed source and evidence into a production release. The handoff covers more than copying a model file because code, configuration, infrastructure, and permissions can all change production behaviour.
+A trained model is ready for production after the required code, data, model, security, performance, and rollback checks have passed and an authorized owner has approved the exact release. Reaching that point involves more than copying a model file. Serving code, configuration, infrastructure, permissions, and the model reference can all change production behaviour.
+
+The delivery process checks those pieces, carries the approved versions through controlled environments, and records what production received.
 
 CI, CD, and CT control different changes in the production system:
 
@@ -273,29 +269,25 @@ These flows can move at different speeds. Serving code may need an urgent securi
 
 ```mermaid
 flowchart TD
-    A["Pull request"] --> B["CI tests code, pipelines,<br/>schemas, and infrastructure"]
-    B --> C["Reviewed release package"]
-    D["Schedule, new data,<br/>or approved trigger"] --> E["CT trains and evaluates a candidate"]
-    E --> F["Candidate plus evidence"]
-    C --> G{"Release gate"}
+    A["Pull Request"] --> B["Continuous Integration<br/>(test code, pipelines, schemas, and infrastructure)"]
+    B --> C["Reviewed Release Package"]
+    D["Training Trigger<br/>(schedule, new data, or approved event)"] --> E["Continuous Training<br/>(train and evaluate a candidate)"]
+    E --> F["Candidate Evidence<br/>(model and evaluation results)"]
+    C --> G{"Release Gate"}
     F --> G
-    G -->|"Approved"| H["CD deploys code, configuration,<br/>and the model reference"]
-    G -->|"Rejected"| I["Keep the current production release"]
-    H --> J["Verify the production release"]
+    G -->|"Approved"| H["Continuous Delivery<br/>(deploy code, configuration, and model reference)"]
+    G -->|"Rejected"| I["Current Release<br/>(keep production unchanged)"]
+    H --> J["Production Verification<br/>(confirm the deployed release)"]
 
-    classDef trigger fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef automation fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,D trigger
     class B,C,E,F,H automation
     class G decision
     class I,J result
 ```
 
-### Promote code and evidence through environments
+### How A Change Reaches Production
 
-Development supports experimentation. Staging tests pipeline code, permissions, schemas, and serving integration. Production runs controlled jobs and serves real decisions.
+A change usually moves through development, staging, and production. Development supports experimentation. Staging checks pipeline code, permissions, schemas, and serving integration without exposing the change to normal production decisions. Production runs controlled jobs and serves real decisions.
 
 GitHub Actions, GitLab CI, Jenkins, and managed delivery systems are common CI/CD choices. Terraform or Pulumi can define cloud resources, identities, queues, stores, and managed endpoints. Helm and Argo CD or Flux fit organizations that already use Kubernetes.
 
@@ -303,13 +295,13 @@ A strong delivery path creates an immutable package, tests it, and promotes the 
 
 Databricks recommends separate development, staging, and production environments and usually promotes ML code through them. The production pipeline then trains with production code and governed production data. This pattern avoids treating one model file from a development workspace as the whole release.
 
-### Release gates need several kinds of evidence
+### What Must Pass Before A Production Release
 
-Before production exposure, check software behaviour, data contracts, model quality, important slices, security, latency, capacity, cost, and rollback readiness. The selected checks should match product risk.
+A **release gate** is the set of checks and approvals that blocks an unready change from reaching production. It can inspect software behaviour, data contracts, model quality, important slices, security, latency, capacity, cost, and rollback readiness. The selected checks should match product risk.
 
 A model that passes offline accuracy can still fail because its serving package lacks a preprocessing dependency. A full integration test loads the exact release, sends a production-shaped input, records the model version, and verifies the output contract.
 
-## 5. Serving Connects Predictions to the Product
+## 5. How Serving Delivers Predictions
 
 <!-- section-summary: Serving supplies production inputs to an approved release and delivers usable predictions through batch, online, streaming, or edge execution. -->
 
@@ -333,9 +325,9 @@ The detailed delivery patterns vary, but every serving boundary needs the same c
 - Fallback behaviour.
 - Prediction records for monitoring and feedback.
 
-### Start with the least operationally expensive serving path
+### Which Serving Path Fits The Product
 
-Managed endpoints from SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks Model Serving are strong defaults for teams already using those platforms. They provide managed infrastructure, identity integration, scaling options, and platform monitoring.
+The product's timing and operating needs determine the serving path. A nightly forecast can finish as a batch table, while a payment decision needs an online response before the request times out. Managed endpoints from SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks Model Serving are strong defaults for teams already using those platforms. They provide managed infrastructure, identity integration, scaling options, and platform monitoring.
 
 An ordinary application API can serve a modest CPU model effectively. KServe, NVIDIA Triton Inference Server, or Ray Serve fit deeper requirements such as shared Kubernetes serving, multi-framework GPU inference, or distributed Python serving. These systems add value after the workload justifies their operational cost.
 
@@ -343,7 +335,7 @@ A feature store belongs beside online serving only if low-latency feature retrie
 
 Suppose a retailer calculates demand forecasts each night. A batch job can score every product-store pair and publish a table before planners arrive. Turning the same workload into millions of online API calls would add cost and failure points without improving the product decision.
 
-## 6. Monitoring Shows What Is Happening
+## 6. How Monitoring Detects Production Problems
 
 <!-- section-summary: Monitoring combines service, data, model, and business evidence so teams can locate failures and understand their user impact. -->
 
@@ -361,21 +353,21 @@ Production ML needs four connected views.
 
 One healthy view cannot stand in for the others. An endpoint may respond quickly while a stale feature pipeline produces poor scores. Model quality may remain stable while queue overload makes predictions arrive after the business decision.
 
-### Current monitoring stacks
+### How Teams Collect And View Monitoring Signals
 
-OpenTelemetry is the standard vendor-neutral choice for instrumenting traces, metrics, and logs. Prometheus and Grafana are common for service and infrastructure metrics. AWS CloudWatch, Google Cloud Monitoring, Azure Monitor, and Databricks monitoring features provide integrated cloud paths.
+The serving application first records measurements and events at the points that matter: request boundaries, feature lookups, model execution, output validation, and product handoff. OpenTelemetry is the standard vendor-neutral choice for instrumenting traces, metrics, and logs. Prometheus and Grafana are common for service and infrastructure metrics. AWS CloudWatch, Google Cloud Monitoring, Azure Monitor, and Databricks monitoring features provide integrated cloud paths.
 
 Model-monitoring products include platform-native monitoring, Evidently, Arize, WhyLabs, and Fiddler. Tool choice depends on label availability, governance, scale, and existing observability systems.
 
 The architecture should keep model and release identity as bounded dimensions. A latency increase can then be compared across the current and candidate versions. Prediction IDs belong in traces or governed prediction records because putting a unique ID in a metric label would create excessive metric cardinality.
 
-### Monitoring should lead to an action
+### What Teams Do After An Alert
 
-Every important alert needs an owner and a runbook. A stale feature alert may stop batch scoring, use an approved snapshot, or activate a fallback. A quality alert may reduce candidate traffic and begin investigation. A service saturation alert may scale capacity or shed lower-priority work.
+An alert needs to identify a condition that an owner can investigate or contain. The runbook defines that owner and the permitted response. A stale feature alert may stop batch scoring, use an approved snapshot, or activate a fallback. A quality alert may reduce candidate traffic and begin investigation. A service saturation alert may scale capacity or shed lower-priority work.
 
 Monitoring supplies evidence. Release, rollback, and retraining workflows decide what to do with that evidence.
 
-## 7. Feedback Connects Predictions to Outcomes
+## 7. How Outcomes Improve The Next Model
 
 <!-- section-summary: Feedback joins production predictions with delayed outcomes and human evidence to reveal model quality and guide the next improvement cycle. -->
 
@@ -385,53 +377,53 @@ For fraud scoring, a chargeback may arrive weeks after the payment. For a recomm
 
 The feedback pipeline needs a stable join key from the prediction record to the outcome. It also needs the release ID, prediction time, policy decision, and label maturity. Without those fields, the team may know that fraud increased while lacking a reliable connection to the model version that handled each payment.
 
-### Feedback has its own quality problems
+### Why Outcome Data Can Be Incomplete Or Biased
 
-Missing outcomes can bias measured quality. Human reviewers may inspect only high-risk cases. Customers may ignore a recommendation for reasons unrelated to relevance. A policy change can alter which examples receive labels.
+Production outcomes do not arrive as a complete and neutral answer key. Missing outcomes can bias measured quality. Human reviewers may inspect only high-risk cases. Customers may ignore a recommendation for reasons unrelated to relevance. A policy change can alter which examples receive labels.
 
-Track label volume, join coverage, delay, reviewer agreement, and selection rules. A sudden quality drop may come from a broken outcome feed instead of model decay.
+Track label volume, join coverage, delay, reviewer agreement, and selection rules. A broken outcome feed can cause the measured quality to fall even while the model remains stable.
 
-### Retraining is a governed response
+### When New Outcomes Should Trigger Retraining
 
-Fresh labels can trigger a training workflow, but a monitoring alert should rarely replace the full release process. New data can contain schema errors, incident artefacts, or a temporary event that the model should not learn as a permanent rule.
+Fresh labels can justify another training run after the team verifies that they represent a real and lasting change. A monitoring alert should rarely replace the full release process. New data can contain schema errors, incident artefacts, or a temporary event that the model should not learn as a permanent rule.
 
 A safe loop validates the new data, trains a candidate, evaluates it against the current model, records the evidence, and uses the normal approval and deployment path.
 
 Feedback also improves systems without retraining. It may reveal a missing input field, a poor product threshold, an unclear human-review workflow, or an alert that fires too late. The best fix can live in data, policy, serving, or product design.
 
-## Orchestration, Governance, and Lineage Cross Every Boundary
+## How Work, Access, And History Are Coordinated Across The System
 
 <!-- section-summary: Orchestration coordinates work, governance controls access and accountability, and lineage connects data, jobs, models, releases, and outcomes. -->
 
-The seven responsibilities describe the lifecycle. Three cross-cutting capabilities keep the lifecycle coordinated and accountable. They connect work across platforms without merging every responsibility into one large service.
+The seven responsibilities depend on shared coordination. Jobs must run in the correct order, people and services need controlled access, and every result needs a recoverable history. MLOps uses orchestration, governance, and lineage for those three jobs. They connect work across platforms without merging every responsibility into one large service.
 
-### Orchestration controls execution
+### How Workflows Coordinate Tasks
 
-A workflow orchestrator records task dependencies, schedules runs, retries bounded failures, passes artifact references, and reports status. Airflow remains common in established enterprises. Dagster offers an asset-centred approach that fits many greenfield data and ML platforms. Prefect and managed ML pipelines provide other practical choices.
+A training workflow may need prepared data before it can start, and evaluation must wait for training to finish. A **workflow orchestrator** records those dependencies, schedules runs, retries bounded failures, passes artifact references, and reports status. Airflow remains common in established enterprises. Dagster offers an asset-centred approach that fits many greenfield data and ML platforms. Prefect and managed ML pipelines provide other practical choices.
 
 The orchestrator should pass stable references such as a dataset snapshot, run ID, model URI, and evaluation report. Large datasets and model files stay in their proper storage systems.
 
-### Governance controls people and machines
+### How Identities And Permissions Protect Each Stage
 
-Governance includes identity and access management, secret storage, data classification, retention, environment separation, approval authority, and audit records.
+Many people and automated services touch an ML system, although each one should reach only the assets required for its job. **Governance** defines those access boundaries and the rules for retention, approval, and accountability. It includes identity and access management, secret storage, data classification, environment separation, approval authority, and audit records.
 
 Each workload should have a narrow identity. A training job may read governed training tables and write candidate artifacts. A serving workload may read one approved release and current features. A delivery workflow may update an endpoint without gaining access to raw sensitive labels.
 
 Data and model catalogues help users discover assets and their owners. Databricks Unity Catalog is one integrated example. Cloud-native catalogues and enterprise data catalogues can cover the same responsibility in other stacks.
 
-### Lineage explains relationships
+### How Lineage Records Where Results Came From
 
-**Lineage** records how one asset or run produced another. OpenLineage defines an interoperable model around datasets, jobs, and runs. Platform-native lineage can provide deeper integration inside a managed ecosystem.
+During an incident, the team may start with one bad prediction and ask which model, data, code, and job produced it. **Lineage** records those relationships between assets and runs. OpenLineage defines an interoperable model around datasets, jobs, and runs. Platform-native lineage can provide deeper integration inside a managed ecosystem.
 
 ```mermaid
 flowchart TD
-    A["Orchestrator starts a versioned job"] --> B["Job reads a dataset snapshot"]
-    B --> C["Job writes model and evaluation artifacts"]
-    C --> D["Registry records model version and evidence"]
-    D --> E["Delivery records production release"]
-    E --> F["Serving records predictions by release"]
-    F --> G["Feedback joins outcomes"]
-    A -. "run identity" .-> H["Lineage and audit"]
+    A["Workflow Start<br/>(orchestrator starts a versioned job)"] --> B["Dataset Read<br/>(job uses one snapshot)"]
+    B --> C["Training Outputs<br/>(model and evaluation artifacts)"]
+    C --> D["Registry Record<br/>(model version and evidence)"]
+    D --> E["Production Release<br/>(delivery records deployment)"]
+    E --> F["Prediction Records<br/>(serving links results to release)"]
+    F --> G["Outcome Join<br/>(feedback links later results)"]
+    A -. "run identity" .-> H["Lineage And Audit"]
     B -. "dataset identity" .-> H
     C -. "artifact identity" .-> H
     D -. "approval identity" .-> H
@@ -439,9 +431,6 @@ flowchart TD
     F -. "prediction identity" .-> H
     G -. "outcome identity" .-> H
 
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef record fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef audit fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C,E,F,G work
     class D record
     class H audit
@@ -449,41 +438,41 @@ flowchart TD
 
 This evidence supports two useful investigations. Backward lineage asks which data, code, and approval produced a model or prediction. Forward lineage asks which models and deployments used a faulty dataset or feature definition.
 
-## How Current Production Stacks Fit the Framework
+## How Real Teams Put The Architecture Together
 
 <!-- section-summary: Integrated cloud platforms, lakehouse platforms, and composable open stacks implement the same responsibilities with different operational trade-offs. -->
 
-There is no universal MLOps product list. Organizations usually choose one of three broad platform shapes and adapt it to their existing data and cloud foundations.
+The responsibilities stay the same even though organizations combine products differently. Most production systems follow one of three broad platform shapes and adapt it to their existing data and cloud foundations.
 
-### Integrated managed cloud
+### Using One Cloud's Managed ML Platform
 
-Amazon SageMaker AI, Google Vertex AI, and Azure Machine Learning provide managed training jobs, pipelines, registries, endpoints, and monitoring integrations. Their surrounding clouds provide object storage, IAM, secrets, queues, logs, and infrastructure automation.
+A team already operating mainly in one cloud can use that provider's managed ML platform for most of the lifecycle. Amazon SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), and Azure Machine Learning provide managed training jobs, pipelines, registries, endpoints, and monitoring integrations. Their surrounding clouds provide object storage, IAM, secrets, queues, logs, and infrastructure automation.
 
 This shape works well for teams already committed to one cloud and seeking a managed default. The architecture still needs explicit ownership and contracts because one platform service can cover several responsibilities.
 
 For example, a SageMaker Pipeline can coordinate data processing, training, evaluation, and registration. Model Registry stores candidate metadata. A managed endpoint serves the approved version. CloudWatch supplies service telemetry. The team still defines the dataset snapshot, evaluation gates, production alias, prediction record, and feedback join.
 
-### Lakehouse-centred platform
+### Using A Lakehouse Platform Such As Databricks
 
-Databricks places data engineering and machine learning on a shared lakehouse foundation. Delta tables can hold raw data, features, inference records, and monitoring results. Lakeflow Jobs can coordinate production workflows. MLflow tracks runs and models. Models in Unity Catalog provide governed versions, access control, auditing, lineage, and discovery. Databricks Model Serving provides managed online inference.
+An organization whose analytical data already lives in a lakehouse may keep data engineering and machine learning on that shared foundation. Databricks is a common example. Delta tables can hold raw data, features, inference records, and monitoring results. Lakeflow Jobs can coordinate production workflows. MLflow tracks runs and models. Models in Unity Catalog provide governed versions, access control, auditing, lineage, and discovery. Databricks Model Serving provides managed online inference.
 
 This shape reduces handoffs between separate data and ML platforms. It fits organizations whose analytical data and feature pipelines already live in Databricks.
 
 The architectural boundaries still matter. A Delta table containing features has a different contract from a registered model. An MLflow run records an experiment, while an approval record authorizes a release. Unity Catalog model versions describe governed assets, while endpoint configuration describes what currently serves traffic.
 
-### Composable open platform
+### Combining Open And Managed Tools
 
-A composable stack often combines cloud object storage, Iceberg or Delta tables, dbt and Spark or Polars, Airflow or Dagster, MLflow, a managed training service, and OpenTelemetry with Prometheus and Grafana. Terraform defines infrastructure. KServe or Triton may serve models on Kubernetes after scale and platform requirements justify them.
+Some teams already operate several strong data and infrastructure tools or need more portability than one platform provides. They can combine cloud object storage, Iceberg or Delta tables, dbt and Spark or Polars, Airflow or Dagster, MLflow, a managed training service, and OpenTelemetry with Prometheus and Grafana. Terraform defines infrastructure. KServe or Triton may serve models on Kubernetes after scale and platform requirements justify them.
 
 This shape offers portability and lets teams select strong tools for each boundary. It also creates more integration work. The team owns authentication between services, metadata links, upgrades, backup, and incident handling.
 
-### A practical default
+### A Practical Starting Point
 
 Start with the data platform the organization already operates. Use managed training jobs and managed endpoints first. Track experiments and models with MLflow or the cloud platform's equivalent. Add a feature store only after reusable or online features create a real need. Use OpenTelemetry with cloud monitoring for service evidence. Keep infrastructure in Terraform and source changes in Git-backed CI/CD.
 
 The framework helps the team replace one tool later without losing the system contract. Airflow can give way to a managed pipeline while dataset and run identities stay stable. A managed endpoint can move to KServe while the serving input, output, release, and monitoring contracts stay intact.
 
-## Build the Minimum Complete Architecture
+## What A Small Production Architecture Needs
 
 <!-- section-summary: A minimum architecture covers every lifecycle responsibility with clear ownership before it adds specialized platforms or automation. -->
 
@@ -493,24 +482,20 @@ A practical baseline uses a Git repository for reviewed change, governed storage
 
 ```mermaid
 flowchart TD
-    A["Git repository and CI"] --> B["Versioned data and quality checks"]
-    B --> C["Managed training job"]
-    C --> D["Evaluation and MLflow tracking"]
-    D --> E["Registry alias and approval"]
-    E --> F["Managed batch job or endpoint"]
-    F --> G["OpenTelemetry and cloud monitoring"]
-    G --> H["Prediction-outcome feedback table"]
+    A["Source And Automation<br/>(Git repository and CI)"] --> B["Training Data<br/>(versioned data and quality checks)"]
+    B --> C["Managed Training Job"]
+    C --> D["Evaluation Records<br/>(MLflow tracking and results)"]
+    D --> E["Release Approval<br/>(registry alias and approval)"]
+    E --> F["Prediction Delivery<br/>(managed batch job or endpoint)"]
+    F --> G["Service Monitoring<br/>(OpenTelemetry and cloud monitoring)"]
+    G --> H["Outcome Feedback<br/>(prediction and outcome table)"]
     H --> B
-    I["Terraform, IAM, secrets, and ownership"] -.-> A
+    I["Infrastructure Controls<br/>(Terraform, IAM, secrets, and ownership)"] -.-> A
     I -.-> C
     I -.-> E
     I -.-> F
     I -.-> G
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef build fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef prod fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef govern fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B source
     class C,D,E build
     class F,G,H prod
@@ -547,6 +532,7 @@ Cloud platforms, Databricks, and composable open stacks package these responsibi
 ## References
 
 - [Google Cloud: MLOps continuous delivery and automation pipelines](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning)
+- [Google Cloud: Gemini Enterprise Agent Platform name changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Microsoft Azure Architecture Center: Machine learning operations](https://learn.microsoft.com/en-us/azure/architecture/data-guide/technology-choices/machine-learning-operations-v2)
 - [Amazon SageMaker AI: Implement MLOps](https://docs.aws.amazon.com/sagemaker/latest/dg/mlops.html)
 - [Databricks: MLOps workflows](https://docs.databricks.com/aws/en/machine-learning/mlops/mlops-workflow)

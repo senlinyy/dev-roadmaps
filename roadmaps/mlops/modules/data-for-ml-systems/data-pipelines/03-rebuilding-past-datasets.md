@@ -9,19 +9,19 @@ id: "article-mlops-data-for-ml-systems-rebuilding-past-datasets"
 
 ## Table of Contents
 
-1. [Why An Old Query Is Not An Old Dataset](#why-an-old-query-is-not-an-old-dataset)
-2. [The Reconstruction Proof Chain](#the-reconstruction-proof-chain)
-3. [Resolve The Historical Boundary](#resolve-the-historical-boundary)
-4. [Recover Immutable Inputs](#recover-immutable-inputs)
-5. [Restore Transformation And Runtime Identity](#restore-transformation-and-runtime-identity)
-6. [Replay Late Data And Label Maturity](#replay-late-data-and-label-maturity)
-7. [Rebuild Stable Splits And Verify The Output](#rebuild-stable-splits-and-verify-the-output)
-8. [Exact Rebuild Or Best-Effort Reconstruction](#exact-rebuild-or-best-effort-reconstruction)
-9. [Operate Within Retention And Deletion Constraints](#operate-within-retention-and-deletion-constraints)
+1. [Why Rerunning An Old Query Produces New Data](#why-rerunning-an-old-query-produces-new-data)
+2. [What You Need To Rebuild A Past Dataset](#what-you-need-to-rebuild-a-past-dataset)
+3. [Choose The Exact Past Moment To Rebuild](#choose-the-exact-past-moment-to-rebuild)
+4. [Find The Exact Input Versions](#find-the-exact-input-versions)
+5. [Recover The Code, Parameters, And Environment](#recover-the-code-parameters-and-environment)
+6. [Reproduce Late Arrivals And Delayed Labels](#reproduce-late-arrivals-and-delayed-labels)
+7. [Rebuild The Same Train And Test Rows, Then Compare Results](#rebuild-the-same-train-and-test-rows-then-compare-results)
+8. [Decide Whether An Exact Rebuild Is Possible](#decide-whether-an-exact-rebuild-is-possible)
+9. [Plan For Data That Has Expired Or Must Be Deleted](#plan-for-data-that-has-expired-or-must-be-deleted)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
-## Why An Old Query Is Not An Old Dataset
+## Why Rerunning An Old Query Produces New Data
 <!-- section-summary: Rebuilding a past dataset requires the historical data state and timing rules behind the old query, because today's sources contain later arrivals, corrections, and deletions. -->
 
 Imagine a team investigating a model released several months ago. The training run points to a SQL file and records that the dataset contained 11.8 million examples. An engineer checks out the old Git commit, runs the SQL again, and receives 12.4 million rows.
@@ -54,10 +54,6 @@ flowchart TD
     I -- "No, evidence is complete" --> K["Locate the first differing boundary"]
     I -- "No, evidence is missing" --> L["Document best-effort reconstruction"]
 
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef replay fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef exact fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef investigate fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C,D,E,F,G evidence
     class H,I replay
     class J exact
@@ -66,7 +62,7 @@ flowchart TD
 
 The final comparison is part of the reconstruction. A successful pipeline run proves that the replay finished. It says nothing about whether the replay produced the historical rows. The team needs expected identities and validation evidence from the original build.
 
-## The Reconstruction Proof Chain
+## What You Need To Rebuild A Past Dataset
 <!-- section-summary: Seven connected records prove what the old dataset contained, how it was produced, and whether the rebuilt output matches it. -->
 
 An exact rebuild rests on a **proof chain**. In plain language, each link answers one question that the next link depends on.
@@ -129,7 +125,7 @@ One manifest cannot create evidence after it has disappeared. A Delta version nu
 
 MLflow dataset tracking can preserve a dataset source, digest, schema, and profile beside the training run. OpenLineage can connect input datasets, the transformation job, its run, and the output dataset. These systems strengthen discovery and provenance. The storage platform still owns the historical bytes, and the build manifest still owns reconstruction-specific timing and split rules.
 
-## Resolve The Historical Boundary
+## Choose The Exact Past Moment To Rebuild
 <!-- section-summary: The historical boundary separates which entities belonged in the dataset, what facts were visible, and which labels were mature enough to use. -->
 
 The first reconstruction decision is the point in history the team wants to recover. “The June dataset” sounds precise in conversation, yet it leaves several clocks unresolved.
@@ -148,10 +144,6 @@ flowchart TD
     D --> E["Original dataset build cutoff"]
     E --> F["Later arrivals and corrections<br/>belong outside the exact rebuild"]
 
-    classDef event fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef mature fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef later fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,C event
     class B,E decision
     class D mature
@@ -160,13 +152,13 @@ flowchart TD
 
 The order above can vary by task. A dataset may be built only after every included label matures, which places the build after label maturity. Another pipeline may build incremental partitions and later finalize them. The manifest should store the actual policy instead of relying on one universal timeline.
 
-### Population time and knowledge time answer different questions
+### Separate When An Event Happened From When The Team Learned About It
 
 Suppose a payment happened before the end of the training window. Its dispute record reached the warehouse several days after the original build. Population time says the payment belongs to the period. Knowledge time says the original dataset could not have included its dispute label.
 
 This is a **bitemporal** problem: the system cares about when the real-world event was effective and when the data system learned about it. Source tables that preserve `event_at`, `ingested_at`, and revision validity give reconstruction a reliable path. A mutable table that overwrites the latest value destroys the earlier knowledge state unless snapshots or change history preserve it elsewhere.
 
-### Start from the run and work backward
+### Start With The Training Job And Trace Its Inputs
 
 The safest boundary comes from the training run or released model, not from a guessed calendar window. Resolve the model to its run, the run to its dataset identity, and the dataset identity to the original build record. Then confirm:
 
@@ -179,12 +171,12 @@ The safest boundary comes from the training run or released model, not from a gu
 
 A missing boundary is an evidence gap. The team should record that gap before reading current data because a convenient current timestamp can quietly turn a reconstruction into a new build.
 
-## Recover Immutable Inputs
+## Find The Exact Input Versions
 <!-- section-summary: Exact reconstruction reads preserved source states through table versions, snapshot IDs, object version manifests, or immutable warehouse outputs. -->
 
 After the boundary is known, the team needs the actual data state. Industrial platforms solve this at different layers, but they share one rule: the rebuild must name an immutable source identity and retain the bytes behind it.
 
-### Delta Lake versions require the log and data files
+### Keep Delta Lake Logs And Data Files For Old Versions
 
 Each Delta Lake commit creates a numbered table version. A rebuild should prefer the recorded version because it identifies one committed state directly:
 
@@ -197,7 +189,7 @@ Delta time travel depends on both the transaction-log history and the data files
 
 Copying a Delta table to a new location can also disturb timestamp-based travel because version timestamps depend on log-file timestamps. A recorded version number is a stronger reconstruction identity than “the state from roughly this time.”
 
-### Iceberg snapshots and tags create durable historical references
+### Use Iceberg Snapshots Or Tags For Long-Lived References
 
 Apache Iceberg records each table state as a snapshot. Spark can read a recorded snapshot directly:
 
@@ -210,7 +202,7 @@ Iceberg snapshots remain available until snapshot expiration removes them from t
 
 Retention still needs active ownership. A snapshot ID written into MLflow cannot override `expire_snapshots`. The data platform should treat production-dataset references as inputs to its snapshot-retention job.
 
-### Object storage needs version IDs or a content manifest
+### Record Object Versions Or List Every File
 
 Object versioning preserves multiple variants under one key. Amazon S3 assigns a version ID to each new object in a versioning-enabled bucket. The pair of bucket, key, and version ID identifies one object.
 
@@ -238,7 +230,7 @@ The manifest itself needs immutable storage and a digest. Bucket versioning alon
 
 GCS and Azure Blob Storage offer comparable object-version concepts. The provider changes the identifier and lifecycle configuration; the reconstruction responsibility remains the same.
 
-### Warehouses need materialized history beyond short recovery windows
+### Copy Warehouse Data Before Recovery History Expires
 
 Warehouse time travel is useful for recent operational recovery. Its window may be much shorter than the life of a production model. BigQuery, for example, supports a configurable time-travel window from two to seven days and recommends table snapshots for longer preservation.
 
@@ -259,9 +251,6 @@ flowchart TD
     F --> G
     G --> H["Verify source identity<br/>before transformation"]
 
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B choice
     class C,D,E,F,G source
     class H verify
@@ -269,14 +258,14 @@ flowchart TD
 
 Source verification should fail fast. Confirm that every version or snapshot resolves, object digests match, expected partitions exist, and access is authorized. Starting a costly pipeline after one input silently fell back to “latest” creates a convincing wrong result.
 
-## Restore Transformation And Runtime Identity
+## Recover The Code, Parameters, And Environment
 <!-- section-summary: Source code, compiled transformations, resolved configuration, dependencies, and engine settings together define the historical dataset recipe. -->
 
-Immutable inputs recover the old facts. The next task recovers how those facts were turned into model-ready rows. **Transformation identity** means the exact program and resolved choices that produced the dataset: SQL, Python, macros, parameters, feature definitions, and selected pipeline nodes. **Runtime identity** means the environment that executed that program: library versions, engine versions, container image, and behaviour-changing settings. Both matter because old source code can produce a different result under a new runtime or a new set of variables.
+Exact inputs recover the old facts, although they cannot show how those facts became model-ready rows. The rebuild also needs the code, resolved parameters, and execution environment used by the original pipeline. These records cover SQL, Python, macros, feature definitions, library versions, engine versions, container image, and behaviour-changing settings. Old source code can produce a different result under a new runtime or a new set of variables.
 
 A Git commit identifies version-controlled SQL and Python. It may also identify dbt models, macros, tests, and package declarations. Git alone misses values supplied at runtime: dbt variables, environment-dependent configuration, orchestration parameters, secrets references, warehouse target, and dynamically selected models.
 
-### Preserve the transformation that actually executed
+### Recover The Exact Code That Ran
 
 dbt generates `manifest.json` during project parsing. The artifact contains a representation of project resources, their configuration, sources, macros, and graph relationships. Executed nodes may also contain compiled SQL. Saving the original artifact alongside `run_results.json` is stronger than compiling today's interpretation of an old source file.
 
@@ -310,15 +299,15 @@ dbt build \
 
 `evidence/resolved-vars.yml` is the archived set of reviewed non-secret variables; dbt receives the file's YAML contents, not its filename. The command is only safe after the rebuild target points to isolated historical sources. A source alias that still resolves to production “latest” defeats the earlier work.
 
-### Record lineage without confusing it with storage
+### Trace The Data Path, Then Recover The Actual Files
 
-MLflow can log dataset inputs and preserve the source, digest, schema, and profile beside the run. It can also hold the resolved parameters and artifacts that connect training to the dataset build.
+Lineage points from a training run back through the dataset build and its sources. It helps the team locate those records, while the retained table versions, object versions, or snapshots supply the actual historical data. MLflow can log dataset inputs and preserve the source, digest, schema, and profile beside the run.
 
 OpenLineage models a defined **Job**, one execution as a **Run**, and data inputs or outputs as **Datasets**. Its source-code and dataset-version facets can carry Git and storage identities. A lineage backend can then answer which job and run produced a dataset and which model training consumed it.
 
 Lineage tells the team where to look. The container registry, Git server, lakehouse, warehouse, and object store still need to retain the evidence. A lineage edge pointing to a deleted image or expired snapshot proves provenance but cannot execute the rebuild.
 
-### Define the required level of runtime equality
+### Decide How Closely The Old Environment Must Be Recreated
 
 Distributed engines may write different Parquet file boundaries or aggregate floating-point values in a different order even under equivalent logic. The team should decide which equality matters:
 
@@ -328,7 +317,7 @@ Distributed engines may write different Parquet file boundaries or aggregate flo
 
 Most tabular ML rebuilds need exact row identity, exact labels and categories, and declared tolerances for floating-point features. The manifest should state this policy before comparison so the team cannot weaken it after seeing a mismatch.
 
-## Replay Late Data And Label Maturity
+## Reproduce Late Arrivals And Delayed Labels
 <!-- section-summary: Historical replay uses event time and knowledge time to reproduce late arrivals, duplicate resolution, point-in-time features, and labels available at the original build. -->
 
 Late data is ordinary in production. Mobile devices reconnect, partner files arrive after a deadline, streaming jobs retry, and human reviewers revise outcomes. An exact rebuild has to reproduce how the original pipeline handled those events.
@@ -362,13 +351,13 @@ WHERE event_rank = 1;
 
 The ordering rule is part of the data contract. Another pipeline may keep the first observation, the highest source sequence, or a revision valid at the cutoff. The historical code and manifest must identify that choice.
 
-### Reproduce watermark and backfill policy
+### Reproduce Which Late Records Were Included
 
-Streaming pipelines often accept events up to a configured lateness threshold. Events beyond the watermark may be dropped, quarantined, or sent through a backfill. Running a batch query over all preserved events can accidentally include records the original streaming job discarded.
+The original pipeline may have accepted events only up to a defined lateness threshold. A streaming **watermark** represents that rule. Events beyond it may be dropped, quarantined, or sent through a later historical rebuild. Running a batch query over every preserved event can accidentally include records the original streaming job discarded.
 
 An exact rebuild should replay the same acceptance rule or read a snapshot of the accepted-event table produced by that rule. A corrected rebuild can deliberately include later events, but it needs a new dataset identity and a written explanation of the change.
 
-### Labels have their own availability history
+### Use Only Labels Available At The Original Cutoff
 
 Outcome records also need system time. A current `chargeback_status = final` row says little about what the original build knew. The label system should preserve revisions through an append-only event log, valid-time columns, a slowly changing table, or immutable snapshots.
 
@@ -393,10 +382,6 @@ flowchart TD
     G -- "No" --> H["Exclude or mark censored<br/>under the recorded policy"]
     G -- "Yes" --> I["Use in historical example"]
 
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef exclude fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef process fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef include fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,F process
     class B,D,G gate
     class C,E,H exclude
@@ -407,14 +392,14 @@ A point-in-time feature store can automate parts of historical feature retrieval
 
 The rebuild still needs the correct offline source snapshot and feature definitions. It also needs the original entity dataframe and late-data policy. Point-in-time joining protects the feature clock; it cannot recover source history that storage already removed.
 
-## Rebuild Stable Splits And Verify The Output
+## Rebuild The Same Train And Test Rows, Then Compare Results
 <!-- section-summary: Stable split manifests preserve evaluation membership, while layered verification proves schema, rows, values, timing, and statistical evidence. -->
 
 The transformed examples are only part of the historical dataset. Training, validation, and test membership can change model metrics even if every row is present.
 
 Re-running `train_test_split(..., random_state=42)` may still produce a different split after row order changes, duplicates are corrected, or library behaviour changes. Entity leakage can also occur if repeated customers, patients, devices, or products land on both sides of the split.
 
-### Preserve membership, not just the splitting recipe
+### Record Exactly Which Rows Belonged To Each Split
 
 The durable approach stores stable example or entity IDs for each split. A grouped split may store customer IDs. A time split may store explicit time boundaries plus exception lists. A frozen evaluation set should have its own dataset identity and manifest.
 
@@ -428,9 +413,9 @@ The replay performs these checks before training:
 
 The split algorithm remains valuable because it explains how new versions should be created. The membership manifests prove how the historical version was actually partitioned.
 
-### Verify from identity toward model meaning
+### Check Identities First, Then Data And Model Results
 
-Verification should progress from the most exact evidence toward broad statistical summaries.
+Verification starts with exact identities, then moves through row-level comparisons, dataset statistics, and model results. This order catches a wrong snapshot or split before broad averages hide the difference.
 
 **Source identity** confirms every snapshot, object manifest, and warehouse materialization. **Schema identity** compares column names, logical types, nullability, units, and category contracts. **Row identity** compares primary keys and split membership. **Content identity** compares canonical values or partition-level digests.
 
@@ -448,10 +433,6 @@ flowchart TD
     H -- "Yes" --> I["Sign exact rebuild report"]
     H -- "No" --> J["Stop at first differing layer"]
 
-    classDef check fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef pass fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C,D,E,F,G check
     class H gate
     class I pass
@@ -467,13 +448,13 @@ A single dataset checksum only works after canonicalization. File order, row ord
 
 The first differing verification layer guides the investigation. A source digest mismatch points toward retention or retrieval. Matching sources with a schema mismatch points toward transformation or runtime. Matching canonical rows with different model outputs points toward model runtime or input serialization.
 
-### Compare the exact rebuild before the corrected rebuild
+### Compare The Exact Rebuild Before The Corrected Rebuild
 
 An incident often needs two outputs. The **exact rebuild** reproduces the flawed historical dataset and proves the evidence path. The **corrected rebuild** changes one or more source states or rules and receives a new identity.
 
 Compare those outputs by changed keys, changed labels, affected features, segments, and model behaviour. This order separates “we successfully reconstructed history” from “we believe this change repairs the historical defect.”
 
-## Exact Rebuild Or Best-Effort Reconstruction
+## Decide Whether An Exact Rebuild Is Possible
 <!-- section-summary: Exact rebuilds satisfy declared equality checks, while best-effort reconstructions disclose missing evidence, substitutions, uncertainty, and permitted use. -->
 
 Some historical datasets cannot be recreated exactly. A snapshot may have expired. Raw objects may have been lifecycle-deleted. A vendor may expose only current data. Personal records may have been lawfully erased. A proprietary runtime may no longer exist.
@@ -501,10 +482,6 @@ flowchart TD
     I -- "No" --> H
     H --> K["Publish gap register,<br/>uncertainty, and allowed use"]
 
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef process fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef exact fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef partial fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,E,J process
     class B,C,D,F,I gate
     class G exact
@@ -526,12 +503,12 @@ Suppose a weather provider retained only corrected observations. The team can re
 
 Names matter. Publishing a best-effort output under the old dataset ID hides uncertainty from future users. Give it a new identity, link it to the historical target, and store the reconstruction status in the catalog and run record.
 
-## Operate Within Retention And Deletion Constraints
+## Plan For Data That Has Expired Or Must Be Deleted
 <!-- section-summary: Rebuild policy balances investigation needs with storage cost, access control, privacy, legal deletion, encryption, and safe isolated execution. -->
 
 Keeping every source forever would simplify reconstruction and create serious cost, security, and privacy problems. A mature rebuild policy defines which historical evidence deserves retention and which constraints can make exact recovery impossible.
 
-### Match retention to model risk and evidence value
+### Keep Evidence For As Long As The Model Risk Requires
 
 Production models need a declared reconstruction window. A low-risk weekly forecast may keep approved training outputs and manifests for a modest period. A safety-critical or regulated decision system may need longer evidence retention under its governing policy.
 
@@ -545,7 +522,7 @@ The storage settings have to agree:
 
 Treat a released model as a downstream reference. The cleanup system should check active model and audit obligations before expiring the dataset evidence behind it.
 
-### Restricted data changes the evidence design
+### Keep Sensitive Source Data Out Of General Evidence Stores
 
 Personal, health, financial, or commercially restricted data should stay in governed storage with least-privilege access and audit logging. A rebuild manifest can preserve opaque identities, versions, digests, schemas, and statistics without copying sensitive rows into MLflow, Git, or an incident document.
 
@@ -555,7 +532,7 @@ Exact reconstruction can therefore become impossible by design. A deletion tombs
 
 Encryption adds another boundary. Historical objects are unreadable after their encryption keys are destroyed. The evidence record should include the key-management class and rebuild eligibility, without storing secret material.
 
-### Use an isolated, read-only rebuild environment
+### Use An Isolated, Read-Only Rebuild Environment
 
 A rebuild should never overwrite the historical source or current production tables. Use read-only credentials for preserved inputs and write the output under a new reconstruction identity. Network controls, access logging, and approved export locations matter for restricted datasets.
 
@@ -568,7 +545,7 @@ The operator should stop if:
 - the output would copy restricted fields into an unapproved location;
 - verification cannot distinguish the result from a partial reconstruction.
 
-### Test reconstruction before an incident
+### Practice Rebuilding Data Before An Incident
 
 A periodic drill can select one released model, resolve its dataset manifest, verify every source reference, rebuild a small partition, and compare the recorded evidence. The exercise exposes expired snapshots, deleted images, stale credentials, missing dbt artifacts, and unreadable split manifests while the original owners still remember the system.
 

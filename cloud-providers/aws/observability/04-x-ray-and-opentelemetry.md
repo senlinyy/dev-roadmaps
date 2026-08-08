@@ -64,12 +64,6 @@ graph LR
     Checkout --> Queue[SQS<br/>fraud-check queue]:::aws
     Queue --> Fraud[fraud-check<br/>Lambda]:::service
     Checkout --> Provider[Payment Provider API]:::external
-
-    classDef client fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
-    classDef edge fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef service fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef aws fill:#193a3a,stroke:#24d2b5,stroke-width:2px,color:#fff
-    classDef external fill:#2f243f,stroke:#a78bfa,stroke-width:2px,color:#fff
 ```
 
 X-Ray also records useful labels. **Annotations** are indexed key-value pairs that you can use for filtering and grouping traces. **Metadata** stores extra key-value data that appears in trace details and stays outside search indexes. For checkout, `tenantTier`, `paymentProvider`, and `route` are good annotation candidates, while a large provider response body belongs in logs or metadata after sensitive fields are removed.
@@ -390,12 +384,6 @@ graph TB
     App --> Logs
     Worker --> Logs
     XRay <-->|trace-to-log correlation| Logs
-
-    classDef service fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef aws fill:#193a3a,stroke:#24d2b5,stroke-width:2px,color:#fff
-    classDef collector fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef xray fill:#2f243f,stroke:#a78bfa,stroke-width:2px,color:#fff
-    classDef logs fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 This is the end state the observability section has been building toward. Metrics tell the team a customer-facing behavior changed. Logs explain the concrete error. Traces connect the services, queues, and dependencies into one request path. With all three signals connected, incident response has a real story instead of a pile of disconnected clues.

@@ -10,17 +10,17 @@ id: "article-mlops-monitoring-and-feedback-tracing-ml-services"
 ## Table of Contents
 
 1. [What ML Service Tracing Means](#what-ml-service-tracing-means)
-2. [A Trace Is A Timeline Made Of Spans](#a-trace-is-a-timeline-made-of-spans)
-3. [OpenTelemetry Gives The Trace A Common Language](#opentelemetry-gives-the-trace-a-common-language)
-4. [Choose Operations That Help Someone Act](#choose-operations-that-help-someone-act)
-5. [Context Propagation Connects Work Across Services](#context-propagation-connects-work-across-services)
-6. [Add Tracing In Two Layers](#add-tracing-in-two-layers)
-7. [The Collector Moves Traces To A Backend](#the-collector-moves-traces-to-a-backend)
-8. [Sampling Controls Trace Cost](#sampling-controls-trace-cost)
-9. [Use A Trace During A Real Investigation](#use-a-trace-during-a-real-investigation)
+2. [How A Trace Shows One Request Over Time](#how-a-trace-shows-one-request-over-time)
+3. [How OpenTelemetry Standardises Tracing](#how-opentelemetry-standardises-tracing)
+4. [Choose Spans That Support A Real Investigation](#choose-spans-that-support-a-real-investigation)
+5. [How Trace Context Crosses Service Boundaries](#how-trace-context-crosses-service-boundaries)
+6. [Combine Automatic And Manual Instrumentation](#combine-automatic-and-manual-instrumentation)
+7. [How The Collector Sends Traces To A Backend](#how-the-collector-sends-traces-to-a-backend)
+8. [How To Reduce Trace Volume And Cost](#how-to-reduce-trace-volume-and-cost)
+9. [Use A Trace To Investigate A Slow Prediction](#use-a-trace-to-investigate-a-slow-prediction)
 10. [Keep Traces Safe And Searchable](#keep-traces-safe-and-searchable)
 11. [Test Failure And Recovery Paths](#test-failure-and-recovery-paths)
-12. [Choose A Stack That Fits The Request Path](#choose-a-stack-that-fits-the-request-path)
+12. [Choose A Tracing Stack For The Serving Platform](#choose-a-tracing-stack-for-the-serving-platform)
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
@@ -93,10 +93,6 @@ flowchart LR
     end
     D --> E
 
-    classDef symptom fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef trace fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B symptom
     class C,D trace
     class E evidence
@@ -105,7 +101,7 @@ flowchart LR
 
 The rest of the tracing system exists to make this journey complete, safe, affordable, and useful during a real incident.
 
-## A Trace Is A Timeline Made Of Spans
+## How A Trace Shows One Request Over Time
 <!-- section-summary: A trace contains connected spans, and each span measures one meaningful operation inside the request. -->
 
 A tracing screen usually looks like a waterfall. Time runs from left to right. Each row shows one piece of work, and the row's width shows how long that work took.
@@ -127,10 +123,6 @@ flowchart LR
         F --> G["420 ms<br/>Response complete"]
     end
 
-    classDef edge fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef dependency fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A edge
     class B,C,D dependency
     class E,F model
@@ -154,7 +146,7 @@ This parent-and-child structure explains cause. The incoming request caused the 
 
 A span also has a **kind**, which describes its role at a system boundary. A `SERVER` span receives a request, while a `CLIENT` span represents an outgoing call. A `PRODUCER` span sends work to a queue, and a `CONSUMER` span receives it. An `INTERNAL` span measures work inside one process, such as preprocessing or model inference. These roles help a tracing backend distinguish time spent serving, calling, publishing, consuming, and computing.
 
-### Parallel work changes how time should be read
+### Read Parallel Spans By Their Overlap
 
 The feature and candidate calls overlap. Adding every row would report more than 420 milliseconds, even though the caller waited only 420 milliseconds.
 
@@ -162,7 +154,7 @@ The path of dependent work that controls the finish time is the **critical path*
 
 For a beginner, the practical rule is simple: follow the chain that reaches the end of the request last. That chain usually shows the first useful performance target.
 
-### Span events record important moments
+### Use Span Events To Record Important Moments
 
 Some things matter but have almost no duration. A retry begins. A circuit breaker opens. A fallback is selected.
 
@@ -174,7 +166,7 @@ Tracing every function creates noise. A helper that converts a list into an arra
 
 *The outer request span contains smaller operations. Their position and width show sequence, overlap, and duration.*
 
-## OpenTelemetry Gives The Trace A Common Language
+## How OpenTelemetry Standardises Tracing
 <!-- section-summary: OpenTelemetry defines how applications create, identify, transport, process, and export trace data while a separate backend stores and displays it. -->
 
 **OpenTelemetry**, often shortened to **OTel**, is an open-source observability framework. It gives applications and platform tools a shared way to create and move traces, metrics, and logs. For tracing, it defines the concepts and interfaces behind spans, trace context, common attributes, export, and collection.
@@ -191,15 +183,12 @@ flowchart LR
     B -->|"OTLP"| C["OpenTelemetry Collector<br/>Filter, batch, and route"]
     C --> D["Tracing backend<br/>Store, search, and inspect"]
 
-    classDef work fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef otel fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef platform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A work
     class B,C otel
     class D platform
 ```
 
-### Instrumentation observes the work
+### Use Instrumentation To Create Telemetry
 
 **Instrumentation** is the part that recognizes an operation and asks OpenTelemetry to represent it as a span. Automatic instrumentation already understands common framework boundaries such as an incoming FastAPI request, an HTTPX call, a database query, or a message sent through a supported client.
 
@@ -207,7 +196,7 @@ Manual instrumentation covers application-specific work. A generic Python librar
 
 This gives teams a useful division of responsibility. Framework integrations cover standard network and library calls. Product code describes the ML operations that only the product team understands.
 
-### The API and SDK have different jobs
+### What The OpenTelemetry API And SDK Do
 
 The OpenTelemetry **API** is the interface used by application code and instrumentation libraries. It provides operations such as obtaining a tracer, starting a span, adding an attribute, and recording an event.
 
@@ -220,7 +209,7 @@ Two kinds of information appear throughout this path:
 
 Suppose ten replicas run the prediction API. `service.name="prediction-api"` belongs to the resource because it describes every span from that service. `app.model.route="candidate"` belongs to the inference span because it describes one request path.
 
-### Semantic conventions keep common fields consistent
+### Use Semantic Conventions For Consistent Fields
 
 OpenTelemetry **semantic conventions** provide shared names and meanings for common operations and attributes. HTTP instrumentation can agree on how to represent request method, route, response status, client calls, and server calls. Messaging and database instrumentation have their own conventions.
 
@@ -228,7 +217,7 @@ This consistency matters in a mixed-language system. A Python API and a Java fea
 
 Product-specific ML fields usually need an application namespace because the standard does not define every concept in a serving system. A team might use reviewed attributes such as `app.model.route`, `app.fallback.reason`, and `app.input.size_band`. The names should stay stable and their values should come from bounded sets.
 
-### OTLP carries completed telemetry
+### Use OTLP To Export Completed Telemetry
 
 The **OpenTelemetry Protocol**, or **OTLP**, is the standard protocol commonly used to export telemetry from an SDK or Collector. It supports transport over gRPC and HTTP.
 
@@ -236,7 +225,7 @@ OTLP carries completed span records toward a Collector or backend. Trace-context
 
 For example, the API forwards W3C Trace Context to the feature service during the request. Each service finishes its own spans and exports them through OTLP. The backend receives those records and reconstructs the connected waterfall from their identifiers and relationships.
 
-### The Collector applies shared policy
+### Use The Collector To Process And Route Telemetry
 
 The **OpenTelemetry Collector** is a separate service that receives telemetry, processes it, and exports it. It gives platform teams one place to apply shared rules such as batching, memory limits, redaction, sampling, routing, or delivery to several backends.
 
@@ -246,10 +235,12 @@ The tracing backend still owns storage, indexes, query behavior, retention, acce
 
 In essence, instrumentation observes the work, the API describes it, the SDK turns it into telemetry, trace context connects services, OTLP transports the finished records, the Collector applies shared policy, and the backend helps an engineer investigate them. The rest of this article develops each part through production design and failure scenarios.
 
-## Choose Operations That Help Someone Act
-<!-- section-summary: Useful span boundaries separate work with its own latency, failure mode, owner, or recovery action. -->
+## Choose Spans That Support A Real Investigation
+<!-- section-summary: Span boundaries separate work with its own latency, failure mode, owner, or recovery action. -->
 
-The hardest design question is deciding which work deserves its own span.
+Each span should represent one operation that an engineer may need to inspect separately. Too few spans hide the slow or failing component. Too many spans fill the trace with internal helper calls that lead to the same owner and response.
+
+The design question is deciding which work deserves its own span.
 
 A useful span separates an operation that could send the investigation in a different direction. Feature retrieval, model inference, policy evaluation, and result persistence often deserve separate spans because different systems and owners control them.
 
@@ -276,17 +267,13 @@ flowchart LR
     C --> G["Use a stable name<br/>and reviewed attributes"]
     E --> G
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef span fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef event fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef internal fill:#CBD5E1,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,D input
     class C,G span
     class E event
     class F internal
 ```
 
-### Stable names make traces searchable
+### Use Stable Span Names
 
 The name `model.predict` creates one useful family of spans. A name such as `model.predict/customer-184729/request-9832` creates a different operation for every request. That naming pattern makes the backend expensive and difficult to query.
 
@@ -298,7 +285,7 @@ OpenTelemetry publishes **semantic conventions**, which are shared names for com
 
 Some semantic conventions remain experimental. A production trace contract should record which convention version it uses and avoid depending on unstable names without a migration plan.
 
-### Attributes should lead to useful groups
+### Use Attributes That Support Safe Grouping
 
 An attribute earns its place if it helps an operator compare or route a problem.
 
@@ -308,7 +295,7 @@ A raw score of `0.728319483` creates many unique values and rarely helps trace s
 
 This is the boundary between tracing and prediction logging: the trace explains the execution path; the decision record preserves the detailed model decision.
 
-## Context Propagation Connects Work Across Services
+## How Trace Context Crosses Service Boundaries
 <!-- section-summary: Context propagation carries trace identity through HTTP calls, queues, and workers so the backend can rebuild one request journey. -->
 
 Each service can record its own timing. Without shared identity, the tracing backend receives separate fragments and cannot tell that they belong to the same request.
@@ -340,7 +327,7 @@ sequenceDiagram
 
 The shared trace ID lets the backend group all three services into one journey. Each service creates a fresh span ID, and the parent value preserves the order of the calls.
 
-### A broken trace has a visible shape
+### How Broken Context Propagation Appears
 
 Suppose the API trace ends at an outgoing feature call. The feature service has a separate root trace at the same time.
 
@@ -353,7 +340,7 @@ The work happened, but the journey split. The team checks the boundary:
 
 The repair is tested with one known request. Success means one trace contains both the API and feature spans in the correct parent-child order.
 
-### Queues carry context in message metadata
+### Carry Trace Context In Queue Metadata
 
 Asynchronous systems need the same idea. A Kafka producer injects trace context into message headers. The consumer extracts it before processing the message.
 
@@ -367,7 +354,7 @@ Each request keeps its own trace and prediction ID. The `batch.execute` span lin
 
 *Parent-child context fits a direct call. Span links describe shared work created from several independent requests.*
 
-### Baggage needs stronger limits
+### Limit What Baggage Can Carry
 
 OpenTelemetry **baggage** carries arbitrary key-value data across service boundaries. This sounds convenient, but downstream libraries may forward it again.
 
@@ -375,10 +362,10 @@ Credentials, customer identity, prompts, feature values, and authorization decis
 
 Trace context connects telemetry across services. Business authorization uses a separate authenticated identity mechanism.
 
-## Add Tracing In Two Layers
+## Combine Automatic And Manual Instrumentation
 <!-- section-summary: Automatic instrumentation covers common frameworks and clients, while a small number of manual spans reveal ML-specific work. -->
 
-**Instrumentation** is the code and library support that creates tracing data.
+**Instrumentation** is the code and library support that creates tracing data. Framework integrations can observe standard operations such as HTTP requests or database calls. Product code must describe ML-specific work such as model inference, policy evaluation, or fallback selection because a generic library cannot know that meaning.
 
 Most teams get the first useful trace in two layers:
 
@@ -387,7 +374,7 @@ Most teams get the first useful trace in two layers:
 
 This order keeps the first change small. It also prevents teams from manually recreating spans that a well-tested library already provides.
 
-### Automatic instrumentation shows the outer journey
+### Use Automatic Instrumentation For The Request Journey
 
 OpenTelemetry supports zero-code or library-based instrumentation for common languages and frameworks. Python traces are stable, and current OpenTelemetry Python supports actively maintained Python versions.
 
@@ -406,7 +393,7 @@ FastAPI instrumentation creates the incoming request span. HTTPX instrumentation
 
 Send one known staging request and inspect its trace in the backend. If the feature call appears but model inference is an unexplained gap, add one manual span around inference.
 
-### Manual spans show the ML work
+### Add Manual Spans Around Important ML Work
 
 Automatic framework instrumentation exposes the HTTP request and supported library calls. A manual span exposes application-specific work such as model artifact selection and inference.
 
@@ -439,7 +426,7 @@ The example disables automatic exception recording because raw exception text ca
 
 The feature vector and complete prediction stay outside the trace. The decision record is the correct home for governed model evidence.
 
-### Treat instrumentation as a serving change
+### Release And Test Instrumentation Like Serving Code
 
 Tracing adds CPU work, memory use, network traffic, and backend cost. Automatic instrumentation can also create duplicate spans if another agent already traces the same library.
 
@@ -453,7 +440,7 @@ A safe rollout uses:
 
 The serving path should continue if tracing export fails. Bounded queues and timeouts protect inference from a slow observability backend.
 
-## The Collector Moves Traces To A Backend
+## How The Collector Sends Traces To A Backend
 <!-- section-summary: The OpenTelemetry Collector receives spans, applies shared policy, and exports retained traces to a managed or self-hosted backend. -->
 
 The application creates spans. A tracing backend stores and displays them. The **OpenTelemetry Collector** is the common component between those two sides.
@@ -478,10 +465,6 @@ flowchart LR
     H["Collector health<br/>queue, rejects, export failures"] -.-> C
     H -.-> F
 
-    classDef app fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef collector fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef backend fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef health fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A app
     class B,C,D,E,F collector
     class G backend
@@ -521,7 +504,7 @@ The memory limiter protects the Collector from uncontrolled pressure. The batch 
 
 Production deployment also needs authenticated transport, bounded sending queues, retries, secrets from the deployment platform, and explicit failure behavior.
 
-### Choose a deployment shape that fits the platform
+### Choose Where The Collector Runs
 
 A small service can export directly to a managed tracing backend. This gives the team value quickly and avoids operating a separate tier.
 
@@ -533,7 +516,7 @@ For a self-managed open-source stack, OpenTelemetry SDKs and Collectors commonly
 
 OTLP keeps application instrumentation portable. It does not remove differences in backend queries, pricing, retention, access, or feature support.
 
-### Monitor the Collector itself
+### Monitor The Collector
 
 If the trace backend slows down, the Collector's sending queue grows. Export failures rise. Eventually, new spans may be refused or dropped.
 
@@ -545,7 +528,7 @@ Suppose queue use reaches 85 percent during a backend slowdown. The observabilit
 
 *The application creates spans, OTLP carries them, the Collector applies policy, and the backend stores the retained journeys.*
 
-## Sampling Controls Trace Cost
+## How To Reduce Trace Volume And Cost
 <!-- section-summary: Sampling keeps representative healthy traces and higher-value slow, failed, fallback, and release-transition traces. -->
 
 A high-traffic endpoint can create thousands of complete traces every second. Retaining all of them increases application export work, Collector memory, network traffic, backend ingestion, storage, and query cost.
@@ -586,10 +569,6 @@ flowchart LR
     D --> H["Store retained traces"]
     G --> H
 
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef head fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef tail fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef store fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B choice
     class C,D head
     class E,F,G tail
@@ -606,7 +585,7 @@ A practical policy might retain:
 
 “Keep every error” also needs a ceiling. During a widespread outage, error volume can exceed backend capacity. The emergency policy may cap detailed traces per service while complete error metrics and durable decision records preserve the size of the incident.
 
-### Roll out sampling as an operational change
+### Change Sampling Gradually And Monitor Its Cost
 
 In staging, replay representative trace sizes and peak request rates. Measure Collector memory, decision latency, incomplete traces, and backend volume.
 
@@ -614,7 +593,7 @@ A production canary compares expected and observed retention by category. If the
 
 Sampling is successful only if responders can still find the traces promised by the policy.
 
-## Use A Trace During A Real Investigation
+## Use A Trace To Investigate A Slow Prediction
 <!-- section-summary: A trace narrows an aggregate service symptom to the specific operation, owner, and release that need action. -->
 
 Consider a model release whose candidate route receives ten percent of traffic. Soon after the release, the 99th-percentile latency rises for candidate requests while the primary route remains healthy.
@@ -671,7 +650,7 @@ A **trace data contract** defines the allowed span names, attributes, events, er
 
 Two risks deserve special attention.
 
-### Sensitive data can escape its original controls
+### Keep Sensitive Data Out Of Traces
 
 Raw prompts, feature vectors, customer identity, documents, credentials, signed URLs, and unrestricted exception messages can reveal protected information.
 
@@ -683,7 +662,7 @@ Raw prompts and full feature payloads require a separate, purpose-built restrict
 
 Suppose an authorized engineer needs a complete feature payload to reproduce a slow request. The restricted store holds one governed copy. The decision record carries a controlled source reference, while the trace carries the feature schema version, size band, and prediction reference.
 
-### High-cardinality fields can overwhelm the backend
+### Control High-Cardinality Trace Attributes
 
 **Cardinality** describes how many distinct values a field can have.
 
@@ -707,9 +686,6 @@ flowchart TB
     C -.->|"Controlled prediction reference"| D
     D -.->|"Governed source reference"| R
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef safe fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef governed fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B input
     class C,E safe
     class D,F governed
@@ -725,7 +701,7 @@ A tracing backend can display attractive waterfalls while telling an incomplete 
 
 Testing starts with one known request and expands outward.
 
-### Verify topology in code
+### Test Span Relationships In Code
 
 An in-memory exporter can assert that a request creates:
 
@@ -737,7 +713,7 @@ An in-memory exporter can assert that a request creates:
 
 A forced feature timeout should produce the expected error class and fallback evidence. Tests reject raw prompts, secrets, direct identifiers, and unsupported attribute names.
 
-### Verify propagation in staging
+### Test Context Propagation In Staging
 
 Send a known request through the real proxy, service, queue, Collector, and backend. Confirm that all expected services share one trace ID and appear in the correct order.
 
@@ -750,13 +726,13 @@ Also confirm that:
 
 This test separates an application instrumentation defect from a Collector, backend, or dashboard-linking defect.
 
-### Verify sampling and overhead under load
+### Test Sampling And Overhead Under Load
 
 Generate healthy, slow, failed, fallback, and candidate traces. Compare observed retention with policy. Add peak traffic and representative trace sizes.
 
 Measure application CPU, memory, and latency. Measure Collector queue use, refused spans, export failures, and backend ingestion. A trace design that overwhelms the serving system has failed its purpose.
 
-### Stop the tracing backend
+### Test A Tracing-Backend Outage
 
 Make the backend reject exports in a safe environment. The service should keep serving predictions within its objective.
 
@@ -771,9 +747,6 @@ flowchart LR
     C --> D["Backend outage<br/>bounded queues"]
     D --> E["Recovery request<br/>fresh complete trace"]
 
-    classDef normal fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stress fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef recovery fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B normal
     class C,D stress
     class E recovery
@@ -781,22 +754,22 @@ flowchart LR
 
 Broken propagation has its own focused runbook. Find the last connected span, inspect the next transport boundary, repair client injection or server extraction, and repeat the known request. One complete trace proves the handoff is restored.
 
-## Choose A Stack That Fits The Request Path
+## Choose A Tracing Stack For The Serving Platform
 <!-- section-summary: Managed tracing suits ordinary services, while Collector gateways and self-hosted backends fit platforms with clear scale or control needs. -->
 
-Tracing creates the most value if a prediction crosses several places that can wait, fail, or change direction.
+Tracing provides the most value for prediction paths that cross several places where work can wait, fail, or change direction.
 
 An endpoint calling an online feature service, vector store, model runtime, policy engine, and fallback has many useful boundaries. A single-process batch script may get enough evidence from job metrics, structured logs, and a durable run record.
 
 The smallest practical stack is often the best starting point.
 
-### Managed application platform
+### Use Managed Application Monitoring
 
 Use the provider's supported OpenTelemetry or application performance monitoring integration for a straightforward managed endpoint. Cloud Trace, Azure Monitor Application Insights, and AWS observability integrations can store and display distributed traces without a team operating the backend.
 
 The provider reduces storage and backend work. The application team still owns useful span boundaries, safe attributes, propagation across custom boundaries, sampling requirements, and decision records.
 
-### Existing Kubernetes observability platform
+### Use The Existing Kubernetes Observability Platform
 
 OpenTelemetry SDKs create spans. Collectors receive and route them. Tempo or Jaeger stores traces. Prometheus handles metrics, and Loki or another logging backend stores recent events. Grafana links the signals.
 
@@ -804,7 +777,7 @@ This stack fits teams that already operate Kubernetes observability and need con
 
 Platform engineers upgrade the Collectors and backend. They plan enough ingestion and storage capacity for traffic peaks, and they protect write and query access. Their on-call response also covers a trace pipeline that falls behind.
 
-### Central Collector gateway
+### Use A Central Collector Gateway
 
 A gateway fits a platform that needs one place for redaction, tail sampling, or routing to several destinations. Tail sampling requires all spans from the same trace to reach the same decision point, so the load-balancing design must understand trace identity.
 

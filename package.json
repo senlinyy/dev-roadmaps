@@ -6,7 +6,8 @@
     "node": ">=22.6.0"
   },
   "scripts": {
-    "build:artifacts": "node --experimental-strip-types scripts/build-content-artifacts.ts",
+    "build:artifacts": "npm run check:mermaid-theme && node --experimental-strip-types scripts/build-content-artifacts.ts",
+    "check:mermaid-theme": "node --experimental-strip-types scripts/check-mermaid-theme.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

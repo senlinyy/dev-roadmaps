@@ -10,20 +10,20 @@ id: "article-mlops-training-pipelines-cpu-vs-gpu-training"
 ## Table of Contents
 
 1. [Choose Hardware for a Training Objective](#choose-hardware-for-a-training-objective)
-2. [Understand the Hardware Path](#understand-the-hardware-path)
-3. [Match Workload Shape to Hardware](#match-workload-shape-to-hardware)
+2. [Understand How Data And Computation Reach The Processor](#understand-how-data-and-computation-reach-the-processor)
+3. [Match The Training Workload To The Hardware](#match-the-training-workload-to-the-hardware)
 4. [Use CPU Training for the Work CPUs Handle Well](#use-cpu-training-for-the-work-cpus-handle-well)
 5. [Use GPUs for Parallel Tensor Work](#use-gpus-for-parallel-tensor-work)
-6. [Fit the Training State Into Device Memory](#fit-the-training-state-into-device-memory)
-7. [Treat Precision as Part of the Experiment](#treat-precision-as-part-of-the-experiment)
+6. [Check Whether Training Fits In Accelerator Memory](#check-whether-training-fits-in-accelerator-memory)
+7. [Choose Numeric Precision As Part Of The Experiment](#choose-numeric-precision-as-part-of-the-experiment)
 8. [Benchmark the Complete Training Path](#benchmark-the-complete-training-path)
-9. [Keep the Accelerator Fed](#keep-the-accelerator-fed)
-10. [Interpret Utilization With Throughput](#interpret-utilization-with-throughput)
+9. [Prevent Data Loading From Leaving The Accelerator Idle](#prevent-data-loading-from-leaving-the-accelerator-idle)
+10. [Read Accelerator Utilization Together With Training Throughput](#read-accelerator-utilization-together-with-training-throughput)
 11. [Place the Job on Managed Compute](#place-the-job-on-managed-compute)
 12. [Schedule Accelerators on Kubernetes](#schedule-accelerators-on-kubernetes)
-13. [Compare Cost per Completed Objective](#compare-cost-per-completed-objective)
+13. [Compare The Cost Of A Successful Training Run](#compare-the-cost-of-a-successful-training-run)
 14. [Preserve Reproducibility Across Hardware](#preserve-reproducibility-across-hardware)
-15. [Scale Up From Evidence](#scale-up-from-evidence)
+15. [Use Measurements To Decide Whether To Scale Up Or Out](#use-measurements-to-decide-whether-to-scale-up-or-out)
 16. [The Main Idea](#the-main-idea)
 17. [References](#references)
 
@@ -54,7 +54,7 @@ flowchart TD
 
 The training objective anchors the decision. Hardware is a means to produce the required model evidence, not the objective itself.
 
-## Understand the Hardware Path
+## Understand How Data And Computation Reach The Processor
 <!-- section-summary: CPUs prepare and coordinate the job, accelerators execute supported parallel operations, and data crosses a host-to-device boundary before accelerator compute can begin. -->
 
 A **central processing unit (CPU)** is a general-purpose processor. Its cores handle varied instructions, branching logic, operating-system work, file parsing, decompression, data joins, and the Python or C++ code that coordinates training. Modern CPUs also contain vector instructions and can train many models efficiently.
@@ -83,7 +83,7 @@ flowchart TD
 
 A training job can use both processors heavily. Calling it “GPU training” means the main supported model operations execute on the GPU; CPU work still feeds and coordinates those operations.
 
-## Match Workload Shape to Hardware
+## Match The Training Workload To The Hardware
 <!-- section-summary: Model operations, batchability, input work, memory footprint, precision, and framework coverage determine whether acceleration can improve the full job. -->
 
 Hardware selection starts with the shape of the work. The model’s parameter count alone gives an incomplete answer. **Workload shape** is the pattern of computation and data movement produced by one representative training step. Equal parameter counts can hide different behavior: one model may perform dense matrix operations while another spends most of its time in sparse lookups or host-side preprocessing. The following questions locate that difference before hardware is requested.
@@ -94,7 +94,7 @@ Dense matrix multiplications, convolutions, attention layers, and large embeddin
 
 Operator support matters too. A framework may place most of a model on the accelerator and fall back to the CPU for an unsupported custom operation. Repeated device transfers around that fallback can erase the expected gain. PyTorch Profiler or TensorFlow Profiler reveals actual device placement and operation time.
 
-### Check Batchability and Input Work
+### Check Whether The Model Can Process Large Batches
 
 **Batchability** describes whether many examples can share the same operation at once. Larger, regular batches usually expose more parallel work. Tiny models, highly variable shapes, and one-example-at-a-time processing can leave an accelerator underfilled.
 
@@ -144,7 +144,7 @@ The damaged-parts classifier is a plausible GPU candidate because convolutions p
 
 GPU use also introduces a compatibility contract: framework build, accelerator backend, driver, runtime libraries, and device capability. Pin the training image by digest and test it on the target device class before scheduling a full run.
 
-## Fit the Training State Into Device Memory
+## Check Whether Training Fits In Accelerator Memory
 <!-- section-summary: GPU class selection starts with peak device-memory demand, then considers throughput, precision support, interconnect, availability, and cost. -->
 
 Device memory decides whether a configuration can run. During training, memory holds more than the model weights. A useful estimate is:
@@ -153,13 +153,13 @@ Device memory decides whether a configuration can run. During training, memory h
 
 For Adam training with float32 values, parameters, gradients, and two optimizer moments can consume roughly `16 bytes` per parameter before activations and temporary buffers. Mixed precision, master-weight copies, fused optimizers, quantization, and framework implementation details change that estimate. Measure the real peak with the target training code.
 
-### Reduce the Footprint Before Changing Hardware
+### Reduce Memory Use Before Choosing A Larger GPU
 
 If the run is close to the limit, test one memory control at a time. Options include a smaller micro-batch, gradient accumulation, automatic mixed precision, activation checkpointing, and a memory-efficient optimizer. Each choice changes speed or numerical behavior and belongs in the experiment record. Clear accidental tensor references and verify that evaluation code releases temporary outputs.
 
 If the model still does not fit, select a larger-memory accelerator. The decision starts from measured peak memory plus operational headroom for allocator variation and input shape. A configuration that peaks near the physical limit is fragile even if one benchmark succeeds.
 
-### Choose the Device Class From the Constraint
+### Choose A GPU That Meets The Measured Limit
 
 After memory fit, compare tensor throughput, supported dtypes, memory bandwidth, host link, and availability. Cost-efficient accelerators such as L4- or A10-class devices can suit smaller vision models and fine-tuning. H100-, H200-, and newer Blackwell-class devices serve larger or more demanding training programs. Exact memory, topology, cloud availability, and pricing vary by product and region, so the platform catalog is the source of truth.
 
@@ -167,7 +167,7 @@ For a single-device job, more interconnect bandwidth between GPUs adds no value.
 
 A concrete memory result makes the choice defensible. If the representative run peaks at `28 GiB`, a `24 GiB` device cannot host that configuration. The team can reduce the footprint or request the next suitable memory class. Theoretical compute throughput does not solve a capacity failure.
 
-## Treat Precision as Part of the Experiment
+## Choose Numeric Precision As Part Of The Experiment
 <!-- section-summary: Lower-precision training can reduce memory and increase accelerator throughput, while numerical range and model-quality checks determine whether it is acceptable. -->
 
 **Precision** describes how floating-point values are represented. Float32 uses 32 bits. Float16 and bfloat16 use 16 bits with different numerical ranges. Lower precision reduces memory traffic and can unlock specialized accelerator units, while selected operations still need float32 for stability.
@@ -233,7 +233,7 @@ Collect at least these outcomes:
 
 Suppose CPU reaches the quality target in `7.5 hours` at low hourly cost. A queued GPU reaches it in `2.2 hours` from submission, while a larger GPU reaches it in `2.1 hours` because input loading dominates. The first GPU is the stronger operating choice despite the larger device’s higher theoretical throughput.
 
-## Keep the Accelerator Fed
+## Prevent Data Loading From Leaving The Accelerator Idle
 <!-- section-summary: Input reads, decoding, transforms, batching, pinned host memory, and device transfer must deliver batches at least as fast as the accelerator consumes them. -->
 
 An **input pipeline** turns stored examples into device-ready batches. For images, it reads objects, decodes compressed bytes, applies augmentations, collates tensors, and copies them into device memory. For language models, tokenization, sequence packing, shuffling, and storage reads can play the same role.
@@ -263,7 +263,7 @@ TensorFlow teams use the equivalent `tf.data` controls: parallel `map`, parallel
 
 A concrete diagnosis compares two durations. If median batch preparation is `55 ms` and median accelerator work is `30 ms`, the accelerator waits for input. If batch preparation falls to `12 ms` and accelerator work remains `30 ms`, the device can receive the next batch in time. The improvement came from the pipeline, not a larger GPU.
 
-## Interpret Utilization With Throughput
+## Read Accelerator Utilization Together With Training Throughput
 <!-- section-summary: Utilization metrics identify active hardware components, while throughput and profiler traces reveal whether compute, memory, transfer, or input work limits progress. -->
 
 GPU utilization is a clue, not a verdict. A dashboard may report high activity during memory stalls or low average activity because short bursts are separated by input waits. Compare hardware counters with examples per second and per-step timing.
@@ -318,7 +318,7 @@ Dynamic Resource Allocation (DRA) is stable in current Kubernetes and supports r
 
 Namespace `ResourceQuota` and a workload queue prevent one experiment burst from consuming the full accelerator pool. Device-aware metrics should carry pod, namespace, and container labels so utilization can be joined with the training run and cost owner.
 
-## Compare Cost per Completed Objective
+## Compare The Cost Of A Successful Training Run
 <!-- section-summary: The economic comparison includes successful and failed attempts, billable runtime, queue delay, checkpoint recovery, and the number of experiments needed to reach the accepted model. -->
 
 Hourly price answers only one part of the decision. The useful unit is **cost per completed training objective**: all compute and supporting spend required to produce an artifact that passes the defined quality and operational checks.
@@ -352,7 +352,7 @@ Compare quality with an agreed tolerance and repeated runs. One CPU run and one 
 
 Changing hardware may also change effective batch size or data order. Preserve the optimization batch, sampler semantics, checkpoint state, and evaluation implementation. A throughput improvement measured with a different training objective is a new experiment, not a hardware-only comparison.
 
-## Scale Up From Evidence
+## Use Measurements To Decide Whether To Scale Up Or Out
 <!-- section-summary: Scale-up changes the resource only after a representative run identifies a compute or memory constraint and defines the expected improvement. -->
 
 Scale up means moving to a stronger single device or more host resources. Scale out means adding devices or nodes. A single larger-memory GPU is usually the first response to a memory-fit problem if the budget and queue support it. Distributed training adds communication, topology, failure coordination, and changed optimization behavior, so it needs its own design.

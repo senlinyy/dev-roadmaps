@@ -1,7 +1,7 @@
 ---
 title: "Docker Images for Model Serving"
-description: "Package model-serving code, dependencies, artifacts, process lifecycle, security, and supply-chain identity into a reproducible image."
-overview: "A container image defines a portable serving filesystem and process contract. This article explains build-time and runtime responsibilities, image layers, artifact strategies, process and health lifecycle, security, and verification before showing a Dockerfile."
+description: "Package a model-serving process as a reproducible, secure OCI image, then test and deploy the complete release by immutable identity."
+overview: "A production image gives every replica the same files and startup command. This article builds the idea from image and container fundamentals through model placement, process lifecycle, health checks, runtime security, supply-chain evidence, smoke testing, deployment, and rollback."
 tags: ["MLOps", "production", "containers"]
 order: 2
 id: "article-mlops-model-serving-docker-images-for-model-serving"
@@ -9,209 +9,652 @@ id: "article-mlops-model-serving-docker-images-for-model-serving"
 
 ## Table of Contents
 
-1. [An Image Defines The Serving Runtime](#an-image-defines-the-serving-runtime)
-2. [Build Time Produces A Reproducible Runtime](#build-time-produces-a-reproducible-runtime)
-3. [Runtime Layers Follow Serving Responsibilities](#runtime-layers-follow-serving-responsibilities)
-4. [Model Artifact Placement Has Two Main Designs](#model-artifact-placement-has-two-main-designs)
-5. [Process And Concurrency Must Match Model Behaviour](#process-and-concurrency-must-match-model-behaviour)
-6. [Health Reflects Process And Model Lifecycle](#health-reflects-process-and-model-lifecycle)
-7. [The Image Is A Security And Supply-Chain Boundary](#the-image-is-a-security-and-supply-chain-boundary)
-8. [A Dockerfile Implements The Framework](#a-dockerfile-implements-the-framework)
-9. [Verification Tests The Built Image](#verification-tests-the-built-image)
-10. [Containers Provide Portability Within Limits](#containers-provide-portability-within-limits)
-11. [A Good Image Makes The Runtime Explicit](#a-good-image-makes-the-runtime-explicit)
-12. [References](#references)
+1. [What A Serving Image Solves](#what-a-serving-image-solves)
+2. [Know What Happens During Image Build And Container Startup](#know-what-happens-during-image-build-and-container-startup)
+3. [Build Reproducible And Cacheable Image Layers](#build-reproducible-and-cacheable-image-layers)
+4. [Choose Where The Model Lives](#choose-where-the-model-lives)
+5. [Choose Container Processes And Concurrency](#choose-container-processes-and-concurrency)
+6. [Use Separate Startup, Readiness, And Liveness Checks](#use-separate-startup-readiness-and-liveness-checks)
+7. [Limit Container Permissions And Resources](#limit-container-permissions-and-resources)
+8. [Record How The Image Was Built](#record-how-the-image-was-built)
+9. [Build A Small Production Image](#build-a-small-production-image)
+10. [Smoke-Test The Built Image](#smoke-test-the-built-image)
+11. [Deploy And Roll Back An Exact Image And Model](#deploy-and-roll-back-an-exact-image-and-model)
+12. [Know Which Host Features Containers Do Not Bundle](#know-which-host-features-containers-do-not-bundle)
+13. [Main Idea](#main-idea)
+14. [References](#references)
 
-## An Image Defines The Serving Runtime
-<!-- section-summary: A container image packages a filesystem and process definition, while a running container adds environment, identity, resources, network, and mounted data. -->
+## What A Serving Image Solves
+<!-- section-summary: An image fixes the files and startup command for a model service, while the container runtime supplies the environment around each running process. -->
 
-A **container image** is an immutable package of operating-system files, language runtime, libraries, application code, and startup configuration. A **container** is a running instance of that image with environment variables, credentials, network, resource limits, and writable storage.
+At a high level, a **container image** is a packaged filesystem with instructions for starting
+an application. It can contain the Python runtime, native libraries, installed packages, serving
+code, and sometimes the model itself. An **OCI image** follows the standard format created by
+the Open Container Initiative, which allows registries and container platforms to exchange the
+same package.
 
-For model serving, the image should create a repeatable path from process start to a ready prediction service. The packaging framework has six responsibilities:
+A **container** is a running instance of that image. The container runtime adds the parts that
+vary between deployments: environment variables, workload identity, CPU and memory limits,
+network access, mounted files, and writable temporary storage. One image can therefore start ten
+containers, with each container running as a separate service replica.
 
-1. Separate build-time work from runtime work.
-2. Define OS, language, native, and application layers.
-3. Choose whether the model is baked in or resolved at startup.
-4. Define process, concurrency, signal, and health lifecycle.
-5. Run as a constrained identity without embedded secrets.
-6. Build, scan, sign, test, and deploy by digest.
-
-Docker is one implementation of the OCI image model. Kubernetes and managed container services can run the resulting image, while their runtime configuration remains outside it.
-
-## Build Time Produces A Reproducible Runtime
-<!-- section-summary: Build stages compile dependencies and application assets, while the final image contains only what inference needs. -->
-
-Build time can install compilers, resolve dependencies, run code generation, export a model, and create wheels. Runtime should contain the smallest approved set needed to start and serve.
-
-A multi-stage build prevents compilers and caches from entering the final image. It also creates a clear supply-chain boundary: build inputs produce a runtime artifact that can be scanned and signed.
-
-The build should use pinned base images and dependency locks. Tags such as `python:latest` move. A digest identifies exact base bytes. Exact application dependencies improve reproducibility, while the team still needs a regular upgrade and vulnerability-remediation process.
-
-Network access during build should be controlled. Private package credentials use build secrets and never remain in image layers. Copy lock files before source code where cache behaviour helps without hiding dependency changes.
-
-## Runtime Layers Follow Serving Responsibilities
-<!-- section-summary: The final image contains system libraries, language dependencies, serving code, and a clear process command. -->
-
-System libraries may support image decoding, tokenization, numerical kernels, or accelerator runtimes. Language packages include the model framework, API framework, validation, and observability. Application code handles request lifecycle and model loading.
-
-Keep each dependency because the service needs it. Notebook, training, and development packages increase size, vulnerabilities, and import complexity. CPU and GPU images often need separate bases and support matrices rather than one image that contains every runtime.
-
-The process command should use exec form so signals reach the server correctly. The server needs a defined host, port, worker model, timeout, and graceful shutdown. Container restart should not be the only failure strategy; readiness keeps traffic away from an unprepared model.
-
-## Model Artifact Placement Has Two Main Designs
-<!-- section-summary: Baking a model into the image simplifies identity, while loading an external artifact separates release cadence and can reduce image size. -->
-
-A **baked-in model** travels inside the image. The image digest then identifies code, dependencies, and model together. Startup is predictable and does not depend on artifact download. Large models make builds, registry storage, and rollout heavier, and every model change creates a new image.
-
-An **external model** is downloaded or mounted at startup from an approved immutable location. Code and model can promote separately, and one image can serve several versions. Startup needs credentials, network, integrity verification, cache policy, disk capacity, and failure handling. The deployment must pin the artifact version or digest.
-
-Multi-model servers use a third variation: one runtime image plus a controlled model repository and cache. They need explicit memory, eviction, concurrency, tenant, and load policy.
-
-The right choice follows artifact size, release frequency, isolation, cold-start limits, and audit requirements. Avoid mutable `latest` references in either design.
-
-The important idea is that **packaging identity and release identity are not always the same thing**. With a baked-in model, one image digest can identify the complete serving release. With an external model, the image digest identifies only the runtime; the release identity is the pair of image digest and model digest, plus any separately versioned feature or tokenizer contract. A deployment that records only the image can appear unchanged while a mutable model reference silently moves.
-
-This distinction also changes rollback. A baked-in release rolls back one image reference. An external model release must restore a proven combination. Rolling the model back while leaving a newly incompatible runtime in place is not recovery. Platforms that allow separate promotion should create an immutable release record that binds the components after compatibility tests pass.
+This distinction solves a familiar production problem. A classifier may work in a notebook
+because the laptop already has a native library, a cached tokenizer, and an old package
+installed outside the project. A fresh production node has none of that hidden state. Packaging
+the service in an image gives every node the same user-space files and the same startup command.
 
 ```mermaid
-flowchart LR
-    Code["Serving code"] --> Image["OCI image digest"]
-    Lock["Dependency lock"] --> Image
-    Base["Approved base digest"] --> Image
-    Model["Model artifact digest"] --> Release["Serving release"]
-    Image --> Release
-    Contract["Feature and response contract"] --> Release
-    Evidence["Compatibility and fixture results"] --> Release
-    Release --> Deploy["Deployment pins complete identity"]
+flowchart TD
+    Inputs["Build Inputs<br/>(source, lockfile, base, and model policy)"] --> Image["OCI Image<br/>(immutable files and startup command)"]
+    Image --> Container["Running Container<br/>(process, identity, resources, network, and mounts)"]
+    Container --> Service["Ready Service<br/>(verified model and traffic eligibility)"]
 ```
 
-## Process And Concurrency Must Match Model Behaviour
-<!-- section-summary: Worker count, threads, batching, accelerator sharing, and memory determine how the container serves concurrent requests. -->
+The image has a clear boundary. It packages the serving process and its user-space files. The
+host kernel and cloud permissions remain outside that package. Kubernetes resource policy, model
+quality evidence, and tested hardware compatibility also remain separate production concerns.
 
-Traditional web advice to start many workers can be harmful when each worker loads a large model. Four workers may create four copies in memory or on the GPU. The process model should follow framework thread safety, model memory, accelerator sharing, request latency, and batching.
+The rest of the design follows that boundary. Build work produces one immutable image. Runtime
+configuration starts a constrained container from it. A release record identifies the exact
+image, model, contracts, and configuration that passed the release gates.
 
-CPU services may use several processes or threads after load testing. GPU services often use a smaller number of model processes with controlled concurrency or a specialized inference server. Autoscaling replicas adds another layer and should not fight an internal queue or batcher.
+## Know What Happens During Image Build And Container Startup
+<!-- section-summary: CI prepares dependencies and application artifacts during the build, while a production container starts without compiling code or installing packages. -->
 
-Graceful shutdown stops new work, allows in-flight requests to finish within a limit, flushes telemetry, and exits. Long model load and warm-up should appear in readiness and startup probes rather than causing repeated restarts.
+**Build time** is the controlled preparation phase. CI resolves the locked dependencies and
+compiles any native extensions. It can then build wheels, run tests, validate generated files,
+and assemble the final filesystem. Temporary tools such as compilers are acceptable in a build
+stage because users never run that stage in production.
 
-## Health Reflects Process And Model Lifecycle
-<!-- section-summary: Liveness reports process viability, readiness reports model usability, and startup protects slow initialization. -->
+**Runtime** begins after the platform starts the finished image. The serving process should load
+its approved model, warm up, expose health endpoints, and accept traffic. It should not contact
+a public package index, run `pip install`, compile extensions, or rewrite its own application
+files.
 
-Liveness indicates whether the process can continue. Readiness remains false until model load, warm-up, required dependency checks, and a fixture prediction succeed. A startup probe gives initialization time before liveness enforcement begins.
+Consider an autoscaling service that installs Python packages during startup. The first replica
+might resolve one package version and the next replica might resolve another. A package outage
+can also prevent new capacity from starting during a traffic spike. Moving dependency
+installation into CI changes this failure mode: the registry either contains a tested image or
+the release never begins.
 
-The service should expose the loaded model version and digest, image digest, feature or tokenizer version, and load time. A generic `{"status":"ok"}` cannot prove that the correct model is ready.
+A **multi-stage build** supports this separation. The builder stage includes packaging tools and
+creates the application environment. The runtime stage copies only the finished environment and
+the files required for inference.
 
-Health endpoints should remain cheap and avoid running a full prediction on every probe. The startup path can run the expensive fixture once and store the result in readiness state.
+```mermaid
+flowchart TD
+    Source["Source Revision<br/>(reviewed serving code and dependency lock)"] --> Builder["Builder Stage<br/>(resolve, compile, test, and package)"]
+    Builder --> Runtime["Runtime Stage<br/>(copy only inference requirements)"]
+    Runtime --> Registry["OCI Registry<br/>(store the immutable image digest)"]
+    Registry --> Replica["Service Replica<br/>(start without package installation)"]
+```
 
-## The Image Is A Security And Supply-Chain Boundary
-<!-- section-summary: A serving image runs as non-root, contains no secrets, limits packages, and carries verifiable provenance. -->
+Private dependency credentials belong to BuildKit secret mounts or the CI platform's equivalent.
+Docker build arguments and ordinary environment variables can appear in image history or
+provenance, so they are unsuitable for secrets. Runtime credentials arrive later through
+workload identity or a secret-management integration.
 
-Create a non-root user and copy runtime files with narrow ownership. Use a read-only root filesystem where the platform supports it, with explicit writable paths for caches or temporary files. Drop Linux capabilities and apply seccomp or another sandbox policy according to the threat model.
+The final image also needs a maintenance path. Reproducibility keeps a release stable; regular
+rebuilds bring in security fixes. Many teams use Renovate, Dependabot, Docker Scout, or an
+internal base-image service to propose a reviewed digest update. The normal release pipeline
+rebuilds and retests the image after that change.
 
-Secrets enter at runtime through the platform's identity and secret system. They should not appear in Dockerfile instructions, copied configuration, or image history. Model-store credentials should be short-lived and read-only for approved artifacts.
+## Build Reproducible And Cacheable Image Layers
+<!-- section-summary: Image layers should rebuild predictably from pinned inputs, with stable dependency work placed before frequently changing application code. -->
 
-CI scans operating-system and language packages, creates a software bill of materials, records build provenance, and signs the digest when the organization uses signing. Policy can require approved registries, bases, signatures, and vulnerability status before deployment.
+An image is stored as a stack of **layers**. A Dockerfile instruction can add a layer containing
+new or changed files. During a later build, BuildKit may reuse an existing layer if the
+instruction and its inputs have stayed the same. A change invalidates that layer and every
+dependent layer above it.
 
-These controls answer different questions. An SBOM lists what the image contains. A vulnerability scan compares that inventory with known advisories. Provenance records where and how the image was built. A signature associates the digest with an approved identity. None of them proves that the model is accurate, that the base image is well configured, or that the signer followed the release policy. A useful admission policy combines these signals with the prediction and compatibility gates rather than treating “signed” as “safe.”
+You can think of the cache as saved construction work. It should reduce build time without
+deciding which dependencies enter the image. The dependency lock decides the versions; the cache
+only avoids repeating an identical installation.
 
-Image hardening must also match the application. A read-only root filesystem fails if a tokenizer or framework tries to populate a cache at startup. The answer is not to make the entire filesystem writable; it is to identify the required cache, pre-populate it during the build when possible, or mount one narrowly scoped writable directory. The same reasoning applies to certificate stores, temporary uploads, and compiled model engines. Every writable path is an operational dependency that tests should expose.
+Layer order matters. Dependency metadata usually changes less often than application source.
+Copy `pyproject.toml` and `uv.lock` first and install the locked dependencies. Copy the source
+afterward. Editing one API function then rebuilds the small application layer instead of
+downloading the full ML framework again.
 
-## A Dockerfile Implements The Framework
-<!-- section-summary: A multi-stage Dockerfile creates a minimal non-root runtime with pinned dependencies and an explicit server process. -->
+```mermaid
+flowchart TD
+    Base["Base Layer<br/>(approved operating system and Python digest)"] --> Dependencies["Dependency Layer<br/>(packages resolved from the lockfile)"]
+    Dependencies --> Application["Application Layer<br/>(serving code that changes more often)"]
+    Application --> Contract["Contract Layer<br/>(schema and model-loading policy)"]
+    Contract --> Image["Image Digest<br/>(content identity for the complete stack)"]
+```
+
+Reproducibility depends on four practical controls:
+
+- Pin the base image by digest in the production build input. A tag such as `python:3.13-slim` is readable, but its publisher can move it to different bytes.
+- Commit a dependency lock and use `uv sync --locked` or an equivalent lock-enforcing installer. A broad range such as `fastapi>=0.100` permits a future build to choose a different release.
+- Keep the build context small with `.dockerignore`. Exclude local development state such as `.git`, virtual environments, notebooks, and caches. Training data and credentials should stay outside the build context. Include test outputs only if a deliberate build step consumes them.
+- Control network inputs. Fetch packages and base images from approved registries or mirrors, and retain the resulting image digest and build provenance.
+
+Aggressive caching cannot rescue unpinned inputs. A cached build may look stable for weeks, then
+a clean runner produces different bytes. CI should occasionally perform a clean rebuild and
+compare functional evidence, while the release record always stores the digest produced by the
+accepted build.
+
+## Choose Where The Model Lives
+<!-- section-summary: A model can travel inside the image or arrive as an immutable external artifact, and each design creates a different release identity. -->
+
+The serving process needs model files before it can make a prediction. There are two common ways
+to supply them.
+
+### Put The Model In The Image
+
+A **model-in-image** release copies the model bundle into the image during CI. One image digest
+identifies the assembled runtime and model. Replicas start without downloading the model.
+Rollback restores one artifact, and local testing closely resembles production. The tradeoff is
+size. A small code change can require pushing a multi-gigabyte image, and each model promotion
+creates another image.
+
+### Load An External Model
+
+An **external-model** release keeps the runtime image and model artifact in separate stores. The
+container downloads or mounts a versioned model at startup. This works well for large artifacts,
+faster model promotion, or a shared inference runtime. It also introduces network access,
+workload identity, local cache capacity, integrity checks, startup failure handling, and
+compatibility between independently released parts.
+
+```mermaid
+flowchart TD
+    Choice["Artifact Strategy<br/>(choose the model delivery boundary)"] --> Baked["Model In Image<br/>(one digest and a larger image)"]
+    Choice --> External["External Model<br/>(separate artifact and startup retrieval)"]
+    Baked --> BakedRelease["Release Record<br/>(image digest, contracts, and configuration)"]
+    External --> ExternalRelease["Release Record<br/>(image, model, contracts, and configuration digests)"]
+```
+
+The external design requires an immutable model reference. Suppose a Deployment pins
+`registry.example.com/risk-api@sha256:abc...` but sets
+`MODEL_URI=s3://ml-production/risk-model/current/model.onnx`. One replica loaded the object
+yesterday. A replacement replica starts today after `current` has been overwritten. Both
+replicas run the same image and can return different predictions.
+
+The repair has three parts. Store the model under a versioned object path. Record its digest in
+the release. Verify the downloaded bytes before `/readyz` returns success. A simple release
+record might contain:
+
+```json
+{
+  "image": "registry.example.com/risk-api@sha256:<image-digest>",
+  "model_uri": "s3://ml-production/risk-model/version=42/model.onnx",
+  "model_sha256": "<model-digest>",
+  "request_schema": "risk-request/v3",
+  "feature_contract": "account-features/v7"
+}
+```
+
+The angle-bracket values represent CI outputs, not mutable names. The deployment controller
+receives the accepted record and renders the platform-specific configuration from it.
+
+Multi-model serving adds a controlled repository and cache to the external pattern. It needs
+explicit admission, eviction, memory isolation, and tenant policy. A generic download directory
+with no capacity limit will eventually become an operational failure.
+
+## Choose Container Processes And Concurrency
+<!-- section-summary: The container process count, model copies, request concurrency, batching, and shutdown behavior must fit the model and its hardware. -->
+
+A model-serving container is still a process-management problem. The platform needs one main
+process to start predictably, report health, receive shutdown signals, and release resources. ML
+adds a second concern: every process may load another copy of a large model.
+
+### Handle Shutdown Signals Safely
+
+The container's main process runs as PID 1. It must receive termination signals and stop
+accepting new requests. It also needs to finish or cancel in-flight work inside the shutdown
+budget, flush important telemetry, and exit. Docker's exec-form command preserves this signal
+path:
 
 ```dockerfile
-FROM python:3.12-slim@sha256:REPLACE_WITH_APPROVED_DIGEST AS builder
-WORKDIR /build
-COPY requirements.lock .
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.lock
-
-FROM python:3.12-slim@sha256:REPLACE_WITH_APPROVED_DIGEST AS runtime
-ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-RUN groupadd --system app \
-    && useradd --system --gid app --home /app app
-
-WORKDIR /app
-COPY --from=builder /opt/venv /opt/venv
-COPY --chown=app:app src/ /app/src/
-COPY --chown=app:app model-contract.json /app/model-contract.json
-
-USER app
-EXPOSE 8080
-CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/app/.venv/bin/uvicorn", "serving.api:app", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-Real builds replace the example base digest through an approved update workflow. Native libraries belong in the relevant stage. If the model is baked in, it is copied under an immutable version and verified during CI. If it loads externally, runtime configuration supplies the approved artifact URI and digest.
+Shell form, such as `CMD uvicorn ...`, inserts a shell between the runtime and the server.
+Signal forwarding then depends on the shell. An entrypoint script can still be appropriate. It
+should validate configuration and finish with `exec "$@"` so the server replaces the shell.
 
-## Verification Tests The Built Image
-<!-- section-summary: CI runs the same image that deployment will use and verifies startup, model identity, prediction fixtures, shutdown, and constraints. -->
+### Count Model Copies Before Adding Workers
 
-CI builds the image once, tags it with the commit for convenience, and preserves the registry digest. It starts the container with representative runtime configuration, waits for readiness, calls version and prediction endpoints, checks negative inputs, and sends a termination signal.
+The worker count deserves special attention in ML serving. Many web servers start each worker as
+a separate process, and each process imports the application and loads its own model. A
+six-gigabyte GPU model served by four workers can request roughly twenty-four gigabytes for
+model weights. Activations, framework memory, and request batches add further demand. The
+container may pass a basic HTTP check and fail as soon as all workers finish loading.
 
-Load tests measure memory per worker, startup time, concurrency, latency, throughput, and errors. CPU and GPU variants run on their intended hardware. The image does not earn release because `docker build` succeeded.
+GPU deployments commonly start with one model process per allocated GPU. Concurrency lives
+inside that process through asynchronous request handling, a bounded queue, or dynamic batching.
+Triton Inference Server, vLLM, KServe runtimes, Ray Serve, and application-specific servers
+offer different batching and model-placement controls. CPU services may benefit from several
+workers, but only measurements of memory, latency, throughput, and thread safety can set the
+count.
 
-The deployment pins the image digest. A mutable tag can remain for human navigation, while the scheduler uses the immutable reference. Model and image identities appear together in release and runtime telemetry.
+```mermaid
+flowchart TD
+    Requests["Incoming Requests<br/>(traffic admitted by readiness)"] --> Queue["Bounded Queue<br/>(protect memory and latency)"]
+    Queue --> Batcher["Request Batcher<br/>(combine compatible work within a time limit)"]
+    Batcher --> Process["Model Process<br/>(one loaded copy per planned execution unit)"]
+    Process --> Hardware["Compute Device<br/>(CPU, GPU, or accelerator allocation)"]
+```
 
-A CI smoke test should use the built container rather than importing the Python package on the runner:
+Horizontal replicas add another concurrency layer. The service should define where queuing
+occurs and how overload is rejected. An unbounded application queue can hide saturation from an
+autoscaler and turn a brief spike into minutes of stale requests. A bounded queue, explicit
+timeout, and observable rejection counter give the platform a usable scaling signal.
+
+## Use Separate Startup, Readiness, And Liveness Checks
+<!-- section-summary: Startup protects model initialization, readiness controls traffic, and liveness requests a restart only for an unrecoverable local failure. -->
+
+Kubernetes offers three probes because starting a process, accepting traffic, and recovering
+from a stuck process are different operational decisions. Treating them as one generic health
+check can send requests too early or restart healthy replicas during an upstream outage.
+
+### Give Initialization Its Own Budget
+
+The **startup probe** answers, “Has initialization completed?” Model download, checksum
+verification, deserialization, accelerator compilation, and a warm-up prediction can take
+several minutes. Kubernetes waits for the startup probe before it begins liveness and readiness
+checks.
+
+### Control Traffic With Readiness
+
+The **readiness probe** answers, “Can this replica safely serve a request?” It returns success
+after the expected model and contracts are loaded. It returns failure for an unloaded or corrupt
+model and during a deliberate drain. Kubernetes then removes the Pod from the matching Service
+endpoints without restarting the process.
+
+Ordinary saturation needs a different response. A bounded queue and explicit `429` or `503` load
+shedding protect latency while queue depth and rejection metrics drive autoscaling. If every
+busy replica failed readiness together, Kubernetes could remove every endpoint and make the
+incident worse.
+
+### Reserve Liveness For Restartable Failure
+
+The **liveness probe** answers, “Is this process stuck beyond recovery?” Failure asks Kubernetes
+to restart the container. Keep this check local and inexpensive. A liveness endpoint that calls
+a remote feature service can restart every healthy model replica during one upstream outage. The
+restart wave increases load and can create a cascading failure.
+
+```yaml
+startupProbe:
+  httpGet:
+    path: /startupz
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 60
+  timeoutSeconds: 2
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 2
+  timeoutSeconds: 2
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+  timeoutSeconds: 2
+```
+
+This startup budget allows up to five minutes for initialization. The value should come from
+measured cold-start distributions plus a deliberate margin. A service that usually loads in
+forty seconds does not need a thirty-minute budget. Such a large allowance would delay recovery
+from a permanently broken model URI.
+
+Health responses should expose enough identity for operators to inspect the replica. `/readyz`
+can report the loaded model version and digest. It can also report the contract version and
+initialization state. Avoid running a full production prediction on every probe. Run an
+expensive fixture during startup, save the result in process state, and keep the repeated
+readiness request cheap.
+
+## Limit Container Permissions And Resources
+<!-- section-summary: A production container should run with a narrow identity, read-only application files, explicit writable paths, bounded resources, and runtime-delivered credentials. -->
+
+The runtime should grant only what the serving process needs. Start with a non-root user and
+prevent privilege escalation. Drop Linux capabilities, use the runtime's default seccomp
+profile, and mount the root filesystem read-only. CPU and memory requests give the scheduler a
+realistic placement signal. Limits prevent one replica from consuming the whole node. GPU
+workloads request the platform's GPU resource instead of assuming a device is present.
+
+### Set Container Identity, Filesystem, And Resources
+
+The manifest below applies those controls to one Kubernetes container. Two bounded `emptyDir`
+volumes supply the only writable paths, so a test can identify any unplanned write immediately.
+
+```yaml
+containers:
+  - name: model-api
+    image: registry.example.com/risk-api@sha256:<image-digest>
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    volumeMounts:
+      - name: temporary-files
+        mountPath: /tmp
+      - name: model-cache
+        mountPath: /var/cache/model
+volumes:
+  - name: temporary-files
+    emptyDir:
+      sizeLimit: 64Mi
+  - name: model-cache
+    emptyDir:
+      sizeLimit: 8Gi
+```
+
+This manifest names every writable location. It also gives the model cache a capacity limit. For
+an external model, the service verifies the digest after download and before changing readiness
+to successful.
+
+Read-only filesystems often uncover hidden assumptions. A tokenizer may try to create
+`$HOME/.cache` during its first request. Pre-populate that cache during the image build if its
+contents belong to the release. Otherwise, point the library at a narrowly mounted directory
+such as `/var/cache/model`. Disabling the read-only policy would permit writes anywhere and hide
+the dependency again.
+
+Credentials stay outside the image. Cloud workload identity can grant read access to one model
+prefix without distributing a long-lived access key. Environments that cannot use workload
+identity can mount a short-lived secret from a managed secret store or a CSI driver. Dockerfile
+instructions, copied `.env` files, and image labels are unsuitable secret locations.
+
+Resource limits need load testing. A memory limit below model peak usage causes repeated
+out-of-memory termination. A very large limit lets a bad batch or cache pressure neighboring
+workloads. Measure cold load, steady traffic, peak batch size, and graceful shutdown, then set
+requests and limits from those observations.
+
+## Record How The Image Was Built
+<!-- section-summary: The release pipeline should attach an SBOM and provenance, scan the image, sign its digest, and verify policy before deployment. -->
+
+A production image contains code from many sources: a base operating system, Python packages,
+native libraries, and the application's own build output. Supply-chain controls create evidence
+about those inputs and the build that assembled them.
+
+### Use Each Supply-Chain Record For One Purpose
+
+An **SBOM**, or software bill of materials, lists the packages found in the image. A
+**vulnerability scan** compares that inventory with advisory databases and the organization's
+severity policy. **Build provenance** records how an artifact was produced and which source and
+builder were involved. SLSA defines a common provenance model for tracing build outputs back to
+their origin. A **signature** binds an approved signing identity to an immutable image digest.
+
+```mermaid
+flowchart TD
+    Commit["Source Commit<br/>(reviewed revision used as build input)"] --> Build["Docker Buildx<br/>(produce the image and attestations)"]
+    Build --> Image["Image Digest<br/>(content identity stored in the registry)"]
+    Build --> Sbom["SBOM<br/>(software inventory attached to the image)"]
+    Build --> Provenance["Provenance<br/>(source and builder evidence)"]
+    Image --> Scan["Vulnerability Scan<br/>(compare contents with policy)"]
+    Image --> Signature["Sigstore Signature<br/>(bind an approved identity to the digest)"]
+    Sbom --> Policy["Admission Policy<br/>(evaluate required release evidence)"]
+    Provenance --> Policy
+    Scan --> Policy
+    Signature --> Policy
+    Policy --> Deployment["Deployment<br/>(admit the accepted digest)"]
+```
+
+### Generate Build Records And Verify The Image In CI
+
+Docker Buildx can attach SBOM and provenance attestations as it pushes an image:
+
+```bash
+docker buildx build \
+  --build-arg PYTHON_IMAGE="$PYTHON_IMAGE_BY_DIGEST" \
+  --platform linux/amd64 \
+  --sbom=true \
+  --provenance=mode=max \
+  --tag "$REGISTRY/model-api:$GIT_SHA" \
+  --push .
+```
+
+Attestations need registry-compatible output. Loading only into Docker Engine's classic local
+image store does not preserve them. After the registry returns the pushed digest, CI signs that
+digest rather than the mutable tag. A Sigstore Cosign verification policy should check the
+expected certificate identity and OIDC issuer:
+
+```bash
+cosign verify "$IMAGE_BY_DIGEST" \
+  --certificate-identity "$RELEASE_WORKFLOW_IDENTITY" \
+  --certificate-oidc-issuer "$OIDC_ISSUER"
+```
+
+These signals answer different questions. A valid signature proves that the configured identity
+signed the referenced digest. It does not prove model quality or safe configuration. Admission
+policy should combine supply-chain evidence with model evaluation, compatibility tests, security
+rules, and release approval.
+
+## Build A Small Production Image
+<!-- section-summary: A focused multi-stage Dockerfile installs the locked Python environment in a builder and copies it into a non-root runtime image. -->
+
+The following Dockerfile uses Python, `uv`, BuildKit cache mounts, and a two-stage design. CI
+supplies `PYTHON_IMAGE` as an approved full reference such as `python:3.13-slim@sha256:...`.
+Requiring that input prevents the production build from silently falling back to a mutable base
+tag.
+
+The builder installs the project into a virtual environment. The runtime copies that finished
+environment and leaves the `uv` binary, package cache, and compilation tools behind. Both stages
+use the same Python base, which keeps the copied environment compatible. The final command
+starts one explicit serving process.
+
+### Read The Dockerfile From Top To Bottom
+
+```dockerfile
+# syntax=docker/dockerfile:1
+ARG PYTHON_IMAGE
+
+FROM ${PYTHON_IMAGE} AS builder
+COPY --from=ghcr.io/astral-sh/uv@sha256:2381d6aa60c326b71fd40023f921a0a3b8f91b14d5db6b90402e65a635053709 /uv /uvx /bin/
+ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-install-project
+
+COPY src/ src/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable
+
+FROM ${PYTHON_IMAGE} AS runtime
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/home/app \
+    MODEL_CACHE_DIR=/var/cache/model
+
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --create-home app \
+    && mkdir --parents /var/cache/model \
+    && chown app:app /var/cache/model
+
+WORKDIR /app
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app model-contract.json ./
+
+USER 10001:10001
+EXPOSE 8080
+CMD ["/app/.venv/bin/uvicorn", "serving.api:app", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+The `uv` binary comes from its official distroless image and is pinned by digest. It remains in
+the builder. The runtime receives the finished non-editable virtual environment, the model
+contract, and a numeric non-root user. The application package is already installed in the
+virtual environment, so a source bind mount is unnecessary.
+
+This example expects an external model. A model-in-image variant would verify and copy the
+approved model bundle during the build. Its digest would also appear in image metadata and the
+release record. Native operating-system libraries belong in the stage that needs them. Compilers
+remain in the builder unless the inference runtime genuinely invokes them after startup.
+
+The Dockerfile is one part of the build. `.dockerignore`, the committed lockfile, the approved
+base digest, CI policy, and the model contract are also build inputs. Review them together.
+
+## Smoke-Test The Built Image
+<!-- section-summary: CI should start the exact image under production-like restrictions and verify readiness, release identity, prediction behavior, and graceful shutdown. -->
+
+Unit tests can call Python functions directly. They cannot reveal a missing shared library, an
+incorrect `CMD`, a root-only directory, or a hidden cache write. A **container smoke test**
+starts the built image and uses its public HTTP interface.
+
+This focused test supplies a read-only model fixture and locks the root filesystem. It applies
+resource limits and waits for readiness. The last checks confirm the loaded identity, one
+representative prediction, the runtime user, and graceful shutdown:
 
 ```bash
 set -euo pipefail
 
-docker build --pull --tag document-api:${GIT_SHA} .
-docker run --detach --name document-api-test \
-  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
-  --env MODEL_URI=s3://ml-releases/document-classifier/version=42/model.onnx \
-  --env MODEL_SHA256=7a9b4c... \
-  --publish 18080:8080 document-api:${GIT_SHA}
-trap 'docker rm --force document-api-test >/dev/null 2>&1 || true' EXIT
+IMAGE="model-api:test-$GIT_SHA"
+NAME="model-api-smoke-$GIT_SHA"
 
-ready=false
+docker build \
+  --build-arg PYTHON_IMAGE="$PYTHON_IMAGE_BY_DIGEST" \
+  --tag "$IMAGE" .
+
+docker run --detach --name "$NAME" \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --mount "type=bind,src=$PWD/tests/model,dst=/models/model,readonly" \
+  --env MODEL_URI=file:///models/model \
+  --env MODEL_SHA256="$TEST_MODEL_SHA256" \
+  --memory 4g --cpus 2 --publish 18080:8080 "$IMAGE"
+trap 'docker rm --force "$NAME" >/dev/null 2>&1 || true' EXIT
+
 for attempt in $(seq 1 60); do
-  if curl --fail --silent http://127.0.0.1:18080/readyz >/dev/null; then
-    ready=true
-    break
-  fi
+  curl --fail --silent http://127.0.0.1:18080/readyz >/dev/null && break
+  test "$attempt" -lt 60
   sleep 1
 done
-test "$ready" = true
 
-curl --fail --silent http://127.0.0.1:18080/version | \
-  jq --exit-status '.model_version == "42" and .model_sha256 == "7a9b4c..."'
-curl --fail --silent --json @tests/fixture.json \
-  http://127.0.0.1:18080/v1/predictions | \
-  jq --exit-status '.class == "invoice"'
-
-test "$(docker inspect --format '{{.Config.User}}' document-api-test)" = "app"
-test "$(docker exec document-api-test id -u)" != "0"
-docker stop --time 20 document-api-test
+curl --fail --silent http://127.0.0.1:18080/version \
+  | jq --exit-status --arg digest "$TEST_MODEL_SHA256" '.model_sha256 == $digest'
+curl --fail --silent --json @tests/request.json \
+  http://127.0.0.1:18080/v1/predictions \
+  | jq --exit-status '.prediction != null'
+test "$(docker exec "$NAME" id -u)" = "10001"
+docker stop --time 20 "$NAME"
 ```
 
-The read-only filesystem exposes hidden writes that would fail under a hardened deployment. Inspecting the declared user and its runtime user ID catches an image that only works as root; overriding the user in `docker run` would hide a broken Dockerfile. The readiness loop now fails explicitly after its bounded model-download and warm-up interval. The version and fixture calls verify identity and behaviour through HTTP, while graceful stop tests signal handling. The exit trap removes the test container after either success or failure.
+The same suite should start a second container with an incorrect model digest. That replica must
+remain unready and must refuse prediction traffic. CI should also assert that shutdown finishes
+inside the termination budget and that the logs do not contain known secret fixtures.
 
-The failure test supplies the wrong model digest. The process may remain alive long enough to report its load error, but `/readyz` must stay unavailable and `/v1/predictions` must never return a prediction. CI also inspects logs for a secret value and checks that a stopped container exits inside the termination budget.
+Run performance tests separately on the intended hardware. Measure cold-start time, peak memory
+during model load, steady memory per worker, latency percentiles, throughput, queue depth, and
+overload behavior. A laptop smoke test proves packaging behavior; it cannot qualify a GPU image
+for a production driver and accelerator combination.
 
-## Containers Provide Portability Within Limits
-<!-- section-summary: Images standardize user-space files and processes while host kernel, hardware, drivers, and platform configuration still vary. -->
+The release pipeline builds once and promotes the same registry digest through environments.
+Rebuilding from the same commit for production creates a new artifact. Base and dependency
+resolution may have changed, so the staging evidence no longer describes the deployed bytes.
 
-An OCI image can run across compatible container platforms, but it does not package the host kernel or erase hardware differences. GPU images still rely on host drivers and device integration. CPU architecture and instruction sets matter. Filesystem, networking, security policy, and resource enforcement come from the runtime platform.
+## Deploy And Roll Back An Exact Image And Model
+<!-- section-summary: Deployment should pin the accepted image digest and every separately released model or contract so rollback can restore the exact proven combination. -->
 
-Portability should be tested on the environments the team supports. The compatibility matrix in the next article defines approved image, model, runtime, and hardware combinations.
+A registry tag is a convenient human label. A digest is the content identity used by the
+scheduler. Production manifests should therefore reference `registry/repository@sha256:...`. OCI
+descriptors use the digest to identify and verify exact content.
 
-## A Good Image Makes The Runtime Explicit
-<!-- section-summary: Reproducible layers, deliberate artifact placement, lifecycle design, security, and digest-based release turn serving code into an operable package. -->
+For a model-in-image release, the image digest covers the runtime and model bytes. The release
+record still identifies the request and response schemas. It also records the feature contract,
+configuration revision, and evaluation evidence. Those items describe the behavior expected
+around the image.
 
-The value of the container image is not the Dockerfile syntax. It is the explicit runtime contract: what files and libraries exist, which process starts, how the model arrives, what identity runs, when traffic is allowed, and which digest the platform deployed.
+For an external-model release, rollback must restore the whole accepted combination. That
+combination includes the image digest, model URI and digest, preprocessing or tokenizer
+artifact, feature contract, and relevant configuration. Restoring only the model can pair an old
+artifact with a runtime that no longer understands it. Restoring only the image can leave a new
+model behind a mutable external reference.
 
-That contract makes local tests, staging, production, and rollback refer to the same built artifact.
+```mermaid
+flowchart TD
+    Candidate["Candidate Release<br/>(image, model, contracts, configuration, and evidence)"] --> Gates["Release Gates<br/>(quality, compatibility, security, and operations)"]
+    Gates --> Record["Immutable Release Record<br/>(accepted component digests and versions)"]
+    Record --> Canary["Canary Deployment<br/>(limited traffic and monitored behavior)"]
+    Canary --> Champion["Production Release<br/>(scheduler pins the accepted image digest)"]
+    Canary --> Rollback["Rollback<br/>(restore the previous complete release record)"]
+```
+
+A canary receives a small traffic share or uses a small replica set. Service health, prediction
+behavior, and business guardrails determine promotion. Keep the previous release record and its
+registry/model artifacts available for the defined rollback window. A rollback drill should
+prove that the platform can still pull the old image and retrieve the old model. It must also
+satisfy current data contracts and reach readiness inside the recovery target.
+
+The running service should emit its release identity in structured logs, traces, and a version
+endpoint. During an incident, operators can then compare replicas and confirm whether mixed
+image or model versions are serving traffic.
+
+## Know Which Host Features Containers Do Not Bundle
+<!-- section-summary: An image standardizes user-space files, while architecture, kernel, accelerator drivers, runtime policy, and external services still require explicit compatibility tests. -->
+
+Container portability has limits. Linux containers share the host kernel. A CUDA runtime inside
+the image still depends on a compatible host GPU driver and device plugin. CPU architecture
+matters, and a native Python wheel built for `linux/amd64` will not run on an `arm64` node.
+
+OCI image indexes can point one image name to separate platform-specific manifests.
+Multi-platform publication solves distribution for supported architectures; it does not prove
+that each variant produces acceptable predictions or performance. Build and test each target on
+representative hardware.
+
+Runtime policy also sits outside the image. A service may fail under a read-only filesystem,
+restricted network egress, a service mesh, a small shared-memory mount, or a different
+certificate authority. These are deployment contracts rather than reasons to expand the image's
+privileges.
+
+Keep a tested compatibility record for every supported combination. Record the image and model
+digests first. Add the CPU architecture or accelerator type, its driver and runtime family, the
+inference server, and important platform constraints. Production scheduling should select from
+that approved set.
+
+## Main Idea
+<!-- section-summary: A production image turns a model-serving program into a repeatable process, while the release record and platform configuration complete the operational contract. -->
+
+A production container image gives every model-serving replica the same filesystem and startup
+command. Reaching that result requires more than placing code in a Dockerfile.
+
+CI separates build work from runtime and locks dependency inputs. It arranges cacheable layers
+and chooses a deliberate model-delivery strategy. The build records the resulting digest.
+
+The serving design accounts for model copies and batching. It also defines signals,
+initialization, traffic readiness, and unrecoverable failure. The runtime applies a non-root
+identity and read-only application files. Narrow writable mounts and measured resource limits
+cover legitimate operating needs.
+
+The release pipeline adds several forms of evidence. An SBOM and vulnerability result describe
+image contents. Provenance and a signature identify the build and signer. CI then tests the
+image through its real interface.
+
+Production deploys the accepted digest and binds it to the exact model, contracts,
+configuration, and evaluation evidence. That complete identity gives operators something precise
+to inspect, promote, and restore.
 
 ## References
 
-- [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
-- [Docker build secrets](https://docs.docker.com/build/building/secrets/)
+- [Open Container Initiative](https://opencontainers.org/)
 - [OCI Image Format Specification](https://github.com/opencontainers/image-spec)
-- [Kubernetes container lifecycle hooks](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/)
-- [Kubernetes probes](https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/)
-- [SLSA specification](https://slsa.dev/spec/)
+- [Docker multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
+- [Docker build cache optimization](https://docs.docker.com/build/cache/optimize/)
+- [Docker build secrets](https://docs.docker.com/build/building/secrets/)
+- [Docker building best practices](https://docs.docker.com/build/building/best-practices/)
+- [Docker build attestations](https://docs.docker.com/build/metadata/attestations/)
+- [Using uv in Docker](https://docs.astral.sh/uv/guides/integration/docker/)
+- [Kubernetes liveness, readiness, and startup probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/)
+- [Kubernetes security contexts](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/)
+- [SLSA provenance](https://slsa.dev/spec/v1.2/provenance)
+- [Sigstore container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
+- [Sigstore signature verification](https://docs.sigstore.dev/cosign/verifying/verify/)

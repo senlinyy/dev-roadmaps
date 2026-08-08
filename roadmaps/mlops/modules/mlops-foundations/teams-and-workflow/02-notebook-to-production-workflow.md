@@ -10,396 +10,604 @@ id: "article-mlops-mlops-foundations-notebook-to-production-workflow"
 ## Table of Contents
 
 1. [What Notebook To Production Means](#what-notebook-to-production-means)
-2. [The Production Maturity Path](#the-production-maturity-path)
-3. [Keep The Notebook As An Exploration Workspace](#keep-the-notebook-as-an-exploration-workspace)
-4. [Define The Product And Data Contracts](#define-the-product-and-data-contracts)
-5. [Move Stable Logic Into Reusable Modules](#move-stable-logic-into-reusable-modules)
-6. [Separate Code, Configuration, Dependencies, And Secrets](#separate-code-configuration-dependencies-and-secrets)
-7. [Test The Boundaries That Change Model Behaviour](#test-the-boundaries-that-change-model-behaviour)
-8. [Give Every Dataset And Split A Stable Identity](#give-every-dataset-and-split-a-stable-identity)
-9. [Run Training As A Tracked Job](#run-training-as-a-tracked-job)
-10. [Use CI To Build A Trusted Candidate](#use-ci-to-build-a-trusted-candidate)
-11. [Separate A Candidate From A Production Release](#separate-a-candidate-from-a-production-release)
-12. [Operate The Release And Return Evidence](#operate-the-release-and-return-evidence)
-13. [A Practical Industrial Baseline](#a-practical-industrial-baseline)
-14. [The Main Idea](#the-main-idea)
-15. [References](#references)
+2. [The Steps From A Notebook To Production](#the-steps-from-a-notebook-to-production)
+3. [Decide What The Model Will Do](#decide-what-the-model-will-do)
+4. [Turn Notebook Code Into A Reusable Training Program](#turn-notebook-code-into-a-reusable-training-program)
+5. [Test The Training Workflow](#test-the-training-workflow)
+6. [Run And Track A Reproducible Training Job](#run-and-track-a-reproducible-training-job)
+7. [Decide Whether The Model Is Ready For Production](#decide-whether-the-model-is-ready-for-production)
+8. [Monitor The Model And Use Production Feedback](#monitor-the-model-and-use-production-feedback)
+9. [A Practical Starter Stack](#a-practical-starter-stack)
+10. [The Main Idea](#the-main-idea)
+11. [References](#references)
 
 ## What Notebook To Production Means
-<!-- section-summary: Notebook-to-production work preserves the speed of interactive exploration while giving approved model logic a repeatable, testable, and operable execution path. -->
 
-At a high level, a notebook is a laboratory. It lets a data scientist inspect a dataset, try a transformation, draw a chart, train several models, and write down what the results might mean. That tight loop between code, output, and explanation is one of the most useful tools in machine learning.
+<!-- section-summary: Notebook-to-production work preserves interactive exploration while giving stable model behavior a repeatable, testable, and operable execution path. -->
 
-Production has a different job. It must run the approved work again next week, on a new data snapshot, without relying on the original author's memory. Another person or automated system must be able to supply the inputs, execute the same logic, find the outputs, understand a failure, and identify the exact model candidate that was produced.
+At a high level, a notebook is a laboratory. It lets a data scientist inspect a
+dataset, try a transformation, draw a chart, train several models, and explain
+what the results might mean. The short loop between code, output, and reasoning
+is one of the strengths of machine-learning work.
 
-You can think of **notebook to production** as a change in operating contract. The research question starts inside an interactive document. Stable knowledge gradually moves into version-controlled modules, configuration, tests, and a tracked job. The notebook remains useful for investigation and explanation, while automation receives a clean entry point.
+Production has a different responsibility. It must run approved work again on a
+declared data snapshot without relying on the original author’s memory. Another
+person or an automated system needs to supply the inputs, execute the same
+logic, find the outputs, investigate failures, and identify the exact trained
+model that the run produced.
+
+**Notebook to production** is a change in operating contract. Exploration starts
+inside an interactive document. Stable knowledge then moves into a Python
+package, configuration, tests, and a tracked job. The notebook remains available
+for investigation and explanation, while automation receives a deterministic
+entry point.
+
+Teams create a **release candidate** by connecting one trained model to the
+code, data, configuration, runtime, metrics, and test results that produced it.
+The candidate awaits production approval and gives reviewers one complete item
+to evaluate before making a release decision.
+
+Consider a notebook that explores whether message length, account history, and
+recent contact volume help prioritize support requests. The charts and rejected
+ideas belong in the notebook. The approved feature definitions, training logic,
+evaluation thresholds, and model output contract need stable interfaces that a
+scheduled job can run.
 
 ```mermaid
 flowchart TD
-    A["Interactive notebook<br/>Explore and learn"] --> B["Reusable modules<br/>Preserve stable logic"]
-    B --> C["Explicit contracts<br/>Data, config, and outputs"]
-    C --> D["Automated tests<br/>Protect behaviour"]
-    D --> E["Tracked job<br/>Record one execution"]
-    E --> F["Candidate<br/>Immutable model and evidence"]
-    F --> G["Release<br/>Approved production change"]
-    G --> H["Operations<br/>Monitor, recover, and learn"]
+    A["Exploration Workspace<br/>(inspect data, test ideas, and record reasoning)"] --> B["Production Contract<br/>(define purpose, inputs, outputs, and ownership)"]
+    B --> C["Stable Logic<br/>(extract reusable transformations and training code)"]
+    C --> D["Explicit Boundaries<br/>(declare data, configuration, runtime, and identity)"]
+    D --> E["Layered Tests<br/>(protect behavior at each failure boundary)"]
+    E --> F["Tracked Job<br/>(run on controlled compute and record parameters, metrics, and outputs)"]
+    F --> G["Trained Model<br/>(connect the model to its code, data, metrics, and runtime)"]
+    G --> H["Production Release<br/>(approve the trained model for a production route)"]
+    H --> I["Operation And Feedback<br/>(monitor, recover, and return outcomes)"]
+
+    class A learn;
+    class B,C,D,E prove;
+    class F,G operate;
+    class H,I release;
 ```
 
-The main risk is hidden state. A notebook kernel remembers variables created several cells earlier. A local machine may contain an undeclared package. A person may manually edit a file before training. Credentials may live in an environment that nobody documented. Production work makes each of those dependencies visible.
+The main production risk is hidden state. A notebook kernel remembers variables
+created several cells earlier. A workstation may contain an undeclared package.
+A person may edit a file before training or hold a credential that nobody else
+can use. Production work gives each dependency an explicit source and owner.
 
 ![Notebook exploration maturing into a tracked and operated production workflow](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/notebook-production-path.png)
 
-## The Production Maturity Path
-<!-- section-summary: Ten connected boundaries move an explored model idea toward a production release without forcing research and operations into the same interface. -->
+## The Steps From A Notebook To Production
 
-The path has ten boundaries. They form a framework for deciding what to extract from the notebook and what evidence each production step should create.
+<!-- section-summary: A reliable transition moves stable notebook work through reusable code, reproducible training, controlled release, and production operation. -->
 
-**Exploration** finds a useful signal and records the reasoning behind it. **Reusable code** gives stable transformations and training logic normal function boundaries. **Configuration** supplies values that change across runs or environments. **Tests** protect data meaning and expected behaviour. **Data identity** names the exact training, validation, and test populations.
+Moving every notebook cell into a long script preserves the cell order while
+leaving most production problems unsolved. The team still needs to know which
+inputs are valid, where configuration comes from, which dependencies were
+installed, what evidence identifies the candidate, and who can release it.
 
-A **tracked job** executes the workflow on managed or controlled compute and records its inputs and outputs. **Continuous integration** checks each proposed code change in a clean environment. A **candidate** binds one model artifact to its code, data, configuration, metrics, and runtime. A **release decision** approves a specific candidate for a specific production route. **Operations** then monitor the release, preserve rollback, and return outcomes to future work.
+The transition follows four practical steps. Each step adds information that
+another person or an automated system can verify.
 
-```mermaid
-mindmap
-  root((Production maturity))
-    Learn
-      Explore
-      Record reasoning
-    Stabilize
-      Reusable code
-      Configuration
-      Tests
-    Reproduce
-      Data identity
-      Tracked job
-      CI
-    Release
-      Candidate
-      Approval
-    Operate
-      Monitoring
-      Rollback
-      Feedback
-```
+### Explore Ideas In The Notebook
 
-Teams can adopt these boundaries incrementally. A small batch model may use one Python package, one scheduled job, MLflow, and a versioned table. A regulated real-time model may add separate build and deployment pipelines, approval records, signed images, shadow traffic, and formal outcome review. The framework stays the same while the implementation grows with risk and scale.
+Exploration searches for a signal and tests assumptions. The notebook records
+the question, data source, observations, and rejected ideas. It should restart
+and run from top to bottom so later readers can distinguish deliberate analysis
+from leftover kernel state.
 
-## Keep The Notebook As An Exploration Workspace
-<!-- section-summary: Notebooks remain valuable for investigation, visualization, and explanation while stable production behaviour moves into importable code. -->
+The extraction point arrives when a piece of logic has a stable meaning. A
+feature used across experiments deserves an importable function. A population
+rule that decides which rows count belongs in a contract. A chart created only
+to investigate one anomaly can remain in the notebook.
 
-A notebook is strongest during work with uncertainty. The team may still be deciding which population to model, whether a label is trustworthy, which feature carries signal, or why one segment performs poorly. Interactive cells and inline plots support that investigation well.
+### Move Stable Logic Into Reusable Code
 
-A useful exploration notebook records the question, data source, assumptions, observations, and rejected ideas alongside the code. It should restart and run from top to bottom, avoid embedded credentials, and clearly mark any manual sample or temporary shortcut. These habits make the research understandable without pretending the notebook is already a production job.
+The team defines product and data contracts, extracts stable logic, declares
+configuration and dependencies, and adds tests. This stage gives the workflow a
+callable entry point with named inputs and outputs. It also separates human
+analysis from the repeatable path that creates candidates.
 
-The extraction point arrives after logic has acquired a stable meaning. A transformation used in several experiments belongs in an importable function. A feature schema shared with serving belongs in a versioned contract. Training and evaluation belong behind callable entry points. The notebook can then import those functions and remain a convenient place to study their results.
+### Reproduce The Full Training Run
 
-For example, a delivery-delay experiment may reveal that recent order count and average dispatch lag are useful features. The notebook can keep the charts and interpretation. The time-window calculation should move into a tested module so training, backfills, and future investigations use the same definition.
+A production run names its exact code, data, configuration, runtime, and
+identity. Managed compute executes the job. Tracking records parameters,
+datasets, metrics, logs, and model outputs. Another engineer can then explain
+what ran without reconstructing a workstation.
 
-This separation preserves two healthy interfaces: an interactive workspace for human inquiry and a deterministic entry point for automation.
+### Release And Operate The Model
 
-## Define The Product And Data Contracts
-<!-- section-summary: Product, input, output, and evaluation contracts state what the model supports before the team invests in production automation. -->
+A completed training run produces evidence. A candidate packages that evidence
+around one model artifact. A release decision authorizes the candidate for a
+named production route. Monitoring, recovery, and delayed outcomes show whether
+the approved behavior still serves the product.
 
-Before extracting a large amount of code, name the decision the model is supposed to support. A promising validation score says little unless the team agrees on the population, prediction time, target, action, quality measure, and unacceptable outcomes.
+Teams can adopt these boundaries incrementally. A small weekly model may need
+one package, one managed job, one MLflow experiment, and one versioned table. A
+high-impact online model may add independent evaluation, separate deployment
+authority, canary traffic, signed images, and formal outcome review. The same
+steps remain recognizable as the implementation grows.
 
-A compact model brief can hold that agreement:
+## Decide What The Model Will Do
 
-```yaml
-decision: flag an order for delivery-risk review
-prediction_time: after payment confirmation
-population: accepted orders with a supported delivery service
-target: missed_promised_window
-primary_measure: recall_at_review_capacity
-guardrails:
-  minimum_precision: 0.35
-  maximum_review_rate: 0.08
-output:
-  score: probability
-  actions: [standard_flow, manual_review]
-owner: fulfilment-operations
-```
+<!-- section-summary: A production contract defines the decision, prediction time, population, target, data, output, evaluation, ownership, and failure behavior before automation expands. -->
 
-The prediction time determines which facts are legal inputs. A dispatch timestamp created later in the fulfilment process would leak the outcome into training. The population rule excludes cases that the production workflow cannot handle. `recall_at_review_capacity` connects evaluation to a team that can review only a limited share of orders.
+A promising metric is only one fact about a model. Production also needs to know
+which decision the model supports, who uses it, which people experience the
+result, and what the workflow should do with the output. These facts form the
+**production contract**.
 
-The input contract then names fields, types, units, allowed values, missing-data rules, entity keys, and time semantics. The output contract names the score or prediction, schema, valid range, and product action. Evaluation guardrails express the trade-offs that could block a candidate even after the primary measure improves.
-
-Schema tools can help enforce these boundaries. Pydantic fits Python application inputs. Pandera can validate DataFrame schemas. dbt tests, Great Expectations, Soda, or platform-native expectations fit governed data pipelines. One authoritative contract should govern development checks, automated jobs, and production inputs so the field meaning stays consistent across environments.
-
-## Move Stable Logic Into Reusable Modules
-<!-- section-summary: Production code gives stable transformations, training, evaluation, and artifact creation explicit interfaces that notebooks and automated jobs can share. -->
-
-Reusable code has named inputs, named outputs, and predictable side effects. It can be imported by a notebook, called from tests, and invoked by a job runner. That structure removes dependence on cell order and kernel memory.
-
-A small Python project may separate four responsibilities:
+The contract is a connected set of agreements. The product contract defines the
+purpose and action. The data contract defines permitted inputs and time
+semantics. The output contract defines what the model returns. The evaluation
+contract defines evidence that can approve or block a candidate.
 
 ```mermaid
 flowchart TD
-    A["Data reader<br/>Load declared snapshot"] --> B["Feature module<br/>Create model inputs"]
-    B --> C["Training module<br/>Fit candidate"]
-    C --> D["Evaluation module<br/>Measure and segment"]
-    D --> E["Artifact writer<br/>Log model and evidence"]
-    F["Job entry point<br/>Coordinates the run"] --> A
+    A["Product Purpose<br/>(decision, user, affected people, and owner)"] --> B["Prediction Moment<br/>(time at which the workflow needs the result)"]
+    B --> C["Input Contract<br/>(population, fields, types, units, and time rules)"]
+    C --> D["Model Output<br/>(score, class, uncertainty, and valid range)"]
+    D --> E["Workflow Action<br/>(review, rank, recommend, approve, or route)"]
+    E --> F["Observed Results<br/>(quality, harm, capacity, and business result)"]
+    F --> G["Release Criteria<br/>(thresholds, guardrails, and decision authority)"]
+
+    class A,B purpose;
+    class C,D,E,F contract;
+    class G decision;
 ```
 
-The entry point coordinates these functions. Business logic remains in modules that can be called directly. Storage clients and tracking clients are passed through a narrow boundary or created in the entry point, which keeps transformation tests independent from cloud services.
+### Decide How The Prediction Will Be Used
 
-The delivery-delay feature can be expressed as a focused function:
+Suppose a support team wants help prioritizing new requests. The permitted use
+is to rank requests for trained agents at the time a message arrives. The model
+cannot close a request or deny support. An agent sees the priority and retains
+authority to change it.
+
+That short description determines the target and evaluation. A historical label
+might record whether a request needed escalation. The main measure can examine
+how many escalations appear within the queue capacity available to agents.
+Guardrails can limit ordinary requests sent to urgent review and compare delay
+across supported languages.
+
+The product owner confirms the decision and capacity. The model owner maintains
+the training and evaluation path. Operations owns the queue and fallback. The
+release authority decides whether the evidence supports production use.
+
+### Define The Data The Model Can Use
+
+An input contract names fields, types, units, allowed values, missing-data rules,
+entity keys, and time semantics. The prediction moment matters because every
+feature must exist at that point. A resolution code recorded after an agent
+finishes the case would leak the future into training.
+
+Schema tools can enforce parts of the contract. Pydantic fits request objects.
+Pandera can validate pandas or Polars frames. dbt tests, Great Expectations,
+Soda, and platform-native expectations fit governed data pipelines. The tool
+checks structure; the contract still needs human explanation of what each field
+means and which use is allowed.
+
+The output contract names the prediction schema, range, units, and failure
+behavior. A probability should define its positive class. A ranking needs a tie
+and missing-score rule. An online service needs a timeout and fallback policy.
+A batch job needs atomic publication so consumers never read half a result.
+
+## Turn Notebook Code Into A Reusable Training Program
+
+<!-- section-summary: Stable transformations and training logic move into a Python package, while data, configuration, dependencies, identity, secrets, and outputs receive explicit sources. -->
+
+The first code change is to move stable notebook logic into functions and a
+normal Python package. Each function has named inputs, named outputs, and
+controlled side effects. A notebook, test, and managed job can then call the
+same logic without depending on cell order or local file edits.
+
+### Move Stable Logic Into Functions
+
+A component boundary should represent work with a stable responsibility. Pure
+feature transformations belong in a package. Training and evaluation need
+callable entry points. Expensive preparation with independent retry or ownership
+may deserve a separate job step.
+
+The following function captures one temporal rule without carrying storage,
+tracking, or cloud setup into the calculation:
 
 ```python
-def recent_order_features(orders, prediction_time):
-    eligible = orders.loc[orders["event_time"] < prediction_time]
+def activity_before(events, prediction_time):
+    observed = events.loc[events["event_time"] < prediction_time]
     return (
-        eligible.groupby("customer_id")
-        .agg(
-            order_count=("order_id", "count"),
-            mean_dispatch_lag=("dispatch_lag_hours", "mean"),
-        )
+        observed.groupby("account_id")
+        .agg(recent_events=("event_id", "count"))
         .reset_index()
     )
 ```
 
-The strict time filter expresses a model assumption as code: future events cannot influence the current prediction. A notebook can call this function for analysis. The training job can call it for a full snapshot. A test can prove its time behaviour with a tiny fixture.
+The strict filter expresses the rule that future events cannot affect the
+current prediction. A notebook can call the function for analysis. A training
+job can call it for a full snapshot. A tiny test can prove its behavior at the
+boundary timestamp.
 
-Avoid turning every notebook cell into its own pipeline component. A component boundary should represent a meaningful unit with a clear input, output, retry behaviour, and ownership. Small pure functions belong inside a package; expensive or independently recoverable work may deserve its own job step.
+Avoid creating one pipeline task for every function. Task boundaries add retry,
+serialization, scheduling, and operational overhead. Use them for independently
+recoverable or separately owned work. Keep small deterministic functions inside
+the package.
 
-## Separate Code, Configuration, Dependencies, And Secrets
-<!-- section-summary: Production runs separate stable program logic from run parameters, locked dependencies, environment packaging, and externally managed credentials. -->
+### Package Code And Lock Dependencies
 
-A training run is assembled from several kinds of information. The program defines the work, run settings choose one experiment, installed packages make that program executable, and credentials allow it to reach protected data or services. A notebook can hold all four inside one interactive session. Automation needs to know where each one comes from.
+Modern Python projects declare package metadata and dependency constraints in
+`pyproject.toml`. A project tool resolves those constraints into a lockfile.
+For a uv project, `uv.lock` records exact resolved packages across supported
+Python environments and belongs in version control.
 
-Separating them makes changes visible and deliberate. A reviewer can see that a pull request changed feature logic. A run record can show that one candidate used a different depth limit. A lock-file diff can reveal a library upgrade. A security team can rotate a credential without editing training code.
+CI should reject a stale lockfile and run tests from the locked environment:
 
-These four inputs also change at different speeds.
-
-**Code** defines behaviour and moves through review. **Configuration** supplies values such as a data reference, random seed, model family, compute size, or evaluation threshold. **Dependencies** define the libraries and runtime needed to execute the code. **Secrets** grant access to protected systems.
-
-Mixing these concerns creates hidden releases. Editing a threshold inside Python changes policy. Installing a newer library on one machine changes the runtime. Pasting a token into a notebook creates a security and recovery problem.
-
-A Python project commonly uses `pyproject.toml` for project metadata and dependency constraints. `uv.lock` or a Poetry lock file records resolved versions and belongs in version control. CI can run `uv run --frozen ...` so an outdated lock file fails instead of silently changing. A Docker image is appropriate where system libraries, native dependencies, or a controlled serving environment need a portable runtime. The image should use an immutable digest at release time.
-
-Run configuration can stay small:
-
-```yaml
-data_manifest: manifests/training-approved.yml
-random_seed: 42
-model:
-  family: histogram_gradient_boosting
-  max_depth: 8
-evaluation:
-  minimum_precision: 0.35
-  maximum_review_rate: 0.08
+```bash
+uv lock --check
+uv run --locked pytest
+uv build
 ```
 
-The tracked run should store the resolved configuration, including defaults. Command-line overrides should appear in the same record. Secret values stay in GitHub Actions environments, GitLab CI variables, a cloud secret manager, or workload identity. The configuration contains only the secret reference.
+The `--locked` option asks uv to fail if project metadata and `uv.lock` disagree.
+The `--frozen` option skips that freshness check, so it serves a different use.
+A wheel is sufficient for many managed Python jobs. An OCI image adds system
+libraries and a complete runtime boundary where the platform expects a
+container.
 
-## Test The Boundaries That Change Model Behaviour
-<!-- section-summary: Production tests protect data meaning, transformations, training integration, artifact loading, and evaluation gates at the smallest useful scope. -->
+### Make Every Training Input Explicit
 
-Model code has several kinds of correctness. A function can execute without producing the intended features. A training job can finish while reading the wrong split. An artifact can be valid while the serving runtime cannot load it. Tests should follow these distinct failure boundaries.
+**Configuration** contains run choices such as the data reference, random seed,
+model family, compute request, and evaluation thresholds. Store defaults in
+version control and log the resolved values. Command-line or workflow overrides
+should appear in the same run record.
 
-**Unit tests** protect deterministic transformations, label logic, and policy calculations. **Contract tests** protect schemas, required fields, ranges, and category rules. **Integration tests** run connected steps against a small fixture dataset. **Smoke tests** prove that the built artifact loads and returns an output with the declared shape. **Evaluation tests** apply explicit thresholds to candidate evidence.
+**Data identity** names the exact source snapshot and split membership.
+**Dependency identity** names the lockfile and built wheel or image. **Workload
+identity** gives the job short-lived, scoped access to data, artifacts, and
+tracking. External services that still require secret values should use a cloud
+secret manager; configuration stores the secret reference.
 
-The time boundary in the earlier feature function deserves a direct test:
+**Output identity** tells downstream systems where the candidate and evidence
+were written. A job should publish to a run-specific location and promote only
+through a separate release action. Retries must avoid silently overwriting an
+approved artifact.
+
+## Test The Training Workflow
+
+<!-- section-summary: Layered tests protect deterministic logic, data meaning, connected execution, artifact loading, and candidate quality at the smallest appropriate scope. -->
+
+Model code has several kinds of correctness. A function can execute while
+creating the wrong feature. A job can finish after reading the wrong data split.
+A saved model can pass evaluation while failing to load in the serving runtime.
+One test style cannot cover all these boundaries.
+
+### Test Data And Feature Logic
+
+Unit tests cover transformations, label rules, split logic, and policy
+calculations. They use tiny fixtures and state the intended behavior directly.
+For the temporal function above, a fixture can include one event before the
+prediction time and one at the same timestamp. The expected count is one.
+
+Data contract tests cover fields, types, ranges, category rules, uniqueness,
+freshness, and join coverage. CI can run schema tests on a small fixture. Data
+quality jobs test full governed snapshots where volume, privacy, and compute
+make pull-request execution impractical.
+
+### Test The Complete Training Path
+
+Integration tests connect the reader, feature logic, trainer, evaluator, and
+artifact writer using a small controlled dataset. A smoke test loads the built
+artifact and requests one prediction with the declared input schema. These tests
+catch path, packaging, permission, and serialization failures that pure unit
+tests cannot see.
+
+A higher-risk workflow should run a small rehearsal on the same managed platform
+used for training. It reads a governed fixture, uses the workload identity,
+creates a small candidate, logs evidence, and reloads the result. This checks the
+real runtime boundary without paying for full training on every pull request.
+
+### Check Model Quality Before Release
+
+Evaluation tests apply product and model guardrails to a candidate. They examine
+overall performance, important segments, calibration, capacity, robustness, and
+any safety or fairness requirements. The test data remains separate from model
+selection.
+
+```mermaid
+flowchart TD
+    A["Unit Tests<br/>(feature, label, split, and policy behavior)"] --> B["Contract Tests<br/>(schema, ranges, freshness, and time rules)"]
+    B --> C["Integration Tests<br/>(reader, trainer, evaluator, and writer together)"]
+    C --> D["Runtime Smoke Test<br/>(load the built artifact and produce one result)"]
+    D --> E["Model Quality Checks<br/>(quality, segments, robustness, and guardrails)"]
+    E --> F["Review Record<br/>(record pass, failure, limits, and reviewer)"]
+
+    class A,B fast;
+    class C,D connected;
+    class E,F decision;
+```
+
+Failures route to the owner of the boundary. A schema failure returns to the data
+producer or contract owner. A runtime load failure returns to packaging. A
+segment guardrail failure returns to model and product review. This routing turns
+test output into an operational action.
+
+## Run And Track A Reproducible Training Job
+
+<!-- section-summary: A managed training job executes a declared package with exact data, configuration, runtime, and identity while tracking the evidence and candidate it produces. -->
+
+A production training job is one governed execution of the model workflow. It
+receives declared inputs, runs on controlled compute, and writes outputs to
+known locations. Its record connects the work to an exact source revision,
+runtime, data population, and workload identity.
+
+### Record The Exact Training Data And Splits
+
+A table name identifies a location whose rows may change. Reproducible training
+needs a snapshot. Delta Lake table versions and Apache Iceberg snapshot IDs can
+identify lakehouse state. Object datasets can use immutable object versions plus
+a manifest of files and digests. A warehouse workflow can materialize a governed
+training table and record the query revision that produced it.
+
+Training, validation, and test splits also need identities. Group-aware splits
+keep the same customer, device, or patient from appearing on both sides. Time-
+aware splits protect future observations from leaking into earlier training.
+Store the split method, seed, and stable membership or manifest.
+
+The snapshot remains reproducible only while the underlying history is retained.
+Retention policy must therefore cover the investigation and model lifecycle.
+MLflow can record dataset metadata and lineage; the lakehouse, warehouse, or
+object store remains responsible for durable data and access control.
+
+### Run Training As A Managed Job
+
+Managed training jobs are a practical default for many teams. Databricks
+Lakeflow Jobs, Amazon SageMaker AI training jobs, Azure Machine Learning command
+jobs, and equivalent services run a package or image with declared compute,
+identity, network, input, output, logs, and status. The provider manages the job
+control plane and temporary compute lifecycle.
+
+A Kubernetes Job is appropriate where a platform team already operates the
+cluster and needs runtime control that managed training cannot provide. That
+choice also transfers image maintenance, scheduling, quotas, security, upgrades,
+and on-call ownership to the platform team.
+
+### Track What The Training Job Used And Produced
+
+MLflow Tracking organizes executions as runs. A run can record parameters,
+metrics, datasets, tags, logs, and artifacts. MLflow 3 also gives each logged
+model its own model ID, which supports several checkpoints or model outputs
+inside one run.
+
+The focused example below records a governed training source and the key model
+evidence without reproducing the full training program:
 
 ```python
-def test_recent_features_exclude_future_orders(sample_orders):
-    cutoff = sample_orders["event_time"].iloc[1]
-
-    features = recent_order_features(sample_orders, cutoff)
-
-    assert features["order_count"].sum() == 1
-```
-
-This test protects model meaning instead of a library implementation detail. A future refactor may switch from pandas to Polars or Spark; the temporal rule still has to hold.
-
-Tests need controlled fixtures. They should include missing values, unknown categories, boundary timestamps, empty populations, and a representative model input. Large production datasets belong in data-quality jobs and evaluation runs. Pull-request tests should stay fast enough to run for every change.
-
-For risky workflows, add a small end-to-end rehearsal on managed compute. It can read a tiny governed dataset, train a small candidate, log evidence, and load the artifact. This catches permission, dependency, storage, and environment failures that local unit tests cannot see.
-
-## Give Every Dataset And Split A Stable Identity
-<!-- section-summary: Reproducible training names the exact source snapshot, population rules, split membership, schema, and transformation code used by one run. -->
-
-“The customer table” is a location, not a reproducible dataset. The rows at that location may change between runs. Production evidence needs a stable identity for the source and for the train, validation, and test populations derived from it.
-
-The identity depends on the storage system. Object data can use immutable object versions, paths, manifests, and checksums. Delta and Iceberg tables can use snapshot or version identifiers. A warehouse extraction can record the source tables, snapshot semantics, query version, and materialized output identity. Restricted datasets can be represented by metadata and a digest without copying sensitive rows into the tracking platform.
-
-```yaml
-dataset_name: order_delivery_training
-source:
-  table: governed.fulfilment.order_events
-  snapshot_id: snapshot_8f31c
-schema_version: order-events-v4
-population_query_commit: 3b9e7a1
-splits:
-  train_manifest: manifests/train_29bc.parquet
-  validation_manifest: manifests/validation_a041.parquet
-  test_manifest: manifests/test_7fe2.parquet
-```
-
-Split identity matters because random splitting can move the same customer, device, patient, or nearby time period across training and evaluation. Group-aware and time-aware splits often reflect production more honestly. The manifest can store stable entity or row identifiers for each split, along with the split method and seed.
-
-MLflow dataset tracking can record a dataset name, source, digest, schema, and profile beside a run. It provides experiment lineage, while the underlying warehouse, lakehouse, object store, or catalog remains responsible for durable data storage and access control.
-
-## Run Training As A Tracked Job
-<!-- section-summary: A tracked training job executes one declared workflow on controlled compute and records enough evidence to understand and reproduce its outputs. -->
-
-A production training job represents one governed execution of the model workflow. Its record connects the immutable code revision, resolved configuration, data identities, runtime environment, compute identity, start and end state, metrics, artifacts, and logs.
-
-The job runner may be a managed ML job, a Databricks Lakeflow Job, a Kubernetes Job, or a task launched by Airflow, Dagster, or Prefect. Managed training jobs are a practical default because they provide isolated compute, logs, status, permissions, and artifact paths without requiring a team to operate its own cluster control plane.
-
-MLflow Tracking is a common evidence layer. The following focused run loads numeric feature tables from immutable split paths, defines the full parameter map, records the training dataset, evaluates one candidate, and logs the model. Supplying `input_example` lets current MLflow infer and store the model signature.
-
-```python
-import mlflow
-import mlflow.sklearn
-import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.metrics import precision_score
-
-target = "missed_promised_window"
-train_uri = "s3://ml-data/order-delay/splits/train_29bc.parquet"
-validation_uri = "s3://ml-data/order-delay/splits/validation_a041.parquet"
-train_frame = pd.read_parquet(train_uri)
-validation_frame = pd.read_parquet(validation_uri)
-X_train, y_train = train_frame.drop(columns=[target]), train_frame[target]
-X_valid, y_valid = validation_frame.drop(columns=[target]), validation_frame[target]
-params = {"max_depth": 8, "random_state": 42}
-training_dataset = mlflow.data.from_pandas(
-    train_frame, source=train_uri, name="order-delivery-train", targets=target
+dataset = mlflow.data.from_pandas(
+    train_frame, source=training_snapshot, name="training", targets="label"
 )
 
 with mlflow.start_run():
+    mlflow.log_input(dataset, context="training")
     mlflow.log_params(params)
-    mlflow.log_input(training_dataset, context="training")
-    model = HistGradientBoostingClassifier(**params).fit(X_train, y_train)
-    predictions = model.predict(X_valid)
-    mlflow.log_metric("validation_precision", precision_score(y_valid, predictions))
-    mlflow.sklearn.log_model(
-        model, name="delivery-risk-model", input_example=X_train.head(3)
-    )
+    model.fit(X_train, y_train)
+    mlflow.log_metric("validation_f1", validation_f1)
+    mlflow.sklearn.log_model(model, name="candidate", input_example=X_train.head(3))
 ```
 
-One run now groups concrete parameter values, an immutable dataset source, an evaluation metric, an inferred input contract, and the logged model. A production version should also log the validation dataset, Git commit, runtime image digest, feature schema version, and job execution ID. Evaluation tables, segment metrics, and plots belong in the same evidence record where reviewers can inspect them.
+The tracking server should also receive the Git revision, wheel or image digest,
+resolved configuration, validation dataset, feature contract version, managed
+job ID, and evaluation report. Restricted rows remain in governed storage;
+tracking can hold the source, schema, profile, and digest.
 
-Tracking and orchestration solve different problems. MLflow records what a run used and produced. An orchestrator schedules tasks, manages dependencies and retries, and exposes workflow state. Some managed platforms provide both capabilities, yet the conceptual split remains useful during incident review.
+Tracking and orchestration answer different questions. Tracking explains what
+one execution used and produced. The managed job or orchestrator controls where
+and when tasks run, their dependencies, retries, and status.
 
-## Use CI To Build A Trusted Candidate
-<!-- section-summary: Continuous integration reruns fast, deterministic checks in a clean environment and builds immutable artifacts from reviewed source. -->
+## Decide Whether The Model Is Ready For Production
 
-Continuous integration checks every proposed change outside the author's workstation. A pull request can run formatting and linting, type checks, unit and contract tests, a package build, dependency or image scanning, and a small artifact smoke test.
+<!-- section-summary: CI builds trusted training inputs, a candidate binds model evidence, and a release authorizes one immutable candidate for a named production route. -->
 
-Full model training rarely belongs in every pull request. It may be expensive, slow, or dependent on restricted data. CI proves that the workflow definition is internally sound. A separate controlled pipeline trains and evaluates the candidate after merge or after an approved trigger.
+Training success and production approval are separate events. The separation
+lets technical automation build and evaluate candidates while an accountable
+release process controls which model can affect people or downstream systems.
 
-A compact GitHub Actions job can use the same locked commands as local development:
+### Use CI To Test And Package Training Code
 
-```yaml
-steps:
-  - uses: actions/checkout@v7
-  - uses: astral-sh/setup-uv@v8
-    with:
-      enable-cache: true
-  - run: uv run --frozen ruff check .
-  - run: uv run --frozen pytest
-  - run: uv build
-```
+GitHub Actions, GitLab CI, Jenkins, and similar systems run checks outside the
+author’s workstation. A pull request can verify the lockfile, run linting and
+tests, build the wheel or OCI image, scan dependencies, and smoke-test the
+artifact.
 
-Production workflows should pin third-party actions according to the organization's supply-chain policy; immutable commit references provide the strongest protection. GitLab CI, Jenkins, and other CI systems can enforce the same contract.
+Full training often runs in a separate controlled workflow because it is slower,
+costlier, and dependent on restricted data. CI publishes the immutable package
+or image. The training job consumes that build. This path connects reviewed
+source to the candidate without installing an editable copy from a developer
+directory.
 
-After CI passes, the build publishes an immutable Python wheel or OCI image. Training consumes that artifact instead of reinstalling an editable copy from a developer directory. The build identity follows the training run and later candidate, which connects code review to the resulting model.
+### Understand The Difference Between A Trained Model And A Production Release
 
-## Separate A Candidate From A Production Release
-<!-- section-summary: A candidate is an immutable model plus evidence, while a release is an approved decision to use that candidate through a named production route. -->
-
-A successful training run produces a **candidate**. The candidate binds the model artifact to its source revision, data identities, resolved configuration, runtime, model signature, evaluation report, and integrity digest.
-
-A **release** adds a decision. It states which candidate may affect which environment or product route, under which policy, with which rollout and rollback plan. The same candidate may be rejected, approved for shadow traffic, approved for one region, or promoted more widely after further evidence.
+A **candidate** binds one logged model to code, data, configuration, runtime,
+metrics, evaluation, and integrity evidence. A **release** authorizes that
+candidate for a specific environment, route, region, batch consumer, or traffic
+share. The release also defines monitoring, rollback, and any operating
+conditions.
 
 ```mermaid
 flowchart TD
-    A["Tracked training run"] --> B["Immutable candidate"]
-    B --> C["Automated quality and contract gates"]
-    C --> D["Risk and product review"]
-    D --> E{"Release decision"}
-    E -->|"Reject"| F["Keep evidence for comparison"]
-    E -->|"Shadow"| G["Observe without decision impact"]
-    E -->|"Limited rollout"| H["Canary route or batch cohort"]
-    G --> I["Production evidence"]
-    H --> I
-    I --> J{"Expand or recover?"}
-    J -->|"Expand"| K["Broader production route"]
-    J -->|"Recover"| L["Restore previous release"]
+    A["Reviewed Source<br/>(approved code, lockfile, configuration, and tests)"] --> B["Immutable Build<br/>(wheel or OCI image with build identity)"]
+    B --> C["Tracked Training Job<br/>(exact data, compute, parameters, and outputs)"]
+    C --> D["Immutable Candidate<br/>(logged model, evaluation, signature, and limits)"]
+    D --> E["Release Decision<br/>(approve scope, conditions, rollout, and rollback)"]
+    E --> F["Limited Route<br/>(shadow, canary, batch cohort, or one region)"]
+    F --> G["Production Evidence<br/>(service, data, model, and outcome signals)"]
+    G --> H["Expand Or Recover<br/>(increase scope or restore the prior release)"]
+
+    class A,B build;
+    class C,D evidence;
+    class E decision;
+    class F,G,H operate;
 ```
 
-A model registry or governed catalog can store candidate versions, descriptions, tags, signatures, and links to source runs. Current MLflow registry workflows use version tags for status and aliases for named references such as `champion`; legacy model stages are deprecated. An alias is a movable reference, so a release record should also preserve the immutable model version or logged-model ID it selected.
+MLflow Model Registry and managed cloud registries can organize registered model
+versions and approval metadata. MLflow registry aliases provide movable names
+such as `champion`; legacy model stages are deprecated. A release record should
+preserve the immutable logged-model ID or registered version selected by the
+alias.
 
-The release pipeline should carry deployment configuration and permissions through source control or a governed automation system. Databricks Declarative Automation Bundles can define jobs, pipelines, experiments, models, and serving resources as source files. Terraform, cloud-native templates, Helm, and GitOps tools serve similar roles in other environments.
+Deployment definitions belong in source control or a governed automation
+system. Declarative Automation Bundles serve this role on Databricks. Terraform,
+cloud-native templates, Helm, and GitOps tools provide similar boundaries in
+other environments.
 
-## Operate The Release And Return Evidence
-<!-- section-summary: Production ownership covers service and model monitoring, incidents, rollback, delayed outcomes, and the evidence that starts the next improvement cycle. -->
+### Plan How To Roll Back A Bad Release
 
-The workflow continues after deployment. Operations must show whether the system can deliver predictions, whether the input remains valid, whether outputs are changing, and whether later outcomes confirm that the model still supports the product.
+The release needs a previous trusted version, a concrete routing or promotion
+action, an authorized owner, and a verification query. Online releases may use
+shadow or canary traffic. Batch releases can publish to a new versioned output
+and switch consumers only after validation.
 
-An online service first needs to show whether callers receive results within the product deadline. Traffic describes demand, latency shows the user-visible delay, errors expose failed work, and saturation reveals shrinking capacity. Feature-freshness and fallback signals then show whether a fast response used the intended data and model route.
+Rollback restores the earlier release quickly. Investigation and retraining can
+continue with the impact contained. If the failure came from data or policy, the
+team must restore those connected inputs as well as the model artifact.
 
-A batch system tells a different operational story. Input readiness confirms that the declared snapshot arrived. Job state and row coverage show whether every expected partition completed. Output freshness and atomic publication confirm that consumers received one complete result. Both delivery paths record model and policy identity in prediction evidence.
+## Monitor The Model And Use Production Feedback
 
-Prediction quality often arrives later. The team needs a governed join between predictions and mature outcomes, along with label delay and join coverage. Business guardrails such as review volume, false rejection, stockout, or escalation rate show whether the model's product effect remains acceptable.
+<!-- section-summary: Operations combine delivery health, data and model evidence, delayed outcomes, incidents, rollback, and the next exploration cycle. -->
+
+The production workflow continues after release. Operations needs to show that
+the system can deliver predictions, that inputs follow the contract, and that
+later outcomes still support the model’s purpose. Each signal has a different
+owner and response.
+
+### Monitor Whether Predictions Are Delivered Reliably
+
+An online service records traffic, latency, errors, saturation, dependency
+health, model route, and fallback use. OpenTelemetry can emit traces, metrics,
+and logs into a cloud or vendor backend. Prometheus and Grafana remain common for
+Kubernetes and self-managed platforms. Cloud-native monitoring is often the
+smallest operational choice for managed jobs and endpoints.
+
+A batch workflow records input readiness, job status, expected partitions, row
+coverage, output freshness, and atomic publication. Both paths attach model,
+policy, feature, and release identities to prediction evidence.
+
+### Monitor Data And Prediction Quality
+
+Input validation checks schema, ranges, categories, freshness, and missing data.
+Drift signals show where production inputs or outputs differ from the approved
+reference. These signals can start an investigation while labels are delayed;
+they cannot prove that prediction quality changed.
+
+Prediction quality needs a governed join between predictions and mature
+outcomes. Track label delay and join coverage beside accuracy, calibration, or
+ranking metrics. Segment evidence can reveal a problem hidden by the overall
+average. Product guardrails show whether review load, escalation, delay, or
+another real action remains acceptable.
+
+### Use Production Results To Improve The Next Model
+
+Incidents, appeals, weak segments, drift, and new business conditions return to
+exploration. A notebook is still a strong place to visualize the evidence and
+test explanations. Stable conclusions move through the same contract, package,
+test, job, candidate, and release path.
+
+```mermaid
+flowchart TD
+    A["Production Release<br/>(approved model, policy, data, and route)"] --> B["Delivery Evidence<br/>(traffic, latency, errors, jobs, and fallback)"]
+    A --> C["Model Evidence<br/>(inputs, outputs, drift, labels, and segments)"]
+    B --> D["Operational Response<br/>(scale, repair, pause, or recover)"]
+    C --> E["Learning Question<br/>(investigate decay, gaps, and new conditions)"]
+    D --> F["Governed Feedback<br/>(incidents, actions, outcomes, and owners)"]
+    E --> F
+    F --> G["New Exploration<br/>(test a focused explanation or improvement)"]
+    G --> H["New Candidate Path<br/>(contract, code, tests, job, and release evidence)"]
+
+    class A release;
+    class B,C evidence;
+    class D,E,F action;
+    class G,H learn;
+```
 
 ![Production evidence returning through monitoring and feedback into evaluation and the next candidate](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/production-feedback-loop.png)
 
-Recovery is part of the release design. The system should preserve the previous model or batch output, the routing or promotion action needed to restore it, and the owner authorized to act. A rollback restores a trusted state quickly; investigation and retraining can continue after impact is contained.
+## A Practical Starter Stack
 
-Production evidence then returns to exploration. A notebook may investigate a failing segment, visualize new drift, or test a new label rule. Stable conclusions move through the same maturity path again.
+<!-- section-summary: A small production baseline uses a normal Python project, locked dependencies, layered tests, versioned data, managed jobs, MLflow, CI, a registry, and production monitoring. -->
 
-## A Practical Industrial Baseline
-<!-- section-summary: A current baseline combines notebook exploration with a normal software project, locked environments, layered tests, immutable data references, tracked managed jobs, CI, a registry, and monitored release automation. -->
+A first production path should expose the important boundaries with the least
+platform ownership the team can sustain. For a small scheduled model, a normal
+software repository and one managed training job can cover most needs.
 
-Consider a small delivery-risk model retrained every week by one team. Its first production path can stay compact. Exploration happens in Jupyter or the notebook environment already attached to governed data. Stable code moves into a Python package. GitHub or GitLab reviews that package, while uv locks its dependencies and pytest protects its contracts.
+Use GitHub or GitLab for source review and CI. Package Python through
+`pyproject.toml`, use uv or Poetry for dependency locking, and build a wheel or
+OCI image. pytest protects code behavior. Pandera, dbt tests, Great Expectations,
+Soda, or platform expectations protect the governed data boundary where needed.
 
-CI builds an immutable wheel or OCI image. A managed Databricks, SageMaker AI, Vertex AI, or Azure Machine Learning job reads a named snapshot from object storage, a warehouse, or a lakehouse. MLflow records the run, dataset, metrics, model, and candidate identity. Cloud monitoring watches the scheduled job and its published output.
+Store data in object storage, a warehouse, or a lakehouse with immutable
+manifests or table snapshots. Use MLflow or managed experiment tracking for run,
+dataset, metric, and model evidence. Run training through a managed job first.
+Use a managed registry or MLflow Model Registry for candidate identity and
+release metadata.
+
+Production monitoring combines OpenTelemetry or platform telemetry with cloud
+monitoring, Prometheus, Grafana, and model-quality jobs as the environment
+requires. Workload identity grants short-lived cloud access. A secret manager
+covers external systems that still require secret values.
 
 ```mermaid
 flowchart TD
-    A["Small scheduled model"] --> B["Repository and review<br/>Python package, uv, pytest"]
-    B --> C["Immutable build<br/>Wheel or OCI image"]
-    C --> D["Named data snapshot"]
-    D --> E["Managed training job"]
-    E --> F["MLflow run and candidate"]
-    F --> G["Scheduled output and monitoring"]
-    G --> H{"Several dependent jobs,<br/>schedules, or recovery paths?"}
-    H -->|"Yes"| I["Add managed pipelines,<br/>Airflow, or Dagster"]
-    G --> J{"Several models need the same<br/>low-latency features?"}
-    J -->|"Yes"| K["Add a feature store"]
-    G --> L{"Managed serving cannot meet a<br/>required runtime or control need?"}
-    L -->|"Yes, and Kubernetes is operated"| M["Add KServe or a specialized runtime"]
+    A["Small Production Baseline<br/>(one team and one scheduled model workflow)"] --> B["Repository And Package<br/>(Git review, pyproject, lockfile, and tests)"]
+    B --> C["Versioned Data<br/>(snapshot, contract, and split identity)"]
+    C --> D["Managed Training Job<br/>(controlled compute, identity, logs, and outputs)"]
+    D --> E["MLflow Evidence<br/>(run, datasets, metrics, and logged model)"]
+    E --> F["Controlled Release<br/>(registry, approval, route, and rollback)"]
+    F --> G["Production Monitoring<br/>(delivery, data, model, outcomes, and recovery)"]
+    G --> H["Growth Trigger<br/>(add complexity only for a concrete operating need)"]
+
+    class A base;
+    class B,C,D,E workflow;
+    class F,G,H release;
 ```
 
-Orchestration earns its place after the weekly run expands into dependent preparation, training, evaluation, registration, and deployment steps with separate retries or schedules. Airflow fits many established enterprise data platforms. Dagster is a strong greenfield choice where asset-aware development and local testability match the team's working model. Managed cloud pipelines reduce platform ownership for teams already committed to one provider.
+Add orchestration after the single job grows into preparation, training,
+evaluation, registration, and deployment tasks with separate schedules,
+dependencies, or recovery paths. Managed pipelines reduce platform ownership.
+Airflow remains common in established data platforms, while Dagster fits teams
+that want asset-aware development and local testability.
 
-A feature store addresses shared feature definitions, point-in-time training retrieval, and low-latency online lookup across several models. A single scheduled model reading one governed snapshot gains little from that extra serving and synchronization layer.
-
-Kubernetes serving addresses a different pressure. An organization that already operates Kubernetes may use KServe to give many model teams the same deployment resource, autoscaling behaviour, and traffic controls. A GPU-heavy workload may place Triton behind that layer to combine requests through dynamic batching or run several models concurrently. These choices transfer runtime upgrades, cluster capacity, serving security, and on-call response to the platform team, so the required control must justify that ownership.
-
-Workload identity should grant the managed job short-lived cloud access. A cloud secret manager covers external systems that still require secret values. Multi-environment promotion and formal approval gates belong in the path after product risk or governance requires separate authority over candidate training and production release.
+Add a feature store after several models need shared point-in-time retrieval and
+low-latency online values. Add Kubernetes serving after managed endpoints fail a
+specific runtime, portability, or control requirement and a platform team can
+own the cluster. Each additional layer needs a concrete responsibility and an
+operational owner.
 
 ## The Main Idea
-<!-- section-summary: Notebook-to-production work protects the creative exploration loop while moving approved behaviour into a repeatable and operable system. -->
 
-A notebook and a production job serve different users. The notebook helps a person ask questions and understand results. The production workflow helps a team or automated system repeat approved work, verify its inputs, and recover from failure. Moving a model into production means preserving both strengths through a clear boundary between exploration and operation.
+<!-- section-summary: Notebook-to-production work keeps exploration interactive while moving stable behavior through explicit contracts, reproducible execution, controlled release, and production feedback. -->
 
-Reusable modules remove dependence on cell order. Configuration makes run choices visible. Locked dependencies define the environment. Tests protect data and model behaviour. Dataset identities make comparison reproducible. A tracked job records one execution. CI connects reviewed source to immutable build artifacts. Candidate evidence supports a release decision. Operations preserve health, rollback, and feedback.
+A notebook helps a person ask questions and understand evidence. A production
+workflow helps a team repeat approved work, verify its inputs, release one
+candidate, and recover from failure. The transition protects both forms of work
+through a deliberate maturity path.
 
-The result is more than a notebook that runs on a server. It is a model workflow that another person can inspect, repeat, release, recover, and improve.
+The product contract defines the decision. Reusable modules preserve stable
+logic. Explicit data, configuration, dependencies, identity, secrets, and
+outputs remove hidden state. Layered tests protect distinct failure boundaries.
+A managed, tracked job records one reproducible execution.
+
+The candidate binds a model to its evidence. The release authorizes that
+candidate for a production route. Monitoring, rollback, and delayed outcomes
+then return real evidence to exploration. The result is a workflow that another
+person can inspect, repeat, release, recover, and improve.
 
 ## References
 
-- [MLflow: Experiment tracking](https://mlflow.org/docs/latest/tracking) - Defines runs, parameters, metrics, code versions, models, and artifacts.
-- [MLflow: Dataset tracking](https://mlflow.org/docs/latest/dataset/) - Documents dataset sources, digests, schemas, profiles, and run inputs.
-- [MLflow: Model signatures](https://mlflow.org/docs/latest/ml/model/signatures/) - Documents model input, output, and parameter contracts.
-- [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Documents current model tags and aliases and the deprecation of legacy stages.
-- [uv: Locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/) - Explains locked and frozen Python project environments.
-- [pytest: Assertions](https://docs.pytest.org/en/stable/how-to/assert.html) - Documents focused behavioural assertions and failure reporting.
-- [GitHub Actions: Continuous integration](https://docs.github.com/en/actions/get-started/continuous-integration) - Describes clean, automated build and test workflows.
-- [Databricks: Declarative Automation Bundles](https://docs.databricks.com/aws/en/dev-tools/bundles/) - Documents source-controlled definitions for data and AI jobs and resources.
-- [Amazon SageMaker AI: Pipelines overview](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-overview.html) - Describes managed preprocessing, training, evaluation, registration, and inference steps.
-- [Vertex AI: Pipelines introduction](https://cloud.google.com/vertex-ai/docs/pipelines/introduction) - Describes managed execution of Kubeflow Pipelines and TFX workflows.
-- [Azure Machine Learning: Component pipelines](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-create-component-pipeline-python?view=azureml-api-2) - Documents reusable managed pipeline components with the current SDK.
+- [Python Packaging User Guide: Writing `pyproject.toml`](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/)
+- [uv: Locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/)
+- [pytest: Assertions](https://docs.pytest.org/en/stable/how-to/assert.html)
+- [MLflow Tracking](https://mlflow.org/docs/latest/tracking)
+- [MLflow Dataset Tracking](https://mlflow.org/docs/latest/dataset/)
+- [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)
+- [Amazon SageMaker AI model training](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html)
+- [Azure Machine Learning model training](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-train-model?view=azureml-api-2)
+- [Databricks Lakeflow Jobs](https://docs.databricks.com/aws/en/jobs/)
+- [Databricks Declarative Automation Bundles](https://docs.databricks.com/aws/en/dev-tools/bundles/)
+- [Apache Iceberg snapshot specification](https://iceberg.apache.org/spec/#snapshots)
+- [OpenTelemetry concepts](https://opentelemetry.io/docs/concepts/)

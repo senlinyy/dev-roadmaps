@@ -63,11 +63,6 @@ graph TB
     Group --> StreamB[Stream<br/>checkout-api/task-b]:::source
     StreamA --> Event1[JSON Event<br/>requestId=req-123]:::event
     StreamB --> Event2[JSON Event<br/>requestId=req-456]:::event
-
-    classDef signal fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef store fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef source fill:#193a3a,stroke:#24d2b5,stroke-width:2px,color:#fff
-    classDef event fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 This structure matters during incidents. The team normally searches the log group across all streams because the failed request could have landed on any task. The stream remains useful after the first query because it tells you which runtime produced the event.
@@ -505,12 +500,6 @@ graph LR
     Logs --> Filters[Metric Filters<br/>selected error counts]:::metric
     Logs --> Archive[Subscription / Export<br/>S3 or Firehose]:::archive
     Filters --> Alarm[CloudWatch Alarms]:::metric
-
-    classDef compute fill:#2c1d3e,stroke:#c446ff,stroke-width:2px,color:#fff
-    classDef store fill:#193a3a,stroke:#24d2b5,stroke-width:2px,color:#fff
-    classDef query fill:#3c341f,stroke:#f39c12,stroke-width:2px,color:#fff
-    classDef metric fill:#2f243f,stroke:#a78bfa,stroke-width:2px,color:#fff
-    classDef archive fill:#2a2a2a,stroke:#555,stroke-width:2px,color:#fff
 ```
 
 This is the production habit to build. Logs serve as structured evidence, stored under owned log groups, queried with care, converted into a few durable metrics, and retained for the period the business actually needs. Application teams get the most value when every printed event has a clear operational purpose.

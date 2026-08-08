@@ -11,12 +11,12 @@ id: "article-mlops-llmops-model-routing"
 
 1. [What Model Routing Means](#what-model-routing-means)
 2. [Why One Route Eventually Stops Fitting Every Task](#why-one-route-eventually-stops-fitting-every-task)
-3. [Follow The Complete Routing Framework](#follow-the-complete-routing-framework)
-4. [Define Candidate Routes As Complete Bundles](#define-candidate-routes-as-complete-bundles)
-5. [Apply Deterministic Eligibility Gates First](#apply-deterministic-eligibility-gates-first)
+3. [Follow A Routing Decision From Request To Result](#follow-a-routing-decision-from-request-to-result)
+4. [Define Each Route With Its Model, Prompt, Tools, And Limits](#define-each-route-with-its-model-prompt-tools-and-limits)
+5. [Remove Routes That Cannot Safely Handle The Request](#remove-routes-that-cannot-safely-handle-the-request)
 6. [Choose Among Eligible Routes](#choose-among-eligible-routes)
-7. [Treat Confidence And Uncertainty As Policy Inputs](#treat-confidence-and-uncertainty-as-policy-inputs)
-8. [Keep Routes Stable Across Stateful Work](#keep-routes-stable-across-stateful-work)
+7. [Use Confidence And Uncertainty To Choose The Next Action](#use-confidence-and-uncertainty-to-choose-the-next-action)
+8. [Keep One Route Through A Conversation Or Workflow](#keep-one-route-through-a-conversation-or-workflow)
 9. [Design Fallbacks As Separate Decisions](#design-fallbacks-as-separate-decisions)
 10. [Put Budgets Inside The Routing Policy](#put-budgets-inside-the-routing-policy)
 11. [Give Applications, Policy Engines, Routers, And Gateways Different Jobs](#give-applications-policy-engines-routers-and-gateways-different-jobs)
@@ -69,7 +69,7 @@ Three conditions support that decision:
 
 If the groups cannot be distinguished reliably, a routing policy may create more quality variation than it saves. If every task still needs the strongest route, the router has no useful decision to make. If a smaller model only saves a tiny amount while requiring a second classifier call, the economics may also fail.
 
-## Follow The Complete Routing Framework
+## Follow A Routing Decision From Request To Result
 <!-- section-summary: Production routing proceeds through eligibility, selection, execution, validation, recovery, and outcome evidence. -->
 
 A reliable router separates six decisions that are often collapsed into one `if` statement. The separation shows a beginner which question the system is answering at each stage and gives operators a precise place to investigate failures.
@@ -89,8 +89,6 @@ flowchart TD
     I --> J["Retry, alternate route, clarification, or review"]
     J --> F
 
-    classDef input fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef decide fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef execute fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef result fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A input;
     class B,C,D,G decide;
     class E,F,I,J execute;
@@ -101,7 +99,7 @@ The order matters. Cost optimization belongs after eligibility because a route t
 
 This framework also improves incident response. A bad outcome can be traced to an incorrect input feature, eligibility defect, selection error, weak route, failed validator, or unsafe recovery transition. Recording only the final model name would mix all six possibilities together.
 
-## Define Candidate Routes As Complete Bundles
+## Define Each Route With Its Model, Prompt, Tools, And Limits
 <!-- section-summary: A candidate route includes every component that affects capability, behaviour, cost, and recovery. -->
 
 A production route should have a product-facing name such as `fast_extraction`, `standard_assistant`, or `review_required`. The name describes the job. Provider model identifiers stay behind that stable contract because model deployments change more frequently. Prices and regional availability can also move without changing the product route.
@@ -140,7 +138,7 @@ routes:
 
 Every route needs an owner and a contract. The contract states eligible task classes, quality objective, and safety guardrails. It also defines latency and cost targets. Validator behaviour and the recovery path explain how execution ends. A route with no validator or terminal recovery leaves the orchestrator guessing after a weak result.
 
-## Apply Deterministic Eligibility Gates First
+## Remove Routes That Cannot Safely Handle The Request
 <!-- section-summary: Hard capability and governance requirements remove unsafe or impossible routes before any optimization occurs. -->
 
 An **eligibility gate** is a rule with a definite result: a route is permitted for the task or it is excluded. These gates should use trusted application facts rather than asking an LLM to interpret critical policy.
@@ -186,7 +184,7 @@ An **ensemble** runs several routes and combines or judges the outputs. It can i
 
 Selection can combine these patterns: deterministic gates create the pool, a learned selector chooses an ordinary route, a validator drives one escalation, and a gateway finds a healthy deployment for the chosen route.
 
-## Treat Confidence And Uncertainty As Policy Inputs
+## Use Confidence And Uncertainty To Choose The Next Action
 <!-- section-summary: A router needs explicit behaviour for ambiguous, novel, or weakly classified tasks. -->
 
 A learned router often returns a score beside its predicted class. That score is **confidence** according to the classifier. It should not be interpreted as a trustworthy probability until calibration proves the relationship.
@@ -206,8 +204,6 @@ flowchart TD
     D -->|Yes| E["Continue to eligible route selection"]
     F --> G["Clarify, use conservative route, or request review"]
 
-    classDef start fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef decide fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef uncertain fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px; classDef proceed fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A start;
     class B,C,D decide;
     class F,G uncertain;
@@ -218,7 +214,7 @@ The **abstention policy** defines what the router does instead of forcing a weak
 
 Track abstention as a product outcome. A rising unknown-route rate may signal new traffic, a broken feature, or an outdated classifier. Treating it as an error to suppress can hide the earliest warning of routing drift.
 
-## Keep Routes Stable Across Stateful Work
+## Keep One Route Through A Conversation Or Workflow
 <!-- section-summary: The routing scope determines whether a choice applies to one request, one workflow step, a conversation, or an entire run. -->
 
 A one-shot extraction can choose a route for every task. Conversations and agents carry state across several calls, so frequent switching can change behaviour, tool formats, context handling, and provider-managed continuation state.
@@ -260,8 +256,6 @@ flowchart TD
     F --> J["Reviewed outcome"]
     G --> J
 
-    classDef attempt fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef decide fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef recovery fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef end fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A attempt;
     class B decide;
     class C,D,E,F,G,H recovery;
@@ -308,19 +302,17 @@ flowchart TD
     E --> F["Application validation and outcome"]
     F --> G["Tracing, evaluation, and cost evidence"]
 
-    classDef product fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef route fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef infrastructure fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef evidence fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A,B product;
     class C route;
     class D,E infrastructure;
     class F,G evidence;
 ```
 
-### Application policy owns product meaning
+### Keep Product Decisions In Application Policy
 
 The application knows tenant rules, data class, workflow step, user deadline, task risk, tool permissions, and acceptable recovery. Keep those inputs at the product boundary. OPA can externalize deterministic decisions and produce decision logs, although the application still enforces the returned route set.
 
-### Provider-native routers own supported semantic selection
+### Use Provider-Native Routers For Supported Model Selection
 
 Amazon Bedrock Intelligent Prompt Routing is generally available. It chooses between exactly two models from the same model family and optimizes predicted response quality against cost. AWS documents important boundaries: the router is optimized for English prompts and cannot adjust decisions from application-specific performance data. An outer product policy remains necessary for domain risk and governance.
 
@@ -328,7 +320,7 @@ Microsoft Foundry Model Router also has a generally available version. It offers
 
 Google Vertex AI documents automatic and manual model routing preferences. Its REST routing documentation still labels the relevant surface Preview, while client references expose several API versions and lifecycle transitions. Treat that integration as version-specific: pin the exact API and SDK, verify the selected region and models, and recheck maturity before production approval.
 
-### Gateways own credentials, capacity, and backend recovery
+### Use Gateways For Credentials, Capacity, And Backend Recovery
 
 An LLM gateway centralizes authentication, provider adapters, rate limits, budgets, usage records, load balancing, and operational fallbacks. LiteLLM Proxy is one common open-source option and documents routing across deployments, cooldowns, retries, and fallback groups.
 
@@ -375,8 +367,6 @@ flowchart TD
     H --> I["Expand by task class and risk tier"]
     I --> J["Keep previous policy ready for rollback"]
 
-    classDef candidate fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef test fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef stop fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px; classDef release fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A candidate;
     class B,C,E,F,G test;
     class D stop;
@@ -433,7 +423,7 @@ Compare task mix, classifier calls, first-route usage, validation rejection, and
 
 Check routing scope and session identity. Pin the route bundle for the conversation, and reserve backend failover for compatible deployments. Rebuild from portable application state if a provider transition is approved.
 
-### No eligible route increases
+### Requests Have No Eligible Route
 
 Check capability metadata, region rules, model lifecycle, tool availability, and health feeds. The repair may be a catalogue update or new approved route. Sending unknown work to the cheapest deployment would hide the coverage gap.
 

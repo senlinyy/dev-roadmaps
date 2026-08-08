@@ -10,7 +10,7 @@ id: "article-mlops-llmops-production-deployment"
 ## Table of Contents
 
 1. [What Production Deployment Actually Ships](#what-production-deployment-actually-ships)
-2. [1. Define the Complete Release Unit](#1-define-the-complete-release-unit)
+2. [1. Decide What Must Ship Together](#1-decide-what-must-ship-together)
 3. [2. Promote One Release Through Environments](#2-promote-one-release-through-environments)
 4. [3. Choose Managed or Self-Hosted Inference](#3-choose-managed-or-self-hosted-inference)
 5. [4. Automate Delivery and Infrastructure](#4-automate-delivery-and-infrastructure)
@@ -20,8 +20,8 @@ id: "article-mlops-llmops-production-deployment"
 9. [8. Keep State and Schemas Compatible](#8-keep-state-and-schemas-compatible)
 10. [9. Observe Reliability, Quality, and Cost Together](#9-observe-reliability-quality-and-cost-together)
 11. [10. Prepare Recovery Before the Release](#10-prepare-recovery-before-the-release)
-12. [A Practical Production Blueprint](#a-practical-production-blueprint)
-13. [The Main Idea](#the-main-idea)
+12. [A Production Deployment Blueprint](#a-production-deployment-blueprint)
+13. [Deploy The Whole LLM System As One Governed Release](#deploy-the-whole-llm-system-as-one-governed-release)
 14. [References](#references)
 
 ## What Production Deployment Actually Ships
@@ -60,10 +60,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef user fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef app fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef runtime fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A user
     class B,C,D app
     class E runtime
@@ -78,7 +74,7 @@ Production deployment owns this path as one operated system. The release process
 
 These questions define the release lifecycle: assemble a complete candidate, gather evidence, control live exposure, and preserve a known-good recovery path. Each stage creates evidence for the next decision.
 
-## 1. Define the Complete Release Unit
+## 1. Decide What Must Ship Together
 
 <!-- section-summary: A release contract records the immutable application and configuration versions that together produce one deployed behaviour. -->
 
@@ -118,13 +114,13 @@ An **immutable artifact** stays byte-for-byte identical after it is built. Conta
 
 The release manifest should refer to configuration versions, never copy sensitive values into source control. A secret reference such as `provider-api-key/production` belongs in configuration. The key itself belongs in a secret manager.
 
-### Model versioning needs special care
+### Record Exactly Which Model Version Runs
 
 Self-hosted model weights can usually be pinned by a repository revision and file digest. A managed provider may expose a stable snapshot, a named deployment, an inference profile, or a moving alias. The release contract records the most specific identifier the provider supports.
 
 For a moving alias, reproducibility also depends on evidence. Record the provider, requested model identifier, response metadata, evaluation result, and first-seen behaviour. Re-run a small compatibility suite on a schedule and after provider notices. This protects the application even if the managed service changes the implementation behind an alias.
 
-### A release record should be easy to query
+### Store Release Identity In A Queryable Record
 
 Write `release_id` into the service version endpoint, traces, structured logs, deployment records, background jobs, and quality results. A user report can then lead from one request ID to the exact release and its approval evidence.
 
@@ -151,17 +147,13 @@ flowchart TD
     I --> J["Full promotion or rollback"]
     H --> B
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef prod fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B source
     class C,D,E stage
     class F,H decision
     class G,I,J prod
 ```
 
-### Staging should exercise the real route
+### Test The Production Request Path In Staging
 
 A staging endpoint is useful only if it tests the same kinds of boundaries as production. The service should authenticate a test identity, retrieve approved test documents, call the selected inference route, execute safe test tools, emit real telemetry, and apply the same policy engine.
 
@@ -207,7 +199,7 @@ Self-hosted inference makes sense for open-weight models, strict data placement,
 
 Choose Kubernetes for an existing platform team, shared GPU scheduling, multiple endpoints, standard policy enforcement, or advanced rollout and scaling. For a single low-volume endpoint, use a managed service or a dedicated virtual machine unless the surrounding platform already depends on Kubernetes.
 
-### Compare the responsibility, not just the token price
+### Compare The Full Operating Responsibility And Cost
 
 A managed API quote contains serving infrastructure and provider operations. A self-hosted estimate starts with accelerator use and spare replicas for failure. It also includes model loading, engineering support, observability, upgrades, and capacity headroom.
 
@@ -265,7 +257,7 @@ The example highlights the control flow. A production repository should pin thir
 
 The `id-token: write` permission allows the job to request an OIDC token. The cloud trust policy still decides which repository, branch, workflow, and environment may assume the deploy role. The workflow receives a short-lived credential for this job instead of storing a permanent cloud key in GitHub.
 
-### Deployment success needs application-level verification
+### Verify Application Behaviour After Deployment
 
 A green infrastructure command proves that the control plane accepted a change. It cannot prove that the application loaded the expected prompt, can reach retrieval, has the correct tool policy, or emits useful traces.
 
@@ -296,7 +288,7 @@ GitHub Actions OIDC is one example. Kubernetes service accounts connected to clo
 
 For a provider that requires an API key, store the key in a managed secret service, restrict which runtime identity can read it, rotate it, and keep it away from container images and repository files. The application should load the secret at runtime through the platform's supported integration.
 
-### Tool permissions should follow the user action
+### Limit Tool Permissions To The Current User Action
 
 Suppose an assistant can read an order and issue a refund. The application runtime needs permission to call the order service. The user still needs authority for the specific order and refund amount.
 
@@ -381,10 +373,6 @@ flowchart TD
     H -->|"No"| G
     G --> J["Verify rollback in new traces"]
 
-    classDef candidate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef observe fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B candidate
     class C,D observe
     class E,H decision
@@ -393,7 +381,7 @@ flowchart TD
 
 Argo Rollouts can automate canary steps and metric analysis for Kubernetes applications. KServe supports rollout strategies for suitable serving modes. Managed platforms may offer endpoint traffic splitting. An application-level gateway can also route by tenant, session, or feature flag.
 
-### Rollback follows the failed layer
+### Roll Back The Component That Caused The Failure
 
 An LLM release has several rollback targets:
 
@@ -441,13 +429,13 @@ The new consumer can treat the added fields as optional during rollout. After al
 
 Changing `status` into an entirely different structure in one step would make mixed-version execution fragile.
 
-### Pin long-running work to a release
+### Keep Long-Running Work On Its Starting Release
 
 A queued job should carry the release ID or a compatible workflow version. A worker restart can then load the declared prompt, model route, and tool contract.
 
 For agent workflows that pause for approval, store the graph or state-machine version alongside the checkpoint. The resumed run can continue under the same semantics or pass through an explicit migration.
 
-### Retrieval changes also have contracts
+### Version Retrieval Indexes And Their Data Contracts
 
 An embedding-model change usually requires a new index. Query embeddings and document embeddings must use compatible vector spaces. Build the new index beside the current one, validate coverage and retrieval quality, then switch the release reference.
 
@@ -463,7 +451,7 @@ If downstream software parses model output, record the schema version and valida
 
 An LLM endpoint can return `200 OK` quickly while giving unsupported advice. It can also produce excellent answers so slowly that users leave. Production decisions therefore need three connected views.
 
-### Reliability shows whether the system can deliver
+### Measure Whether The System Can Deliver
 
 Begin with request rate and error ratio. Time to first token, total latency, and stream interruptions describe the user experience. Queue time, retries, and saturation explain pressure inside the service.
 
@@ -471,19 +459,19 @@ Self-hosted runtimes also need GPU utilization, key-value cache pressure, batch 
 
 Time to first token describes how quickly a streamed answer starts. Total latency describes how long the complete task takes. Both matter because a fast first token can hide a long tool loop.
 
-### Quality shows whether the result helps
+### Measure Whether The Result Helps
 
 Quality signals depend on the product. A retrieval assistant may track citation support, groundedness, source coverage, and escalation. A coding agent may track test success and accepted patches. A tool-using workflow may track correct tool selection, authorization, action success, and human correction.
 
 Automated judges can score a sample of production traces, although expert review remains important for high-risk or ambiguous cases. Calibrate judges against human decisions and monitor their own drift and cost.
 
-### Cost shows what the outcome consumes
+### Measure The Cost Of Each Useful Outcome
 
 Record input and output tokens, model route, retrieval calls, tool calls, retries, cache hits, and evaluator cost. Then connect those inputs to an outcome such as a resolved support case or completed workflow.
 
 A release that cuts token cost by a third but doubles human escalations may increase total operating cost. Cost per successful task exposes that trade-off.
 
-### Traces connect the three views
+### Use Traces To Link Reliability, Quality, And Cost
 
 A **trace** represents one end-to-end request. **Spans** are timed steps inside it, such as retrieval, a model call, or a tool execution. OpenTelemetry provides vendor-neutral APIs, SDKs, collectors, and semantic conventions for this telemetry.
 
@@ -522,13 +510,13 @@ If a release exposed sensitive prompt content to telemetry, traffic rollback alo
 
 If a queued workflow used an incompatible schema, inspect in-flight jobs before returning traffic. Some jobs can finish under their pinned release. Others may need cancellation and explicit recreation.
 
-### Drill the complete path
+### Practice Recovery From Detection To Verification
 
 A rollback drill should deploy a harmless candidate, create a long-running job, move a small internal cohort, restore the previous release, and verify routing, state, telemetry, and quality.
 
 This exercise often finds issues that a container rollback test misses: an old prompt was deleted, a worker reads the newest configuration by default, a vector index was overwritten, or the dashboard cannot separate candidate traffic.
 
-## A Practical Production Blueprint
+## A Production Deployment Blueprint
 
 <!-- section-summary: A common production design keeps the application release portable while selecting managed or self-hosted inference according to operational needs. -->
 
@@ -549,7 +537,7 @@ A practical industrial baseline can stay simple because each tool has one clear 
 
 Managed cloud platforms can supply many pieces of this blueprint. Self-hosted platforms assemble more of them from Kubernetes, vLLM, KServe, Triton, Argo Rollouts, Prometheus, Grafana, and OpenTelemetry. The framework stays the same: identify the whole release, gather evidence, limit exposure, observe outcomes, and preserve recovery.
 
-## The Main Idea
+## Deploy The Whole LLM System As One Governed Release
 
 <!-- section-summary: Production deployment operates the complete LLM application as a versioned, testable, observable, and recoverable system. -->
 

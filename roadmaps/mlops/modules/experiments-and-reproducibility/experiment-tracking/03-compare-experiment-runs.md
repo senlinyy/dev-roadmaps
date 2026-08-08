@@ -10,15 +10,15 @@ id: "article-mlops-experiments-and-reproducibility-compare-experiment-runs"
 ## Table of Contents
 
 1. [Two Scores Can Hide Two Different Experiments](#two-scores-can-hide-two-different-experiments)
-2. [Run Comparison Explains Why the Result Changed](#run-comparison-explains-why-the-result-changed)
+2. [Compare Runs To Find Why Results Changed](#compare-runs-to-find-why-results-changed)
 3. [Prove That the Runs Are Comparable](#prove-that-the-runs-are-comparable)
-4. [Choose a Baseline and a Candidate](#choose-a-baseline-and-a-candidate)
+4. [Choose The Reference Run And The New Run To Compare](#choose-the-reference-run-and-the-new-run-to-compare)
 5. [Isolate the Intended Change](#isolate-the-intended-change)
 6. [Read Learning Curves Alongside Final Metrics](#read-learning-curves-alongside-final-metrics)
-7. [Use Segments and Artifacts to Explain the Aggregate](#use-segments-and-artifacts-to-explain-the-aggregate)
+7. [Compare Segments And Example-Level Results](#compare-segments-and-example-level-results)
 8. [Separate Improvement From Random Variation](#separate-improvement-from-random-variation)
 9. [Compare Hyperparameter Trials as One Study](#compare-hyperparameter-trials-as-one-study)
-10. [Use MLflow 3 as an Evidence Workspace](#use-mlflow-3-as-an-evidence-workspace)
+10. [Compare Runs And Models With MLflow 3](#compare-runs-and-models-with-mlflow-3)
 11. [Know What the Comparison UI Cannot Decide](#know-what-the-comparison-ui-cannot-decide)
 12. [An Experiment Winner Is Only a Release Candidate](#an-experiment-winner-is-only-a-release-candidate)
 13. [Record the Conclusion and the Next Experiment](#record-the-conclusion-and-the-next-experiment)
@@ -51,7 +51,7 @@ flowchart TD
 
 This order prevents a familiar mistake: sorting a run table by one metric and treating the first row as the answer.
 
-## Run Comparison Explains Why the Result Changed
+## Compare Runs To Find Why Results Changed
 <!-- section-summary: A useful comparison connects a measured outcome to the controlled change that could have produced it. -->
 
 An experiment asks a question such as, “Does adding recency features improve ranking quality?” or “Does a smaller learning rate improve calibration?” A run is one execution of that experiment. Run comparison evaluates the evidence across executions.
@@ -74,11 +74,11 @@ For example, two demand-forecasting runs use the same code and evaluation window
 
 **Comparability** means the runs answer the same question under sufficiently similar conditions. Exact byte-for-byte execution is unnecessary for every study. The conditions that can change the conclusion must be aligned or explicitly accounted for.
 
-### Align the meaning of the task
+### Use The Same Prediction Task And Label Definition
 
 Start with the task. Both runs should predict the same target for the same population and decision horizon. A churn model predicting cancellation in 30 days cannot be compared directly with one predicting cancellation in 90 days, even if both log `roc_auc`.
 
-### Align the evidence boundary
+### Use The Same Data And Evaluation Boundary
 
 Then verify the evidence boundary:
 
@@ -105,7 +105,7 @@ flowchart TD
 
 If comparability fails, the team has learned something useful: the current runs cannot answer the intended question. Rerunning one model on the other run’s evaluation snapshot is often faster and safer than debating incompatible scores.
 
-## Choose a Baseline and a Candidate
+## Choose The Reference Run And The New Run To Compare
 <!-- section-summary: The baseline is the reference the team cares about, and the candidate is the controlled alternative being evaluated against it. -->
 
 A **baseline** is the reference point for the decision. It gives the metric delta a practical meaning. The best baseline depends on the question:
@@ -171,12 +171,12 @@ For example, two language classifiers finish at nearly the same F1 score. The ca
 
 Step metrics also reveal unfair stopping. Comparing the best checkpoint from one run with the final checkpoint from another gives each run a different selection rule. Choose the checkpoint policy before examining results and apply it consistently.
 
-## Use Segments and Artifacts to Explain the Aggregate
+## Compare Segments And Example-Level Results
 <!-- section-summary: Segment metrics and diagnostic artifacts reveal which examples improved, which regressed, and why the average moved. -->
 
 An aggregate metric compresses many cases into one number. **Segment analysis** expands it again by looking at meaningful groups such as class, region, language, device, time horizon, or customer workflow.
 
-### Start from product-relevant segments
+### Start With Product-Relevant Segments
 
 The right segments come from product risk and known data structure. They should be defined before inspecting candidate outcomes where possible. Creating a very specific slice after seeing an error can generate a convincing story from random noise.
 
@@ -191,7 +191,7 @@ Artifacts add the missing detail. Useful comparison artifacts include:
 - model cards, feature-importance reports, or data-profile differences;
 - runtime profiles, checkpoints, and evaluation reports.
 
-### Inspect paired examples
+### Compare The Same Examples
 
 The stable example ID is especially useful. Join baseline and candidate predictions on the same examples, then inspect cases that changed from correct to incorrect and incorrect to correct. This **paired comparison** is more informative than two separate error galleries because it shows exactly where behavior moved.
 
@@ -245,12 +245,12 @@ Use the tuning study to shortlist promising configurations. Then retrain the fin
 
 A parent-child structure also prevents unrelated trials from flooding the main experiment view. Compare child runs inside their study first. Compare the selected configuration with the production or research baseline after the confirmation runs exist.
 
-## Use MLflow 3 as an Evidence Workspace
+## Compare Runs And Models With MLflow 3
 <!-- section-summary: MLflow 3 can query comparable runs and first-class logged models, while the team still defines the experimental rules that make comparison valid. -->
 
 MLflow Tracking stores parameters, step metrics, tags, dataset references, and artifacts for runs. Its search API can retrieve a fair comparison group instead of relying on whichever rows happen to be visible in the UI.
 
-### Query comparable runs
+### Query Runs That Used The Same Evaluation
 
 This focused query selects runs that share an evaluation dataset and protocol, then exposes the fields needed for review:
 
@@ -279,7 +279,7 @@ comparison = runs[[
 
 The query filters for comparable evidence before any sorting happens. A reviewer can then add segment metrics, artifact links, and repeated-trial summaries. MLflow search uses a SQL-like filter language with its own supported operators. It is a tracking query with narrower semantics than general SQL.
 
-### Compare first-class logged models
+### Compare The Trained Models Recorded By MLflow 3
 
 MLflow 3 also treats logged models as first-class entities. One run can log several checkpoints, each with its own model ID, and metrics can be linked to a specific model and dataset. `mlflow.search_logged_models()` can filter and rank those model objects. This is useful for checkpoint comparison because “run” and “model checkpoint” are no longer forced to mean the same thing.
 

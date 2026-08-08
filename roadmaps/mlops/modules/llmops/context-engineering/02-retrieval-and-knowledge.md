@@ -12,19 +12,19 @@ aliases:
 
 ## Table of Contents
 
-1. [Retrieval Brings External Evidence Into a Model Decision](#retrieval-brings-external-evidence-into-a-model-decision)
-2. [Five Objects Keep the Knowledge System Honest](#five-objects-keep-the-knowledge-system-honest)
-3. [Govern the Source Lifecycle Before Tuning Search](#govern-the-source-lifecycle-before-tuning-search)
-4. [Parsing and Chunking Create Evidence Units](#parsing-and-chunking-create-evidence-units)
-5. [Retrieval Uses Several Search Signals](#retrieval-uses-several-search-signals)
+1. [Use Retrieval To Give The Model External Evidence](#use-retrieval-to-give-the-model-external-evidence)
+2. [Distinguish The Source, Index, Search Results, Evidence, And Model Context](#distinguish-the-source-index-search-results-evidence-and-model-context)
+3. [Manage Source Versions Before Tuning Search](#manage-source-versions-before-tuning-search)
+4. [Prepare Source Material For Search](#prepare-source-material-for-search)
+5. [Combine Several Ways To Search](#combine-several-ways-to-search)
 6. [Permissions Must Constrain the Search](#permissions-must-constrain-the-search)
-7. [Evidence Selection Handles Coverage, Conflict, and Abstention](#evidence-selection-handles-coverage-conflict-and-abstention)
-8. [Citations Need a Resolver](#citations-need-a-resolver)
+7. [Choose Evidence That Is Complete, Consistent, And Sufficient](#choose-evidence-that-is-complete-consistent-and-sufficient)
+8. [Link Every Citation Back To Its Source](#link-every-citation-back-to-its-source)
 9. [Evaluate Retrieval Separately From Generation](#evaluate-retrieval-separately-from-generation)
 10. [Operate Retrieval as a Production Data System](#operate-retrieval-as-a-production-data-system)
 11. [References](#references)
 
-## Retrieval Brings External Evidence Into a Model Decision
+## Use Retrieval To Give The Model External Evidence
 <!-- section-summary: Retrieval finds relevant external material and supplies selected evidence to a model without turning the model into the owner of that knowledge. -->
 
 At a high level, **retrieval** is the process of finding information outside a model and bringing the useful parts into one model decision. The external information might be a policy, product manual, source file, support record, research paper, or incident runbook.
@@ -68,12 +68,12 @@ A production retrieval system therefore owns four outcomes:
 
 The model participates at the end of this path. Data governance, indexing, access control, and evidence selection determine the quality of what it receives.
 
-## Five Objects Keep the Knowledge System Honest
+## Distinguish The Source, Index, Search Results, Evidence, And Model Context
 <!-- section-summary: Source records, searchable indexes, candidates, evidence blocks, and model context represent different stages of the retrieval path. -->
 
 Retrieval discussions often use “knowledge base,” “vector store,” “document,” and “context” as loose synonyms. Clear object boundaries show which component owns a fact and where each failure can occur. Five objects are especially important.
 
-### The source of truth owns the material
+### Keep Original Material In A Source Of Truth
 
 The **source of truth** is the system authorised to publish or change the material. A policy repository may own expense rules. A Git repository may own versioned code. A product catalogue may own specifications. An incident platform may own the active incident record.
 
@@ -85,13 +85,13 @@ A **searchable index** is a representation prepared for fast retrieval. It may c
 
 Indexes trade source fidelity for search performance. They may lag behind the source, use a different schema, and contain several chunks for one document. An index health check can report green while its content is stale.
 
-### A retrieved candidate is a possible match
+### Treat Each Search Result As A Possible Match
 
 A **candidate** is one result returned by a first-stage search. It usually includes an identifier, score, metadata, and text or a reference to text. Candidates are possible evidence. Their presence says, “the search system found this potentially relevant.”
 
 A candidate can still be wrong for the task. It may belong to an expired revision, duplicate another result, miss a regional exception, or lack the caller's required evidence type.
 
-### An evidence block is selected for use
+### Select Search Results The Model Can Use
 
 An **evidence block** is a candidate that has passed the application's selection rules. The block contains enough surrounding material to support a claim. It also carries a stable source locator and a clear role, such as `official_policy`, `supporting_guidance`, or `historical_record`.
 
@@ -117,7 +117,7 @@ Consider a current travel policy stored in a document repository. The repository
 
 Each object has its own failure mode. A missing source is an ingestion problem. A missing index entry is an indexing problem. Poor candidate order is a ranking problem. A missing exception in the final evidence is a selection problem. A correct evidence set followed by an unsupported answer is a generation problem.
 
-## Govern the Source Lifecycle Before Tuning Search
+## Manage Source Versions Before Tuning Search
 <!-- section-summary: Search quality depends on a governed lifecycle that publishes, versions, activates, supersedes, revokes, and deletes source material across every retrieval path. -->
 
 The best ranking algorithm cannot recover a document that never entered the index. It also cannot know that a source owner withdrew a policy unless the lifecycle carries that decision into search.
@@ -134,7 +134,7 @@ Begin with a source registry. For each collection, record:
 
 This registry explains what “current” means. A product manual may become current as soon as a release tag is published. A policy may be published today with an effective date next month. An incident note may become stale after a few minutes.
 
-### One revision moves through explicit states
+### Track Each Source Revision From Ingestion To Deletion
 
 Ingestion should create an immutable record for each source revision. Reprocessing the same revision should produce the same active chunk identities or replace them atomically. Silent in-place edits make citations and incident investigation unreliable.
 
@@ -168,7 +168,7 @@ and (effective_to is empty or decision_time < effective_to)
 
 This filter expresses a business rule directly. Similarity scores should not choose between policy periods.
 
-### Deletion is a distributed workflow
+### Delete Source Data From Every Derived System
 
 Deleting the source record is only the first step. Derived text indexes, vector indexes, caches, citation mappings, summaries, and evaluation fixtures may still contain the material.
 
@@ -185,7 +185,7 @@ Provider behaviour affects the temporary control. OpenAI's vector-store document
 
 This approach treats deletion as a safety property. A successful API response alone provides incomplete evidence.
 
-## Parsing and Chunking Create Evidence Units
+## Prepare Source Material For Search
 <!-- section-summary: Parsing preserves document structure, while chunking turns that structure into passages that can be found, understood, governed, and cited. -->
 
 Raw files are rarely ready for search. A PDF may contain headers, footers, tables, images, and text in a reading order that differs from the page layout. A web page may include navigation and hidden text. A spreadsheet stores meaning in row and column relationships.
@@ -196,7 +196,7 @@ Scanned documents may require optical character recognition, or OCR. OCR convert
 
 Parser quality directly affects retrieval. If a two-column PDF is read across both columns, the resulting sentences may be nonsense. If table headers disappear, a row containing “Berlin | 240” loses the meaning of 240. Quarantine malformed output and expose parser failures as ingestion errors.
 
-### A chunk should stand as evidence
+### Keep Each Search Passage Meaningful On Its Own
 
 A **chunk** is the unit stored and returned by the search index. You can think of it as a passage prepared for independent use. Its boundary should preserve the meaning needed to support a claim.
 
@@ -228,9 +228,9 @@ This pattern separates two goals:
 
 The expansion still needs a budget. Returning an entire handbook because one sentence matched recreates the noise problem.
 
-### Chunk metadata carries governance and provenance
+### Record Where Each Search Passage Came From
 
-A practical chunk record may look like this:
+Every stored search passage needs enough metadata to identify its source, revision, location, permissions, and processing history. A practical record may look like this:
 
 ```json
 {
@@ -253,7 +253,7 @@ A practical chunk record may look like this:
 
 Structured metadata supports permissions, time filters, authority rules, citation resolution, and incident diagnosis. Keep filterable attributes out of the embedding alone. An embedding captures meaning; it does not provide a reliable tenant or retention boundary.
 
-## Retrieval Uses Several Search Signals
+## Combine Several Ways To Search
 <!-- section-summary: Lexical matching, semantic similarity, structured filters, hybrid fusion, reranking, and diversity contribute different evidence about relevance. -->
 
 One search method rarely handles every query well. Production retrieval commonly combines several signals because each catches a different relationship between the question and the source.
@@ -337,7 +337,7 @@ First-stage search may inspect millions of records quickly and return forty cand
 
 This two-stage design balances speed and quality. Elasticsearch and OpenSearch both support reranking workflows. Teams can also use a separately hosted reranking model.
 
-### Diversity protects evidence coverage
+### Remove Duplicate Results To Cover More Evidence
 
 The five highest-scoring chunks may repeat the same paragraph with small overlaps. **Diversity** controls redundancy so several evidence needs can fit into the context.
 
@@ -372,7 +372,7 @@ flowchart TD
 
 The user message can contain useful search terms. It cannot supply the trusted tenant ID or grant itself a new role. Those values come from the session, identity provider, or policy service.
 
-### Pre-filtering protects both security and recall
+### Filter By Permissions Before Ranking Results
 
 Imagine a global vector search that returns ten nearest passages and removes forbidden results afterwards. If nine results belong to another tenant, the caller receives only one passage. A relevant allowed passage ranked eleventh never enters the result set.
 
@@ -386,13 +386,13 @@ The correct design depends on scale and isolation needs:
 
 Every path must follow the same rule. Lexical and vector searches need equivalent access filters. Reranking fetches and citation resolution must recheck the permitted documents. Caches and debugging tools must preserve the same boundary.
 
-### Permission changes need cache invalidation
+### Clear Cached Results After Access Changes
 
 Access can change after a context or candidate set has been cached. A user may leave a project, or a document may become restricted.
 
 Cache keys should include the relevant identity or policy version. Sensitive caches need short lifetimes or active invalidation. Citation resolvers should recheck current access before opening a source, even if the answer was created earlier.
 
-## Evidence Selection Handles Coverage, Conflict, and Abstention
+## Choose Evidence That Is Complete, Consistent, And Sufficient
 <!-- section-summary: Candidate selection builds a small evidence set with the required coverage, explicit source roles, conflict handling, and a safe path for missing support. -->
 
 Search ranking answers, “Which passages look relevant?” Evidence selection answers a richer question: “Which passages are sufficient and appropriate for this decision?”
@@ -420,7 +420,7 @@ flowchart TD
     E --> M["Model context"]
 ```
 
-### Source authority guides conflicts
+### Resolve Conflicts By Source Authority
 
 Two passages may disagree because one is explanatory guidance and the other is the active policy. The source registry should say which class owns the fact. Select the applicable authoritative revision and retain the supporting material only if it helps interpretation.
 
@@ -428,7 +428,7 @@ Some conflicts cannot be resolved automatically. Two active records may both cla
 
 In these cases, preserve the disagreement. Give the model both labelled records and a response rule that avoids a definitive claim. High-impact workflows can route the case to a human owner.
 
-### Thresholds need a failure path
+### Decide What Happens Below The Confidence Threshold
 
 A similarity threshold can reject weak matches, but a number alone cannot prove evidence sufficiency. A score of `0.82` has no universal meaning across indexes, embedding models, or query types.
 
@@ -442,7 +442,7 @@ Calibrate thresholds on representative questions. Combine the score with require
 
 **Abstention** means declining to make a claim that lacks adequate support. It is a designed product behaviour, not a model failure.
 
-### Evidence blocks should carry labels and boundaries
+### Label And Delimit Evidence Passed To The Model
 
 Each final block should tell the model what it represents:
 
@@ -458,7 +458,7 @@ content: ...
 
 Labels help the model distinguish policy from user-provided text or historical guidance. They also provide the keys used by the citation resolver.
 
-## Citations Need a Resolver
+## Link Every Citation Back To Its Source
 <!-- section-summary: Citation labels must resolve through application-owned evidence records to an inspectable source revision and location. -->
 
 A generated citation such as `[E2]` is a reference inside the answer. The application still needs to map it to the selected evidence block and the underlying source.
@@ -520,7 +520,7 @@ Suppose the answer gives the wrong Berlin limit. Several causes are possible:
 
 Separate evaluation exposes the cause.
 
-### Build retrieval judgements
+### Record Which Evidence Each Test Question Requires
 
 Create an evaluation set from real questions, common tasks, and high-risk edge cases. For each query, record:
 
@@ -533,7 +533,7 @@ Create an evaluation set from real questions, common tasks, and high-risk edge c
 
 Include exact identifiers, paraphrases, multi-source questions, table lookups, permission boundaries, temporal questions, ambiguous requests, and hostile document text.
 
-### Measure candidate search and final evidence
+### Measure Both Search Results And Selected Evidence
 
 **Recall at k** asks whether the required evidence appears among the first *k* results. It matters where missing one passage can invalidate the answer.
 
@@ -609,7 +609,7 @@ The serving side should expose:
 
 A healthy vector cluster says that the service is reachable. It cannot prove that the latest source revision was indexed or that the answer used the correct exception.
 
-### Trace the evidence path
+### Trace A Question From Search To Citation
 
 OpenTelemetry's Generative AI semantic conventions include a retrieval span with `gen_ai.operation.name` set to `retrieval`. Those conventions remain in development, so teams should pin the emitted schema version and review upgrades.
 

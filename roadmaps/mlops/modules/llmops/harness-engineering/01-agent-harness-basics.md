@@ -10,19 +10,19 @@ aliases: ["agent-harness-basics"]
 
 ## Table of Contents
 
-1. [The Harness Connects Model Judgement To Real Work](#the-harness-connects-model-judgement-to-real-work)
-2. [See The Complete Harness Before Choosing Products](#see-the-complete-harness-before-choosing-products)
-3. [A Simple Agent Loop Has A Useful Limit](#a-simple-agent-loop-has-a-useful-limit)
-4. [The Environment Gives The Agent A World It Can Inspect](#the-environment-gives-the-agent-a-world-it-can-inspect)
-5. [Context Builds One Working View](#context-builds-one-working-view)
-6. [The Orchestrator Owns The Run](#the-orchestrator-owns-the-run)
-7. [State And Memory Cover Different Lifetimes](#state-and-memory-cover-different-lifetimes)
-8. [Tools, Permissions, And Sandboxes Bound Action](#tools-permissions-and-sandboxes-bound-action)
-9. [Hooks, Traces, And Evals Close The Feedback Loop](#hooks-traces-and-evals-close-the-feedback-loop)
-10. [Choose The Smallest Harness That Can Recover](#choose-the-smallest-harness-that-can-recover)
+1. [What An Agent Harness Does](#what-an-agent-harness-does)
+2. [Understand The Parts Before Choosing Products](#understand-the-parts-before-choosing-products)
+3. [Why A Simple Agent Loop Stops Being Enough](#why-a-simple-agent-loop-stops-being-enough)
+4. [Give The Agent A Controlled Environment To Inspect](#give-the-agent-a-controlled-environment-to-inspect)
+5. [Build Context For The Current Step](#build-context-for-the-current-step)
+6. [How The Orchestrator Controls The Run](#how-the-orchestrator-controls-the-run)
+7. [Separate Run State From Long-Term Memory](#separate-run-state-from-long-term-memory)
+8. [Control What The Agent Can Do](#control-what-the-agent-can-do)
+9. [Use Hooks, Traces, And Evals To Detect And Improve Failures](#use-hooks-traces-and-evals-to-detect-and-improve-failures)
+10. [Choose A Simple Harness That Can Recover](#choose-a-simple-harness-that-can-recover)
 11. [References](#references)
 
-## The Harness Connects Model Judgement To Real Work
+## What An Agent Harness Does
 <!-- section-summary: An agent harness supplies the system responsibilities that let a model inspect an environment, propose actions, preserve progress, and produce verifiable results. -->
 
 At a high level, **an agent harness is the engineered system around a model that lets it perform useful work safely and reliably**. The model contributes language understanding and flexible judgement. The harness supplies the workspace, information, tools, state, permissions, control flow, and evidence needed to turn that judgement into a real outcome.
@@ -35,7 +35,7 @@ The same distinction appears outside software development. A support agent may j
 
 This division explains why harness engineering matters even with a strong model. Better reasoning can improve the proposed plan. It cannot repair an invisible environment, a stale policy source, an overpowered credential, or a missing recovery path.
 
-## See The Complete Harness Before Choosing Products
+## Understand The Parts Before Choosing Products
 <!-- section-summary: The harness framework separates environment, context, orchestration, state, tools, authority, controls, and evidence so each responsibility has a clear owner. -->
 
 The word *harness* can sound like another name for an agent software development kit, usually shortened to **SDK**. Its scope is wider. An SDK may implement the model-and-tool loop. The complete harness can also rely on application services and databases. A workflow runtime may preserve progress, a sandbox may isolate execution, an identity system may limit authority, and an observability stack may record evidence.
@@ -70,15 +70,10 @@ flowchart TB
     T --> F["Tests, traces, evals,<br/>review, and outcomes"]
     F --> O
 
-    classDef world fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef safety fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class E,M world
     class O,C,S control
     class D,P model
     class A,T,F safety
-    linkStyle default stroke:#AAB9E8,stroke-width:3px
 ```
 
 The path starts from an authenticated goal. Raw prompt text cannot establish identity or authority. The orchestrator assembles a view for one decision, and the model returns a proposal. Controls decide whether that proposal can continue. A tool then interacts with the environment. State preserves the result, and feedback informs the next step.
@@ -87,7 +82,7 @@ Each responsibility needs an authoritative owner. The identity service decides w
 
 OpenAI's harness-engineering case study shows the same framework in a coding environment. Repository knowledge, isolated worktrees, tests, browser access, logs, metrics, traces, architecture rules, and maintenance tasks all affected what the coding agent could understand and verify. The model was one component inside a deliberately prepared engineering system.
 
-## A Simple Agent Loop Has A Useful Limit
+## Why A Simple Agent Loop Stops Being Enough
 <!-- section-summary: A direct model-tool loop suits short restartable work, while durable or high-impact tasks require explicit state, recovery, authority, and effect handling. -->
 
 The smallest useful agent loop lets a model investigate instead of answering from its first impression. The model can inspect the information already in its messages, choose a tool, read the result, and use that new evidence to choose the next action. This is enough for tasks such as searching a small document set, checking a service through read-only tools, or editing code inside a disposable workspace.
@@ -110,29 +105,29 @@ This pattern already supports genuine agency because the next action can depend 
 
 Problems appear after the task crosses a boundary that a message history cannot control.
 
-### Time creates a durability problem
+### Why Long Runs Need Durable State
 
 A process can hold a two-minute task in memory. A run that waits several hours for approval needs a durable checkpoint and a stable run identity. The original worker may disappear while another worker, queue consumer, or scheduled process receives the event that continues the work.
 
 The checkpoint must say which step is active, which proposal is awaiting review, which deadline applies, and which workflow version understands the stored state. Replaying a conversation from the first message is a poor substitute because the model may choose a different path and the earlier process state may already be gone.
 
-### External actions create an effect problem
+### Why Tool Actions Need Reliable Execution
 
 Read operations can often tolerate a retry. Writes require more care. Suppose a payment service commits a refund and its response is lost. The loop sees a timeout, although the real-world effect may already exist. A second call with a fresh operation identity could create another refund.
 
 The harness needs an **idempotency key**, which identifies one intended effect across retries. Recovery queries the payment service with that key and classifies the outcome as committed, absent, or still unknown. The transcript can record this process, while the payment service remains authoritative for the transaction.
 
-### Coordination creates a transition problem
+### Why Branches And Handoffs Need Explicit State
 
 Parallel tools, human review, callbacks, cancellations, and subagents can all update a run. The system needs permitted transitions and concurrency rules. An approval for proposal `p1` should never authorize a later proposal `p2`. A cancellation should block new writes even if an older worker is still processing a previous model response.
 
-### Authority creates an enforcement problem
+### Why Permissions Need Enforcement Outside The Model
 
 Instructions can tell a model that a refund above a threshold requires review. The execution path still needs a policy check based on trusted identity, current state, amount, and approval. A model proposal and a policy decision are different kinds of output.
 
 These boundaries explain why a normal loop eventually needs an orchestrator. The model can keep making flexible decisions inside selected steps. Software carries the lifecycle, authority, recovery, and final definition of completion.
 
-## The Environment Gives The Agent A World It Can Inspect
+## Give The Agent A Controlled Environment To Inspect
 <!-- section-summary: The environment provides a reproducible execution surface, discoverable knowledge, and feedback that lets the agent see the consequences of its actions. -->
 
 The **environment** is the world available to the run. It may contain files, databases, browsers, queues, and test systems. It can also expose application programming interfaces, usually called **APIs**, that let software interact with other services. Availability alone is insufficient. The agent must be able to understand the environment and observe useful results from its work.
@@ -154,7 +149,7 @@ The environment also defines the ceiling on autonomy. Giving a coding agent perm
 
 Most teams should start with a managed or familiar execution path. An ephemeral continuous integration runner, often called a **CI runner**, works well for short repository tasks. A provider-managed container suits isolated jobs without a large platform team. An existing application worker can be enough for low-risk API work. Kubernetes and custom sandbox platforms become reasonable once scale or isolation needs justify the extra platform work.
 
-## Context Builds One Working View
+## Build Context For The Current Step
 <!-- section-summary: Context assembly selects the instructions, trusted facts, evidence, state, memory, and tool descriptions needed for one model decision. -->
 
 An environment can contain millions of records and files. One model step needs a much smaller working view. **Context** is that temporary selection.
@@ -177,7 +172,7 @@ Context also has a budget. Sending every tool and every document increases cost 
 
 The context projection should be reproducible enough for investigation. A trace can record the instruction bundle, state checkpoint, retrieved source IDs and versions, selected tools, compaction policy, and token counts. Sensitive source content can remain in its governed system rather than being copied into general telemetry.
 
-## The Orchestrator Owns The Run
+## How The Orchestrator Controls The Run
 <!-- section-summary: The orchestrator turns model decisions into a managed lifecycle through explicit steps, transitions, persistence, limits, interruption, and completion rules. -->
 
 The **orchestrator** coordinates the harness during a run. It selects the next step, assembles that step's context, invokes the model or deterministic code, validates the result, dispatches approved tools, persists state, and decides what follows.
@@ -219,7 +214,7 @@ A durable workflow engine such as Temporal solves a broader process problem. It 
 
 The framework supplies primitives. The application still defines the business states and the authority of each tool. It also owns retry policy and the evidence required for completion. Introducing a graph does not make an external write idempotent. Adding a checkpoint does not decide whether an old approval remains valid.
 
-## State And Memory Cover Different Lifetimes
+## Separate Run State From Long-Term Memory
 <!-- section-summary: State preserves the facts needed to continue the current run, while memory retains selected information for later turns or future runs. -->
 
 **State** answers, “What is true about this run now?” The active step and completed tool effects show how far the run has progressed. A pending approval or artifact reference connects that progress to an external object. Retry counts, deadlines, and remaining budgets tell the orchestrator whether another step is allowed. State needs durable storage if the run must survive a pause or worker failure.
@@ -234,7 +229,7 @@ Good checkpoints keep durable facts compact and refer to large artifacts by ID. 
 
 A memory record needs a source and a clear reason to exist. Its policy should define who can read it and how long it remains useful. People also need a way to correct or delete it. Persisting every transcript or model summary creates a noisy data store and can turn an earlier mistake into future context. A deliberate memory policy selects only information that has clear value beyond the current run.
 
-## Tools, Permissions, And Sandboxes Bound Action
+## Control What The Agent Can Do
 <!-- section-summary: Tools express model-facing capabilities, while trusted identity, policy, isolation, and effect controls decide what a run can actually do. -->
 
 A **tool** is a structured capability that the model can request. Its description and input schema help the model form a valid proposal. Its implementation is ordinary application code that treats the proposal as untrusted input.
@@ -257,7 +252,7 @@ Organizations that operate their own multi-tenant execution layer commonly run e
 
 The principle stays the same across implementations: the model sees a useful capability; the runtime enforces its real boundary.
 
-## Hooks, Traces, And Evals Close The Feedback Loop
+## Use Hooks, Traces, And Evals To Detect And Improve Failures
 <!-- section-summary: Hooks attach cross-cutting controls to lifecycle events, traces explain one run, and evaluations judge whether the harness produced acceptable behavior. -->
 
 An agent needs feedback during the task, and the engineering team needs evidence after it. These needs connect, although they use different mechanisms.
@@ -284,7 +279,7 @@ The three mechanisms answer different questions:
 
 Production failures should improve the harness layer that caused them. Missing evidence may require environment or retrieval work. Repeated effects point to state and tool semantics. An invisible UI state points to better environment feedback. An unsafe authorized call points to policy and permission design. Another prompt paragraph is useful only if the failure truly came from instructions.
 
-## Choose The Smallest Harness That Can Recover
+## Choose A Simple Harness That Can Recover
 <!-- section-summary: Harness scope follows task duration, impact, control-flow complexity, environment needs, and the evidence required for recovery. -->
 
 Harness design is a selection problem. Too little structure leaves the team unable to explain or recover a failed run. Too much structure turns a short, low-risk task into an expensive workflow platform. The best harness is the smallest system that can perform the task and recover from the failures the product has agreed to accept.

@@ -12,21 +12,21 @@ aliases:
 
 ## Table of Contents
 
-1. [Promotion Moves One Tested Candidate Forward](#promotion-moves-one-tested-candidate-forward)
-2. [Give The Release Candidate One Immutable Identity](#give-the-release-candidate-one-immutable-identity)
-3. [Carry Evidence With The Candidate](#carry-evidence-with-the-candidate)
-4. [Use Registries To Express Lifecycle Intent](#use-registries-to-express-lifecycle-intent)
-5. [Keep Environment Configuration Outside The Artifact](#keep-environment-configuration-outside-the-artifact)
-6. [Bind Approval To A Release And A Scope](#bind-approval-to-a-release-and-a-scope)
-7. [Commit Promotion As A Controlled State Change](#commit-promotion-as-a-controlled-state-change)
-8. [Choose A Delivery Pattern That Matches The Boundary](#choose-a-delivery-pattern-that-matches-the-boundary)
-9. [Record And Verify What The Environment Received](#record-and-verify-what-the-environment-received)
-10. [Roll Back To A Retained Release](#roll-back-to-a-retained-release)
+1. [What Artifact Promotion Means](#what-artifact-promotion-means)
+2. [Give Every Release Candidate An Immutable Identity](#give-every-release-candidate-an-immutable-identity)
+3. [Keep Test Results And Approvals Attached To The Candidate](#keep-test-results-and-approvals-attached-to-the-candidate)
+4. [Use Registry Versions And Aliases To Show Release Status](#use-registry-versions-and-aliases-to-show-release-status)
+5. [Keep Environment Settings Separate From The Artifact](#keep-environment-settings-separate-from-the-artifact)
+6. [Record Who Approved The Release And For Which Use](#record-who-approved-the-release-and-for-which-use)
+7. [Prevent Partial Or Conflicting Promotion Updates](#prevent-partial-or-conflicting-promotion-updates)
+8. [Choose How The Approved Release Reaches Each Environment](#choose-how-the-approved-release-reaches-each-environment)
+9. [Verify The Exact Release In Each Environment](#verify-the-exact-release-in-each-environment)
+10. [How To Restore A Retained Release](#how-to-restore-a-retained-release)
 11. [Keep Exceptions Narrow And Temporary](#keep-exceptions-narrow-and-temporary)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
-## Promotion Moves One Tested Candidate Forward
+## What Artifact Promotion Means
 <!-- section-summary: Artifact promotion authorizes one immutable, tested release candidate for use in a more controlled environment. -->
 
 At a high level, **artifact promotion is the process of allowing one tested release candidate to move into a more controlled environment without changing what was tested**. The candidate might move from a development registry into staging, or from a staging-approved state into production. Its model bytes, serving image, preprocessing assets, contracts, and content digests remain fixed throughout that journey.
@@ -45,10 +45,6 @@ flowchart TD
     D --> E["Production desired state pins<br/>the same candidate"]
     E --> F["Runtime verification proves<br/>what actually loaded"]
 
-    classDef create fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef prove fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef authorize fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef operate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A create
     class B,C prove
     class D authorize
@@ -57,7 +53,7 @@ flowchart TD
 
 This is the **build-once promotion model**. Some organisations deliberately run training inside each environment because data residency, account isolation, or platform policy demands it. That production training run produces a new artifact with a new digest and provenance record. It starts another candidate lifecycle and belongs to the retraining path.
 
-## Give The Release Candidate One Immutable Identity
+## Give Every Release Candidate An Immutable Identity
 <!-- section-summary: A release manifest binds every deployable artifact and contract under one content-addressed candidate identity. -->
 
 A model file rarely describes the complete thing that production will run. The model may depend on a tokenizer, label map, preprocessing code, Python packages, serving image, feature contract, and decision policy. If any of those parts changes, the system can produce different decisions from the same input.
@@ -100,20 +96,18 @@ flowchart TD
     R --> E["Evidence references"]
     R --> B["Rollback release"]
 
-    classDef release fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef part fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class R release
     class M,I,C,P,E,B part
 ```
 
 Immutability means a change creates another identity. A corrected tokenizer, a patched image, or an altered threshold produces another release manifest. Reusing `claims-router-r47` after any of those changes would detach the approval and test evidence from the system that production receives.
 
-## Carry Evidence With The Candidate
+## Keep Test Results And Approvals Attached To The Candidate
 <!-- section-summary: Promotion evaluates several evidence types because provenance, security, model quality, and compatibility answer different risk questions. -->
 
 A digest proves byte identity. It cannot explain who produced those bytes, whether the model performs well, whether the image contains a vulnerable library, or whether the target runtime can load the bundle. Promotion therefore consumes a set of evidence records linked to the exact release manifest.
 
-### Provenance explains origin
+### How To Record Where The Candidate Came From
 
 **Provenance** records where an artifact came from and how it was produced. For a serving image, SLSA build provenance can identify the source repository, revision, build platform, and build process. For a model, useful lineage also includes the training run, code revision, training-data snapshot, feature definitions, and framework environment.
 
@@ -133,7 +127,7 @@ cosign verify-attestation "$IMAGE_AT_DIGEST" \
 
 The expected workflow identity matters as much as signature validity. A valid signature from an unrelated workflow should fail the policy. The release controller also checks the attestation subject digest, because a trusted workflow can produce many artifacts.
 
-### Quality and compatibility explain fitness for use
+### How Tests Show Whether The Candidate Is Ready
 
 Model-quality evidence identifies the evaluation dataset, label definition, and intended use. It records metrics against a baseline, then shows results for important segments and decision thresholds. A single `accuracy=0.94` tag lacks enough context for a release decision. Promotion needs the durable evaluation record that says which candidate achieved that value and under which protocol.
 
@@ -156,9 +150,6 @@ flowchart TD
     C --> G
     V --> G
 
-    classDef subject fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
     class A subject
     class P,S,Q,C,V evidence
     class G decision
@@ -166,7 +157,7 @@ flowchart TD
 
 Each gate keeps its own meaning. A signature supports authenticity and integrity. It offers no claim about fairness or recall. A model evaluation supports the reviewed use case. It offers no inventory of operating-system packages. Promotion combines these records while preserving their separate owners and failure reasons.
 
-## Use Registries To Express Lifecycle Intent
+## Use Registry Versions And Aliases To Show Release Status
 <!-- section-summary: Registries store governed versions and useful movable labels, while release records pin the concrete version selected for an environment. -->
 
 A model registry gives teams a governed place to find model versions, lineage, evidence, and lifecycle metadata. It also provides readable status labels such as `validation_status=passed` or aliases such as `candidate` and `champion`. These labels help people and automation communicate intent.
@@ -192,13 +183,13 @@ release_subject = {
 
 MLflow Model Registry stages such as `Staging` and `Production` are deprecated. Current MLflow workflows use tags to describe status, aliases for movable references, and environment-specific registered models or access boundaries where that design fits. MLflow's `copy_model_version()` supports a simple cross-model promotion pattern. A release controller still needs to verify the resulting source identity and record the exact destination version.
 
-Managed registries express the same responsibility with different objects. Amazon SageMaker AI groups model package versions and gives each version an approval status that can trigger delivery automation. Vertex AI Model Registry provides mutable version aliases. Azure Machine Learning registries share versioned models and environments across workspaces. Databricks Models in Unity Catalog adds governed names, permissions, lineage, audit, versions, and aliases across workspaces.
+Managed registries express the same responsibility with different objects. Amazon SageMaker AI groups model package versions and gives each version an approval status that can trigger delivery automation. Model Registry on Gemini Enterprise Agent Platform provides mutable version aliases. Azure Machine Learning registries share versioned models and environments across workspaces. Databricks Models in Unity Catalog adds governed names, permissions, lineage, audit, versions, and aliases across workspaces.
 
 The registry status is useful evidence, while the **deployment record** remains the environment truth. `Approved` can mean eligible for production without proving that production currently runs the model. `Champion` can move without restarting an endpoint. Promotion reads the registry decision, pins a version, and writes the desired environment state through the deployment system.
 
 Databricks MLflow 3 deployment jobs can connect evaluation, approval, and deployment around Unity Catalog models. The feature currently remains in Public Preview. Teams that require a settled production control plane can keep Lakeflow Jobs as the workflow runner, Git as the desired-state record, and their existing approval service as the authority while evaluating the preview workflow.
 
-## Keep Environment Configuration Outside The Artifact
+## Keep Environment Settings Separate From The Artifact
 <!-- section-summary: Promotion reuses the same model and image while a reviewed environment record supplies infrastructure values, secrets, and deployment policy. -->
 
 Staging and production usually differ. They may use separate accounts, identities, network boundaries, encryption keys, endpoint names, replica counts, and observability destinations. Trying to bake those values into separate artifacts forces a rebuild and destroys the identity link between the two environments.
@@ -232,7 +223,7 @@ Calling every value “environment configuration” would create an unreviewed p
 
 GitOps makes the desired release reviewable. A pull request changes the production file from one immutable release ID to another. Argo CD or Flux compares the committed state with the live Kubernetes state and reconciles the difference. For managed endpoints, the same principle can use a provider deployment specification and a durable deployment event. Terraform or OpenTofu usually owns longer-lived infrastructure such as registries, IAM, networks, and endpoint resources; release automation then updates the versioned model and image fields through the smallest safe control surface.
 
-## Bind Approval To A Release And A Scope
+## Record Who Approved The Release And For Which Use
 <!-- section-summary: An approval authorizes one release manifest for a defined environment, use, rollout scope, and validity period. -->
 
 An approval answers: who accepts the remaining risk of allowing this exact candidate into this exact environment? The answer needs a specific subject. A broad `approved=true` tag can survive after the model, image, policy, or intended use changes.
@@ -250,10 +241,6 @@ flowchart TD
     H -->|approve| D["Signed decision records subject,<br/>scope, owner, and expiry"]
     D --> P["Release controller may commit<br/>only the approved change"]
 
-    classDef request fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef check fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef allow fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class R request
     class A,H check
     class X stop
@@ -264,10 +251,10 @@ Approval scope matters in ordinary operations. Evidence for a nightly batch proc
 
 Signatures strengthen this design by authenticating the decision and its subject. Accountable review remains a separate control. The signed record proves which identity made a claim about a digest. Promotion policy decides whether that identity had authority and whether the claim satisfies the required gate.
 
-## Commit Promotion As A Controlled State Change
+## Prevent Partial Or Conflicting Promotion Updates
 <!-- section-summary: Promotion advances through explicit states so partial copies, stale evidence, expired approvals, and concurrent releases cannot publish ambiguous desired state. -->
 
-Promotion looks simple from the outside: change a version and deploy. Inside the control plane, several conditions can change between evaluation and commitment. An approval can expire. A new vulnerability can violate policy. Another release can reach production first. A copied artifact can arrive without its tokenizer.
+Promotion can fail halfway through. The model may reach production storage while its tokenizer does not, an approval may expire before deployment, or another release may reach production first. The controller therefore needs an all-or-nothing update: it commits the complete release transition or leaves the current release unchanged. This property is called **atomicity**.
 
 Treating promotion as a state transition keeps those cases visible. The controller evaluates the source identity and evidence, obtains approval, prepares any destination copy, commits the desired-state reference atomically, and verifies reconciliation.
 
@@ -292,7 +279,7 @@ The desired-state update needs one atomic unit. Updating the model version, serv
 
 Retries use an idempotency key derived from the release digest, destination, requested scope, and approval decision. Repeating the same request returns the same promotion record. Reusing that key for another digest fails. A compare-and-set check also records which environment release the request expects to replace. A concurrent promotion then produces a visible conflict and preserves the newer intent.
 
-## Choose A Delivery Pattern That Matches The Boundary
+## Choose How The Approved Release Reaches Each Environment
 <!-- section-summary: Teams can reference shared immutable artifacts or copy them into environment-owned storage, provided both patterns preserve identity and evidence. -->
 
 Some platforms let every environment read one governed model registry and one OCI registry. Promotion changes permissions, a registry alias, or a deployment reference to the shared immutable artifact. This pattern reduces duplicate storage and keeps lineage direct. It fits environments that share a trusted control plane and can enforce narrow read access.
@@ -312,10 +299,6 @@ flowchart TD
     E --> C
     C --> F["Commit desired environment state"]
 
-    classDef start fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef done fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A start
     class B choice
     class D,E work
@@ -324,7 +307,7 @@ flowchart TD
 
 The two paths share the same invariant: production receives the candidate that passed review. A copy preserves the digest and provenance link. A reference resolves to immutable storage. A mutable `latest` tag, an engineer's local file, or a fresh training run cannot enter through the promotion path.
 
-## Record And Verify What The Environment Received
+## Verify The Exact Release In Each Environment
 <!-- section-summary: Promotion closes only after desired state, target storage, deployment control, and observed runtime all agree on the release identity. -->
 
 A successful registry update or deployment API call proves that the control plane accepted a request. It gives no guarantee that production can read the model, every replica loaded it, or traffic reaches the intended release. Verification compares several independent views.
@@ -359,11 +342,6 @@ flowchart TD
     Q -->|yes| P["Promotion verified"]
     Q -->|no| S["Stop expansion and restore<br/>the previous desired state"]
 
-    classDef desired fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef observed fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef pass fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class G desired
     class C,R,T observed
     class Q choice
@@ -375,7 +353,7 @@ For a batch release, verification checks the job definition, model identity in w
 
 A mismatch has a concrete response. The controller freezes the release at its current scope, records the observed identities, and preserves the candidate for investigation. It can retry a missing copy, repair a permission error, or restore the prior desired-state commit. The approved artifact remains immutable throughout the repair.
 
-## Roll Back To A Retained Release
+## How To Restore A Retained Release
 <!-- section-summary: Rollback restores a previously verified complete release and proves that the target environment loaded it again. -->
 
 Promotion creates a recovery obligation. The previous release needs to remain complete throughout the declared rollback window. Its image and model bundle preserve executable bytes. Its configuration revision and contracts preserve behavior. Its evidence and access path keep the retained release verifiable and loadable. Old model weights alone can leave the team without a compatible runtime or feature path.
@@ -422,7 +400,8 @@ Build once, identify every part, authorize a precise scope, and verify observed 
 - [Databricks MLflow 3 deployment jobs](https://docs.databricks.com/aws/en/mlflow/deployment-job)
 - [Amazon SageMaker AI model approval status](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-approve.html)
 - [Amazon SageMaker AI cross-account model deployment](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-deploy.html)
-- [Vertex AI model version aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Model Registry on Gemini Enterprise Agent Platform: Model Version Aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning registries](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2)
 - [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md)
 - [Sigstore Cosign signature verification](https://docs.sigstore.dev/cosign/verifying/verify/)

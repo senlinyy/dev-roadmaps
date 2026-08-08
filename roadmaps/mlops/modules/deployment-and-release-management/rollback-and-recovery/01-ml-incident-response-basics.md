@@ -12,21 +12,21 @@ aliases:
 
 ## Table of Contents
 
-1. [An ML Incident Can Hide Behind a Healthy Service](#an-ml-incident-can-hide-behind-a-healthy-service)
-2. [Read the System as Seven Observable Layers](#read-the-system-as-seven-observable-layers)
-3. [The Incident Lifecycle Organizes the Response](#the-incident-lifecycle-organizes-the-response)
-4. [Validate the Evidence Before Changing Production](#validate-the-evidence-before-changing-production)
+1. [A Healthy Service Can Still Produce Harmful Decisions](#a-healthy-service-can-still-produce-harmful-decisions)
+2. [Check The Seven Layers Of An ML Decision System](#check-the-seven-layers-of-an-ml-decision-system)
+3. [Follow A Clear Incident Response Lifecycle](#follow-a-clear-incident-response-lifecycle)
+4. [Check Monitoring And Outcome Data Before Changing Production](#check-monitoring-and-outcome-data-before-changing-production)
 5. [Declare the Incident and Assign Authority](#declare-the-incident-and-assign-authority)
 6. [Contain Harm Before Correcting the System](#contain-harm-before-correcting-the-system)
-7. [Investigate in a Deliberate Order](#investigate-in-a-deliberate-order)
-8. [Find the Blast Radius and Repair Consumed Decisions](#find-the-blast-radius-and-repair-consumed-decisions)
-9. [Recovery Requires Evidence Across Every Layer](#recovery-requires-evidence-across-every-layer)
-10. [Communication Is Part of the Technical Response](#communication-is-part-of-the-technical-response)
-11. [Turn the Incident Into System Improvement](#turn-the-incident-into-system-improvement)
+7. [Investigate The Decision Path In A Deliberate Order](#investigate-the-decision-path-in-a-deliberate-order)
+8. [Find Every Affected Decision And Repair The Harm](#find-every-affected-decision-and-repair-the-harm)
+9. [Prove Recovery Across Every Layer](#prove-recovery-across-every-layer)
+10. [Use Incident Communication To Coordinate Technical Work](#use-incident-communication-to-coordinate-technical-work)
+11. [Fix The System Weaknesses Revealed By The Incident](#fix-the-system-weaknesses-revealed-by-the-incident)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
-## An ML Incident Can Hide Behind a Healthy Service
+## A Healthy Service Can Still Produce Harmful Decisions
 <!-- section-summary: An ML incident is a production event in which an ML-enabled system creates unacceptable harm, risk, or loss of trust. -->
 
 At a high level, an **ML incident** is a production event in which an ML-enabled system creates unacceptable harm, risk, or loss of trust. The cause may sit in a model, a feature pipeline, a decision rule, an API, a monitoring job, or a downstream product workflow. The definition starts with impact because users experience the whole decision system, not the component named in a dashboard.
@@ -39,7 +39,7 @@ The same principle applies to a recommender that repeatedly amplifies unsafe con
 
 Cybersecurity guidance offers a helpful foundation. [NIST SP 800-61r3](https://www.nist.gov/publications/incident-response-recommendations-and-considerations-cybersecurity-risk-management-csf) connects preparation, detection, response, recovery, and organizational learning across normal risk-management work. ML teams apply that discipline to a broader set of production harms, while security and privacy specialists retain authority over incidents in their domains.
 
-## Read the System as Seven Observable Layers
+## Check The Seven Layers Of An ML Decision System
 <!-- section-summary: Seven observable layers help responders locate a failure without assuming that the model itself is the cause. -->
 
 Calling every quality problem a “bad model” sends the investigation toward the most visible ML component. A production decision crosses several layers, and each layer can create the same outward symptom. A sudden drop in approvals could come from request validation, a stale feature, a new model, a threshold change, or a broken outcome join that only makes the dashboard look worse.
@@ -64,20 +64,20 @@ flowchart TD
     F --> G["Monitoring and label pipeline"]
     G -. "alerts and delayed evidence" .-> A
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#FFE04F,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#FFE04F,stroke:#536A9A,color:#111827
-    style G fill:#93C5FD,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-tertiary
+    class G dp-mermaid-primary
 ```
 
 Failures travel through these layers. A source delay creates stale features. The model accepts them because their types are valid. Scores shift, a policy converts those scores into extra manual reviews, and the review queue grows until users face long delays. The original fault lives in data freshness, while the largest visible symptom appears in product operations.
 
 The final layer can also create a false incident story. A label job may stop joining outcomes to predictions after a schema change. Reported accuracy collapses because the remaining joined cases are unrepresentative. The model may still be performing normally. That is why evidence integrity leads the investigation.
 
-## The Incident Lifecycle Organizes the Response
+## Follow A Clear Incident Response Lifecycle
 <!-- section-summary: The incident lifecycle provides a stable sequence for reducing harm, restoring service, and learning from the event. -->
 
 Incident response works best as a lifecycle that connects evidence, authority, action, and verification. The phases overlap, especially communication and evidence collection, yet each phase answers a distinct question.
@@ -119,13 +119,12 @@ stateDiagram-v2
     Verifying --> Learning: recovery criteria pass
     Learning --> [*]
 
-    classDef phase fill:#2DD4BF,stroke:#536A9A,color:#111827
     class Detected,EvidenceValidated,Declared,Contained,Investigating,Recovering,Verifying,Learning phase
 ```
 
 Containment can begin before the full diagnosis if current harm is clear. A privacy exposure, unsafe automated action, or rapidly growing financial loss may require an immediate stop. Evidence validation still continues in parallel so responders know what they contained and can choose a safe recovery.
 
-## Validate the Evidence Before Changing Production
+## Check Monitoring And Outcome Data Before Changing Production
 <!-- section-summary: Evidence validation checks whether the alert and its supporting data describe the live system accurately. -->
 
 The first investigation asks whether the evidence can be trusted. This does not dismiss an alert. It establishes whether the signal describes the live system, an old release, a partial population, or a damaged monitoring pipeline.
@@ -150,14 +149,14 @@ flowchart TD
     F -->|"Yes"| G["Declare and contain"]
     F -->|"Unclear"| H["Repair evidence and use independent safety signals"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FFE04F,stroke:#536A9A,color:#111827
-    style F fill:#FB7185,stroke:#536A9A,color:#111827
-    style G fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style H fill:#93C5FD,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-secondary
+    class F dp-mermaid-primary
+    class G dp-mermaid-tertiary
+    class H dp-mermaid-primary
 ```
 
 ## Declare the Incident and Assign Authority
@@ -187,12 +186,12 @@ flowchart TD
     B --> E["Serving, data, model, and product responders"]
     A --> F["Security, privacy, compliance, or safety authority"]
 
-    style A fill:#FFE04F,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#93C5FD,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style F fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-secondary
+    class F dp-mermaid-primary
 ```
 
 ## Contain Harm Before Correcting the System
@@ -244,32 +243,32 @@ flowchart TD
     F --> K["Revert policy or pause automation"]
     G --> L["Revoke access, preserve evidence, quarantine data"]
 
-    style A fill:#FB7185,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#93C5FD,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style F fill:#FFE04F,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
-    style H fill:#93C5FD,stroke:#536A9A,color:#111827
-    style I fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style J fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style K fill:#FFE04F,stroke:#536A9A,color:#111827
-    style L fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-secondary
+    class G dp-mermaid-primary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-quaternary
+    class J dp-mermaid-primary
+    class K dp-mermaid-secondary
+    class L dp-mermaid-primary
 ```
 
 Every containment action needs a named owner. Define the signal that should change and the period used to observe it. Also record the condition that would reverse the action. “Switch to fallback” is incomplete if nobody knows its capacity, segment coverage, or quality limits. The incident commander records why the action is safer than current behavior and which evidence will confirm that judgment.
 
-## Investigate in a Deliberate Order
+## Investigate The Decision Path In A Deliberate Order
 <!-- section-summary: A consistent investigation order separates damaged evidence from genuine production changes and reduces unnecessary interventions. -->
 
 Investigation starts with evidence integrity, then narrows the time window and affected population. After that, compare concrete release identities and inspect the seven layers from the first divergence toward the downstream consequence.
 
-### Establish a trustworthy window
+### Find The Trustworthy Incident Window
 
 Record the earliest confirmed harmful decision and the last known healthy decision. Include event time and processing time because delayed pipelines can make a failure appear later than it occurred. Check telemetry gaps, monitor schedules, clock skew, sampling changes, and retention boundaries. The interval should remain provisional until multiple signals agree.
 
-### Compare identities, not names
+### Compare Immutable Release Identities
 
 Record immutable service artifact or image digest, model version, preprocessing version, feature-set version, policy version, API contract version, and monitoring-code version. A mutable registry alias helps routing, but it cannot prove which version served an earlier decision. Store the resolved model version in prediction records and telemetry at inference time.
 
@@ -289,7 +288,7 @@ sum by (service_version, model_version, policy_version, feature_set_version) (
 
 Suppose manual-review traffic rises only for `policy_version="policy-18"`, while the model and feature versions span both healthy and affected requests. That pattern moves the investigation toward policy logic. If the increase follows one feature-set version across two model releases, the feature layer deserves priority.
 
-### Follow the first divergence
+### Find The First Meaningful Divergence
 
 Start with the earliest layer showing a real change. Confirm request mix and client versions before attributing a score shift to the model. Compare feature freshness and missing-value paths before examining model internals. Check calibration and score distributions before studying policy actions. Finally, confirm that downstream systems consumed the action as designed.
 
@@ -297,7 +296,7 @@ Use counterfactual replays carefully. Reconstruct a governed sample of affected 
 
 Keep competing hypotheses visible in the decision log. For each hypothesis, record supporting evidence, contradicting evidence, and the next discriminating test. This prevents the loudest early theory from absorbing the whole response.
 
-## Find the Blast Radius and Repair Consumed Decisions
+## Find Every Affected Decision And Repair The Harm
 <!-- section-summary: Blast-radius analysis identifies affected decisions precisely and connects them to remediation in downstream systems. -->
 
 The **blast radius** is the set of users, decisions, systems, and time periods affected by the incident. Counting failed requests is enough for a conventional outage only in limited cases. An ML service can return successful predictions that later trigger a declined application, hidden listing, blocked payment, incorrect forecast, or delayed review.
@@ -340,17 +339,17 @@ flowchart TD
     F -->|"No"| G["Cancel, recompute, or hold"]
     F -->|"Yes"| H["Review and remediate with audit record"]
 
-    style A fill:#FB7185,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#FFE04F,stroke:#536A9A,color:#111827
-    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style F fill:#FFE04F,stroke:#536A9A,color:#111827
-    style G fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style H fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-quaternary
+    class G dp-mermaid-primary
+    class H dp-mermaid-primary
 ```
 
-## Recovery Requires Evidence Across Every Layer
+## Prove Recovery Across Every Layer
 <!-- section-summary: Recovery is complete after the system and its decisions satisfy defined technical, ML, and product criteria. -->
 
 A green endpoint proves that requests are reaching a service. Recovery needs additional evidence that features are fresh, scores carry the expected meaning, policy actions are safe, and delayed quality has recovered. Use acceptance criteria across the same layers used for investigation.
@@ -376,20 +375,20 @@ flowchart TD
     G -->|"Yes"| H["Close active response and continue observation"]
     G -->|"No"| I["Return to containment or correction"]
 
-    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#FFE04F,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
-    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style I fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-secondary
+    class G dp-mermaid-quaternary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-primary
 ```
 
 The incident commander declares recovery from written criteria, with confirmation from the relevant technical and product owners. NIST recovery guidance likewise emphasizes checking restoration integrity, confirming normal operations with system owners, monitoring restored systems, and completing incident documentation.
 
-## Communication Is Part of the Technical Response
+## Use Incident Communication To Coordinate Technical Work
 <!-- section-summary: Clear communication protects coordination, supports affected teams, and preserves the reasoning behind production decisions. -->
 
 Incident communication is more than a status message. It controls who changes production, gives downstream teams time to protect their workflows, and preserves the reasoning behind each decision.
@@ -415,16 +414,16 @@ flowchart TD
     D --> G
     E --> G
 
-    style A fill:#FFE04F,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#93C5FD,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-secondary
+    class G dp-mermaid-primary
 ```
 
-## Turn the Incident Into System Improvement
+## Fix The System Weaknesses Revealed By The Incident
 <!-- section-summary: A post-incident review explains the causal system and produces owned changes with verifiable completion criteria. -->
 
 The post-incident review reconstructs how the system produced harm and how the organization responded. Its purpose is learning and risk reduction. [Google's postmortem guidance](https://sre.google/workbook/postmortem-culture/) recommends focusing on system conditions, using blameless language, and giving action items clear ownership and verifiable completion.
@@ -451,13 +450,13 @@ flowchart TD
     E --> F["Exercise the changed control"]
     F --> G["Close after verification"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#FB7185,stroke:#536A9A,color:#111827
-    style E fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-tertiary
+    class G dp-mermaid-secondary
 ```
 
 ## The Main Idea

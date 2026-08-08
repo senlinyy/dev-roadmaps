@@ -11,16 +11,16 @@ id: "article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-
 
 1. [What Production Training Means](#what-production-training-means)
 2. [Why A Successful Notebook Is Still Only A Starting Point](#why-a-successful-notebook-is-still-only-a-starting-point)
-3. [The Run Contract Defines One Training Attempt](#the-run-contract-defines-one-training-attempt)
-4. [A Task Graph Makes The Training Path Visible](#a-task-graph-makes-the-training-path-visible)
-5. [Parameters And Task Values Carry Small Pieces Of Context](#parameters-and-task-values-carry-small-pieces-of-context)
-6. [Code, Compute, And Identity Form The Execution Environment](#code-compute-and-identity-form-the-execution-environment)
-7. [A Trigger Should Represent Data Readiness](#a-trigger-should-represent-data-readiness)
-8. [Retries Are Safe Only When Tasks Are Safe To Repeat](#retries-are-safe-only-when-tasks-are-safe-to-repeat)
-9. [Repair Runs Recover A Workflow Without Hiding Its History](#repair-runs-recover-a-workflow-without-hiding-its-history)
-10. [Operational Evidence Explains What The Job Did](#operational-evidence-explains-what-the-job-did)
-11. [Choose Lakeflow Jobs At The Right Orchestration Boundary](#choose-lakeflow-jobs-at-the-right-orchestration-boundary)
-12. [The Complete Production Training Path](#the-complete-production-training-path)
+3. [Define The Inputs And Outputs Of One Training Run](#define-the-inputs-and-outputs-of-one-training-run)
+4. [Split The Training Workflow Into Visible Tasks](#split-the-training-workflow-into-visible-tasks)
+5. [Pass Small Values Between Lakeflow Tasks](#pass-small-values-between-lakeflow-tasks)
+6. [Control The Code, Compute, And Identity Used By Training](#control-the-code-compute-and-identity-used-by-training)
+7. [Start Training Only After The Data Is Ready](#start-training-only-after-the-data-is-ready)
+8. [Make Every Retried Task Safe To Repeat](#make-every-retried-task-safe-to-repeat)
+9. [Recover A Failed Workflow With Repair Runs](#recover-a-failed-workflow-with-repair-runs)
+10. [Record What The Training Job Did](#record-what-the-training-job-did)
+11. [Choose When Lakeflow Jobs Is The Right Orchestrator](#choose-when-lakeflow-jobs-is-the-right-orchestrator)
+12. [Follow The Complete Production Training Path](#follow-the-complete-production-training-path)
 13. [References](#references)
 
 ## What Production Training Means
@@ -53,10 +53,6 @@ flowchart TD
     F["Service identity and<br/>governed compute"] --> C
     G["Retries, repair, alerts,<br/>and run history"] --> C
 
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,C,F,G control
     class D work
@@ -123,7 +119,7 @@ The important feature of this code is its boundary. The table, cutoff, and exper
 
 Moving code out of notebook cells does not require hundreds of tiny files. A small project may have one package with data validation, training, and evaluation modules. The useful separation follows production responsibilities: work that can fail independently, needs different compute, or produces evidence worth inspecting independently deserves a clear boundary.
 
-## The Run Contract Defines One Training Attempt
+## Define The Inputs And Outputs Of One Training Run
 <!-- section-summary: A run contract fixes the data, code, configuration, identity, outputs, and acceptance rules for one production training attempt. -->
 
 Before designing tasks, define exactly what belongs to one training attempt: the data, code, settings, execution identity, intended outputs, and acceptance rules. This definition is the **run contract**. It gives every task the same training-attempt identity. Those facts remain stable throughout the run, so the resulting evidence describes one reproducible attempt.
@@ -162,7 +158,7 @@ Values such as `label-window-complete` would resolve to an actual cutoff before 
 
 This contract also improves incident response. If a candidate looks suspicious, an investigator can compare its contract with the previous successful run. A changed table version is expected. A changed source commit may explain a new feature. A different run identity or experiment path may reveal a configuration mistake.
 
-## A Task Graph Makes The Training Path Visible
+## Split The Training Workflow Into Visible Tasks
 <!-- section-summary: A task graph separates production training into units with explicit dependencies, outputs, failure states, and opportunities for parallel work. -->
 
 A production training workflow contains several kinds of work. Some steps are cheap and deterministic. Others are expensive and statistical. Running everything inside one giant task hides these boundaries and makes recovery wasteful.
@@ -188,10 +184,6 @@ flowchart TD
     H -->|"Yes"| I["Mark candidate<br/>ready for review"]
     H -->|"No"| J["Preserve evidence<br/>and reject candidate"]
 
-    classDef contract fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef task fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C contract
     class D,E,F,G task
     class H decision
@@ -200,29 +192,29 @@ flowchart TD
 
 This graph exposes four useful boundaries.
 
-### Cheap checks run before expensive work
+### Run Cheap Checks Before Expensive Training
 
 Schema, freshness, label volume, feature coverage, and permission checks usually cost much less than model training. Put them near the start. If label volume has fallen by 80 percent, the workflow should fail before it provisions expensive training compute.
 
 For example, a demand-forecasting run expects every active region to have complete sales data through the cutoff. One region is missing its latest partition. The readiness task reports the missing region and stops the graph. The team repairs the data feed and reruns from that boundary instead of discovering the gap after a costly training task.
 
-### Parallel tasks shorten independent evaluation
+### Run Independent Evaluation Tasks In Parallel
 
 Overall quality, segment analysis, calibration, fairness checks, and model packaging may use the same trained candidate without depending on one another. Independent tasks can run in parallel, provided they all read the same model and dataset identities.
 
-Parallelism should follow real independence. Splitting ten metrics into ten tasks adds orchestration overhead without giving each task a meaningful owner or failure boundary. One overall evaluation task and one domain-critical segment task are often clearer.
+Parallelism should follow real independence. Splitting ten metrics into ten tasks adds orchestration overhead without giving each task a meaningful owner or failure boundary. One overall evaluation task and one domain-critical segment task usually preserve a meaningful failure boundary without unnecessary orchestration.
 
-### Failure handling becomes part of the design
+### Define What Happens After Each Task Fails
 
 A cleanup or notification task may need to run even after an upstream failure. Lakeflow Jobs supports dependency conditions such as **All succeeded**, **All done**, and **At least one failed**. These conditions let the graph preserve diagnostics, close temporary resources, or notify the correct operational channel.
 
 Failure handling should never turn a failed candidate into a successful release. A cleanup task can succeed while the main training path remains failed. The final state must still communicate that the candidate was not produced.
 
-### The graph should stop at a meaningful business boundary
+### End The Training Workflow At A Clear Release Boundary
 
-One training job can reasonably finish after it has created and evaluated a candidate. A separate release workflow can own approval and deployment. This separation makes permissions clearer: the training identity can create evidence, while the release identity can approve or modify production serving.
+One training job can reasonably finish after it has created and evaluated a candidate. A separate release workflow can own approval and deployment. This separation assigns distinct permissions: the training identity can create evidence, while the release identity can approve or modify production serving.
 
-## Parameters And Task Values Carry Small Pieces Of Context
+## Pass Small Values Between Lakeflow Tasks
 <!-- section-summary: Job parameters describe the requested run, while task values pass small results discovered during that run. -->
 
 Tasks need a way to share context. Lakeflow Jobs provides two important mechanisms: **parameters** and **task values**. They solve different problems.
@@ -244,17 +236,13 @@ flowchart TD
     I["Delta and Unity Catalog<br/>Large datasets"] --> D
     J["MLflow<br/>Models and artifacts"] --> F
 
-    classDef requested fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef value fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef durable fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A requested
     class C,E,G value
     class B,D,F,H work
     class I,J durable
 ```
 
-The distinction is easiest to remember this way: a parameter says **what the run was asked to do**; a task value says **what an earlier task learned or created**.
+Keep the distinction concrete: a parameter says **what the run was asked to do**; a task value says **what an earlier task learned or created**.
 
 Follow one model-ID handoff from training to evaluation. The training task fits and logs the candidate in MLflow. It then sets the resulting model ID as a task value:
 
@@ -284,7 +272,7 @@ The `dbutils.jobs.taskValues` utility in this example is available in Python not
 
 Task values are intentionally small. A run can set up to 250 task values, and the JSON representation of each value cannot exceed 48 KiB. They work well for IDs, table versions, paths, counts, metric summaries, and status flags. They are a poor place for a training dataset, prediction frame, model binary, or long report.
 
-### Job parameters can reach tasks in two shapes
+### Understand How Job Parameters Reach Tasks
 
 Job parameters carry requested context such as `training_cutoff`. Lakeflow tasks receive that context in one of two common shapes.
 
@@ -319,12 +307,12 @@ This pattern keeps the graph readable. The orchestrator moves addresses between 
 
 *Parameters enter at the top. Tasks discover versions and IDs. Large data and model artifacts remain in governed systems.*
 
-## Code, Compute, And Identity Form The Execution Environment
+## Control The Code, Compute, And Identity Used By Training
 <!-- section-summary: Reproducible training needs a fixed source revision, pinned dependencies, appropriate job compute, and a stable service identity. -->
 
 The same training function can behave differently under another source revision, library set, compute shape, or identity. Production training therefore controls these four parts together.
 
-### Use one source revision throughout the run
+### Use One Code Revision Throughout The Run
 
 Lakeflow Jobs can run notebooks, Python scripts, SQL files, Python wheels, pipelines, and other task types. For staging and production, Databricks supports tasks that reference a remote Git repository. At the start of a run, tasks use one repository snapshot, and the run history records the commit.
 
@@ -334,7 +322,7 @@ Production code can also arrive as a built Python wheel. Wheels help package reu
 
 Dependencies need the same care. Pin important package versions. A loose requirement such as `scikit-learn>=1.5` allows a later run to resolve a different environment. The source commit may be identical while the training behaviour changes underneath it.
 
-### Match compute to the task
+### Match Compute To The Task
 
 Compute is the CPU, memory, GPU, and runtime environment that executes a task. Databricks offers serverless compute and classic jobs compute for automated workflows.
 
@@ -346,7 +334,7 @@ All-purpose compute is designed for interactive use. It is convenient during dev
 
 Different tasks may need different compute. Data validation can use modest serverless resources. Distributed training may need a GPU or larger memory profile. Evaluation may return to CPU compute. Separating these tasks avoids keeping the most expensive resource alive throughout the entire graph.
 
-### Run production work as a service principal
+### Run Production Work As A Service Principal
 
 A **service principal** is a non-human identity created for automation. The Lakeflow **Run as** setting determines which identity and permissions the tasks use.
 
@@ -362,30 +350,30 @@ A service principal gives the workflow a stable identity. Grant it only the perm
 
 The people who view or trigger a job do not need all of those data permissions. Lakeflow job permissions such as **Can View**, **Can Manage Run**, and **Can Manage** control interaction with the job object. Unity Catalog privileges control what the Run as identity can do with data and models. These are separate layers and should be reviewed separately.
 
-## A Trigger Should Represent Data Readiness
+## Start Training Only After The Data Is Ready
 <!-- section-summary: The best trigger starts training after its required data and labels are ready, rather than merely because a convenient clock time has arrived. -->
 
 A **trigger** tells Lakeflow Jobs to create a new run. Choosing a trigger looks like a scheduling decision, although the deeper question is about readiness: what evidence says the training inputs are complete enough to use?
 
-### A schedule fits predictable readiness
+### Use A Schedule For Predictable Data Readiness
 
 A time-based schedule works well if upstream data and labels become ready on a reliable cadence. A weekly model may run after the label window closes and the feature pipeline finishes.
 
 The job should still validate readiness. A schedule says, “It is time to check.” It does not prove that every source arrived. The first task can verify table freshness, label count, region coverage, schema, and the expected cutoff before training begins.
 
-### A table update trigger fits governed table completion
+### Use A Table Update Trigger For Governed Table Completion
 
 A table update trigger can start a job after one or more supported Unity Catalog tables change. It can wait for any monitored table or for all monitored tables, and it can debounce bursts of updates.
 
-This is useful after an upstream pipeline publishes a completed training table. The trigger may pass the updated table version into the run contract. The training job still needs semantic validation: a table commit confirms that data changed, while a readiness check confirms that the data is complete and suitable for training.
+Use this trigger after an upstream pipeline publishes a completed training table. The trigger may pass the updated table version into the run contract. The training job still needs semantic validation: a table commit confirms that data changed, while a readiness check confirms that the data is complete and suitable for training.
 
-### A file arrival trigger fits external batches
+### Use A File Arrival Trigger For External Batches
 
 A file arrival trigger watches a Unity Catalog external location or volume. It can wait after the last file arrives so one batch starts one run.
 
 This trigger is appropriate for an external label export that lands as immutable files. It is less helpful if files arrive continuously and there is no reliable signal for batch completion. In that case, a schedule plus a manifest or control table may describe readiness more clearly.
 
-### Manual or API triggers fit controlled replays
+### Use Manual Or API Triggers For Controlled Replays
 
 Manual and API-triggered runs are useful for backfills, investigations, and explicitly approved retraining. The caller can override job parameters such as the cutoff or dataset version.
 
@@ -405,21 +393,18 @@ flowchart TD
     E --> F
     F --> G["Validate freshness, completeness,<br/>schema, and label maturity"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef choice fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A question
     class B,C,D,E choice
     class F,G verify
 ```
 
-Continuous triggers are designed for workflows that should keep running, such as streaming processing. Periodic model retraining usually has a completed input window and a reviewable output, so a schedule or event trigger creates a clearer run boundary.
+Continuous triggers are designed for workflows that should keep running, such as streaming processing. Periodic model retraining usually has a completed input window and a reviewable output, so a schedule or event trigger produces a bounded run that the team can inspect and replay.
 
 Concurrency also matters. New jobs default to one active run. That is usually the safest setting for training because two runs may compete for the same output name or race to update a candidate record. If overlapping runs are genuinely independent, give every output a run-scoped identity before increasing concurrency.
 
 Queueing prevents a run from being skipped at a concurrency or workspace-capacity boundary only if queueing is enabled. A queued run can wait for up to 48 hours. Jobs created through the current UI enable it by default, while existing jobs and declarative definitions should set the property explicitly so their behaviour does not depend on how the job was created.
 
-## Retries Are Safe Only When Tasks Are Safe To Repeat
+## Make Every Retried Task Safe To Repeat
 <!-- section-summary: A retry can recover a transient failure, but safe repetition depends on idempotent task logic and deliberate output design. -->
 
 A **retry** starts a failed task again. It is useful for transient failures such as a temporary network interruption, lost compute, or a service rate limit. It cannot repair a bad schema, an incomplete label window, or invalid training code.
@@ -472,7 +457,7 @@ Retry policies should follow failure classes:
 
 *The failure class determines the response. Repeating every failure hides useful information and can create duplicate outputs.*
 
-## Repair Runs Recover A Workflow Without Hiding Its History
+## Recover A Failed Workflow With Repair Runs
 <!-- section-summary: A repair run re-executes failed and dependent tasks while preserving the successful work and history of the original multi-task run. -->
 
 A multi-task training job may spend hours building a dataset and fitting a model, then fail during segment evaluation because one library cannot load. Starting the entire workflow again wastes the successful work and creates another set of evidence.
@@ -497,10 +482,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef event fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef record fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A event
     class B,E decision
     class C,D,F,G action
@@ -515,20 +496,20 @@ Repair runs use current task and job settings for the re-executed tasks. This ma
 
 Lakeflow does not make task logic idempotent automatically. A repair starts the task from its beginning. A partially written append, external API call, or notification may happen again. The output patterns from the retry section remain necessary.
 
-## Operational Evidence Explains What The Job Did
+## Record What The Training Job Did
 <!-- section-summary: Job history, task logs, MLflow records, notifications, and system tables provide different views of one production training run. -->
 
 After a job finishes, the team needs more than a green status. A production record should explain what ran, how long it took, what it produced, and why it failed or passed.
 
 Four evidence layers work together.
 
-### The job run shows orchestration state
+### Use The Job Run To Inspect Workflow State
 
 The Lakeflow Jobs UI shows the run, task graph, task states, timings, parameters, retries, repairs, compute details, and task output. The matrix view helps an operator compare failures across recent runs.
 
 This layer answers operational questions: Which task failed? Was it retried? Which tasks were skipped? Did queueing delay the start? Which repair finally succeeded?
 
-### MLflow shows model evidence
+### Use MLflow To Inspect Model Evidence
 
 MLflow records the experiment, run, Logged Model, dataset context, parameters, metrics, artifacts, and evaluation results. It answers model questions: Which model did training produce? What data identity did it use? How did it compare with the baseline? Which segments failed?
 
@@ -548,7 +529,7 @@ with mlflow.start_run() as run:
 
 The exact tag names are a team contract. Consistency matters more than inventing many tags. Sensitive values and large payloads belong elsewhere.
 
-### Notifications ask a person or system to act
+### Send Notifications That Ask Someone Or A System To Act
 
 Lakeflow can send notifications for start, success, failure, and duration warnings through email or configured system destinations. Custom webhooks fit incident systems that need a stable payload.
 
@@ -556,7 +537,7 @@ A useful failure notification includes the environment, job, run, failed task, o
 
 Task-level notifications can expose every failed attempt, including retries. Job-level failure notification usually represents the final unsuccessful result. Choose the level according to the operator's responsibility.
 
-### System tables show patterns across many runs
+### Use System Tables To Find Patterns Across Runs
 
 The `system.lakeflow` schema provides account-level records for jobs, tasks, and run timelines in the region. These tables support fleet questions that are difficult to answer from one job page:
 
@@ -587,7 +568,7 @@ Timeline tables split long-running jobs into hourly slices, and only the final s
 
 System tables have permissions, regional scope, retention rules, and ingestion delay. They are excellent for operational analysis. The job UI and task logs remain the immediate source during a fresh incident, while MLflow remains the evidence source for model behaviour.
 
-## Choose Lakeflow Jobs At The Right Orchestration Boundary
+## Choose When Lakeflow Jobs Is The Right Orchestrator
 <!-- section-summary: Lakeflow Jobs is a strong default for workflows centered on Databricks assets, while broader cross-platform coordination may remain in an enterprise orchestrator. -->
 
 Lakeflow Jobs is a strong default if most of the work runs on Databricks. It understands Databricks task types, compute, Git sources, Unity Catalog permissions, job parameters, task values, retries, repair runs, and system tables. A team avoids operating another scheduler merely to coordinate Databricks work.
@@ -607,7 +588,7 @@ Lakeflow Spark Declarative Pipelines has another nearby role. It defines and mai
 
 Use a simple selection question: **Where does the meaningful failure boundary live?** If a failed feature refresh, training task, and evaluation repair all live inside Databricks, Lakeflow Jobs is usually the clearest owner. If the business process spans many systems, let the enterprise orchestrator own the outer journey and call Lakeflow at the Databricks boundary.
 
-## The Complete Production Training Path
+## Follow The Complete Production Training Path
 <!-- section-summary: A complete production training run moves from a readiness signal through a fixed contract and recoverable task graph to a reviewable model candidate. -->
 
 A production training cycle receives a readiness signal first. A schedule reaches its expected window, a governed table publishes a new version, an external batch lands, or an operator requests a replay.

@@ -10,19 +10,19 @@ id: "article-mlops-experiments-and-reproducibility-reproducing-old-training-run"
 ## Table of Contents
 
 1. [An Old Production Model Has to Be Rebuilt](#an-old-production-model-has-to-be-rebuilt)
-2. [Reproduction Can End in Four Honest Outcomes](#reproduction-can-end-in-four-honest-outcomes)
-3. [Start From the Identity That Production Used](#start-from-the-identity-that-production-used)
-4. [Build a Recovery Map Before Using Compute](#build-a-recovery-map-before-using-compute)
-5. [Prove That the Original Data Still Exists](#prove-that-the-original-data-still-exists)
+2. [Understand The Four Possible Reproduction Outcomes](#understand-the-four-possible-reproduction-outcomes)
+3. [Start With The Exact Model Used In Production](#start-with-the-exact-model-used-in-production)
+4. [List The Required Inputs Before Starting Compute](#list-the-required-inputs-before-starting-compute)
+5. [Verify That The Original Training Data Still Exists](#verify-that-the-original-training-data-still-exists)
 6. [Reconstruct the Environment Without Hiding Changes](#reconstruct-the-environment-without-hiding-changes)
-7. [Treat Secrets and External Services as Historical Dependencies](#treat-secrets-and-external-services-as-historical-dependencies)
-8. [Choose Exact Replay or a Migration Study](#choose-exact-replay-or-a-migration-study)
+7. [Restore Authorized Access To Required Services And Data](#restore-authorized-access-to-required-services-and-data)
+8. [Decide Whether To Replay Or Migrate The Run](#decide-whether-to-replay-or-migrate-the-run)
 9. [Run Preflight Checks Before Training](#run-preflight-checks-before-training)
-10. [Execute a Clean Replay Under a New Identity](#execute-a-clean-replay-under-a-new-identity)
-11. [Compare the Replay in Layers](#compare-the-replay-in-layers)
-12. [Stop Where Missing Evidence Stops the Claim](#stop-where-missing-evidence-stops-the-claim)
+10. [Run The Replay Under A New Run ID](#run-the-replay-under-a-new-run-id)
+11. [Compare The Replay From Inputs To Final Metrics](#compare-the-replay-from-inputs-to-final-metrics)
+12. [Limit The Claim To The Evidence You Recovered](#limit-the-claim-to-the-evidence-you-recovered)
 13. [Preserve History Instead of Replacing It](#preserve-history-instead-of-replacing-it)
-14. [A Practical Recovery Workflow](#a-practical-recovery-workflow)
+14. [Follow A Practical Recovery Workflow](#follow-a-practical-recovery-workflow)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
 
@@ -55,24 +55,24 @@ flowchart TD
     J --> H
 ```
 
-## Reproduction Can End in Four Honest Outcomes
+## Understand The Four Possible Reproduction Outcomes
 <!-- section-summary: Exact replay, migration replay, partial forensic reconstruction, and unverifiable history support different claims and require different evidence. -->
 
 The word *reproduce* can hide several standards. Recovery work is clearer if the team chooses one of four outcomes before running training or writing a historical conclusion.
 
-### Exact or numerical replay
+### The Old Run Replays Exactly Or Within A Declared Tolerance
 
 The team recovers the original code, data snapshots, resolved configuration, dependency environment, execution shape, and comparison evidence. It runs those conditions again. Some deterministic pipelines may produce identical bytes. Accelerator training often aims for predictions and metrics within a declared numerical tolerance because library, driver, and hardware behavior can introduce small differences.
 
 The claim is narrow and strong: “We replayed the recorded conditions and obtained the expected result within the declared boundary.”
 
-### Declared migration replay
+### The Rebuilt Run Requires A Documented Migration
 
 At least one historical component is obsolete, unsafe, or unavailable. The team intentionally replaces it and treats the work as a migration experiment. Examples include moving from an unsupported Python runtime, rebuilding a deleted image from its lockfile, changing GPU generation, or replacing an expired feature client.
 
 The claim identifies the substitution: “We could not execute the original environment. The migrated environment passed the agreed functional and quality contract against the old artifact.”
 
-### Partial forensic reconstruction
+### Only Part Of The Old Run Can Be Reconstructed
 
 Some historical evidence remains, while the team lacks the ingredients for a trustworthy replay or migration comparison. The registry may still resolve the model to a source run, code commit, and configuration. Meanwhile, the training snapshot or stable comparison set has expired.
 
@@ -80,13 +80,13 @@ That evidence can support a bounded lineage claim: “This run and configuration
 
 Partial forensic reconstruction is therefore weaker than a replay. It explains the surviving lineage or mechanism without adding a new controlled execution that reproduces the result.
 
-### Unverifiable history
+### The Available Evidence Cannot Support A Reproduction Claim
 
 A critical identity or artifact is missing. The training data may be overwritten, the source run unresolved, the label query lost, or stable comparison evidence unavailable. Running today’s pipeline could still create a useful new model. That result offers no verification of the historical model.
 
 The correct result is a documented gap. This protects future reviewers from mistaking a plausible reconstruction for evidence.
 
-## Start From the Identity That Production Used
+## Start With The Exact Model Used In Production
 <!-- section-summary: Recovery starts from an immutable model or release identity and follows lineage to the source run instead of guessing from current code or familiar names. -->
 
 The safest starting point is the exact object that served traffic: a registered model version, MLflow logged-model ID, artifact digest, or deployment release ID. Friendly names such as `forecast-model` or aliases such as `champion` can point somewhere else later.
@@ -116,11 +116,11 @@ This resolves the registry version to the source run. The run then exposes param
 
 An MLflow dataset input provides lineage metadata about the data used by the run. Its source description may still lack the transformed rows required for replay. The recovery map therefore needs the immutable table version, object manifest, or dataset snapshot referenced by that input.
 
-If the registry link is absent, check the deployment manifest, release record, model metadata, artifact store, and managed training-job history. A SageMaker training-job description, for example, can retain container, input channels, hyperparameters, resources, output location, and job status. Similar managed job records exist in Vertex AI, Azure Machine Learning, and Databricks Jobs.
+If the registry link is absent, check the deployment manifest, release record, model metadata, artifact store, and managed training-job history. A SageMaker training-job description, for example, can retain container, input channels, hyperparameters, resources, output location, and job status. Similar managed job records exist in Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks Jobs.
 
 Never choose a source run because its timestamp looks close to the model creation time. A nearby timestamp offers a hypothesis to investigate and no verified identity link.
 
-## Build a Recovery Map Before Using Compute
+## List The Required Inputs Before Starting Compute
 <!-- section-summary: A recovery map records which historical ingredients resolve, which have expired, and which substitutions would change the replay claim. -->
 
 The previous lesson explained the evidence bundle captured during a reproducible run. Old-run recovery uses the same categories: code, data, configuration, environment, execution, and outputs. Here the question is different: *Which of them can still be retrieved and trusted today?*
@@ -150,7 +150,7 @@ recovery_map:
 
 The map prevents accidental claim inflation. A recreated container built from the old Dockerfile and lockfile is a reconstructed environment. It may be excellent evidence, yet it is distinct from pulling the original image by digest.
 
-## Prove That the Original Data Still Exists
+## Verify That The Original Training Data Still Exists
 <!-- section-summary: A table name or object path is historical evidence only if the exact files, snapshot, and transformation rules remain available. -->
 
 Data retention often decides whether reproduction is possible. A tracker may preserve a dataset name and digest while the storage system has already deleted the underlying files. A table called `training_features` usually points to its current state, not the state used by the old run.
@@ -189,7 +189,7 @@ The strongest environment identity is a container image digest. A tag such as `t
 First recover the digest from the original run, build record, or managed job specification. Compare it with the historical recovery map, then pull that exact object into the isolated replay environment:
 
 ```bash
-docker pull registry.example.com/ml/trainer@sha256:<recorded-digest>
+docker pull registry.example.com/ml/trainer@sha256:8a6c1f2d9b7e4a5083cf6d1e7b9a2c4f5e60718293a4b5c6d7e8f90123456789
 ```
 
 If that pull succeeds, keep the environment isolated and scan it before execution. Historic images may contain known vulnerabilities or expired package credentials. Pulling the image supplies identity evidence. Safe execution still requires isolation, restricted credentials, and reviewed network access.
@@ -208,7 +208,7 @@ A lockfile cannot recover every historical dependency. Packages may have disappe
 
 Hardware creates a similar boundary. The original GPU class may no longer be available, or its driver may reject the historical framework. A different GPU can support a functional migration test while changing floating-point execution and performance. Preserve device model, worker count, precision mode, distributed topology, accelerator libraries, and deterministic flags so the comparison can explain the new boundary.
 
-## Treat Secrets and External Services as Historical Dependencies
+## Restore Authorized Access To Required Services And Data
 <!-- section-summary: Old credentials should never be restored blindly; replay uses current, scoped access to the historical resources it is authorized to read. -->
 
 Training runs often depend on package registries, object stores, feature services, experiment trackers, or licensed datasets. The original secret value may have expired, and storing that secret in a run artifact would have been a security failure.
@@ -219,7 +219,7 @@ Some external services hold mutable state. Calling today’s geocoding API, feat
 
 For example, an old risk model may have used a vendor-provided industry classification. A current credential can reach the service, but the vendor now returns a revised taxonomy. Successful authentication has recovered access; it has not recovered the old input semantics. The migration report must name that change.
 
-## Choose Exact Replay or a Migration Study
+## Decide Whether To Replay Or Migrate The Run
 <!-- section-summary: The replay mode follows from the recovered evidence and determines which claims and comparison rules are valid. -->
 
 The recovery map now tells the team which historical conditions are intact and which have changed. That evidence determines the kind of replay the team can run and the strength of the conclusion it can later make.
@@ -260,7 +260,7 @@ Suppose the old model expects 84 features and the reconstructed pipeline emits 8
 
 Managed training platforms can run the same preflight entry point as a small job. Reuse the intended container, input channels, IAM role or service account, network controls, and output location. Then promote the verified job specification to the full replay resource size.
 
-## Execute a Clean Replay Under a New Identity
+## Run The Replay Under A New Run ID
 <!-- section-summary: A replay runs in an isolated workspace, writes fresh evidence, and links back to the historical target without mutating it. -->
 
 Every replay receives a new run ID. The old run is historical evidence and stays immutable. Add explicit lineage tags to the new run:
@@ -285,7 +285,7 @@ Use a clean workspace and a fresh compute job. An engineer’s long-lived notebo
 
 If the replay fails, keep the failed run. Its logs and recovery state explain which layer broke. A new attempt should link to the failed replay and name the correction.
 
-## Compare the Replay in Layers
+## Compare The Replay From Inputs To Final Metrics
 <!-- section-summary: Layered comparison finds the first divergence across ingredients, data, processing, training, predictions, and accepted product behavior. -->
 
 Replay comparison works like fault isolation. It checks the recovered ingredients first, then follows their effects through data preparation, training, and final model behavior. The first mismatch usually offers the clearest explanation for later differences.
@@ -311,7 +311,7 @@ The success contract determines how far the ladder must match. An exact packagin
 
 Artifact hash differences need interpretation. Archive timestamps or serialization order can change bytes while predictions stay identical. Matching aggregate metrics also provide limited evidence; two models can have the same accuracy and disagree on many individual examples. A frozen prediction set and cohort results reveal those differences.
 
-## Stop Where Missing Evidence Stops the Claim
+## Limit The Claim To The Evidence You Recovered
 <!-- section-summary: Missing evidence sets a hard boundary on what the team can say about the old run, even if a modern pipeline trains successfully. -->
 
 Recovery work creates pressure to “get something running.” A successful current training job can be operationally valuable and historically irrelevant.
@@ -346,7 +346,7 @@ The new replay record should contain:
 
 If a migration replay succeeds, register its output as a new model version. Link it to the migration run and approval evidence. Preserve the older registry version for audit and rollback according to retention policy. A registry alias may move later through the release process; the immutable versions remain distinct.
 
-## A Practical Recovery Workflow
+## Follow A Practical Recovery Workflow
 <!-- section-summary: Industrial recovery moves through identity resolution, retention checks, reconstruction, preflight, isolated execution, comparison, and a recorded decision. -->
 
 The recovery process has a deliberate sequence. Each step either strengthens the replay claim or reveals a boundary that the team must carry into the result. Compute comes after identity, retention, access, and preflight have been checked.
@@ -385,4 +385,5 @@ Every attempt receives a new identity and preserves the original history. That d
 - [uv: Locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/)
 - [Docker: Pull an image by digest](https://docs.docker.com/reference/cli/docker/image/pull/)
 - [Amazon SageMaker AI: DescribeTrainingJob](https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_DescribeTrainingJob.html)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [PyTorch: Reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html)

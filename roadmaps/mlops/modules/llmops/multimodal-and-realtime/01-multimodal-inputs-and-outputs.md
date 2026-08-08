@@ -9,22 +9,22 @@ id: "article-mlops-llmops-multimodal-inputs-outputs"
 
 ## Table of Contents
 
-1. [A New Modality Expands the System Contract](#a-new-modality-expands-the-system-contract)
-2. [Three Ways to Understand Media](#three-ways-to-understand-media)
-3. [Represent Every Input as an Ordered Content Part](#represent-every-input-as-an-ordered-content-part)
-4. [Build a Safe Ingestion Boundary](#build-a-safe-ingestion-boundary)
-5. [Keep Originals and Derived Artifacts Connected](#keep-originals-and-derived-artifacts-connected)
-6. [Preserve Ordering and Alignment](#preserve-ordering-and-alignment)
-7. [Route by Capability and Evidence Need](#route-by-capability-and-evidence-need)
-8. [Budget Media Cost and Latency](#budget-media-cost-and-latency)
-9. [Treat Multimodal Outputs as Governed Media](#treat-multimodal-outputs-as-governed-media)
-10. [Separate Uploaded Media from Live Streams](#separate-uploaded-media-from-live-streams)
+1. [What Changes When An Application Adds Images, Audio, Or Video](#what-changes-when-an-application-adds-images-audio-or-video)
+2. [Choose How The System Processes Media](#choose-how-the-system-processes-media)
+3. [Represent Inputs As Ordered Content Parts](#represent-inputs-as-ordered-content-parts)
+4. [Validate And Store Uploaded Media Safely](#validate-and-store-uploaded-media-safely)
+5. [Link Original Media To Derived Artifacts](#link-original-media-to-derived-artifacts)
+6. [Preserve Order And Timing Across Modalities](#preserve-order-and-timing-across-modalities)
+7. [Route Media To Capable Models And Tools](#route-media-to-capable-models-and-tools)
+8. [Plan Media Cost And Latency](#plan-media-cost-and-latency)
+9. [Validate And Govern Generated Media](#validate-and-govern-generated-media)
+10. [Handle Uploaded Media And Live Streams Differently](#handle-uploaded-media-and-live-streams-differently)
 11. [Design Accessibility and Fallbacks](#design-accessibility-and-fallbacks)
-12. [Delete Every Copy of Sensitive Media](#delete-every-copy-of-sensitive-media)
-13. [Observe and Evaluate the Whole Pipeline](#observe-and-evaluate-the-whole-pipeline)
-14. [Recover at the Failed Stage](#recover-at-the-failed-stage)
-15. [Fit Provider APIs Behind the Same Contract](#fit-provider-apis-behind-the-same-contract)
-16. [A Production Design in One View](#a-production-design-in-one-view)
+12. [Delete Sensitive Media From Every Storage Layer](#delete-sensitive-media-from-every-storage-layer)
+13. [Monitor And Evaluate The Complete Media Pipeline](#monitor-and-evaluate-the-complete-media-pipeline)
+14. [Recover At The First Failed Stage](#recover-at-the-first-failed-stage)
+15. [Use A Common Contract Across Provider APIs](#use-a-common-contract-across-provider-apis)
+16. [How A Production Multimodal System Fits Together](#how-a-production-multimodal-system-fits-together)
 17. [References](#references)
 
 **Multimodal** means working with information in more than one form. Text is one modality. Images, audio, and video are other modalities. A document is usually a container that combines several of them: written text, page layout, tables, diagrams, and scanned images.
@@ -33,7 +33,7 @@ At a high level, a multimodal application must preserve the meaning of that medi
 
 These questions explain why adding an image field to a text API changes much more than the request body. The application gains a media pipeline with new security, storage, processing, routing, evaluation, accessibility, and deletion responsibilities.
 
-## A New Modality Expands the System Contract
+## What Changes When An Application Adds Images, Audio, Or Video
 
 <!-- section-summary: Images, audio, video, and documents add media-specific responsibilities across ingestion, storage, processing, model routing, output delivery, and lifecycle management. -->
 
@@ -68,7 +68,7 @@ flowchart TD
 
 For example, a support form may accept a screenshot beside a written question. The screenshot adds type detection, pixel limits, privacy checks, image-capable routing, visual-quality evaluation, and an accessible text alternative. The same product promise now depends on all of those parts.
 
-## Three Ways to Understand Media
+## Choose How The System Processes Media
 
 <!-- section-summary: Production systems use native multimodal models, specialist preprocessing, tool-mediated analysis, or a deliberate combination of all three. -->
 
@@ -111,7 +111,7 @@ For a long report, the system can index extracted text and retrieve three releva
 
 The choice follows the task. Use native processing for meaning that depends on the original media. Use specialist processing for deterministic extraction and search. Tools support selective work inside a larger workflow.
 
-## Represent Every Input as an Ordered Content Part
+## Represent Inputs As Ordered Content Parts
 
 <!-- section-summary: A normalized content-part envelope gives every provider adapter the same information about media type, location, provenance, alignment, and access policy. -->
 
@@ -166,7 +166,7 @@ The manifest stores an internal object reference rather than a durable signed UR
 
 The `trust` field prevents another common mistake. Words found in a document, image, filename, or transcript are untrusted content. They stay separate from application instructions even if they look like commands. For example, a document named “ignore previous rules” receives a neutral internal name at the provider boundary.
 
-## Build a Safe Ingestion Boundary
+## Validate And Store Uploaded Media Safely
 
 <!-- section-summary: The ingestion boundary authenticates uploads, verifies their real format, limits decoded work, scans risky content, and promotes only approved objects into production storage. -->
 
@@ -205,7 +205,7 @@ Consider a photo upload that is only a few megabytes on disk but declares dimens
 
 The accepted-format list should be narrow and based on a real product need. A service that needs JPEG, PNG, and PDF gains little from accepting every image, archive, and office format. Each additional parser increases the security and operational surface.
 
-## Keep Originals and Derived Artifacts Connected
+## Link Original Media To Derived Artifacts
 
 <!-- section-summary: Immutable originals, versioned derivatives, and explicit provenance make media processing reproducible, cacheable, reviewable, and deletable. -->
 
@@ -231,7 +231,7 @@ Object storage such as Amazon S3, Google Cloud Storage, or Azure Blob Storage is
 
 Content-addressed caching can reuse a derivative for the same source hash, transform version, and policy. Tenant and authorization checks still apply. Identical bytes do not imply shared ownership or permission.
 
-## Preserve Ordering and Alignment
+## Preserve Order And Timing Across Modalities
 
 <!-- section-summary: Ordered content parts and page, region, frame, and timestamp references keep evidence connected to the question it is meant to answer. -->
 
@@ -266,7 +266,7 @@ Transformations must preserve or remap alignment. If an image is rotated and cro
 
 Two small scenarios show why this matters. A form with “front” and “back” photos needs stable positions and labels, or the model may treat the back as the front. A meeting recording needs transcript timestamps and slide-change times, or a summary may attach a spoken comment to the wrong chart.
 
-## Route by Capability and Evidence Need
+## Route Media To Capable Models And Tools
 
 <!-- section-summary: A capability registry matches the requested media, output, region, latency, and safety requirements to a tested route before provider calls begin. -->
 
@@ -303,7 +303,7 @@ Evidence need matters as much as modality. A product that only needs a rough ima
 
 Fallbacks need honest names because they can lose information. `audio -> transcript -> text model` removes tone and non-speech sounds. `video -> sampled frames` may miss short events. The response record includes the selected route, preprocessing versions, and any information-loss flag so downstream policy can require review.
 
-## Budget Media Cost and Latency
+## Plan Media Cost And Latency
 
 <!-- section-summary: Media cost and delay depend on decoded size, duration, selected detail, preprocessing, queue time, and provider-specific tokenization. -->
 
@@ -328,7 +328,7 @@ For example, an application that answers one question about a long PDF should av
 
 Useful controls begin with per-tenant byte, duration, and page quotas. Model-detail policy and bounded concurrent decoders limit expensive processing. **Queue backpressure** slows or temporarily refuses new work before downstream workers become overloaded. Reusable derivatives avoid repeated processing, and the product timeout can hand long work to a clear asynchronous path.
 
-## Treat Multimodal Outputs as Governed Media
+## Validate And Govern Generated Media
 
 <!-- section-summary: Generated images, audio, video, and structured observations need explicit schemas, safety checks, provenance, storage, accessibility, and delivery rules. -->
 
@@ -359,7 +359,7 @@ Safety policy belongs after generation as well as before it. Media generation ca
 
 Downstream validation should inspect the real decoded artifact. A successful HTTP response does not prove that the media is usable. An image decoder may still reject the file, and an audio file may contain no usable track.
 
-## Separate Uploaded Media from Live Streams
+## Handle Uploaded Media And Live Streams Differently
 
 <!-- section-summary: Uploaded media is a finite object suited to durable asynchronous processing, while live media is an ordered session of partial events with timing and interruption concerns. -->
 
@@ -394,7 +394,7 @@ Fallbacks also help with ordinary failure. A user can type a description if came
 
 Consider a voice form used in a noisy environment. The product can show the live transcript before submission and highlight uncertain words. The user corrects a part number in text rather than recording the entire message again. The same design improves accessibility and data quality.
 
-## Delete Every Copy of Sensitive Media
+## Delete Sensitive Media From Every Storage Layer
 
 <!-- section-summary: Retention and deletion must cover originals, derivatives, provider files, caches, embeddings, traces, review records, and backups according to their policies. -->
 
@@ -426,7 +426,7 @@ A media catalog makes this possible by recording parent-child relationships and 
 
 Backups follow a documented expiry process. Immediate removal from every immutable backup may be impossible. A deletion marker must therefore prevent restored data from silently returning to active service.
 
-## Observe and Evaluate the Whole Pipeline
+## Monitor And Evaluate The Complete Media Pipeline
 
 <!-- section-summary: Traces explain stage-level performance, metrics show population trends, and sliced evaluations measure whether the complete media workflow remains useful and safe. -->
 
@@ -469,7 +469,7 @@ Video evaluation should include brief events that could disappear between sample
 
 A useful evaluation checks both the answer and its evidence. For a document question, measure whether the value is correct and whether the cited page or region supports it. For transcription, measure recognition quality plus the accuracy of timestamps or speaker labels needed by the product. For image understanding, test the exact visual distinctions that drive the decision.
 
-## Recover at the Failed Stage
+## Recover At The First Failed Stage
 
 <!-- section-summary: Recovery uses stage-specific actions, preserving successful work and avoiding repeated calls with media that cannot satisfy the task. -->
 
@@ -501,7 +501,7 @@ The distinction saves real work. If page rendering succeeded and model inference
 
 Every job record should identify the exact source and derivative bytes. It also records the processing version and route. Attempt count, terminal reason, and review state explain how the run ended. Together, these fields make a retry reproducible and prevent two workers from creating competing results.
 
-## Fit Provider APIs Behind the Same Contract
+## Use A Common Contract Across Provider APIs
 
 <!-- section-summary: OpenAI, Vertex AI, Amazon Bedrock, and Azure expose different media interfaces, while the application's envelope, capability registry, and lifecycle remain stable. -->
 
@@ -543,7 +543,7 @@ The architecture chooses between native model processing, specialist extraction,
 
 These are current examples of provider contracts. Supported formats, quotas, model IDs, regional availability, and preview status change. The deployed capability registry, contract probes, official documentation, and task evaluations should remain the operational source of truth.
 
-## A Production Design in One View
+## How A Production Multimodal System Fits Together
 
 <!-- section-summary: A reliable multimodal system preserves trusted instructions, untrusted media, evidence, access policy, and lifecycle state across every processing stage. -->
 

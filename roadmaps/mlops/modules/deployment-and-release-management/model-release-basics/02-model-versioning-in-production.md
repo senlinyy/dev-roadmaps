@@ -10,21 +10,21 @@ id: "article-mlops-deployment-and-release-management-model-versioning-in-product
 ## Table of Contents
 
 1. [What Model Versioning Means In Production](#what-model-versioning-means-in-production)
-2. [A Release Must Reproduce The Whole Prediction Path](#a-release-must-reproduce-the-whole-prediction-path)
+2. [Why Model Versioning Must Cover The Whole Prediction Path](#why-model-versioning-must-cover-the-whole-prediction-path)
 3. [1. Start With The Model Artifact And Its Signature](#1-start-with-the-model-artifact-and-its-signature)
 4. [2. Pin Preprocessing And Feature Contracts](#2-pin-preprocessing-and-feature-contracts)
 5. [3. Preserve Code, Runtime, And Dependencies](#3-preserve-code-runtime-and-dependencies)
 6. [4. Version Configuration And Decision Policy](#4-version-configuration-and-decision-policy)
-7. [5. Connect The Release To Data And Evaluation Evidence](#5-connect-the-release-to-data-and-evaluation-evidence)
-8. [Registry Identity And Lineage Answer Different Questions](#registry-identity-and-lineage-answer-different-questions)
-9. [Digests, Signatures, And Provenance Protect Immutable Assets](#digests-signatures-and-provenance-protect-immutable-assets)
-10. [Versions, Aliases, And Tags Have Different Jobs](#versions-aliases-and-tags-have-different-jobs)
+7. [5. Record Which Data And Evaluation Approved The Release](#5-record-which-data-and-evaluation-approved-the-release)
+8. [What A Registry Records And What Lineage Records](#what-a-registry-records-and-what-lineage-records)
+9. [How To Verify That Release Files Are Authentic And Unchanged](#how-to-verify-that-release-files-are-authentic-and-unchanged)
+10. [How Versions, Aliases, And Tags Identify Models](#how-versions-aliases-and-tags-identify-models)
 11. [Promote The Same Release Through Each Environment](#promote-the-same-release-through-each-environment)
-12. [Compatibility Keeps Callers And Rollbacks Safe](#compatibility-keeps-callers-and-rollbacks-safe)
-13. [Record The Release Behind Every Prediction](#record-the-release-behind-every-prediction)
-14. [Rollback Restores A Known-Good System](#rollback-restores-a-known-good-system)
-15. [Retention And Audit Keep Old Releases Useful](#retention-and-audit-keep-old-releases-useful)
-16. [How Current Industrial Platforms Fit The Framework](#how-current-industrial-platforms-fit-the-framework)
+12. [How To Keep Callers And Rollbacks Compatible](#how-to-keep-callers-and-rollbacks-compatible)
+13. [Record Which Release Made Every Prediction](#record-which-release-made-every-prediction)
+14. [How To Restore A Known-Good Release](#how-to-restore-a-known-good-release)
+15. [Keep Old Releases Long Enough For Rollback And Audit](#keep-old-releases-long-enough-for-rollback-and-audit)
+16. [How Production Platforms Store Model Versions](#how-production-platforms-store-model-versions)
 17. [Test Whether A Release Is Truly Restorable](#test-whether-a-release-is-truly-restorable)
 18. [The Main Idea](#the-main-idea)
 19. [References](#references)
@@ -53,9 +53,6 @@ flowchart TD
     E --> G
     F --> G
 
-    classDef release fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef part fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A release
     class B,C,D,E,F part
     class G outcome
@@ -63,7 +60,7 @@ flowchart TD
 
 The bundle receives its own immutable `release_id`. Individual systems still keep their native identities. MLflow has a logged-model ID and a registry version. Git has a commit. An OCI registry has an image digest, and the feature platform has a feature-set version. The release record joins those identities without pretending they are one object.
 
-## A Release Must Reproduce The Whole Prediction Path
+## Why Model Versioning Must Cover The Whole Prediction Path
 <!-- section-summary: Complete release identity covers every input that can change a model's production behaviour. -->
 
 Suppose a team saves an old model file for rollback. An incident occurs, so the deployment loads that file into the current service image. The current image contains a newer tokenizer and a newer version of the numerical library. The endpoint starts successfully, though its scores differ from the original release.
@@ -216,7 +213,7 @@ Configuration falls into three useful groups:
 
 This separation allows a release to run with four replicas in staging and forty in production while keeping its model behaviour identical. It also prevents an unreviewed threshold edit from hiding inside a deployment variable.
 
-## 5. Connect The Release To Data And Evaluation Evidence
+## 5. Record Which Data And Evaluation Approved The Release
 <!-- section-summary: Data identities and evaluation evidence explain what the model learned and why a particular release was approved. -->
 
 A production version should lead back to the evidence that justified it. The weights answer “what was saved?” Lineage and evaluation answer “where did it come from, how was it tested, and what use was approved?”
@@ -241,17 +238,13 @@ flowchart TD
     G["Image, contracts, and policy"] --> F
     F --> H["Approval for a defined environment and use"]
 
-    classDef origin fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef identity fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef release fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef approval fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,D,G origin
     class B,C,E identity
     class F release
     class H approval
 ```
 
-## Registry Identity And Lineage Answer Different Questions
+## What A Registry Records And What Lineage Records
 <!-- section-summary: Registry versions identify governed model entries, while lineage connects those entries to their origins and evidence. -->
 
 A **model registry** is a governed catalogue for model assets. It gives a registered model a stable name and creates ordered versions beneath that name. It also stores metadata and controls lifecycle actions such as approval or alias movement.
@@ -264,7 +257,7 @@ During an incident, lineage guides the investigation toward shared causes. If se
 
 The release manifest adds a final relationship: it connects the registry version to the exact runtime, contracts, and policy deployed around it. Registries increasingly store more of this metadata. The production application may still need a dedicated release record. That record joins identities from Git and OCI with the feature, policy, and data systems.
 
-## Digests, Signatures, And Provenance Protect Immutable Assets
+## How To Verify That Release Files Are Authentic And Unchanged
 <!-- section-summary: A digest identifies bytes, a cryptographic signature verifies an attestation, and provenance describes the build that produced an artifact. -->
 
 Three security terms often appear together: digest, signature, and provenance. They protect different parts of release trust. Understanding the difference helps a beginner see why a production gate may check all three instead of choosing one.
@@ -285,12 +278,12 @@ An immutable digest alone cannot tell the team whether the build was trustworthy
 
 The same idea applies beyond containers. Model artifacts, dependency locks, evaluation reports, and dataset manifests can carry hashes. A release controller verifies those hashes before deployment and reports a failure if a referenced asset has changed or disappeared.
 
-## Versions, Aliases, And Tags Have Different Jobs
+## How Versions, Aliases, And Tags Identify Models
 <!-- section-summary: Versions preserve history, while aliases and tags provide movable names for discovery and automation. -->
 
 A **version** is the durable identity of one registry entry. An **alias** is a readable name that points to a version. `candidate`, `champion`, or `rollback` can communicate a version's current role without changing the version itself.
 
-Aliases are deliberately movable. In MLflow Model Registry, an alias can be reassigned from one model version to another. Vertex AI Model Registry follows a similar idea. An OCI tag also acts as a human-readable pointer whose target can move.
+Aliases are deliberately movable. In MLflow Model Registry, an alias can be reassigned from one model version to another. Model Registry on Gemini Enterprise Agent Platform follows a similar idea. An OCI tag also acts as a human-readable pointer whose target can move.
 
 That mutability is useful for discovery and automation. It is unsafe as the only production identity.
 
@@ -307,10 +300,6 @@ flowchart TD
     E --> F["Workers load r42"]
     F --> G["Telemetry reports r42 and version 27"]
 
-    classDef pointer fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef immutable fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef runtime fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A pointer
     class B,D control
     class C,E immutable
@@ -336,10 +325,6 @@ flowchart TD
     B -. "Same model and image digests" .-> D
     B -. "Same model and image digests" .-> F
 
-    classDef build fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef release fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef gate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef production fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A build
     class B release
     class C,D,E gate
@@ -350,7 +335,7 @@ Endpoint names, replica counts, secret references, and regional capacity can dif
 
 Managed registries support several promotion shapes. Azure Machine Learning registries can share models, environments, components, and data assets across workspaces. Databricks Unity Catalog provides governed models and aliases across workspaces attached to the metastore. SageMaker Model Registry uses model package groups and model versions with approval metadata. The exact API differs, while the architecture remains build once, identify precisely, approve deliberately, and deploy the same assets.
 
-## Compatibility Keeps Callers And Rollbacks Safe
+## How To Keep Callers And Rollbacks Compatible
 <!-- section-summary: Compatibility rules describe which callers, features, stored records, and older releases can safely coexist. -->
 
 A release can be accurate and fully reproducible yet still break the surrounding product. **Compatibility** asks whether the new release can communicate safely with existing callers, feature producers, stored predictions, dashboards, and rollback targets.
@@ -369,7 +354,7 @@ Breaking changes need a migration path. The service may accept both request shap
 
 Rollback compatibility deserves explicit testing. If clients adopt a new required response field, restoring the prior service may break them. A team can retain a compatibility adapter or delay the client requirement. Another option prepares a rollback release that includes the old model with the compatible API layer.
 
-## Record The Release Behind Every Prediction
+## Record Which Release Made Every Prediction
 <!-- section-summary: Runtime and prediction records connect real user outcomes to the exact release that produced them. -->
 
 The release manifest describes approved intent. Production telemetry shows what actually ran. Both are needed because a deployment can contain stale workers, failed rollouts, unexpected fallbacks, or traffic outside the approved scope.
@@ -396,7 +381,7 @@ Runtime metadata also supports reconciliation. A controller expects ten percent 
 
 Sensitive input values do not belong in high-cardinality metric labels. Exact prediction identity belongs in governed logs, traces, or decision records. Metrics can aggregate by bounded fields such as release, route, result, and region.
 
-## Rollback Restores A Known-Good System
+## How To Restore A Known-Good Release
 <!-- section-summary: A safe rollback restores the model, runtime, contracts, and policy that passed earlier production checks. -->
 
 Rollback is the strongest test of the versioning design. If the team can restore only the old weights, it has saved one artifact and lost the rest of the release identity.
@@ -414,7 +399,7 @@ A practical rollback runbook covers four stages:
 
 Alias movement can be part of the control plane, though it cannot prove that every worker loaded the target. Deployment status and runtime telemetry provide that proof.
 
-## Retention And Audit Keep Old Releases Useful
+## Keep Old Releases Long Enough For Rollback And Audit
 <!-- section-summary: Reference-aware retention preserves complete rollback releases, while audit events explain every lifecycle change. -->
 
 Old releases consume storage, so teams need a retention policy. Deleting them solely by age is risky. A release may still be the active rollback target or support an older batch partition. An investigation with delayed labels may also need it weeks later.
@@ -427,10 +412,10 @@ The **audit trail** records who performed each lifecycle action. Useful events i
 
 Audit history answers questions that lineage cannot. Lineage explains how an artifact was produced. Audit explains who authorized its use and who changed production. Together they support incident review, regulated evidence, and ordinary operational accountability.
 
-## How Current Industrial Platforms Fit The Framework
+## How Production Platforms Store Model Versions
 <!-- section-summary: Modern registries and OCI tooling cover important parts of release identity, while a release record joins the complete production system. -->
 
-Industrial platforms divide model versioning across several systems. A model registry governs model identity and evidence. An OCI registry governs custom runtime images. Source control, data platforms, and deployment systems preserve the remaining identities. The release record connects them into one restorable production unit.
+Production model versioning usually spans several systems. A model registry stores model identities and review metadata. An OCI registry stores custom runtime images. Source control, data platforms, and deployment systems preserve the remaining versions. The release record connects them into one restorable production unit.
 
 ### MLflow 3 and Databricks Unity Catalog
 
@@ -438,13 +423,13 @@ MLflow 3 gives each logged model a `model_id` and connects model metrics to data
 
 This stack works well for teams that want open model packaging and experiment tracking with either an open-source registry or a governed lakehouse registry. The release record should still pin the serving image digest, feature contract, decision policy, and target-environment approval around the registered model version.
 
-### Managed cloud registries
+### Managed Cloud Model Registries
 
-Amazon SageMaker Model Registry groups versions in model package groups and can associate model artifacts, inference images, metrics, model cards, lineage, and approval status. Vertex AI Model Registry provides model versions and aliases, plus deployment integration with Vertex endpoints. Azure Machine Learning registries share models, environments, components, and data assets across workspaces.
+Amazon SageMaker Model Registry groups versions in model package groups and can associate model artifacts, inference images, metrics, model cards, lineage, and approval status. Model Registry on Gemini Enterprise Agent Platform provides model versions and aliases, plus integration with Gemini Enterprise Agent Platform Endpoints. Azure Machine Learning registries share models, environments, components, and data assets across workspaces.
 
 These services reduce the amount of registry infrastructure a team operates. They also integrate with their cloud's IAM, deployment, metadata, and monitoring services. The same release discipline applies. Pin concrete versions and preserve complete evidence. Keep movable aliases separate from immutable deployment identity. Test rollback as a full system.
 
-### OCI images and software-supply-chain controls
+### OCI Images And Supply-Chain Verification
 
 Docker-compatible OCI registries are the common packaging boundary for custom model services, KServe, Kubernetes deployments, and many managed endpoints. Image digests give the runtime an immutable content identity. Cosign signatures and SLSA provenance can add trust and build-history checks around that digest.
 
@@ -494,7 +479,8 @@ The final standard is practical: another operator should be able to identify, ex
 - [MLflow dataset tracking](https://mlflow.org/docs/latest/dataset/)
 - [Databricks: Manage model lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
 - [Amazon SageMaker Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html)
-- [Google Cloud Vertex AI model aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Model Registry on Gemini Enterprise Agent Platform: Model Version Aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning registries for MLOps](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2)
 - [Open Container Initiative image descriptor specification](https://github.com/opencontainers/image-spec/blob/main/descriptor.md)
 - [Sigstore Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/)

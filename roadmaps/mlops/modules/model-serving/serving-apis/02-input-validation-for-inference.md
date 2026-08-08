@@ -1,7 +1,7 @@
 ---
 title: "Input Validation"
-description: "Validate inference inputs before model execution with type checks, range checks, business rules, schema versions, and safe error handling."
-overview: "Input validation protects inference services by enforcing structural, semantic, temporal, compatibility, and resource rules before model execution, then making failures observable and safe for callers."
+description: "Validate inference inputs before model execution with resource limits, strict schemas, semantic and temporal rules, operating-domain checks, safe outcomes, and observable rollout controls."
+overview: "Input validation is the layered safety boundary between an inference caller and a model. This article explains how production teams validate transport, structure, meaning, time, feature readiness, model operating limits, compatibility, and failure behavior."
 tags: ["MLOps", "core", "api"]
 order: 2
 id: "article-mlops-model-serving-input-validation-for-inference"
@@ -12,375 +12,415 @@ aliases:
 
 ## Table of Contents
 
-1. [Validation Protects The Model Boundary](#validation-protects-the-model-boundary)
-2. [A Claim Severity API As A Supporting Example](#a-claim-severity-api-as-a-supporting-example)
-3. [Validate Types, Ranges, And Required Fields](#validate-types-ranges-and-required-fields)
-4. [Add Business Rules With Pydantic Validators](#add-business-rules-with-pydantic-validators)
-5. [Separate Client Errors From Service Errors](#separate-client-errors-from-service-errors)
-6. [Log Validation Failures Without Leaking Data](#log-validation-failures-without-leaking-data)
-7. [Monitor Validation Drift](#monitor-validation-drift)
-8. [Secure the Boundary Beyond Validation](#secure-the-boundary-beyond-validation)
-9. [Roll Out Validation Safely](#roll-out-validation-safely)
-10. [Putting It Together](#putting-it-together)
-11. [References](#references)
+1. [Valid JSON Can Still Be Unsafe For A Model](#valid-json-can-still-be-unsafe-for-a-model)
+2. [Validate Input At Several Boundaries](#validate-input-at-several-boundaries)
+3. [Stop Unsafe Bodies Before Expensive Processing](#stop-unsafe-bodies-before-expensive-processing)
+4. [Use A Strict Schema For Values Supplied By The Caller](#use-a-strict-schema-for-values-supplied-by-the-caller)
+5. [Validate Meaning, Units, And Relationships](#validate-meaning-units-and-relationships)
+6. [Validate Timestamps And Data Freshness](#validate-timestamps-and-data-freshness)
+7. [Reject Inputs Outside The Model's Supported Domain](#reject-inputs-outside-the-models-supported-domain)
+8. [Control Type Coercion And Compatibility](#control-type-coercion-and-compatibility)
+9. [Choose A Response For Each Validation Failure](#choose-a-response-for-each-validation-failure)
+10. [Use Stable Error Categories](#use-stable-error-categories)
+11. [Apply Security Controls Before And During Validation](#apply-security-controls-before-and-during-validation)
+12. [Monitor Validation Without Storing Raw Payloads](#monitor-validation-without-storing-raw-payloads)
+13. [Introduce New Validation Rules Gradually](#introduce-new-validation-rules-gradually)
+14. [Test The Validation Contract And Incident Paths](#test-the-validation-contract-and-incident-paths)
+15. [The Main Idea](#the-main-idea)
+16. [References](#references)
 
-## Validation Protects The Model Boundary
-<!-- section-summary: Input validation checks inference requests before model execution so broken payloads never turn into misleading predictions. -->
+## Valid JSON Can Still Be Unsafe For A Model
+<!-- section-summary: Inference validation checks whether a request is safe to interpret, within the supported operating domain, and affordable to process before the model runs. -->
 
-**Input validation** is the serving step that checks a prediction request before the model runs. It verifies required fields, types, ranges, enum values, schema versions, cross-field rules, and payload size. If the request fails the contract, the service returns a clear error and skips model execution.
+At a high level, **input validation for inference** is the process of deciding whether a production request is safe for the model system to interpret. The check starts with bytes and JSON shape, then continues through units, timestamps, feature freshness, and the conditions under which the model was approved to operate.
 
-This topic builds on the request-design article. A request contract says what the caller should send. Validation enforces that contract every time. The model should not receive a missing timestamp, a negative claim amount, a stale feature schema, or a field that changed meaning after a client release.
+This matters because an ML service can accept a request, return `200 OK`, and still make a meaningless prediction. A field called `amount` may contain `1200`, with one caller intending cents and another intending dollars. Both values are valid integers. The model receives a value one hundred times larger than intended and produces a perfectly formatted response.
 
-Validation is not only a neat API feature. It is a production safety control. It protects model latency because invalid requests stop early. It protects prediction logs because bad inputs receive explicit error records. It protects incident response because validation failure rates can reveal a broken client deploy before customers report strange predictions.
+Time creates a similar problem. A support-ticket request may contain valid ISO timestamps, yet the reported time appears before the customer message that created the ticket. A fraud service may receive a valid feature snapshot that is several hours old, even though its policy requires recent account activity. Type validation approves both payloads; their meaning remains unsafe.
 
-The main idea is simple: reject broken requests at the boundary where the caller can still fix them. If the request reaches feature transformation and model execution, the serving team has already lost the cleanest place to explain the problem.
+Files and arrays add a resource dimension. A valid image can contain enough pixels to exhaust decoder memory. A valid batch can contain enough rows to occupy every inference worker. Production validation therefore answers three questions before scoring:
 
-Validation has five layers. **Structural rules** check presence, types, shape, and size. **Semantic rules** check units, ranges, categories, and cross-field meaning. **Temporal rules** check event order, staleness, and prediction-time availability. **Compatibility rules** identify the schema and feature contract the caller uses. **Operational rules** limit work and produce stable failures, metrics, and safe logs. Authentication, authorization, rate limiting, and adversarial-input defenses surround these layers but remain distinct controls.
+- Can the service safely read and parse this request?
+- Do the values describe a coherent event with documented units and time?
+- Does the model system have the evidence and operating coverage required to make this decision?
 
-The layers should fail differently. A missing required field is a repairable client error. An unknown schema version may require a client upgrade. A payload beyond the resource limit should stop before expensive parsing or inference. An internal feature lookup failure is a service error, not evidence that the caller's data was invalid. Stable categories let product clients respond correctly and let operators see which boundary is degrading.
+The answer leads to a controlled outcome: accept the request, ask the caller to repair it, route the case to a safe review path, or report a service dependency failure.
 
-## A Claim Severity API As A Supporting Example
-<!-- section-summary: A claim-severity example shows how structural, semantic, temporal, and compatibility rules protect one serving boundary. -->
+```mermaid
+flowchart TD
+    A["Request Arrival<br/>(bytes headers and caller identity)"] --> B["Resource Gate<br/>(body size item count and media type)"]
+    B --> C["Schema Gate<br/>(required fields types and allowed values)"]
+    C --> D["Meaning Gate<br/>(units relationships and domain rules)"]
+    D --> E["Time Gate<br/>(event order and freshness)"]
+    E --> F["Model Gate<br/>(features and operating coverage)"]
+    F --> G["Controlled Outcome<br/>(score review repair or retry)"]
 
-Imagine **Cedar Mutual**, an insurance company that receives auto claims through a mobile app and a call-center workflow. The model predicts whether a claim will need senior adjuster review. The prediction helps route work: high-severity claims go to experienced adjusters, straightforward claims go to the normal queue.
-
-The request uses structured claim facts: accident time, report time, estimated damage, injury indicator, vehicle age, location state, and whether the vehicle is drivable. Bad input has real cost. A negative damage amount can send a claim into the wrong queue. A report timestamp before the accident time can create nonsense feature values. A stale schema can drop a new injury field the model expects.
-
-The first serving contract is:
-
-| Field | Example | Validation reason |
-|---|---|---|
-| `request_id` | `claim_20260705_5512` | Join logs and caller errors |
-| `claim_id` | `clm_842193` | Connect prediction to claim workflow |
-| `accident_time_utc` | `2026-07-05T12:10:00Z` | Builds delay features |
-| `reported_time_utc` | `2026-07-05T13:35:00Z` | Must come after accident time |
-| `estimated_damage_cents` | `275000` | Numeric range and currency unit |
-| `vehicle_age_years` | `7` | Range check |
-| `injury_reported` | `true` | Routing signal |
-| `vehicle_drivable` | `false` | Routing signal |
-| `state` | `CA` | Controlled geography |
-| `feature_schema_version` | `claim_severity_features_v2` | Prevent stale clients |
-
-That table is the validation plan. Each row says what the caller sends and why the API cares.
-
-![Cedar Mutual claim severity request crossing a Pydantic boundary with type checks, range checks, schema version checks, and business rules before model scoring or a 422 response.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/claim-validation-boundary.png)
-
-*Validation protects the model boundary by checking the Cedar Mutual claim payload before it reaches scoring.*
-
-## Validate Types, Ranges, And Required Fields
-<!-- section-summary: Basic validation catches missing fields, wrong types, out-of-range values, and stale schema versions. -->
-
-The first layer of validation belongs in the Pydantic request model. This layer should be boring and explicit: required fields are required, numbers have ranges, strings have lengths, and schema versions use a controlled value.
-
-```python
-from datetime import datetime
-from typing import Literal
-
-from pydantic import BaseModel, Field
-
-
-class ClaimSeverityRequest(BaseModel):
-    request_id: str = Field(min_length=12, max_length=100)
-    claim_id: str = Field(min_length=6, max_length=80)
-    accident_time_utc: datetime
-    reported_time_utc: datetime
-    estimated_damage_cents: int = Field(ge=0, le=20_000_000)
-    vehicle_age_years: int = Field(ge=0, le=60)
-    injury_reported: bool
-    vehicle_drivable: bool
-    state: str = Field(pattern=r"^[A-Z]{2}$")
-    feature_schema_version: Literal["claim_severity_features_v2"]
+    class A input
+    class B,C,D,E,F process
+    class G result
 ```
 
-The ranges should come from the business and training data review, not from a guess. `estimated_damage_cents` allows up to `$200,000` because this API handles normal auto claims, while total-loss and specialty claims go through a separate workflow. `vehicle_age_years` allows older vehicles because the company still sees classic cars, yet a value of `400` should fail. The state pattern checks the two-letter shape; a separate approved-jurisdiction set should enforce membership because syntactic shape alone cannot distinguish a real code from `ZZ`.
+## Validate Input At Several Boundaries
+<!-- section-summary: Each validation layer owns a different failure class, allowing the cheapest and most precise check to run before model execution. -->
 
-FastAPI will use this model to parse the JSON body. If the client sends `"estimated_damage_cents": "many"`, Pydantic rejects the type. If the client sends `-2000`, the range check fails. If the client sends `claim_severity_features_v1`, the schema version fails. The model function never runs.
+A production validation path works from cheap checks toward expensive checks. A gateway can reject a body that exceeds the published limit without allocating application memory for the full request. Pydantic can reject an undeclared field before feature lookups begin. A feature service can reject stale evidence before a GPU receives work.
 
-## Add Business Rules With Pydantic Validators
-<!-- section-summary: Custom validators catch cross-field mistakes that simple type and range checks cannot catch. -->
+This ordering saves capacity, though its deeper value is precision. The service can tell whether the caller sent malformed JSON, used the wrong unit, requested an unsupported case, or encountered a failing dependency. Each cause has a different owner and recovery action.
 
-Types and ranges catch many broken requests. Real inference payloads also need cross-field rules. For Cedar Mutual, the report time should be the same as or after the accident time. A claim with serious injury and `vehicle_drivable=true` may still be valid, so the validator should focus on rules the business truly treats as impossible or unsupported.
+The layers also prevent one validation library from carrying responsibilities it was never designed to own. Pydantic describes structured Python data very well. It has no knowledge of the gateway's connection limits, the caller's permission to reference an account, the freshness of an online feature row, or the reviewed operating range of a model. Those checks live in the components that own the relevant evidence.
 
-Pydantic validators let the model class check those rules after field parsing:
+A practical request path uses this order:
 
-:::expand[Implement the cross-field rules and manual-review route]{kind="example"}
+1. The gateway checks protocol, content type, compressed and decoded body limits, authentication, rate limits, and deadlines.
+2. The application schema checks fields, types, shapes, controlled values, and undeclared properties.
+3. Domain rules check units and relationships between fields.
+4. Temporal rules check event order, clock tolerance, and data freshness.
+5. Feature and model preconditions check availability, supported modalities, and operating-domain policy.
+6. Outcome routing returns a prediction, review decision, caller error, fallback, or service error.
+
+The service should stop at the first layer that produces a definitive result. Later checks often require database, feature-store, or model work, so an early rejection protects both latency and capacity.
+
+## Stop Unsafe Bodies Before Expensive Processing
+<!-- section-summary: Gateways and streaming readers enforce media type, byte, batch, image, and deadline limits before application validation allocates costly resources. -->
+
+Transport validation deals with the physical request: headers, bytes, compression, media type, and the amount of work represented by the body. This layer belongs before ordinary model validation because a framework often needs to read and decode JSON before it can construct a Pydantic object.
+
+For a JSON prediction endpoint, the boundary accepts the documented media type, sets a maximum encoded and decoded body size, limits nesting and array length, and gives the entire request a deadline. A bounded-batch endpoint also caps the number of items. Rate limits control request frequency; concurrency limits control simultaneous expensive work. Both are needed because one large request and many small requests consume capacity differently.
+
+Consider an image-classification endpoint. A five-megabyte upload may decode into hundreds of millions of pixels. The service first applies a gateway byte limit. A streaming reader maintains its own byte counter because a client may omit `Content-Length`. A safe image decoder then verifies the file signature, allowed format, decoded width, height, and pixel count before resizing. The client-provided filename and `Content-Type` offer hints; decoded content supplies the evidence used for acceptance.
+
+Compressed bodies need two limits. The encoded limit protects network and buffering resources. The decoded limit protects memory and parsers from highly compressed content. Similar care applies to archives, audio duration, video dimensions, document page counts, and LLM token budgets.
+
+OWASP groups missing timeouts, upload limits, batch limits, rate limits, and memory controls under unrestricted resource consumption. In practice, teams enforce these at the API gateway or ingress, repeat critical bounds in the application, and cap downstream work such as feature lookups and accelerator queue time.
+
+```mermaid
+flowchart TD
+    A["Incoming Body<br/>(JSON image audio or document)"] --> B["Gateway Limit<br/>(media type bytes rate and deadline)"]
+    B --> C["Safe Decode<br/>(stream limit signature and expansion)"]
+    C --> D["Work Limit<br/>(items pixels tokens and lookups)"]
+    D --> E["Application Schema<br/>(typed accepted structure)"]
+    B --> F["Resource Rejection<br/>(413 415 or 429)"]
+    C --> F
+    D --> F
+
+    class A input
+    class B,C,D,E process
+    class F reject
+```
+
+## Use A Strict Schema For Values Supplied By The Caller
+<!-- section-summary: A typed allowlist defines required fields, controlled values, lengths, ranges, and unknown-property behavior for the public request boundary. -->
+
+After the body is safe to parse, **structural validation** checks its document shape. It answers concrete questions: Is the root value an object? Are required fields present? Are identifiers bounded strings? Is the currency drawn from an approved vocabulary? Is the batch an array with a declared maximum length?
+
+FastAPI reads a typed request body through a Pydantic model. Pydantic validates the object and generates JSON Schema, which FastAPI includes in its OpenAPI document. The same source therefore drives runtime checks, client documentation, and schema-based tests.
+
+The model below represents one transaction-risk request. The example stays at the API boundary: it contains facts owned by the caller and a reference used to retrieve governed features. Rolling aggregates, encodings, and model tensor positions remain inside the feature contract.
 
 ```python
-from pydantic import model_validator
+from typing import Annotated, Literal, Self
+from uuid import UUID
+
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
-class ClaimSeverityRequest(BaseModel):
-    request_id: str = Field(min_length=12, max_length=100)
-    claim_id: str = Field(min_length=6, max_length=80)
-    accident_time_utc: datetime
-    reported_time_utc: datetime
-    estimated_damage_cents: int = Field(ge=0, le=20_000_000)
-    vehicle_age_years: int = Field(ge=0, le=60)
-    injury_reported: bool
-    vehicle_drivable: bool
-    state: Literal[
-        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-        "HI", "IA", "ID", "IL", "IN", "KS", "KY", "LA", "MA", "MD",
-        "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND", "NE", "NH",
-        "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC",
-        "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY",
-        "DC"
-    ]
-    feature_schema_version: Literal["claim_severity_features_v2"]
+class RiskDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["risk-request-v3"]
+    request_id: UUID
+    transaction_id: str = Field(min_length=8, max_length=80)
+    account_ref: str = Field(min_length=8, max_length=120)
+    amount_minor: Annotated[int, Field(strict=True, ge=0, le=50_000_000)]
+    currency: Literal["GBP", "EUR", "USD"]
+    channel: Literal["web", "mobile", "assisted"]
+    transaction_created_at: AwareDatetime
+    event_time: AwareDatetime
 
     @model_validator(mode="after")
-    def check_time_order(self) -> "ClaimSeverityRequest":
-        if self.reported_time_utc < self.accident_time_utc:
-            raise ValueError("reported_time_utc must be at or after accident_time_utc")
-        return self
-
-    @model_validator(mode="after")
-    def check_large_claim_context(self) -> "ClaimSeverityRequest":
-        if self.estimated_damage_cents >= 10_000_000 and self.vehicle_drivable:
-            raise ValueError(
-                "claims over 100000 dollars require vehicle_drivable=false or manual review"
-            )
+    def creation_precedes_decision_event(self) -> Self:
+        if self.transaction_created_at > self.event_time:
+            raise ValueError("transaction_created_at must be at or before event_time")
         return self
 ```
 
-The second validator is a business routing rule. It does not say the world can never produce a drivable vehicle with a large estimate. It says this specific API should route that case to manual review because the claim is outside the model's reviewed operating range. That is the right place for validation to meet model governance.
+`extra="forbid"` turns the model into an allowlist. An undeclared field such as `approval_override` fails validation before it enters the application object. The strict integer rule rejects `"1200"` for `amount_minor`, and the controlled literals reject misspelled currencies or channels. `AwareDatetime` requires timezone-aware values, which prevents a local timestamp from silently acquiring the server's timezone.
 
-The serving endpoint can keep manual-review behavior explicit:
+Ranges deserve product review. The upper amount bound should reflect the endpoint's supported decision workflow and abuse model. Copying the maximum observed training value would reject every legitimate future record above that historical sample. A range should express a documented business or system limit, with an explicit route for cases outside it.
+
+## Validate Meaning, Units, And Relationships
+<!-- section-summary: Semantic validation gives typed values a documented unit and checks relationships that determine whether the event makes sense. -->
+
+Structural validation proves that `amount_minor` is an integer. **Semantic validation** proves that the integer has the unit and relationship expected by the decision. In essence, this layer checks the story told by the fields, beyond each field in isolation.
+
+Clear names carry part of the solution. `amount_minor` paired with `currency` is safer than `amount`. `temperature_celsius` is safer than `temperature`. `forecast_horizon_hours` is safer than `horizon`. The OpenAPI field description should define any remaining assumptions, including rounding, inclusive bounds, and category meaning.
+
+Cross-field rules cover facts that only make sense together. A reservation end time follows its start time. Latitude and longitude appear as a pair. A selected country supports the submitted currency. A requested forecast horizon fits the chosen model route. Pydantic v2 model validators run after individual fields have been parsed, making them appropriate for these relationships.
+
+The validator in the preceding model protects a caller-owned relationship: the transaction creation time may occur at or before the decision event. Reversing those timestamps indicates a mapping, clock, or event-definition problem that the caller can repair.
+
+A parallel point-in-time rule belongs inside feature retrieval. The feature snapshot may use evidence available at or before the transaction event. A snapshot from the future would leak later information into the decision. Training-data construction needs the same rule so offline evaluation and online inference share the same temporal meaning.
+
+Some unusual values remain valid. A very large purchase, a rare product category, or a customer with little history may lie far from typical training examples. Domain validation should preserve these legitimate events and pass an explicit coverage signal to the model-policy layer. Treating every statistical outlier as malformed input hides model uncertainty inside a client error.
+
+```mermaid
+flowchart TD
+    A["Typed Fields<br/>(integer enum and timestamp)"] --> B["Unit Meaning<br/>(minor currency units and timezone)"]
+    B --> C["Cross-Field Rules<br/>(paired values and event order)"]
+    C --> D["Product Support<br/>(documented workflow boundaries)"]
+    D --> E["Model Coverage Signal<br/>(familiar rare or unsupported)"]
+
+    class A input
+    class B,C,D,E process
+```
+
+## Validate Timestamps And Data Freshness
+<!-- section-summary: Temporal validation distinguishes event time, request time, feature time, and model time so production decisions use evidence available at the intended moment. -->
+
+ML requests usually contain several clocks. **Event time** describes the business event being scored. **Request time** describes arrival at the serving boundary. **Feature time** describes the latest evidence included in a feature row. **Model time** records the model and policy state used during scoring.
+
+These timestamps answer different questions. A delayed transaction event may still be valid, yet it requires a feature lookup as of the historical event. A feature row created recently may still contain source data that is too old. A timestamp several minutes in the future may indicate caller clock skew or a unit error.
+
+Temporal validation starts with format and timezone, then checks relationships and tolerances. The service defines acceptable future skew, supported event age, feature freshness by feature group, and the exact point-in-time lookup rule. These limits come from the product deadline and feature pipeline guarantees.
+
+Consider a risk request whose event occurred one minute ago. The online feature row says `updated_at` one minute ago, yet the card-activity source inside that row is two hours old. A top-level row timestamp gives false reassurance. Production feature contracts should expose freshness for the sources that matter to the decision, or provide a computed readiness status based on those source-level service objectives.
+
+Ownership determines the response. A caller-supplied event time outside the documented window is a client or workflow problem. A server-managed feature lookup that returns stale evidence is a service precondition failure. The policy may use a reviewed fallback or route the case to manual review. Relabeling server staleness as invalid caller input sends recovery to the wrong team.
+
+```mermaid
+flowchart TD
+    A["Business Event<br/>(event time to score)"] --> B["Request Arrival<br/>(network and queue delay)"]
+    B --> C["Feature Snapshot<br/>(source evidence available by event time)"]
+    C --> D["Freshness Policy<br/>(source age and readiness limits)"]
+    D --> E["Scoring Record<br/>(model policy and decision time)"]
+
+    class A input
+    class B,C,D,E process
+```
+
+## Reject Inputs Outside The Model's Supported Domain
+<!-- section-summary: Model preconditions check feature readiness, supported modalities, and approved coverage before policy chooses prediction, fallback, or review. -->
+
+A request can satisfy the public API contract and still fall outside the conditions approved for automated prediction. This boundary is the **model operating domain**: the data conditions, populations, modalities, and feature availability under which evaluation supports use of the model.
+
+For a tabular model, the gate first confirms that feature retrieval succeeded and returned the expected feature-set version. It checks freshness and verifies that every category has documented handling. A final tensor check rejects non-finite numeric values or an unexpected shape. Together, these checks prevent a serving transformation or feature-store problem from reaching the predictor as ordinary data.
+
+Other modalities need their own evidence. An image gate verifies decoded format and usable resolution, then applies the approved channel and quality rules. A language gate checks the supported language and token budget. It also confirms the document type and configured content-safety route. Every rule should describe what the evaluated system supports, using the same preprocessing implementation exercised during model validation.
+
+Operating-domain checks should reflect evaluation evidence and product risk. Training data identifies sparse regions, while slice evaluation measures quality for important populations and conditions. Out-of-distribution tests probe unfamiliar inputs, and calibration analysis shows whether reported probabilities retain their meaning there.
+
+Policy review turns that evidence into routes. Well-supported cases can use automated prediction. Cases with evaluated fallback coverage use that fallback. Conditions with insufficient evidence go to human judgment. Historical minimums and maximums remain descriptive statistics; they rarely define universal limits for future valid events.
+
+Suppose an identity model receives a sharp, valid image of a document type that was excluded from evaluation. The body and image decoder have succeeded. Returning `422` would imply a malformed request. A controlled `review` decision explains the actual result: the case is valid for the product and outside automated coverage.
+
+Feature dependency failures need another route. A timeout from the feature store says nothing about the caller's event. The service can use a pre-approved reduced-feature model, a cached result inside its freshness limit, manual review, or a `503` response. The decision source and precondition outcome belong in prediction evidence so monitoring can separate full-model traffic from degraded routes.
+
+```mermaid
+flowchart TD
+    A["Valid Product Request<br/>(coherent caller facts)"] --> B["Feature Readiness<br/>(availability freshness and version)"]
+    B --> C["Operating Coverage<br/>(evaluated population and modality)"]
+    C --> D{"Policy Route<br/>(approved action for this condition)"}
+    D --> E["Primary Prediction<br/>(full model evidence)"]
+    D --> F["Reviewed Fallback<br/>(rules cache or reduced model)"]
+    D --> G["Manual Review<br/>(valid case outside automation)"]
+    B --> H["Service Failure<br/>(dependency unavailable)"]
+
+    class A input
+    class B,C,E,F,G process
+    class D gate
+    class H fail
+```
+
+## Control Type Coercion And Compatibility
+<!-- section-summary: Strict fields expose accidental type changes, while explicit schema versions and adapters give consumers a controlled migration path. -->
+
+Validation libraries often coerce values for developer convenience. Pydantic's default behavior can convert the string `"123"` into the integer `123`. That behavior fits query parameters and environment variables, which naturally arrive as text. At an ML request boundary, silent conversion can hide a client release that changed serialization or units.
+
+Use strict mode selectively for fields whose representation carries meaning. Money in minor units, item counts, booleans, and bounded numeric measurements are strong candidates. Date and time parsing follows its own JSON rules, so timezone requirements and relationship validators still matter. Record a test for every coercion choice that protects a product invariant.
+
+Strictness also interacts with schema evolution. A new required field breaks old callers immediately. A new enum member may break clients with exhaustive decoders. An optional response field may break a strict mobile decoder. OpenAPI and JSON Schema describe the document shape, while consumer contract tests reveal how actual clients behave.
+
+An explicit `schema_version` makes migrations observable. The service can support two request models and translate the older form through a reviewed adapter. Metrics count accepted and rejected requests by a bounded schema-version label and registered caller. Owners contact remaining consumers, verify their contract tests, and remove the adapter through a controlled release.
+
+The feature-set version stays separate. A serving team may change internal features while the public request remains `risk-request-v3`. Joining schema, feature, model, and policy versions in the decision record gives incident responders the exact interpretation of every accepted request.
+
+## Choose A Response For Each Validation Failure
+<!-- section-summary: Caller mistakes, valid low-confidence cases, approved fallbacks, and platform failures produce different outcomes because they require different recovery. -->
+
+A failed check can reveal a caller bug, stale evidence, an unsupported case, a security violation, or a temporary dependency problem. These situations require different responses because the caller can repair some of them while the service must contain or recover the others. Four outcome families cover most production cases.
+
+A **client repair** means the request violates the published contract. Examples include malformed JSON, a missing field, a string in a strict numeric field, or an event timestamp outside the supported request window. The response names the violated rule and gives a stable machine-readable code.
+
+A **controlled review or abstention** means the request describes a valid product case and automated prediction lacks sufficient coverage or evidence. A rare category, uncertain image, or unfamiliar language can take this route. The API returns the documented product action and records the reason as prediction evidence.
+
+An **approved fallback** means the primary path failed and policy selected another safe method. A feature timeout may route to a reviewed rules engine. A missing high-cost feature may use a reduced-feature model whose quality has been evaluated. The response identifies the fallback so downstream analytics can measure degraded operation.
+
+A **service error** means the platform failed to fulfil a valid request and no approved fallback completed the decision. An unavailable model artifact, feature dependency, or exhausted deadline belongs here. The caller applies the documented retry and product fallback policy.
+
+These categories keep model uncertainty, invalid input, and infrastructure failure visible as separate operational signals. Combining them into a generic `validation_failed` counter would obscure ownership and encourage unsafe retries.
+
+## Use Stable Error Categories
+<!-- section-summary: Stable status codes, domain codes, rule identifiers, field paths, and retry guidance let callers recover without parsing prose. -->
+
+An error contract serves two audiences. The HTTP status guides generic transport behavior, while a domain `error_code` guides the product client. A `rule_id` identifies the exact validation rule, and a field path locates the failing value without copying it into the response.
+
+Common transport choices include `413` for a body beyond the declared limit, `415` for an unsupported media type, and `429` for a rate limit. FastAPI uses `422` for request-body validation by default. Teams may map malformed JSON and semantic failures into their own documented `400` or `422` policy; consistency across versions matters more than inventing many status codes. Dependency unavailability commonly maps to `503`, while a gateway deadline can map to `504`.
+
+A stable error envelope typically carries:
+
+- `error_code`, such as `REQUEST_SCHEMA_INVALID` or `FEATURES_STALE`;
+- `rule_id`, such as `amount_minor.strict_integer`;
+- `field_paths`, using bounded schema paths;
+- a short human-readable message;
+- `request_id` for log correlation;
+- `retryable` plus an optional bounded delay hint;
+- a documentation link tied to the contract version.
+
+The message may improve over time, so clients branch on `error_code` and `rule_id`. They should apply capped exponential backoff and jitter only for documented transient errors. A retry still respects the user's remaining deadline and attempt budget. Validation errors require payload repair or migration, and repeated retries would only amplify traffic.
+
+```mermaid
+flowchart TD
+    A["Failed Check<br/>(resource schema meaning or dependency)"] --> B{"Failure Owner<br/>(caller policy or platform)"}
+    B --> C["Caller Error<br/>(repair payload or migrate schema)"]
+    B --> D["Policy Outcome<br/>(review abstention or fallback)"]
+    B --> E["Service Error<br/>(retry within product budget)"]
+    C --> F["Stable Evidence<br/>(status code rule ID and request ID)"]
+    D --> F
+    E --> F
+
+    class A input
+    class B gate
+    class C,D,E,F process
+```
+
+## Apply Security Controls Before And During Validation
+<!-- section-summary: Authentication, authorization, resource budgets, property allowlists, and safe media handling protect threats beyond ordinary field correctness. -->
+
+Schema validation is one part of API security. Authentication establishes caller identity. Authorization establishes whether that identity may score this entity, use this model route, or access a protected explanation. Object-level checks matter because a perfectly valid `account_ref` may belong to another tenant.
+
+An allowlisted request model also reduces mass-assignment risk. `extra="forbid"` rejects a caller-supplied `approval_override` or `internal_tier` field, and application code maps approved request fields into internal commands explicitly. Authorization still checks the caller's permission for each referenced object and operation.
+
+Resource controls surround the schema. Gateways enforce body size, rate, concurrency, and deadlines. The application caps batch items, decoded pixels, token count, feature lookups, and downstream fan-out. Infrastructure limits memory and CPU, while cost controls watch paid external services. These measures align with OWASP guidance on unrestricted resource consumption.
+
+Media inputs require content-aware handling. File extensions and caller-provided MIME types can be spoofed. A production path checks an allowed type, verifies the file signature, decodes with a maintained library under resource limits, and validates the decoded representation. Teams can isolate or scan higher-risk document formats and store uploads outside executable web paths.
+
+URLs in an inference request create a server-side fetch capability. A controlled fetcher should allow approved schemes and destinations, resolve addresses safely, block private-network targets, cap redirects and bytes, and apply its own deadline. Many systems avoid arbitrary URLs entirely and accept an authorized object-store reference.
+
+Rich text and prompts require domain-specific controls because grammar checks provide little protection against harmful meaning. Content policy, moderation, prompt isolation, output controls, and human review belong to that wider safety design.
+
+## Monitor Validation Without Storing Raw Payloads
+<!-- section-summary: Bounded metrics, traces, and redacted logs reveal validation drift while keeping personal data and high-cardinality values out of telemetry. -->
+
+Validation failures often reveal a broken client release before model-quality metrics move. The service needs enough telemetry to answer which rule failed, which contract version was used, and which registered caller is affected.
+
+A practical counter looks like `inference_validation_total{route, schema_version, rule_id, outcome}`. Each label comes from a bounded vocabulary. A histogram can track accepted payload bytes or batch length. Service metrics separately track feature-readiness failures, abstention rate, fallback rate, and model execution failures.
+
+Entity IDs, request IDs, raw values, free-form messages, and file names create high-cardinality metric labels. Keep them out of metrics. Request and trace IDs belong in structured logs and trace records with appropriate access and retention, allowing an operator to move from an aggregate spike to a small set of approved diagnostic records.
+
+OpenTelemetry's HTTP semantic conventions use route templates such as `/v1/risk-decisions` for low-cardinality `http.route`. A concrete transaction path would create one time series per identifier and may expose sensitive data. Custom validation attributes should follow the same bounded-cardinality discipline.
+
+Logs should identify the stable rule, field path, registered caller class, schema version, and serving release. Enforcement mode and outcome complete the operational explanation: the same rule may be observed for one caller and enforced for another during migration.
+
+General operational logs exclude the raw request body and feature vector. Prompts, images, and direct personal identifiers also stay outside this store. Parser failures map to bounded error codes before logging, keeping unrestricted exception text out of the event. A restricted evidence store can retain an approved pseudonymous reference for investigations that require source review.
+
+```mermaid
+flowchart TD
+    A["Validation Event<br/>(bounded rule and outcome)"] --> B["Metric Series<br/>(route schema rule and mode)"]
+    A --> C["Trace Record<br/>(request path and dependency timing)"]
+    A --> D["Redacted Log<br/>(request ID release and field path)"]
+    D --> E["Restricted Evidence<br/>(approved source reference)"]
+
+    class A input
+    class B,C,D,E process
+```
+
+## Introduce New Validation Rules Gradually
+<!-- section-summary: New compatibility rules progress from measured observation to targeted enforcement, with caller evidence and rollback kept throughout the migration. -->
+
+A stricter validation rule can break healthy clients. Changing a numeric field from coercing to strict, narrowing an enum, or retiring a schema version deserves the same release care as any API compatibility change.
+
+Teams commonly use three modes. **Observe** evaluates the proposed rule and records `would_reject` while the existing safe behavior continues. **Canary enforce** rejects violations for selected test callers or a small production segment. **Enforce** applies the rule across the supported contract. A rule registry records the rule ID, owner, rationale, severity, affected schema versions, remediation, and current mode.
+
+Observe mode fits compatible tightening, such as discovering clients that still serialize an integer as a string. Fundamental safety controls—authentication, object authorization, body limits, and known-dangerous media rules—should be active from the start. Production traffic should never bypass a critical control merely to collect migration data.
+
+During observation, dashboards segment `would_reject` by registered caller, schema version, and rule ID. Owners receive concrete failing examples through an approved private channel. Provider and consumer tests exercise the new rule. Canary enforcement then proves the real response code, error envelope, client behavior, and fallback path.
+
+Rollback preserves the former accepted schema model or adapter behind a release control. A rollback decision uses client impact, false-rejection rate, resource risk, and product fallback health. The team keeps the new rule's observation metrics active after rollback so the migration can continue with evidence.
+
+```mermaid
+flowchart TD
+    A["Proposed Rule<br/>(versioned rationale and owner)"] --> B["Observe Mode<br/>(record would-reject evidence)"]
+    B --> C["Consumer Repair<br/>(examples tests and migration)"]
+    C --> D["Canary Enforce<br/>(selected callers or traffic)"]
+    D --> E{"Release Gate<br/>(impact and fallback within limits)"}
+    E -->|Proceed| F["Enforce Mode<br/>(supported contract boundary)"]
+    E -->|Repair| B
+    F --> G["Ongoing Review<br/>(false rejects drift and incidents)"]
+
+    class A input
+    class B,C,D,F,G process
+    class E gate
+```
+
+## Test The Validation Contract And Incident Paths
+<!-- section-summary: Boundary tests prove documented rules, while incident diagnosis separates telemetry integrity, caller changes, rule releases, feature readiness, and model behavior. -->
+
+Contract tests should exercise the public boundary through the same parser and exception handler used in production. Positive cases prove accepted requests. Negative cases cover every stable error family: missing fields, unknown fields, strict numeric types, enum values, string and list bounds, cross-field relationships, timezone requirements, body and batch limits, deprecated schema versions, and authorization checks.
+
+Boundary values deserve special attention. Test the exact maximum body size, one byte beyond it, the first supported event time, clock-skew tolerance, and the feature-freshness threshold on both sides. Property-based or fuzz tests can explore malformed shapes, while curated examples preserve the business meaning expected by consumers.
+
+One compact test can protect the cross-field rule in the Pydantic model:
 
 ```python
-from fastapi import HTTPException
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from pydantic import ValidationError
 
 
-@app.post("/v1/claim-severity:predict", response_model=ClaimSeverityResponse)
-def predict_claim_severity(body: ClaimSeverityRequest, request: Request):
-    if body.estimated_damage_cents >= 10_000_000:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error_code": "OUTSIDE_MODEL_OPERATING_RANGE",
-                "message": "Large claims require senior adjuster review without ML routing.",
-                "request_id": body.request_id,
-                "retryable": False,
-            },
-        )
+def test_transaction_created_after_event_is_rejected(valid_payload):
+    event_time = datetime.now(timezone.utc)
+    valid_payload["event_time"] = event_time
+    valid_payload["transaction_created_at"] = event_time + timedelta(minutes=1)
 
-    features = build_claim_features(body)
-    score = float(request.app.state.model.predict(features)[0])
-    return build_response(body, score, request.app.state.model_version)
+    with pytest.raises(
+        ValidationError,
+        match="transaction_created_at must be at or before event_time",
+    ):
+        RiskDecisionRequest.model_validate(valid_payload)
 ```
 
-This keeps the model away from cases the review team has excluded. It also gives the caller a clear next step: send the claim to senior adjuster review.
+The concrete timestamp carries no policy meaning; the test asserts the relationship between two fields. A separate API-level test should prove that the exception handler returns the documented `422`, stable `error_code`, `rule_id`, and redacted field path.
 
-:::
+Incident diagnosis starts by checking evidence integrity. Confirm that validation metrics are fresh, the rule registry matches the deployed release, schema and caller labels are populated, and trace sampling still covers the affected route. A telemetry gap can make healthy traffic appear rejected or hide an entire caller segment.
 
-![Cedar Mutual claim payload routed through time-order, schema, and large-claim validation rules to 422 client error, senior adjuster review, or 503 service error outcomes.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/claim-validation-rules-outcomes.png)
+The next pass compares failure rate by rule ID, caller, schema version, release ID, and enforcement mode. A strict-integer spike limited to one client release points toward serialization. The same spike across every caller immediately after a validator release points toward a service rule or adapter. Feature-freshness failures across several endpoints point toward the feature pipeline.
 
-*The validation outcome should tell the caller whether to fix the payload, route the claim to senior review, or retry a service failure.*
+After locating the layer, recovery follows its owner: roll back the validation release, restore an adapter, repair the caller, fix the feature pipeline, or switch to the reviewed fallback. Model-quality investigation starts only after accepted-request integrity and evidence freshness are established.
 
-## Separate Client Errors From Service Errors
-<!-- section-summary: Validation failures should produce client errors, while model load failures and dependency failures should produce service errors. -->
+## The Main Idea
+<!-- section-summary: Strong inference validation protects resources, preserves product meaning, checks model readiness, and routes every failure to an observable recovery path. -->
 
-An inference API should separate errors by owner. A missing required field is usually a caller problem. A broken model artifact is a serving problem. A feature store timeout may involve another platform dependency. If all of those failures return the same vague `500`, the caller and on-call team lose useful information.
+Input validation is a layered production safety boundary. Gateways protect bytes, rate, and deadlines. Typed schemas protect document structure. Semantic and temporal rules protect meaning. Feature and operating-domain checks protect the conditions required for a trustworthy model decision.
 
-Use a small error policy:
+The boundary also needs deliberate outcomes. Caller mistakes receive stable repair guidance. Valid cases outside automated coverage receive review or abstention. Approved fallbacks remain visible in prediction evidence. Platform failures produce bounded retry guidance.
 
-| Failure | Status | Retryable | Owner |
-|---|---:|---|---|
-| Missing required field | `422` | `false` | Caller |
-| Field outside range | `422` | `false` | Caller or product workflow |
-| Unsupported schema version | `422` | `false` | Caller migration |
-| Model still loading | `503` | `true` | Serving platform |
-| Feature dependency timeout | `503` or fallback response | `true` with backoff | Serving and dependency owners |
-| Unexpected model exception | `500` | `false` until investigated | Serving owner |
-
-FastAPI's default validation body is already structured. A team can wrap it with its own `error_code` format if callers need a stable cross-service error shape. The important rule is that invalid input should not look like a model failure. Dashboards should show validation failures separately from runtime failures.
-
-## Log Validation Failures Without Leaking Data
-<!-- section-summary: Validation logs should count and explain failures while avoiding raw personal data or unbounded high-cardinality fields. -->
-
-Validation errors are useful signals, so the service should log them. The log should include enough information to debug the caller and schema. It should avoid raw free text, private claim notes, or every unique raw field value. Even structured fields can carry privacy risk when logs live longer than the request path.
-
-A validation log event can look like this:
-
-```json
-{
-  "event": "inference_validation_failed",
-  "endpoint": "/v1/claim-severity:predict",
-  "request_id": "claim_20260705_5512",
-  "caller": "claims-mobile-api",
-  "feature_schema_version": "claim_severity_features_v1",
-  "error_code": "UNSUPPORTED_FEATURE_SCHEMA",
-  "field": "feature_schema_version",
-  "model_name": "claim-severity",
-  "accepted_schema_versions": ["claim_severity_features_v2"]
-}
-```
-
-That event is enough for on-call to see the problem. The mobile API is sending the old schema. The model version may be healthy. The fix belongs in the client migration path.
-
-Validation logs should also avoid storing raw user-provided strings unless the privacy review approves them. For this Cedar Mutual API, the request is structured and does not include claim notes. If a future API accepts text, the serving team should decide whether to hash, redact, sample, or skip the raw content in logs.
-
-## Monitor Validation Drift
-<!-- section-summary: Validation failure rates can reveal stale clients, upstream schema drift, broken data joins, and bad release coordination. -->
-
-Validation failures are a serving metric. A stable service may see a tiny baseline of bad requests. A sudden spike often points to a client release, upstream schema change, or expired migration window.
-
-Useful metrics include:
-
-| Metric | Why it helps |
-|---|---|
-| `inference_requests_total{status="accepted"}` | Tracks normal traffic |
-| `inference_validation_failures_total{field="feature_schema_version"}` | Finds stale clients |
-| `inference_validation_failures_total{field="estimated_damage_cents"}` | Finds bad upstream amount mapping |
-| `inference_validation_failure_rate{caller="claims-mobile-api"}` | Separates one bad caller from global failure |
-| `inference_payload_size_bytes` | Finds oversized requests before they hurt latency |
-
-OpenTelemetry metrics can carry these counters and histograms to the team's monitoring backend. Keep labels low-cardinality. A label such as `field` is useful because there are few fields. A label such as `claim_id` is harmful because every claim creates a new time series.
-
-A simple alert can watch schema failures:
-
-```yaml
-alert: ClaimSeverityUnsupportedSchemaSpike
-expr: |
-  sum(rate(inference_validation_failures_total{
-    endpoint="/v1/claim-severity:predict",
-    error_code="UNSUPPORTED_FEATURE_SCHEMA"
-  }[10m])) > 5
-for: 15m
-labels:
-  severity: page
-annotations:
-  summary: "Claim severity API is receiving unsupported schema versions"
-  runbook: "Check caller release versions and accepted feature schema versions."
-```
-
-This alert points the on-call person to the right investigation. It does not say the model is inaccurate. It says callers are sending a contract version the service rejects.
-
-## Secure the Boundary Beyond Validation
-<!-- section-summary: Authentication, authorization, TLS, network policy, rate limits, and request budgets protect the serving path around the validated JSON body. -->
-
-Pydantic proves that a request has the expected shape. The production boundary also needs to prove **who sent it**, **what that caller may do**, **how traffic is protected**, and **how much work one caller can demand**. These controls solve different problems, so passing schema validation should never grant access by itself.
-
-For Cedar Mutual, the platform and application teams divide the boundary like this:
-
-| Control | Question it answers | Practical ownership |
-|---|---|---|
-| **Authentication** | Which workload or user sent the request? | The API gateway validates a short-lived OIDC access token, including issuer, audience, signature, and expiry. |
-| **Authorization** | May that identity call this operation? | The gateway and API require a narrow scope such as `claims:predict`; access to admin or explanation routes uses separate scopes. |
-| **TLS** | Is traffic encrypted and is the peer identity checked? | The gateway terminates client TLS. The platform also uses reviewed gateway-to-backend TLS or service-mesh mTLS when the threat model requires it. |
-| **Network policy** | Which workloads can reach the model pods? | Kubernetes allows ingress from the gateway namespace and blocks unrelated pod traffic. The cluster network plugin must enforce NetworkPolicy. |
-| **Rate limit** | How quickly may one caller send requests? | The gateway applies per-client or per-tenant limits and returns `429` with retry guidance. Limits come from capacity tests and product priority. |
-| **Request budget** | How much time and work may one request consume? | The boundary caps body size, batch count, feature lookups, queue wait, and end-to-end deadline before expensive inference starts. |
-
-FastAPI can declare OAuth2 scopes through its `Security` dependencies, while many teams validate tokens and apply coarse scopes at the gateway as well. The service should still receive a trusted caller identity for audit and fine-grained product rules. It should avoid trusting a caller-supplied header such as `X-User-Role` unless the gateway removes external copies and writes a verified value.
-
-A short policy record keeps these controls reviewable without binding the API contract to one gateway product:
-
-:::expand[Inspect the boundary and NetworkPolicy configuration]{kind="example"}
-
-```yaml
-inference_boundary:
-  token:
-    issuer: https://identity.cedarmutual.example/
-    audience: claim-severity-api
-    required_scope: claims:predict
-  transport:
-    client_to_gateway: tls
-    gateway_to_service: tls_with_backend_certificate_validation
-  limits:
-    requests_per_minute_per_client: 600
-    max_request_bytes: 32768
-    max_batch_items: 1
-    end_to_end_timeout_ms: 800
-  overload_response:
-    status: 429
-    retry_after_seconds: 2
-```
-
-The numbers are example operating values for this scenario. The serving owner should derive them from load tests, downstream capacity, caller retry behavior, and the safe fallback. A timeout budget should leave time for the caller to use its fallback instead of consuming the caller's entire deadline inside model inference.
-
-Kubernetes NetworkPolicy adds a separate network boundary. This example allows only gateway pods in the labeled gateway namespace to reach the claim model on port `8080`:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: claim-severity-ingress
-  namespace: ml-serving
-spec:
-  podSelector:
-    matchLabels:
-      app: claim-severity-api
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: api-gateway
-          podSelector:
-            matchLabels:
-              app: inference-gateway
-      ports:
-        - protocol: TCP
-          port: 8080
-```
-
-NetworkPolicy works at the network layer; it does not verify JWT scopes or replace TLS. The platform team should test the policy with an allowed gateway pod and a denied unrelated pod. It should also verify the cluster's network plugin actually enforces the resource. Together, these controls give the inference API a layered boundary: the network restricts reachability, TLS protects traffic, identity and scopes control access, validation protects the model contract, and rate or request budgets protect capacity.
-
-:::
-
-## Roll Out Validation Safely
-<!-- section-summary: Stricter validation should ship with shadow counts, caller communication, migration windows, and rollback controls. -->
-
-Validation rules can break callers, so changes need release care. Adding a new required field, tightening a range, or removing an old schema version can produce a sudden wave of `422` responses. The serving team should treat validation changes as API changes.
-
-Use a rollout sequence:
-
-| Step | What happens |
-|---|---|
-| Observe | Log warnings for the future rule while still accepting requests |
-| Share | Tell caller teams which requests would fail and when enforcement starts |
-| Enforce in staging | Reject invalid staging traffic and require contract tests |
-| Enforce in production | Reject invalid traffic after the migration window |
-| Watch | Monitor failure rate by caller and field |
-| Roll back | Re-enable the previous accepted schema version if a critical caller was missed |
-
-For Cedar Mutual, the team might allow both `claim_severity_features_v1` and `claim_severity_features_v2` for two weeks. During the window, responses can include a warning header for v1 callers:
-
-```python
-@app.middleware("http")
-async def add_schema_warning(request, call_next):
-    response = await call_next(request)
-    if getattr(request.state, "deprecated_schema_used", False):
-        response.headers["x-ml-schema-warning"] = (
-            "claim_severity_features_v1 retires on 2026-07-20"
-        )
-    return response
-```
-
-That warning is a bridge for the client team. It gives them a date, a schema, and a signal they can test before enforcement.
-
-![Cedar Mutual validation rollout and monitoring path showing observe, share, staging enforcement, production enforcement, caller-field metrics, and rollback.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/validation-rollout-monitoring.png)
-
-*Stricter validation should ship through observation, caller communication, staging enforcement, production metrics, and rollback controls.*
-
-## Putting It Together
-<!-- section-summary: Input validation turns the API contract into a safety layer that protects model execution, client feedback, logs, metrics, and release migration. -->
-
-Input validation is the guardrail at the model boundary. It checks that the request matches the contract, rejects impossible or unsupported cases, returns errors the caller can act on, and gives operators a clean signal when clients drift.
-
-The Cedar Mutual claim API shows the practical shape. Pydantic handles fields, types, ranges, schema versions, and cross-field rules. Identity, scopes, TLS, NetworkPolicy, rate limits, and request budgets protect the wider serving path. The endpoint keeps manual-review cases outside the model's operating range. Logs and metrics show which caller broke which rule. Rollout controls let the team make validation stricter without surprising every client at once.
+Strict Pydantic v2 models, FastAPI-generated OpenAPI, gateway limits, OpenTelemetry signals, contract tests, and observe-to-enforce rollout controls provide an industrial implementation path. Their value comes from a shared validation policy that names every rule, owner, outcome, and recovery action.
 
 ## References
 
-- [FastAPI handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
-- [FastAPI request body tutorial](https://fastapi.tiangolo.com/tutorial/body/)
-- [Pydantic models](https://docs.pydantic.dev/latest/concepts/models/)
-- [Pydantic validators](https://docs.pydantic.dev/latest/concepts/validators/)
-- [FastAPI OAuth2 scopes](https://fastapi.tiangolo.com/advanced/security/oauth2-scopes/)
-- [Kubernetes NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
-- [Gateway API BackendTLSPolicy](https://gateway-api.sigs.k8s.io/reference/api-types/policy/backendtlspolicy/)
-- [Envoy Gateway JWT authentication](https://gateway.envoyproxy.io/latest/tasks/security/jwt-authentication/)
-- [Envoy Gateway global rate limiting](https://gateway.envoyproxy.io/latest/tasks/traffic/global-rate-limit/)
-- [OpenTelemetry metrics](https://opentelemetry.io/docs/concepts/signals/metrics/)
-- [OpenTelemetry Python instrumentation](https://opentelemetry.io/docs/languages/python/instrumentation/)
+- [FastAPI: Request bodies](https://fastapi.tiangolo.com/tutorial/body/)
+- [FastAPI: Strict Content-Type checking](https://fastapi.tiangolo.com/advanced/strict-content-type/)
+- [FastAPI: Handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- [Pydantic: Models](https://pydantic.dev/docs/validation/latest/concepts/models/)
+- [Pydantic: Validators](https://pydantic.dev/docs/validation/latest/concepts/validators/)
+- [Pydantic: Strict mode](https://pydantic.dev/docs/validation/latest/concepts/strict_mode/)
+- [Pydantic: JSON Schema](https://pydantic.dev/docs/validation/latest/concepts/json_schema/)
+- [OpenAPI Specification](https://spec.openapis.org/oas/)
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)
+- [OpenTelemetry: HTTP metrics semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/)
+- [OWASP API Security: Unrestricted Resource Consumption](https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/)
+- [OWASP API Security: Broken Object Property Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/)
+- [OWASP: Input Validation Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html)
+- [OWASP: File Upload Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)
+- [OWASP: REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html)

@@ -10,19 +10,19 @@ id: "article-mlops-data-for-ml-systems-repeatable-data-pipelines"
 ## Table of Contents
 
 1. [What Makes A Data Pipeline Repeatable?](#what-makes-a-data-pipeline-repeatable)
-2. [The Repeatability Framework](#the-repeatability-framework)
+2. [What Every Repeatable Pipeline Must Control](#what-every-repeatable-pipeline-must-control)
 3. [1. Declare The Inputs And Their Time](#1-declare-the-inputs-and-their-time)
-4. [2. Make Transformations Deterministic](#2-make-transformations-deterministic)
+4. [2. Make The Same Inputs Produce The Same Result](#2-make-the-same-inputs-produce-the-same-result)
 5. [3. Make Every Run Safe To Retry](#3-make-every-run-safe-to-retry)
-6. [4. Treat Validation As A Publication Gate](#4-treat-validation-as-a-publication-gate)
-7. [5. Publish A Stable Materialized Output](#5-publish-a-stable-materialized-output)
-8. [6. Record Lineage And Run Evidence](#6-record-lineage-and-run-evidence)
-9. [7. Schedule By Logical Data Windows](#7-schedule-by-logical-data-windows)
-10. [8. Plan Backfills Before You Need Them](#8-plan-backfills-before-you-need-them)
-11. [9. Recover Without Hiding The Failure](#9-recover-without-hiding-the-failure)
-12. [Choosing The Processing And Orchestration Layers](#choosing-the-processing-and-orchestration-layers)
-13. [Operational Ownership](#operational-ownership)
-14. [A Practical Industrial Baseline](#a-practical-industrial-baseline)
+6. [4. Validate The Output Before Publishing It](#4-validate-the-output-before-publishing-it)
+7. [5. Publish One Complete Output For Other Systems To Use](#5-publish-one-complete-output-for-other-systems-to-use)
+8. [6. Record Which Inputs And Code Produced Each Output](#6-record-which-inputs-and-code-produced-each-output)
+9. [7. Schedule Work For A Defined Time Window](#7-schedule-work-for-a-defined-time-window)
+10. [8. Plan How To Rebuild Historical Time Windows](#8-plan-how-to-rebuild-historical-time-windows)
+11. [9. Restore The Output And Keep The Failure Evidence](#9-restore-the-output-and-keep-the-failure-evidence)
+12. [Choose Tools For Data Processing And Scheduling](#choose-tools-for-data-processing-and-scheduling)
+13. [Decide Who Responds When The Pipeline Fails](#decide-who-responds-when-the-pipeline-fails)
+14. [A Practical First Production Design](#a-practical-first-production-design)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
 
@@ -56,11 +56,6 @@ flowchart TD
     F --> G["Record lineage,<br/>run evidence, and owner"]
     G --> H["Release the dataset<br/>to training or inference"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef publish fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A input
     class B,C work
     class D gate
@@ -70,10 +65,10 @@ flowchart TD
 
 The transformation code is one part of this path. A production pipeline also defines the identity of its inputs, safe write behaviour, release gates, output identity, scheduling semantics, recovery rules, and ownership.
 
-## The Repeatability Framework
+## What Every Repeatable Pipeline Must Control
 <!-- section-summary: Nine connected responsibilities turn transformation code into a production dataset-building system. -->
 
-It is useful to think of a pipeline as a small production system with nine connected responsibilities. Each responsibility answers a question that transformation code leaves open. Together, they keep one successful run from being mistaken for a reliable data product.
+A repeatable pipeline controls nine connected responsibilities. Each responsibility answers a question that transformation code leaves open. Together, they keep one successful run from being mistaken for a reliable data product.
 
 **Declared inputs and snapshots** give the run a fixed starting point. A warehouse table name identifies a location; a table snapshot, source watermark, object version, or extraction manifest identifies the data the run actually used.
 
@@ -167,7 +162,7 @@ Different storage systems express input identity differently. An object-store pi
 
 The important distinction is between **where the data lives** and **which state of that data belongs to the run**. The first supports access. The second supports reconstruction.
 
-## 2. Make Transformations Deterministic
+## 2. Make The Same Inputs Produce The Same Result
 <!-- section-summary: Deterministic transformation logic produces the same logical rows and values from the same declared inputs and configuration. -->
 
 A deterministic transformation produces the same logical result from the same declared inputs and configuration. You can think of it as a pure calculation at pipeline scale: every value that can influence the output enters through a reviewed input.
@@ -208,7 +203,7 @@ Determinism also requires stable business definitions. If missing merchant categ
 
 Distributed engines add one nuance. Spark can schedule partitions differently across runs, so file names and row order may vary. Tests should compare the dataset's keys, values, schema, and relevant aggregate invariants. Byte order matters only for consumers whose contract explicitly requires it.
 
-### Match the transformation engine to the workload
+### Choose A Processing Tool That Fits The Data
 
 dbt fits transformations expressed mainly as SQL inside a warehouse or lakehouse. It builds a dependency graph from model references, materializes models, and keeps tests beside those models. Incremental models can process new or updated rows, provided the filter and unique-key policy capture late changes correctly.
 
@@ -272,10 +267,6 @@ flowchart TD
     D -->|"Yes"| F["Commit the table snapshot<br/>or approved manifest"]
     F --> G["Consumers see one<br/>complete dataset version"]
 
-    classDef retry fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef safe fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A retry
     class B,C work
     class D gate
@@ -284,7 +275,7 @@ flowchart TD
 
 Restartability also applies inside the run. Expensive extraction or feature stages may checkpoint intermediate results under the run ID. Those checkpoints are execution aids. The published dataset identity still comes from the final commit and run record.
 
-## 4. Treat Validation As A Publication Gate
+## 4. Validate The Output Before Publishing It
 <!-- section-summary: Validation checks decide whether a candidate dataset is safe for downstream training or inference. -->
 
 Validation is the release review for data. It asks whether the candidate output still satisfies the assumptions used by training, evaluation, and serving.
@@ -320,7 +311,7 @@ Threshold checks need an explicit response. A small change in row count may pass
 
 If validation fails, the candidate output and report stay available for investigation while the previous approved version remains active. This separation prevents a failed daily build from replacing a healthy training input.
 
-## 5. Publish A Stable Materialized Output
+## 5. Publish One Complete Output For Other Systems To Use
 <!-- section-summary: Publication turns a validated candidate into a durable dataset version that consumers can reference. -->
 
 A transformation result has limited production value until consumers can identify and read it consistently. **Materialization** means writing the computed result to durable storage. **Publication** means marking one materialized result as approved for downstream use.
@@ -347,10 +338,6 @@ flowchart TD
     E --> F["Catalog records version,<br/>owner, and evidence"]
     F --> G["Training reads the<br/>approved identity"]
 
-    classDef candidate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef publish fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B candidate
     class C gate
     class D fail
@@ -359,7 +346,7 @@ flowchart TD
 
 Storage maintenance belongs to the operating design. Delta and Iceberg snapshots require retention and cleanup policies. Object-store staging prefixes need lifecycle rules. Retention should preserve the versions required for investigations, model reproducibility, audit, and rollback.
 
-## 6. Record Lineage And Run Evidence
+## 6. Record Which Inputs And Code Produced Each Output
 <!-- section-summary: Run evidence connects a published dataset to its source versions, transformation job, execution, checks, and owner. -->
 
 Lineage explains how data moved and changed. Run evidence explains what happened during one execution. Together they give an operator a route from a questionable model result back to the dataset build.
@@ -386,10 +373,6 @@ flowchart TD
     D -. "Quality facets" .-> F
     E -. "Output dataset event" .-> F
 
-    classDef data fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef process fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef lineage fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,E data
     class B,C process
     class D evidence
@@ -402,7 +385,7 @@ A useful run record identifies the pipeline, run, logical interval, code commit,
 
 *The run record acts as a receipt for the published dataset, while lineage connects that receipt to upstream and downstream systems.*
 
-## 7. Schedule By Logical Data Windows
+## 7. Schedule Work For A Defined Time Window
 <!-- section-summary: A scheduler maps each run to a logical data interval and coordinates dependencies, retries, and publication. -->
 
 A schedule says more than “start at midnight.” It maps an execution to the data interval that the execution owns.
@@ -413,7 +396,7 @@ Airflow models workflows as DAGs and creates runs for scheduled logical interval
 
 Dagster models data products as assets. Partitioned assets give teams a direct vocabulary for materialization, asset checks, dependencies, and backfills.
 
-Managed services reduce platform operation for provider-centered workloads. Common choices include Databricks Lakeflow Jobs, SageMaker Pipelines, Vertex AI Pipelines, and Azure Machine Learning pipelines.
+Managed services reduce platform operation for provider-centered workloads. Common choices include Databricks Lakeflow Jobs, SageMaker Pipelines, Gemini Enterprise Agent Platform Pipelines, and Azure Machine Learning pipelines.
 
 The scheduler coordinates work. The transformation engine still owns the SQL or dataframe calculation, and the table format still owns atomic storage commits. Keeping those roles separate prevents workflow code from accumulating transformation logic.
 
@@ -437,10 +420,10 @@ sequenceDiagram
 
 Freshness expectations should account for upstream availability, normal runtime, validation time, and publication. An alert such as “dataset has missed its expected publication time” gives the owner more context than a generic task-failed notification.
 
-## 8. Plan Backfills Before You Need Them
+## 8. Plan How To Rebuild Historical Time Windows
 <!-- section-summary: Backfills rebuild bounded historical partitions after late data, corrected sources, or transformation changes. -->
 
-A **backfill** runs pipeline logic for historical partitions. Teams use backfills after late source data arrives or a source correction changes old records. A feature-definition change and a new pipeline with missing history are two other common reasons.
+Sometimes the team must run pipeline logic again for historical time windows. This operation is a **backfill**. Teams use it after late source data arrives or a correction changes old records. A feature-definition change and a new pipeline with missing history are two other common reasons.
 
 The safest backfill unit is usually a declared partition or range of partitions. The pipeline calculates which outputs are affected, rebuilds them from controlled inputs, validates the candidate, and publishes according to the dataset's versioning policy.
 
@@ -460,10 +443,6 @@ flowchart TD
     G --> I["Record reason and lineage"]
     H --> I
 
-    classDef cause fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef plan fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef release fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A cause
     class B,C,D,E plan
     class F gate
@@ -472,7 +451,7 @@ flowchart TD
 
 For example, a source team repairs account status history across twelve daily partitions. The pipeline owner first runs the corrected logic in an isolated environment. The review compares key counts and feature distributions with the published partitions, then examines downstream model impact. After approval, the platform publishes corrected partitions atomically or creates a new dataset version according to governance policy. The run record keeps the correction reason and affected range.
 
-## 9. Recover Without Hiding The Failure
+## 9. Restore The Output And Keep The Failure Evidence
 <!-- section-summary: Recovery actions preserve the last approved dataset, retain evidence, and match the actual failure class. -->
 
 Recovery is the process of returning the pipeline to a trustworthy state while protecting the last approved dataset. The right action depends on where the run stopped and whether any output reached consumers. Recovery therefore starts by identifying which guarantee failed.
@@ -501,10 +480,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef incident fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A incident
     class B question
     class C,D,E,F,G action
@@ -513,7 +488,7 @@ flowchart TD
 
 Retries should remain bounded. Permanent schema changes, permission errors, and failed contracts need human attention; repeated automatic execution only adds cost and noise.
 
-## Choosing The Processing And Orchestration Layers
+## Choose Tools For Data Processing And Scheduling
 <!-- section-summary: The best pipeline stack follows the location, scale, transformation language, and operational ownership of the data. -->
 
 Tool selection can feel confusing because several products describe themselves as pipeline platforms. The clearer starting point is to separate data transformation from workflow coordination. First choose the engine that can process the data where it lives; then choose the orchestrator that can schedule, retry, and backfill that work.
@@ -541,9 +516,6 @@ flowchart TD
     F -->|"Asset-oriented greenfield platform"| H["Dagster"]
     F -->|"Provider-centered workload"| I["Managed orchestrator"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef engine fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef orchestrator fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,F question
     class C,D,E engine
     class G,H,I orchestrator
@@ -551,7 +523,7 @@ flowchart TD
 
 Scale is only one factor. Team skills, data locality, governance, operational maturity, and existing platform commitments also matter. A small, well-owned pipeline on existing warehouse infrastructure can be more reliable than a new distributed platform carrying little data.
 
-## Operational Ownership
+## Decide Who Responds When The Pipeline Fails
 <!-- section-summary: Clear ownership connects source contracts, pipeline operation, platform reliability, and downstream model use. -->
 
 Repeatability depends on people as much as code. A pipeline can produce perfect run metadata and still remain unreliable if nobody owns a broken source contract or approves a corrective backfill. Ownership tells the team who has authority to diagnose, repair, and release each part of the data path.
@@ -564,7 +536,7 @@ For example, an alert that says “the feature dataset missed its publication ta
 
 Ownership also governs changes. A new column may be backward compatible for one consumer and dangerous for another. Schema changes, key changes, partition changes, and altered label cutoffs need review from both the pipeline owner and affected consumers.
 
-## A Practical Industrial Baseline
+## A Practical First Production Design
 <!-- section-summary: A common production baseline combines governed storage, an appropriate transformation engine, orchestration, validation, lineage, and platform observability. -->
 
 A practical production baseline starts with durable data in object storage, a warehouse, or a governed lakehouse. Delta Lake or Apache Iceberg adds transactional table commits and snapshots to object storage. Plain Parquet remains useful when an immutable manifest supplies identity and publication control.

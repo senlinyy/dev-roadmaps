@@ -12,18 +12,18 @@ aliases:
 
 ## Table of Contents
 
-1. [Orchestration Coordinates Work That Outlives One Process](#orchestration-coordinates-work-that-outlives-one-process)
-2. [Use the Smallest Control Layer That Fits](#use-the-smallest-control-layer-that-fits)
-3. [The Orchestrator Has Seven Core Responsibilities](#the-orchestrator-has-seven-core-responsibilities)
-4. [Recovery Depends on Safe Repetition](#recovery-depends-on-safe-repetition)
-5. [The State Store Needs Its Own Recovery Plan](#the-state-store-needs-its-own-recovery-plan)
-6. [Choose the Orchestration Model Before the Product](#choose-the-orchestration-model-before-the-product)
-7. [Credentials, Capacity, and Versioned Definitions Protect Shared Runs](#credentials-capacity-and-versioned-definitions-protect-shared-runs)
-8. [Prove the Choice With Failure Drills](#prove-the-choice-with-failure-drills)
+1. [How To Coordinate A Multi-Step Training Workflow](#how-to-coordinate-a-multi-step-training-workflow)
+2. [Choose The Simplest Way To Coordinate Training](#choose-the-simplest-way-to-coordinate-training)
+3. [The Seven Jobs Of A Training Orchestrator](#the-seven-jobs-of-a-training-orchestrator)
+4. [Recover Failed Work Without Duplicating It](#recover-failed-work-without-duplicating-it)
+5. [Protect The Database That Records Workflow Progress](#protect-the-database-that-records-workflow-progress)
+6. [Choose The Orchestrator That Fits The Workflow](#choose-the-orchestrator-that-fits-the-workflow)
+7. [Protect Credentials, Compute Capacity, And Workflow Versions](#protect-credentials-compute-capacity-and-workflow-versions)
+8. [Test The Orchestrator With Failure Drills](#test-the-orchestrator-with-failure-drills)
 9. [Main Idea](#main-idea)
 10. [References](#references)
 
-## Orchestration Coordinates Work That Outlives One Process
+## How To Coordinate A Multi-Step Training Workflow
 <!-- section-summary: A training orchestrator coordinates dependencies, workers, run state, and recovery across work that may continue after the original process exits. -->
 
 At a high level, a **training orchestrator** is the control system for a multi-step ML run. It decides which step may start, asks the appropriate compute system to perform the work, records progress, and chooses the next action after success or failure. You can think of it as a dispatcher that remembers the whole journey even though different workers drive each part of it.
@@ -47,7 +47,7 @@ This gives an ML platform two distinct areas of responsibility. The **control pl
 
 Large datasets and model files live in durable systems such as object storage, a warehouse, a lakehouse, or a model registry. The orchestrator keeps references, status, and small metadata. This boundary keeps the control plane responsive and allows another worker to continue the run after an earlier worker disappears.
 
-## Use the Smallest Control Layer That Fits
+## Choose The Simplest Way To Coordinate Training
 <!-- section-summary: Ordinary Python or a managed training job is often sufficient until a workflow gains independent stages, long waits, partial recovery, or historical reprocessing. -->
 
 An orchestrator adds value after the workflow develops orchestration problems. Many teams can begin with ordinary Python. A single program can load one prepared dataset, train one model, evaluate it, and write the outputs. The operating boundary is clear: one process succeeds or fails as a unit.
@@ -71,7 +71,7 @@ Now add a label-quality gate, two training routes, an evaluation branch, a delay
 
 The decision therefore starts with workflow shape and failure boundaries. Product familiarity matters later, after the team can explain which state must survive and which work must repeat.
 
-## The Orchestrator Has Seven Core Responsibilities
+## The Seven Jobs Of A Training Orchestrator
 <!-- section-summary: Production orchestration combines a graph, execution boundary, triggers, persisted state, artifact contracts, repetition policy, and shared capacity controls. -->
 
 Every orchestration product must satisfy the same architectural responsibilities, even if it uses different terminology. Responsibility-level vocabulary gives the team a stable basis for comparison and exposes weak recovery boundaries that a familiar user interface or programming language might hide.
@@ -88,7 +88,7 @@ flowchart TD
     F --> G["Shared Capacity<br/>(quotas priority and ownership)"]
 ```
 
-### 1. The workflow definition describes permitted work
+### 1. Define The Steps And Their Order
 
 A workflow definition explains the steps and their dependencies. The usual term is a **directed acyclic graph**, or **DAG**. A node represents a unit of work, and an edge says that one unit depends on another. “Acyclic” means one run has no dependency path that circles back to an earlier node.
 
@@ -98,7 +98,7 @@ These are related abstractions, yet they lead to different operator questions. A
 
 The graph captures dependencies. It still needs versioned runtime details: code revision, container digest, parameters, resource requests, and input identities. A run graph without those identities can show green boxes while leaving the actual computation unclear.
 
-### 2. Triggers create runs with specific meaning
+### 2. Decide When A Run Starts
 
 A **trigger** creates a run. It can be a schedule, an event, an API request, or an operator action. Every trigger should establish the inputs and business meaning of that run.
 
@@ -106,7 +106,7 @@ For a daily workflow, the run often represents a specific data interval or parti
 
 Event triggers need equivalent care. An object-created event should carry a stable dataset or manifest identity. Duplicate delivery is common in distributed systems, so the run-creation path needs a deduplication key or an idempotent policy.
 
-### 3. The control plane decides what is runnable
+### 3. Decide Which Steps Are Ready
 
 The **scheduler** examines run state and dependencies, then decides which task instances are ready. The wider **control plane** also includes APIs, workflow-definition processing, metadata persistence, authentication, and the operator interface.
 
@@ -114,7 +114,7 @@ This layer coordinates work; it should avoid performing heavy training inside th
 
 Separating coordination from computation protects the scheduler from memory-heavy code and long network calls. It also lets platform teams scale orchestration and training capacity independently.
 
-### 4. Workers and executors define where code runs
+### 4. Start Work On The Right Compute
 
 A **worker** is a service or process that receives runnable work. An **executor** is the mechanism that launches or manages task execution. A **work pool** groups an execution environment and its policy, such as a Kubernetes cluster, a serverless job service, or a group of virtual machines.
 
@@ -122,7 +122,7 @@ The exact boundary varies by product. Airflow uses executors to run task instanc
 
 The practical question stays constant: which service accepts work, which identity it uses, which infrastructure it can create, and who owns failures at that boundary?
 
-### 5. The state store lets the run survive process loss
+### 5. Record Progress So A Run Can Recover
 
 The orchestrator’s **state store** records run and task states such as scheduled, queued, running, completed, failed, cancelled, or waiting. It also records attempts, timestamps, parameters, and links to logs or external jobs.
 
@@ -130,7 +130,7 @@ This database acts as the control plane’s memory. A worker can disappear, and 
 
 State has several layers. Orchestration state answers whether a task may proceed. External compute state answers whether a cloud job or Kubernetes workload is active. Artifact state answers whether a declared model, table, or report exists and passes integrity checks. Reliable recovery reconciles all three.
 
-### 6. Artifact contracts connect one task to the next
+### 6. Pass Durable Outputs Between Steps
 
 An **artifact contract** defines the durable inputs and outputs of a task. A feature-building step may accept a dataset manifest and produce a feature-table version. Training may accept that version plus a configuration and produce a model URI, metrics, and lineage manifest.
 
@@ -138,7 +138,7 @@ The control plane carries small references. The artifact system carries the larg
 
 Completion should include output validation. A process exit code of zero proves that the process ended successfully. It says little about a missing model file, an empty metrics report, or an incompatible model signature. The task contract can require each output and verify its checksum, schema, or metadata before the next task starts.
 
-### 7. Capacity policy protects shared infrastructure
+### 7. Protect Shared Compute And Services
 
 Production workflows compete for database connections and external API quotas. They also share CPU, memory, and accelerators. A global run limit protects the control plane. Per-workflow limits, task pools, team queues, and within-run limits then protect each scarce resource at the relevant boundary.
 
@@ -146,7 +146,7 @@ For example, twenty historical backfill runs may each request four GPU jobs. Cre
 
 Capacity also has an owner. Every workflow, queue, and alert should route to a team that can interpret its failures. Without ownership, the central platform team serves as the accidental responder for domain errors such as invalid labels or an unacceptable evaluation result.
 
-## Recovery Depends on Safe Repetition
+## Recover Failed Work Without Duplicating It
 <!-- section-summary: Retry, repair, cache, and backfill repeat work for different reasons, so each requires its own identity and safety rules. -->
 
 Orchestration matters most during failure, yet recovery can be more dangerous than the original error. Repeating a pure validation query is usually safe. Repeating a task that already submitted a costly training job can duplicate work. Repeating a promotion step can change a production alias twice.
@@ -164,7 +164,7 @@ flowchart TD
     E --> G["Operator Decision<br/>(adopt cancel or rerun)"]
 ```
 
-### Retry repeats one failed attempt
+### Retry One Failed Step
 
 A **retry** gives the same task another attempt after a retryable failure. Temporary network errors, a lost worker before submission, and short-lived service throttling can fit this policy. Invalid schema, missing labels, and deterministic code errors require a correction first.
 
@@ -172,7 +172,7 @@ Retry policies need a maximum attempt count, delay or backoff, and a clear set o
 
 Airflow 3 provides a Task and Asset State Store for information such as external job identifiers or progress watermarks that must survive worker crashes and retries. Similar designs can use an orchestrator’s durable run metadata or a domain database. The key property is persistence across attempts; ordinary in-process variables and worker-local files lose that evidence.
 
-### Repair and resume preserve completed work
+### Resume From Completed Work
 
 A **repair** creates a controlled continuation after the cause has been understood. It reuses valid upstream outputs and runs the selected failed or downstream steps. **Resume** is a broader product term, so teams should document its exact semantics: which task states carry forward, which definition version runs, and how uncertain external effects are handled.
 
@@ -180,7 +180,7 @@ Suppose validation and feature generation succeeded, training failed because its
 
 Repair deserves a new audit record. It should capture the operator, reason, changed configuration, reused outputs, and new attempts. This keeps “the run eventually succeeded” from hiding the intervention that made it succeed.
 
-### Cache reuses equivalent successful work
+### Reuse An Existing Result
 
 A **cache hit** skips computation because an earlier execution already produced an equivalent valid output. Equivalence requires a complete identity. Data version and upstream artifact identities describe the inputs. A code or image digest, component version, parameters, and dependency environment describe the implementation.
 
@@ -188,7 +188,7 @@ Kubeflow Pipelines can cache component outputs according to the task inputs and 
 
 Training with a random seed illustrates the boundary. If nondeterministic training is intentional, reuse may conceal a desired new trial. The team can disable caching for that component or include a trial identity in the inputs. Data validation or deterministic feature transformation often benefits more clearly from caching.
 
-### Backfill creates runs for historical intervals
+### Run The Workflow For Past Data
 
 A **backfill** processes past intervals or partitions through a workflow definition. It supports missing-day repair, late labels, logic corrections, and rebuilding derived assets.
 
@@ -196,7 +196,7 @@ Historical execution needs explicit answers for code version, source snapshot, o
 
 Airflow exposes backfill runs with reprocessing and concurrency controls. Dagster can backfill selected asset partitions. Managed pipeline services can create parameterized historical runs even if they use different terminology. In every case, promotion should remain a separate governed action so a historical run cannot accidentally replace the current production model.
 
-## The State Store Needs Its Own Recovery Plan
+## Protect The Database That Records Workflow Progress
 <!-- section-summary: Orchestrator metadata, external jobs, and durable artifacts fail independently, so control-plane recovery must reconcile all three. -->
 
 The state database is one of the most important parts of an orchestrator. It contains the scheduler’s view of runs, attempts, queues, parameters, and external references. Losing it can make active work invisible even though cloud jobs continue and artifacts remain intact.
@@ -221,7 +221,7 @@ Self-hosted products make the platform team responsible for database backups, re
 
 A managed service transfers much of the control-plane operation to the provider. The ML team still needs stable run identifiers, artifact manifests, retention policy, exported audit evidence where required, and a response for a regional or platform outage. “Managed” changes who restores the scheduler; it leaves workflow-level reconciliation and business decisions with the user.
 
-## Choose the Orchestration Model Before the Product
+## Choose The Orchestrator That Fits The Workflow
 <!-- section-summary: Airflow, Dagster, Prefect, Kubeflow Pipelines, and managed platforms fit different workflow objects, execution boundaries, and operating responsibilities. -->
 
 Choose a product whose primary abstraction matches the workflow’s main object, whose execution model fits the workload plane, and whose control-plane ownership fits the team’s operating capacity. Evaluate its features against the real run and failure model.
@@ -245,7 +245,7 @@ flowchart TD
     B -->|Single provider ecosystem| G["Managed ML Pipeline<br/>(integrated control plane)"]
 ```
 
-### Airflow 3 fits scheduled work across many systems
+### Use Airflow 3 For Scheduled Work Across Many Systems
 
 Airflow’s central object is a Dag containing task instances, often tied to schedules and data intervals. It has a broad provider ecosystem and mature backfill behavior, which makes it common for organizations that already coordinate warehouse, Spark, data-quality, and ML jobs through one enterprise scheduler.
 
@@ -257,7 +257,7 @@ Versioned definitions matter during long runs. Airflow 3 Dag Bundles let deploym
 
 Airflow is a strong fit for an existing data-scheduling estate with cross-system dependencies. It is a heavier starting point for one or two self-contained training jobs.
 
-### Dagster fits durable assets, partitions, and lineage
+### Use Dagster For Data Assets, Partitions, And Lineage
 
 Dagster treats tables, files, models, and reports as **software-defined assets**. An asset definition explains how to materialize a durable object and which upstream assets it depends on. Partitions represent repeated slices such as dates, regions, or model routes. Materialization records and asset checks give operators a direct view of which result exists and whether it is healthy.
 
@@ -267,7 +267,7 @@ Dagster also separates execution responsibilities. A run launcher allocates a pr
 
 Dagster Open Source leaves the deployment and its storage, compute, and operations with the team. Dagster+ provides managed deployment choices. In both forms, the durable assets still live in systems such as object storage, a warehouse, or a lakehouse; Dagster records their orchestration and materialization metadata.
 
-### Prefect 3 fits Python flows and flexible execution
+### Use Prefect 3 For Python Workflows And Flexible Execution
 
 Prefect’s primary abstractions are **flows**, **tasks**, **deployments**, and **states**. A deployment records how and where a flow should run, plus schedules or event triggers. A work pool describes an execution environment, and a worker polls that pool to provision or submit flow-run infrastructure.
 
@@ -277,7 +277,7 @@ The operating boundary depends on the work-pool type. A hybrid pool uses a worke
 
 The friendly Python surface still needs production contracts. Results shared across separate workers need durable storage, deployments need versioned code and environments, and retries need idempotent effects.
 
-### Kubeflow Pipelines v2 fits containerized ML components on Kubernetes
+### Use Kubeflow Pipelines V2 For Containerized ML Work On Kubernetes
 
 Kubeflow Pipelines uses **components** with declared parameters and typed input or output artifacts. The v2 SDK compiles a Python pipeline definition into an intermediate-representation YAML file. A compatible backend turns the graph into Kubernetes-backed work and records the pipeline run.
 
@@ -287,7 +287,7 @@ Open-source Kubeflow Pipelines brings a substantial platform boundary: Kubernete
 
 New Kubeflow pipeline work should use the v2 SDK and intermediate representation. The v1 SDK reached its final release and no longer receives new releases.
 
-### Managed ML pipelines fit workflows concentrated in one ecosystem
+### Use Managed ML Pipelines For Work In One Cloud Ecosystem
 
 Managed ML services provide the orchestration control plane beside managed training, identity, metadata, registries, and deployment. This can reduce integration and operations work if most of the ML lifecycle already lives in that provider.
 
@@ -297,7 +297,7 @@ A managed option is especially attractive for a team already using the provider�
 
 Managed services preserve the same architecture rules. Large artifacts stay in governed storage. Task and component contracts remain versioned. External operation identifiers support reconciliation. The provider operates the control plane; the customer owns workflow meaning, data access, release policy, and proof that outputs are correct.
 
-## Credentials, Capacity, and Versioned Definitions Protect Shared Runs
+## Protect Credentials, Compute Capacity, And Workflow Versions
 <!-- section-summary: Production orchestration separates identities, controls shared capacity, and preserves the exact workflow definition used by every run. -->
 
 An orchestrator can start powerful workloads and reach sensitive data, so its security design separates identities. The person or CI service that deploys a workflow has different authority from the workload that reads training data. Operators who retry or cancel runs have a third role.
@@ -322,7 +322,7 @@ Every run should point to an immutable or recoverable workflow definition. That 
 
 Versioning supports two different recovery goals. Operational repair usually continues the original definition and preserves successful outputs. A corrected rerun uses a new definition and records the relationship to the failed run. Mixing those paths makes incident review and model lineage difficult.
 
-## Prove the Choice With Failure Drills
+## Test The Orchestrator With Failure Drills
 <!-- section-summary: A realistic pilot should demonstrate recovery, lineage, capacity control, and control-plane restoration alongside the successful path. -->
 
 A successful demo proves that the API can launch work. A production pilot also needs to prove that the team can understand and recover the run under pressure.

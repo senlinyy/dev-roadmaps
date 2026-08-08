@@ -9,19 +9,19 @@ id: "article-mlops-model-evaluation-approval-gates-before-deployment"
 
 ## Table of Contents
 
-1. [An Approval Gate Turns Evidence Into Production Authority](#an-approval-gate-turns-evidence-into-production-authority)
+1. [What An Approval Gate Checks Before Deployment](#what-an-approval-gate-checks-before-deployment)
 2. [Identify the Exact Proposal Before Review](#identify-the-exact-proposal-before-review)
-3. [Choose Evidence That Fits the Intended Use](#choose-evidence-that-fits-the-intended-use)
+3. [Require Evidence That Matches The Intended Use](#require-evidence-that-matches-the-intended-use)
 4. [Automate the Checks With Objective Answers](#automate-the-checks-with-objective-answers)
 5. [Give Human Reviewers Clear Decision Authority](#give-human-reviewers-clear-decision-authority)
 6. [Keep Passed, Failed, Unknown, and Deferred Separate](#keep-passed-failed-unknown-and-deferred-separate)
 7. [Make Exceptions Narrow and Temporary](#make-exceptions-narrow-and-temporary)
-8. [Enforce the Decision at the Deployment Boundary](#enforce-the-decision-at-the-deployment-boundary)
-9. [Keep Approval Current Through Verification, Expiry, and Audit](#keep-approval-current-through-verification-expiry-and-audit)
+8. [Block Deployment Unless The Approved Release Matches The Request](#block-deployment-unless-the-approved-release-matches-the-request)
+9. [Verify The Deployed Release And Expire Stale Approvals](#verify-the-deployed-release-and-expire-stale-approvals)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
-## An Approval Gate Turns Evidence Into Production Authority
+## What An Approval Gate Checks Before Deployment
 <!-- section-summary: An approval gate decides whether one exact release may influence a declared production population and makes the deployment path enforce that decision. -->
 
 Imagine a model that prioritizes incoming support messages. A new version finds more urgent messages on the approved evaluation set. The team proposes a five-percent canary for English-language web tickets. It brings the exact model and serving-image identities, the candidate comparison, segment results, a load test, monitoring queries, and a successful rollback drill.
@@ -53,10 +53,6 @@ flowchart TD
     H -. "risk unsupported" .-> Q
     V -. "stop condition" .-> R["Revoke and recover"]
 
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef operation fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class P,E,A evidence
     class H,D decision
     class F,V,X operation
@@ -97,7 +93,7 @@ Modern MLflow Model Registry workflows use immutable model versions plus tags an
 
 Managed registries expose similar concepts with different names. A SageMaker AI model package starts in `PendingManualApproval`. Review can move it to `Approved` or `Rejected`, and configured projects can react to that change through CI/CD. The status remains one part of the control. The surrounding decision still defines the scope and evidence, while named owners accept the operating conditions.
 
-## Choose Evidence That Fits the Intended Use
+## Require Evidence That Matches The Intended Use
 <!-- section-summary: Evidence requirements follow the proposed decision, population, harm, and operating environment instead of using one universal model checklist. -->
 
 An approval gate should ask for evidence that can answer the proposed production question. A low-risk weekly demand forecast reviewed by a planner needs a different packet from an automated clinical prioritization system. A universal checklist either blocks small changes with irrelevant work or gives high-impact changes too little scrutiny.
@@ -112,7 +108,7 @@ The intended use tells the team what to require:
 
 The candidate comparison supplies the central quality evidence. The production baseline and shared protocol establish what was compared. Effect size and uncertainty explain the change. Segment and robustness results show where that claim may narrow, and recorded limitations show what remains unknown. The gate also receives the exact requested scope so reviewers can tell whether the evidence reaches that far.
 
-### Organize requirements by the failure they protect
+### Organize Checks Around The Failures They Prevent
 
 Requirements make more sense to beginners and reviewers if each one protects a visible failure boundary:
 
@@ -146,7 +142,7 @@ The sequence matters. Identity and protocol checks run before performance checks
 
 Suppose a payment-risk candidate requires thirty days for its outcome label to mature. The pipeline can calculate service metrics immediately, while the quality check has no trustworthy answer after one week. The output should record that quality result as `unknown`. Omitting the check would make the packet appear more complete than it is.
 
-### Keep checks reproducible and independently visible
+### Record Enough Detail To Reproduce Every Automated Check
 
 Each result should record the check ID, policy version, state, observed value, required limit, evidence URI, and subject identity. Reviewers can then see which rule failed and rerun the same check.
 
@@ -234,7 +230,7 @@ Some boundaries should remain ineligible for exception. A high-impact release wi
 
 Exceptions should remain separate from ordinary approval. Otherwise, a temporary risk decision can slowly turn into the default production path. Expiry, alerts, and an owner make the temporary nature operationally visible.
 
-## Enforce the Decision at the Deployment Boundary
+## Block Deployment Unless The Approved Release Matches The Request
 <!-- section-summary: The delivery system compares the requested action with the active decision and fails closed on mismatched identity, scope, state, or expiry. -->
 
 A meeting record has little effect if the deployment pipeline can ignore it. The **enforcement point** is the place where a production-changing request is allowed or denied. It may be a managed ML deployment pipeline, a CI/CD job, a GitOps admission step, or an internal release service.
@@ -292,7 +288,7 @@ Provider-native status can participate in the same path. A SageMaker AI model pa
 
 *Registration records an artifact, approval grants scoped authority, deployment applies it, and verification keeps that authority tied to the running release.*
 
-## Keep Approval Current Through Verification, Expiry, and Audit
+## Verify The Deployed Release And Expire Stale Approvals
 <!-- section-summary: Active approval remains valid only while deployment identity, traffic scope, evidence assumptions, monitoring, and accountable ownership continue to hold. -->
 
 The deployment job should verify the result it created. It checks that the endpoint or batch job is running the approved model, image, feature, and policy versions. It confirms the traffic percentage and population route. Prediction events should carry the decision ID and safe release identity so monitoring can separate candidate and control.
@@ -301,7 +297,7 @@ The first production checks use immediate evidence: schema failures, feature cov
 
 If a stop condition fires, operations needs authority to revoke the decision and restore the retained release without waiting for another review meeting. Verification follows the data path: send a new request or inspect a new batch output, then confirm that the production identity has returned. The incident record preserves why authority was revoked.
 
-### Expiry forces stale evidence back into review
+### Require Another Review After Important Evidence Becomes Stale
 
 Some evidence ages quickly. Recent-traffic comparisons lose relevance after a major product change. Capacity tests can become stale after a serving-image update. Privacy assessments can depend on a supplier or data use that later changes.
 
@@ -309,7 +305,7 @@ An approval therefore needs an expiry rule. It might be a fixed duration, the ar
 
 Expansion also requires a new decision. Raising traffic changes capacity, label volume, queue pressure, cost, and exposure. The team can reuse valid evidence while adding the proof required by the larger scope.
 
-### Audit records connect intent to production state
+### Record What Was Approved And What Reached Production
 
 The audit trail should preserve:
 

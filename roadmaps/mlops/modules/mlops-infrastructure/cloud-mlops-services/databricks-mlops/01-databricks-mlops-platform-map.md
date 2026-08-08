@@ -12,16 +12,16 @@ id: "article-mlops-mlops-infrastructure-databricks-mlops-platform-map"
 1. [What Databricks MLOps Actually Means](#what-databricks-mlops-actually-means)
 2. [Why Machine Learning Needs More Than Ordinary DevOps](#why-machine-learning-needs-more-than-ordinary-devops)
 3. [How To Read The Platform Map](#how-to-read-the-platform-map)
-4. [The Durable Foundation: Code, Data, And Model History](#the-durable-foundation-code-data-and-model-history)
-5. [Development Turns Exploration Into Repeatable Work](#development-turns-exploration-into-repeatable-work)
-6. [Staging Proves The Pieces Work Together](#staging-proves-the-pieces-work-together)
-7. [Production Creates The Model Under Production Controls](#production-creates-the-model-under-production-controls)
-8. [Lakeflow Jobs Coordinates The Pipelines](#lakeflow-jobs-coordinates-the-pipelines)
-9. [Declarative Automation Bundles Move Reviewed Changes](#declarative-automation-bundles-move-reviewed-changes)
-10. [Serving Delivers Predictions In Three Different Ways](#serving-delivers-predictions-in-three-different-ways)
-11. [Monitoring Connects Predictions Back To Reality](#monitoring-connects-predictions-back-to-reality)
+4. [Record The Code, Data, And Model Used For Each Run](#record-the-code-data-and-model-used-for-each-run)
+5. [Turn Exploration Into Repeatable Development Work](#turn-exploration-into-repeatable-development-work)
+6. [Test The Complete ML Workflow In Staging](#test-the-complete-ml-workflow-in-staging)
+7. [Run Training Under Production Controls](#run-training-under-production-controls)
+8. [Coordinate Training And Data Pipelines With Lakeflow Jobs](#coordinate-training-and-data-pipelines-with-lakeflow-jobs)
+9. [Deploy Reviewed Databricks Changes With Declarative Automation Bundles](#deploy-reviewed-databricks-changes-with-declarative-automation-bundles)
+10. [Choose Batch, Streaming, Or Online Predictions](#choose-batch-streaming-or-online-predictions)
+11. [Monitor Predictions, Service Health, And Real Outcomes](#monitor-predictions-service-health-and-real-outcomes)
 12. [Decide Which Responsibilities Databricks Should Own](#decide-which-responsibilities-databricks-should-own)
-13. [The Complete Journey](#the-complete-journey)
+13. [Follow The Complete Databricks MLOps Lifecycle](#follow-the-complete-databricks-mlops-lifecycle)
 14. [References](#references)
 
 ## What Databricks MLOps Actually Means
@@ -56,10 +56,6 @@ flowchart TD
     F --> G["Investigate, improve,<br/>or retrain"]
     G --> A
 
-    classDef learn fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef prove fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef operate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef respond fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B learn
     class C,D prove
     class E,F operate
@@ -132,20 +128,20 @@ The three environments have different goals.
 
 A small team may separate these environments through catalogs, schemas, permissions, and separate job identities inside one workspace. A larger or regulated organization often uses separate workspaces and catalogs, separate service principals, and stronger network boundaries. The separation should match the risk. Its purpose is to keep experiments from changing production and to give release automation a clear target.
 
-## The Durable Foundation: Code, Data, And Model History
+## Record The Code, Data, And Model Used For Each Run
 <!-- section-summary: Git, Delta Lake, Unity Catalog, and MLflow preserve the histories needed to reproduce and investigate a production model. -->
 
 Every automated task eventually finishes. The cluster may shut down and the notebook session may disappear. The system still needs a reliable account of what happened. Databricks MLOps uses three connected histories for that job: code history, data history, and model history.
 
 Imagine that a model starts producing poor results six months after its release. The investigation follows the prediction back to the governed candidate in Unity Catalog and its evaluation in MLflow. That model record points to the training table state preserved by Delta Lake. The training run also points to the source revision recorded in Git. A notebook name or model file would leave most of this path missing, while these connected identifiers carry the investigation across the complete lifecycle.
 
-### Git records the code history
+### Use Git To Record The Training Code
 
 Git holds feature logic, training code, tests, configuration, and deployment definitions. A commit identifies the exact source revision used by a workflow. For example, commit `7da0b53` may contain the transformation that calculates `transactions_7d` and the validation rule that rejects a candidate after segment recall falls below its threshold.
 
 The repository should contain repeatable project code. Exploration can stay in a notebook while the idea is still changing. Once the team wants CI or a scheduled job to run it, the useful logic moves into reviewed source files. Python modules and SQL files hold the transformations and algorithms. Workflow configuration defines how automation runs them, while tests protect the expected behaviour.
 
-### Delta Lake records the data history
+### Use Delta Lake To Record Data Versions
 
 **Delta Lake** gives tables on cloud object storage reliable transactions and version history. In simple terms, a Delta table has data files plus a transaction log that records each committed change. Readers receive a consistent table state, and a training run can point to one table version.
 
@@ -155,7 +151,7 @@ A table version protects the stored state used by the job. The training pipeline
 
 Labels have another clock. If churn means “cancelled within 30 days,” a prediction from 1 March needs an observation window through the end of March. The training table can include the row after that window has completed. Point-in-time feature joins and label-maturity rules work together: one protects the input time, and the other waits for the outcome.
 
-### Unity Catalog gives assets governed names
+### Give Data And Models Governed Names With Unity Catalog
 
 **Unity Catalog** is the governance layer that organizes and protects data and AI assets. A three-part name such as `prod.features.churn_training` means the `churn_training` table inside the `features` schema and `prod` catalog.
 
@@ -163,7 +159,7 @@ That name carries practical controls. Unity Catalog can grant a training identit
 
 Lineage shows observed technical relationships. Business meaning still needs a human owner. A graph can show that `monthly_fee` entered the model, while a data contract explains its currency, null policy, update schedule, and owner. Both pieces matter during an investigation.
 
-### MLflow records the model history
+### Use MLflow To Record Model Development
 
 **MLflow 3** records what happened during model development. An **experiment** groups related work. A **run** records one execution, including parameters, metrics, datasets, tags, and artifacts. A **Logged Model** gives the trained model its own identity, allowing evaluation evidence from several runs to connect to the same model. **Models in Unity Catalog** then gives accepted candidates governed names and immutable versions.
 
@@ -175,7 +171,7 @@ These histories connect into one evidence chain:
 
 Consider a poor prediction with ID `pred_82a`. The decision record points to endpoint `churn-risk-prod` and model version 18. Unity Catalog identifies the governed candidate. MLflow identifies the run, metrics, dataset, code revision, signature, and Logged Model. Delta identifies the training table at version 128. The team now has a concrete path to investigate.
 
-## Development Turns Exploration Into Repeatable Work
+## Turn Exploration Into Repeatable Development Work
 <!-- section-summary: Development starts with open-ended investigation and produces data, training, evaluation, and monitoring code that automation can run again. -->
 
 Development is the learning stage. The team is still discovering whether the data can solve the problem and which approach deserves production investment. Databricks notebooks, SQL, Spark, Python, and AutoML can all support this exploration.
@@ -184,7 +180,7 @@ Suppose the task is fraud detection. A data scientist may inspect label delay, c
 
 This work is exploratory because the questions keep changing. A notebook is useful here: the scientist can inspect a chart, change a query, and try another model. The production result of this stage is the reusable logic discovered during that exploration.
 
-### Feature code needs a stable time definition
+### Define Which Historical Data Each Feature May Use
 
 Feature logic turns raw events into values the model can use. A feature such as “transactions during the last ten minutes” needs an exact event-time window, a policy for late events, and a rule for duplicate transactions. The training path must calculate the feature as it would have existed at each historical prediction time.
 
@@ -192,7 +188,7 @@ Databricks Feature Engineering and Feature Store can help teams create, register
 
 This machinery earns its place after features need reuse or online consistency. A monthly model that reads three stable warehouse columns may only need a well-tested Delta transformation. A real-time fraud service with shared features across several models gains more from a feature platform.
 
-### MLflow turns trials into comparable evidence
+### Track Experiments So Runs Can Be Compared
 
 During exploration, people often remember a model as “the XGBoost run from Tuesday.” MLflow gives that attempt a durable record. The run can capture the algorithm, parameters, metrics, training-data reference, plots, code revision, environment, and model artifact.
 
@@ -228,7 +224,7 @@ The **signature** describes the columns and types accepted and returned by the m
 
 Development ends with repeatable project code and explicit evaluation rules. The team now knows how to build features, train a candidate, evaluate it, and produce the monitoring records needed later. Staging tests whether those pieces still work after automation replaces the interactive notebook session.
 
-## Staging Proves The Pieces Work Together
+## Test The Complete ML Workflow In Staging
 <!-- section-summary: Staging runs reviewed code in a controlled environment to check software behaviour, pipeline integration, and model acceptance logic. -->
 
 Staging answers a practical question: can the complete system run from start to finish under conditions that resemble production? It uses controlled data, production-like permissions, and temporary resources to expose broken connections safely. A notebook result gives evidence about an idea. Staging gives evidence about the automated implementation and the records that implementation will create.
@@ -251,7 +247,7 @@ Imagine that the candidate passes offline quality checks and the temporary endpo
 
 The recovery path is straightforward. The application or serving wrapper adds the governed model version to its decision record. CI reruns the request, checks the response, confirms that the prediction row contains the expected version, and removes the temporary endpoint after the test. Production receives the change only after the evidence path works.
 
-## Production Creates The Model Under Production Controls
+## Run Training Under Production Controls
 <!-- section-summary: Production runs reviewed pipeline code against governed data, validates the resulting model, and records an explicit release decision. -->
 
 Production has stricter goals than development. Jobs run with production identities. They read governed production data, use approved compute, write to controlled locations, and produce evidence that other people can inspect. Data scientists often receive read access for investigation, while automation owns the main write path.
@@ -271,7 +267,7 @@ Consider a weekly churn model. The production job creates a release record that 
 
 The values form a release record. Each one points to evidence kept by Git, Delta Lake, MLflow, Unity Catalog, or the approval system.
 
-### Models in Unity Catalog gives the candidate a governed identity
+### Give Each Trained Model A Governed Version In Unity Catalog
 
 **Models in Unity Catalog** manages registered model names and immutable versions. In everyday terms, the registered name identifies the model's purpose, while the version identifies one exact trained candidate. A name such as `prod.customer_models.churn` groups the candidates used for churn prediction. Version 18 always points to the same candidate, even after a later version receives production traffic.
 
@@ -279,7 +275,7 @@ The older Workspace Model Registry is a legacy path. Older tutorials may also sh
 
 An alias is a readable pointer to a model version. A team may use `Challenger` for the accepted candidate under comparison and `Champion` for the model chosen by the release process. The immutable version remains the audit identity. The alias expresses the current role and can move after a reviewed decision.
 
-### Validation needs a meaningful baseline
+### Compare The Trained Model With A Meaningful Baseline
 
 A training job that exits successfully has proved that code ran. Model validation asks whether the result deserves release. The checks can cover overall quality, important segments, calibration, robustness, model size, latency, input signature, required documentation, fairness, privacy, and compliance rules.
 
@@ -302,10 +298,6 @@ flowchart TD
     K --> L["Repair and<br/>reevaluate"]
     L --> E
 
-    classDef model fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef approved fill:#A3E635,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stopped fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,E,H model
     class C,F,I decision
     class J approved
@@ -316,7 +308,7 @@ The state names make the release decision visible. The job may automate many che
 
 Retraining in the target environment can be expensive for very large models. Current Databricks tooling also supports copying model versions across registered models for workflows where retraining in every environment is impractical. The choice should preserve the source artifact, evaluation, destination identity, and approval evidence.
 
-## Lakeflow Jobs Coordinates The Pipelines
+## Coordinate Training And Data Pipelines With Lakeflow Jobs
 <!-- section-summary: Lakeflow Jobs turns separate data, training, validation, inference, and monitoring tasks into repeatable workflows with visible dependencies and retries. -->
 
 An ML lifecycle contains work that runs on different schedules. Features may refresh hourly. Training may run weekly. Batch predictions may run every night. Outcome evaluation may wait thirty days for labels. One notebook cannot reliably coordinate all of that work.
@@ -335,10 +327,6 @@ flowchart TD
     E -->|"No"| G["Keep evidence and<br/>notify the owner"]
     F --> H["Create release record"]
 
-    classDef data fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B data
     class C,D model
     class E decision
@@ -353,7 +341,7 @@ Each task needs its own retry behaviour. A read-only validation task can usually
 
 Lakeflow Jobs fits work that mainly runs in Databricks. An organization may already use Airflow or Dagster to coordinate a warehouse, approval service, application deployment, and Databricks jobs. The external orchestrator can own that cross-platform process while Lakeflow Jobs owns the bounded Databricks workflow. One system should hold the final retry and release state for each step.
 
-## Declarative Automation Bundles Move Reviewed Changes
+## Deploy Reviewed Databricks Changes With Declarative Automation Bundles
 <!-- section-summary: Declarative Automation Bundles keep Databricks project code and resource definitions in Git so CI can validate and deploy the same project across environments. -->
 
 Clicking through a UI works well during exploration. Repeating those clicks across development, staging, and production creates hidden differences. One job may use another schedule, compute policy, service principal, permission set, or model name. Those differences often appear during an incident or release.
@@ -378,14 +366,14 @@ Terraform, OpenTofu, Pulumi, or cloud-native infrastructure tooling often owns t
 
 Rollback follows the type of change. A broken job definition can be repaired by deploying an earlier reviewed Git revision. A model-quality regression can be contained by routing traffic to the previously approved model version. Each action preserves the history for its own asset.
 
-## Serving Delivers Predictions In Three Different Ways
+## Choose Batch, Streaming, Or Online Predictions
 <!-- section-summary: Databricks can deliver predictions through batch, streaming, or online paths, and each path fits a different deadline and workload shape. -->
 
 After approval, the model needs to deliver a result where the product can use it. The correct delivery path depends on how soon the answer is needed, how much work arrives, and how the consumer reads the result.
 
 An overnight retention process can wait for one large table of scores. A payment authorization needs one answer in a fraction of a second. A fraud-event stream sits between those cases because it processes continuing events without waiting for a daily batch. Databricks supports all three patterns, and each one has a different way to measure completeness, recover from failure, and control cost.
 
-### Batch inference handles large scheduled work
+### Use Batch Inference For Large Scheduled Work
 
 **Batch inference** scores a known set of records together. A retention team may need churn scores for five million accounts before 06:00 each morning. A Lakeflow job can load the approved model, score the current table, and write predictions to a governed Delta table.
 
@@ -393,7 +381,7 @@ Batch health comes from completeness and deadlines. The job should record expect
 
 Safe publication often uses a staging table. The job writes all candidate output there, checks coverage and quality, then updates a table alias or pointer in one step. Downstream readers receive the previous complete result or the new complete result.
 
-### Streaming inference handles continuing event flows
+### Use Streaming Inference For Continuing Event Flows
 
 **Streaming inference** scores events continuously as they arrive. It fits a pipeline that reads a Kafka topic or streaming Delta table, enriches each event, applies the model, and writes predictions to another stream or table.
 
@@ -401,7 +389,7 @@ The workflow needs event-time rules, checkpointing, late-data handling, and idem
 
 Suppose a transaction stream restarts from its latest checkpoint and replays 2,000 payments. A writer keyed only by arrival time could create another prediction and another fraud-review case for every replayed payment. A stable transaction ID and model version allow the output table to merge the repeated work safely. After restart, the team checks the input offset, prediction count, duplicate count, and age of the oldest unprocessed event before declaring recovery.
 
-### Online serving handles immediate requests
+### Use Online Serving For Immediate Requests
 
 **Databricks Model Serving** provides managed serverless endpoints for real-time requests. An **endpoint** is the stable API address called by the application. A **served entity** is a model version or other supported model behind the endpoint. The endpoint configuration controls compute and traffic routing.
 
@@ -415,7 +403,7 @@ Online features add another request-time dependency. Databricks Feature Engineer
 
 The product also needs a fallback. A recommendation service might return a cached popular list. A fraud service might send the payment to review. A medical decision may need to stop and wait for a human. The application team defines that safe behaviour because the endpoint cannot decide which degraded result the product may accept.
 
-## Monitoring Connects Predictions Back To Reality
+## Monitor Predictions, Service Health, And Real Outcomes
 <!-- section-summary: Production monitoring combines service health, prediction records, data evidence, and delayed outcomes to show what changed and how the team should respond. -->
 
 Deployment starts the model's operational life. Real requests now contain new combinations of data, dependencies face real load, and the world continues changing. The model can return valid-looking predictions long after their quality has started to decline.
@@ -479,7 +467,7 @@ A larger estate has more coordination pressure. Dozens of models may share lakeh
 
 Platform choice also includes portability. Delta Lake and MLflow provide open formats and APIs that help. Unity Catalog permissions, Lakeflow job definitions, bundle schemas, Feature Engineering behaviour, and Model Serving configuration still belong to Databricks. A portability plan should preserve model artifacts, data contracts, evaluation reports, dependencies, and release records in forms another runtime can use.
 
-## The Complete Journey
+## Follow The Complete Databricks MLOps Lifecycle
 <!-- section-summary: The full Databricks MLOps journey connects reviewed code, governed data, model evidence, automated delivery, predictions, and outcomes. -->
 
 The complete journey follows one production question: how does a useful experiment turn into a prediction that the team can trust and investigate? Each stage adds a different kind of evidence. Together, those records connect the original idea to production behaviour.

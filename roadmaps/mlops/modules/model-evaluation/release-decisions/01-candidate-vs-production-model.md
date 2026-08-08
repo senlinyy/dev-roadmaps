@@ -9,19 +9,19 @@ id: "article-mlops-model-evaluation-candidate-vs-production-model"
 
 ## Table of Contents
 
-1. [A Candidate Must Improve the Decision Users Receive](#a-candidate-must-improve-the-decision-users-receive)
+1. [Compare A New Model With The Complete System Running Today](#compare-a-new-model-with-the-complete-system-running-today)
 2. [Start With the Current System and a Release Question](#start-with-the-current-system-and-a-release-question)
 3. [Give Both Systems a Fair Comparison](#give-both-systems-a-fair-comparison)
-4. [Measure the Replacement Effect and Its Uncertainty](#measure-the-replacement-effect-and-its-uncertainty)
+4. [Measure What Changes If The New Model Replaces The Current System](#measure-what-changes-if-the-new-model-replaces-the-current-system)
 5. [Find Who Benefits and Who Carries the Errors](#find-who-benefits-and-who-carries-the-errors)
 6. [Test the Complete Release Under Production Conditions](#test-the-complete-release-under-production-conditions)
-7. [Build Evidence in Offline, Shadow, and Canary Stages](#build-evidence-in-offline-shadow-and-canary-stages)
-8. [Choose the Smallest Release Scope the Evidence Supports](#choose-the-smallest-release-scope-the-evidence-supports)
-9. [Verify the Decision After Traffic Moves](#verify-the-decision-after-traffic-moves)
+7. [Test Offline First, Then With Shadow And Limited Live Traffic](#test-offline-first-then-with-shadow-and-limited-live-traffic)
+8. [Choose The Smallest Release Scope Justified By The Results](#choose-the-smallest-release-scope-justified-by-the-results)
+9. [Verify The Release After It Starts Receiving Traffic](#verify-the-release-after-it-starts-receiving-traffic)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
-## A Candidate Must Improve the Decision Users Receive
+## Compare A New Model With The Complete System Running Today
 <!-- section-summary: Candidate review asks whether replacing the current production decision path creates enough useful improvement to justify the change. -->
 
 Suppose a delivery service already gives customers an estimated arrival time. The running model predicts the time, a policy clips extreme estimates, and a route-based fallback supplies an answer if live features are missing. A new model reduces average error in a notebook.
@@ -51,9 +51,6 @@ flowchart TD
     E -. "harm or uncertainty" .-> H
     O -. "unsafe operation" .-> H
 
-    classDef question fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class P,C,E,O question
     class A decision
     class H hold
@@ -146,7 +143,7 @@ print({"paired_mae_change": paired["loss_change"].mean()})
 
 The two outputs answer separate questions. Coverage shows whether each path served the intended population. The paired change shows the quality difference where both paths produced a result. A release report needs both; one cannot substitute for the other.
 
-### Use several evaluation sets for several kinds of confidence
+### Use Different Evaluation Sets For Different Release Questions
 
 One dataset rarely answers every release question. Teams commonly combine:
 
@@ -160,7 +157,7 @@ The sets have different jobs. Repeatedly consulting the frozen holdout during tu
 
 The report should keep those roles visible instead of blending all rows into one score. The protocol also records dataset versions, code revision, model and policy identities, and exclusions so another reviewer can reconstruct the comparison.
 
-## Measure the Replacement Effect and Its Uncertainty
+## Measure What Changes If The New Model Replaces The Current System
 <!-- section-summary: Paired effects describe the change caused by replacement, while uncertainty shows how precisely the evaluation estimates that change. -->
 
 After the comparison is valid, the next question is how much the replacement changes the outcome. Two isolated scores answer, “How did each system perform on average?” A **paired effect** answers, “What changed for the same unit after switching from production to the candidate?”
@@ -185,10 +182,6 @@ flowchart TD
     Q -- "Yes" --> S["Continue to segment and operating review"]
     Q -- "No" --> M["Collect more evidence or narrow the claim"]
 
-    classDef input fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef analysis fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class U,P,C input
     class D,G,I analysis
     class Q,S decision
@@ -242,7 +235,7 @@ The team therefore creates a complete **release identity**. The model and servin
 
 The operational tests should recreate the intended workload:
 
-### Contract and dependency checks
+### Check Inputs, Dependencies, And Fallbacks
 
 Representative requests should pass through input validation, feature lookup, preprocessing, inference, post-processing, and fallback. The test covers missing optional fields, invalid types, large payloads, dependency timeouts, and model startup. A model signature from MLflow or a provider registry helps describe inputs and outputs; application-level tests still verify policy and fallback behaviour around the model.
 
@@ -250,7 +243,7 @@ Representative requests should pass through input validation, feature lookup, pr
 
 Load tests should use realistic request sizes, concurrency, traffic shape, and hardware. Review p50, p95, and p99 latency, throughput, queue time, error rate, memory, accelerator utilization, cold starts, and cost per useful prediction. Averages can hide the tail experienced by users.
 
-### Identity, monitoring, and recovery checks
+### Check Release Identity, Monitoring, And Rollback
 
 Prediction events need enough safe metadata to identify the release. The model and deployment IDs show which runtime produced the result. Feature and policy versions explain the surrounding decision logic. A traffic role distinguishes candidate, control, and shadow events, while a correlation ID connects approved operational records. Sensitive raw inputs belong in governed storage only if policy permits them.
 
@@ -270,7 +263,7 @@ The registry organizes evidence and provides model versions. The CI or managed p
 
 For ordinary teams, a managed endpoint is the practical starting point. Amazon SageMaker AI provides model approval status plus managed canary and rollback controls; Azure Machine Learning supports versioned assets and traffic across endpoint deployments. Kubernetes teams with an existing platform can use Argo Rollouts to combine canary traffic with metric analysis. The operating cost of Kubernetes rarely makes sense solely to gain a canary controller.
 
-## Build Evidence in Offline, Shadow, and Canary Stages
+## Test Offline First, Then With Shadow And Limited Live Traffic
 <!-- section-summary: Offline, shadow, and canary stages answer different questions, so the release path should match the model's risk and delivery pattern. -->
 
 No test environment reproduces every part of production. A historical replay can use mature labels and still miss a feature-service timeout introduced yesterday. Sending the candidate real requests reveals that timeout, although it says nothing about user outcomes if the candidate's answer remains hidden. Teams build confidence in stages because each stage exposes a different part of the production path.
@@ -291,9 +284,6 @@ flowchart LR
     S -. "contract, capacity, or dependency failure" .-> H
     C -. "guardrail or harm signal" .-> R["Stop and restore stable traffic"]
 
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef live fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef hold fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class O,S evidence
     class C,W live
     class H,R hold
@@ -303,7 +293,7 @@ This sequence is a menu rather than a compulsory ladder. A monthly batch forecas
 
 Progressive-delivery tooling applies the same principle in different environments. SageMaker AI can shift a canary portion to a new fleet and use CloudWatch alarms to trigger rollback. Azure managed online endpoints can keep blue and green deployments behind one endpoint and move traffic explicitly. Argo Rollouts can run Prometheus-backed analysis during Kubernetes canaries. Each tool controls exposure; the team still defines the ML quality, segment, and product signals that determine success.
 
-## Choose the Smallest Release Scope the Evidence Supports
+## Choose The Smallest Release Scope Justified By The Results
 <!-- section-summary: A release outcome binds an exact candidate to the population, traffic level, conditions, owners, stop signals, and expiry justified by its evidence. -->
 
 After the evidence stages, the team decides how much authority the candidate has earned. “Approved” by itself is too vague. Approval for isolated shadow traffic carries no permission to change user decisions. Approval for five percent of one route carries no permission for another region or broad traffic.
@@ -339,7 +329,7 @@ Modern MLflow Registry workflows use model versions, tags, and aliases; fixed mo
 
 The scope must be technically enforceable. A written city-only approval has little value if the router cannot keep other traffic out. The release record, deployment policy, and traffic controller should describe the same boundary.
 
-## Verify the Decision After Traffic Moves
+## Verify The Release After It Starts Receiving Traffic
 <!-- section-summary: Post-release verification checks the serving identity, traffic boundary, early operating signals, mature outcomes, and rollback path before authority expands. -->
 
 A release decision is a claim about future production behaviour. Traffic provides the first chance to test that claim against current inputs, dependencies, users, and feedback effects.

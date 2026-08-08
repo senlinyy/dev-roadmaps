@@ -10,19 +10,19 @@ aliases: ["tool-runtime-design"]
 
 ## Table of Contents
 
-1. [Tool Calls Need a Runtime Between the Model and the Service](#tool-calls-need-a-runtime-between-the-model-and-the-service)
+1. [Why Tool Calls Need An Execution Runtime](#why-tool-calls-need-an-execution-runtime)
 2. [Follow One Complete Tool Call](#follow-one-complete-tool-call)
-3. [Build the Runtime Around Ten Responsibilities](#build-the-runtime-around-ten-responsibilities)
-4. [Discovery and Eligibility Limit the Choice](#discovery-and-eligibility-limit-the-choice)
-5. [Validation and Trusted Context Create a Safe Request](#validation-and-trusted-context-create-a-safe-request)
-6. [Authorization and Adapters Protect the Domain Boundary](#authorization-and-adapters-protect-the-domain-boundary)
-7. [Timeouts, Retries, and Idempotency Control Failure](#timeouts-retries-and-idempotency-control-failure)
-8. [Result Semantics Drive State Transitions](#result-semantics-drive-state-transitions)
-9. [Observability and Recovery Close the Execution Path](#observability-and-recovery-close-the-execution-path)
-10. [Choose an Industrial Runtime Shape](#choose-an-industrial-runtime-shape)
+3. [The Ten Jobs Of A Tool Runtime](#the-ten-jobs-of-a-tool-runtime)
+4. [Choose Which Tools The Model Can See And Use](#choose-which-tools-the-model-can-see-and-use)
+5. [Validate Arguments And Add Trusted Context](#validate-arguments-and-add-trusted-context)
+6. [Authorize The Tool Call And Translate It For The Service](#authorize-the-tool-call-and-translate-it-for-the-service)
+7. [Handle Timeouts, Retries, And Duplicate Writes](#handle-timeouts-retries-and-duplicate-writes)
+8. [Use The Tool Result To Choose The Next Run State](#use-the-tool-result-to-choose-the-next-run-state)
+9. [Trace Tool Calls And Recover From Failure](#trace-tool-calls-and-recover-from-failure)
+10. [Choose A Production Runtime Design](#choose-a-production-runtime-design)
 11. [References](#references)
 
-## Tool Calls Need a Runtime Between the Model and the Service
+## Why Tool Calls Need An Execution Runtime
 <!-- section-summary: A tool runtime turns a model proposal into a controlled operation by supplying trusted identity, policy, execution rules, and a durable result. -->
 
 At a high level, **a tool runtime is the application layer that decides whether a model-requested action may run, performs the approved operation, and reports exactly what happened**. The model sees a useful capability such as “look up an order.” The runtime connects that capability to the real order service under the correct identity and policy.
@@ -79,7 +79,7 @@ sequenceDiagram
 
 A real runtime may distribute these steps across several services. Their order still matters. Eligibility limits the model's choices before generation, while authorization makes the final decision immediately before execution.
 
-## Build the Runtime Around Ten Responsibilities
+## The Ten Jobs Of A Tool Runtime
 <!-- section-summary: Ten connected responsibilities carry a proposed tool call from discovery to a recoverable state transition. -->
 
 The complete runtime can be understood as ten responsibilities. Each one answers a different production question, and each produces an input needed by the next step. Skipping one creates a specific gap: the model may see the wrong tool, the service may receive an unsafe request, or the run may lose the meaning of a failure.
@@ -109,31 +109,26 @@ flowchart TD
     H --> I["Persist state transition"]
     I --> J["Trace, verify, or recover"]
 
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef control fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef effect fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,C choice
     class D,E,F control
     class G,H effect
     class I,J evidence
-    linkStyle default stroke:#AAB9E8,stroke-width:3px
 ```
 
 The model participates at the proposal step. Software owns every gate around it. This separation lets a team change models without moving identity or payment policy into a prompt. It also lets the same adapter serve a deterministic workflow, a human-facing application, and an agent.
 
-## Discovery and Eligibility Limit the Choice
+## Choose Which Tools The Model Can See And Use
 <!-- section-summary: Discovery finds possible tools, while eligibility exposes only the subset relevant and permitted for the current step. -->
 
 A small agent can receive three tool definitions in every model call. A production platform may connect to hundreds of operations across customer support, billing, data, and engineering systems. Sending the complete catalogue wastes context and gives the model many irrelevant choices.
 
-### Discovery finds possible tools
+### Discover Available Tools
 
 **Discovery** answers, “Which tools exist?” Local function registration is the simplest implementation. The Model Context Protocol, known as **MCP**, gives clients a standard way to discover remote tools through `tools/list` and invoke one through `tools/call`. Each definition includes a name, description, and JSON Schema for its arguments. JSON Schema is a machine-readable description of the fields and value shapes a request may contain.
 
 Discovery only finds candidates.
 
-### Eligibility creates a per-step allowlist
+### Create A Per-Step Tool Allowlist
 
 **Eligibility** decides which candidates belong in the current model step. A support agent investigating an order may receive read-only order and shipping tools. A refund tool can remain hidden until evidence has been collected and the workflow reaches a proposal state. A development environment should never expose a production deployment action simply because a registry contains it.
 
@@ -147,18 +142,18 @@ Hiding a tool improves relevance and reduces accidental selection. It does not g
 
 Tool definitions also need version and ownership metadata in the registry even if the model does not see all of it. The runtime should know which team owns the adapter, which schema revision it expects, and whether the operation is read-only or effectful. MCP tool annotations can describe behavior, although the MCP specification tells clients to treat annotations as untrusted unless the server itself is trusted.
 
-## Validation and Trusted Context Create a Safe Request
+## Validate Arguments And Add Trusted Context
 <!-- section-summary: Validation checks model-controlled fields, while trusted context supplies identity and internal dependencies that the model cannot choose. -->
 
 After the model chooses a tool, the runtime still has a string name and model-generated arguments. Both are untrusted input.
 
-### Schema checks the proposed shape
+### Validate The Proposed Arguments
 
 The first validation layer checks the contract. The runtime resolves the exact registered tool and parses its arguments with a strict schema. A refund amount declared as a positive decimal should reject `"all of it"`. An order identifier should reject an unexpected object or extra fields. Schema validation catches shape and type errors before a service call starts.
 
 Business validation comes next. A schema can prove that `delivery_date` is a date. It cannot prove that the date falls inside the carrier's rescheduling window. Application code checks those cross-field and domain rules. Invalid requests return specific field errors so the orchestrator can permit a bounded correction.
 
-### Trusted context supplies what the model cannot choose
+### Add Identity And Authority Outside The Model
 
 The runtime then adds **trusted context**. This is local application data that tool code can use without sending it to the model as editable arguments. It commonly holds the authenticated principal, run ID, policy client, service adapter, and deadline. The OpenAI Agents SDK represents this local data through `RunContextWrapper`; its documentation distinguishes local runtime context from the conversation content visible to the model.
 
@@ -201,18 +196,18 @@ The `Field` pattern rejects malformed order IDs. `RunContextWrapper` supplies de
 
 This code is one SDK implementation of the boundary. A Java service, an MCP client, or a workflow activity should preserve the same separation between proposed arguments and trusted execution context.
 
-## Authorization and Adapters Protect the Domain Boundary
+## Authorize The Tool Call And Translate It For The Service
 <!-- section-summary: Authorization decides whether the action is permitted, and an adapter translates the approved request into the owning service's operation. -->
 
 Validation can produce a perfectly shaped request that the caller has no right to perform. **Authorization** answers a separate question: may this authenticated principal perform this action on this resource under the current policy?
 
-### Policy evaluates current trusted facts
+### Evaluate Policy With Current Trusted Facts
 
 An order read may require ownership of the order. A refund may require a support role and a matching approval above a threshold. A deployment may require the target service to be inside the operator's environment scope. These checks need current records from trusted systems. A role claimed in tool arguments or quoted from a retrieved document has no authority.
 
 The authorization decision should identify the policy version and the resource it evaluated. High-impact writes also need approval bound to the exact proposal. If the amount or destination changes after approval, the proposal hash changes and the runtime must request a new decision.
 
-### Adapters translate a stable tool contract
+### Convert Tool Arguments Into The Service Request
 
 After authorization, an **execution adapter** translates the stable tool contract into the API owned by the domain service. For example, `shipping.reschedule_delivery` may call a carrier API that uses different field names and status codes. The adapter normalises those details and protects the rest of the harness from provider changes.
 
@@ -222,22 +217,22 @@ Credentials follow the same boundary. The model sees neither a cloud token nor a
 
 Adapters also create a controlled place for rollout. A team can route a small percentage of read traffic through a new shipping adapter, compare its structured results with the old path, and fall back without changing prompts. Write adapters need stronger verification, such as provider-side test accounts or shadow validation that never commits an effect.
 
-## Timeouts, Retries, and Idempotency Control Failure
+## Handle Timeouts, Retries, And Duplicate Writes
 <!-- section-summary: Timeouts bound waiting, retries repeat safe attempts, and idempotency preserves one intended external effect across repeated calls. -->
 
 External services fail in several ways. A request can wait in a queue, lose its connection, receive a temporary error, or commit a write before the response disappears. Treating all four conditions as “tool failed” creates unsafe recovery.
 
-### Timeouts cap waiting
+### Set A Timeout For Each Call
 
 A **timeout** limits how long one phase may wait. The runtime should distinguish time spent waiting for capacity from time spent inside the dependency where possible. It also needs an overall deadline inherited from the run. A two-second tool timeout cannot extend a user request whose remaining budget is half a second.
 
-### Retry only failures that another attempt can change
+### Retry Only Failures A New Attempt Can Fix
 
 A **retry** sends another attempt after a failure that may be temporary. Read-only calls often tolerate a small retry budget with exponential backoff and random jitter. Backoff increases the delay between attempts. Jitter spreads callers across slightly different delays so they do not all retry at once.
 
 Permanent errors should return immediately. Invalid arguments need correction, and permission denial needs a new authorization path. Repeating either request consumes capacity without changing the cause.
 
-### Idempotency protects one intended write
+### Prevent Duplicate Writes
 
 Writes require an **idempotency key**. This key identifies one intended effect across retries. The runtime creates it before the first attempt, stores it in run state, and sends it to the service that commits the effect. The service must record the key with the transaction. Keeping the key only in the agent transcript provides no protection at the external boundary.
 
@@ -263,7 +258,7 @@ The lookup is **reconciliation**. It asks the owning service whether the effect 
 
 Temporal models failure-prone external operations as Activities and recommends idempotent Activity code. Activities provide timeouts and retry policies for tool adapters inside durable workflows. The default Activity retry policy permits repeated attempts. An effectful tool therefore needs named errors that must stop immediately and a bound on total retry time. Its idempotency and reconciliation rules must still match the domain service.
 
-## Result Semantics Drive State Transitions
+## Use The Tool Result To Choose The Next Run State
 <!-- section-summary: A structured outcome preserves failure meaning so the orchestrator can choose a safe next state without asking the model to guess. -->
 
 The model needs a useful result, while the orchestrator needs an operational fact. A single free-form string rarely serves both purposes.
@@ -305,12 +300,12 @@ stateDiagram-v2
 
 Parallel calls add one more rule. Results from independent reads can merge after both complete. Writes against the same resource often need a version check or serial execution. The model may request parallel work, while the runtime enforces dependency limits and rejects conflicting effects.
 
-## Observability and Recovery Close the Execution Path
+## Trace Tool Calls And Recover From Failure
 <!-- section-summary: Tool-call traces explain the path, while recovery procedures reconcile uncertain effects and prove that the run returned to a safe state. -->
 
 A tool runtime is incomplete if the team cannot answer what ran, under whose authority, and what changed. Imagine an operator finding two refund records after one agent run. A generic error log cannot show whether the model proposed two calls, the runtime retried one call, or the payment service duplicated one effect. Observability preserves that path, while recovery uses it to restore a safe state.
 
-### Trace the call without copying its payload
+### Trace The Call Without Copying Sensitive Payloads
 
 OpenTelemetry represents one request path as a **trace** made of timed **spans**. A tool call can have a parent span for the agent step and child spans for authorization and the external service call. Shared trace context connects work across processes.
 
@@ -320,13 +315,13 @@ Raw prompts and customer documents should stay out of general telemetry. Credent
 
 Metrics reveal patterns across calls. A rise in `invalid_request` may point to a poor schema description. Increasing `denied` outcomes may reveal stale eligibility rules. Old `outcome_unknown` records indicate that reconciliation is stuck. Latency and saturation show whether the adapter or dependency needs capacity work.
 
-### Recovery follows the outcome class
+### Recover According To The Result Type
 
 Recovery follows the outcome class. A temporary read failure can use its bounded retry policy. A permission denial goes to the access owner. An uncertain write goes to reconciliation under its original idempotency key. A schema rollout failure can route traffic back to the previous adapter version.
 
 A useful recovery test deliberately loses the response after a test write. The run should enter `outcome_unknown`, find the committed effect by key, persist its external identifier, and finish without a duplicate. The trace should show both attempts and the reconciliation decision. This test proves that the runtime handles the failure most likely to cause hidden damage.
 
-## Choose an Industrial Runtime Shape
+## Choose A Production Runtime Design
 <!-- section-summary: Runtime shape follows tool location, interoperability, effect risk, and the durability required by the surrounding workflow. -->
 
 Teams rarely need a separate tool platform on their first day. An application with a few local tools can register typed functions in its agent software development kit, usually called an **SDK**. The application process can supply trusted context, enforce policy, call ordinary service clients, and emit OpenTelemetry spans.

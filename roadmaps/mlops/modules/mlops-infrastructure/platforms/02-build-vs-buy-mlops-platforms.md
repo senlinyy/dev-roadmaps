@@ -12,179 +12,368 @@ aliases:
 
 ## Table of Contents
 
-1. [Build Versus Buy Decides Who Owns The Platform](#build-versus-buy-decides-who-owns-the-platform)
-2. [Map Responsibilities Before Products](#map-responsibilities-before-products)
-3. [Hard Constraints Remove Invalid Options](#hard-constraints-remove-invalid-options)
-4. [Delivery Models Trade Control For Operating Work](#delivery-models-trade-control-for-operating-work)
-5. [Ownership Includes The Night And Weekend](#ownership-includes-the-night-and-weekend)
-6. [Security And Governance Need End-To-End Evidence](#security-and-governance-need-end-to-end-evidence)
-7. [Three-Year Economics Include Opportunity Cost](#three-year-economics-include-opportunity-cost)
-8. [Proof Of Concept Tests The Riskiest Claims](#proof-of-concept-tests-the-riskiest-claims)
-9. [Adoption Tests The Platform As A Product](#adoption-tests-the-platform-as-a-product)
-10. [Architecture Often Combines Buy And Build](#architecture-often-combines-buy-and-build)
-11. [Exit Strategy Is Part Of The Initial Design](#exit-strategy-is-part-of-the-initial-design)
-12. [The Decision Is An Operating Commitment](#the-decision-is-an-operating-commitment)
-13. [References](#references)
+1. [What Build Versus Buy Actually Decides](#what-build-versus-buy-actually-decides)
+2. [List The ML Workloads The Platform Must Support](#list-the-ml-workloads-the-platform-must-support)
+3. [Decide Which Capabilities Need Custom Design](#decide-which-capabilities-need-custom-design)
+4. [Decide What The Provider And Internal Team Will Operate](#decide-what-the-provider-and-internal-team-will-operate)
+5. [Compare Total Cost With Team Capacity](#compare-total-cost-with-team-capacity)
+6. [Check Every Integration Between Platform Components](#check-every-integration-between-platform-components)
+7. [Protect Data And Compliance Boundaries](#protect-data-and-compliance-boundaries)
+8. [Test How The Team Would Leave Or Replace The Platform](#test-how-the-team-would-leave-or-replace-the-platform)
+9. [Compare Four Practical Platform Delivery Models](#compare-four-practical-platform-delivery-models)
+10. [Run A Fair Platform Pilot](#run-a-fair-platform-pilot)
+11. [Define Who Owns And Operates The Platform](#define-who-owns-and-operates-the-platform)
+12. [Adopt The Platform In Stages](#adopt-the-platform-in-stages)
+13. [The Main Idea](#the-main-idea)
+14. [References](#references)
 
-## Build Versus Buy Decides Who Owns The Platform
-<!-- section-summary: A platform decision assigns responsibilities to a managed vendor, composable services, or an internal engineering team. -->
+## What Build Versus Buy Actually Decides
+<!-- section-summary: Build versus buy decides where the organization places the operating boundary for each ML platform capability. -->
 
-An ML platform supplies shared capabilities for data access, development, training, artifacts, evaluation, registry, serving, monitoring, security, and governance. **Build versus buy** decides who delivers and operates those capabilities.
+A team can train its first model with a notebook, a storage bucket, and a few scripts. As more models reach production, the same questions appear repeatedly. Who provisions compute? Who records experiments? Who controls releases? Who patches the serving runtime? Who answers an alert at two in the morning?
 
-The choice is a spectrum:
+**Build versus buy is the decision about which of those responsibilities the organization will operate and which it will ask a provider to operate.** It is an operating-boundary decision. The boundary can sit in a different place for training, orchestration, model records, serving, monitoring, and governance.
 
-- A **managed platform** provides an integrated control plane and managed runtime services.
-- A **composable platform** combines managed cloud services, commercial products, and open-source components.
-- An **internal platform** builds opinionated workflows on infrastructure the organization operates.
+Building rarely means writing every component from scratch. An internal platform may still use cloud object storage, managed databases, Kubernetes, MLflow, and commercial observability. The organization builds the product layer and owns the integration. Buying places more shared machinery behind a managed API. The customer still owns its data meaning, model quality, access rules, release decisions, and product outcomes.
 
-Few teams build every underlying component. A Kubernetes-based internal platform still buys cloud compute, storage, identity, networking, and often databases. A managed platform still leaves model quality, data contracts, access policy, release decisions, and incident ownership with the customer.
-
-The decision framework has seven stages: map responsibilities, identify hard constraints and service objectives, choose plausible delivery models, assign ownership and on-call burden, evaluate integration and economics, run a proof of concept, and design migration and exit.
+Consider a team choosing an online prediction platform. A managed endpoint can provision replicas, apply host patches, autoscale, and expose service metrics. The team still defines the request contract, selects the approved model, tests prediction behaviour, chooses a fallback, and investigates bad outcomes. A self-managed Kubernetes service moves replica health, upgrades, autoscaling, and more of the incident path onto the internal team.
 
 ```mermaid
-flowchart LR
-    Needs["Platform responsibilities and users"] --> Constraints["Hard constraints and service objectives"]
-    Constraints --> Options["Managed, composable, and internal options"]
-    Options --> Ownership["Operating and support ownership"]
-    Ownership --> Economics["Three-year cost and opportunity cost"]
-    Economics --> Proof["Representative proof of concept"]
-    Proof --> Decision["Architecture and operating commitment"]
-    Decision --> Exit["Export, migration triggers, and exit path"]
+flowchart TD
+    Need["Business And ML Work<br/>(the decisions and workloads the platform must support)"] --> Capabilities["Required Capabilities<br/>(interfaces, control, execution, evidence, governance, and operations)"]
+    Capabilities --> Boundary["Operating Boundary<br/>(provider ownership and internal ownership)"]
+    Boundary --> Evidence["Matched Evaluation<br/>(cost, risk, usability, recovery, and exit tests)"]
+    Evidence --> Decision["Staged Commitment<br/>(scope, owners, adoption, and review triggers)"]
 ```
 
-An option that fails a hard constraint leaves the decision before feature scoring. The remaining options move through ownership, economics, and proof together because a cheaper component can require more engineering and an integrated service can create stronger coupling. The exit path closes the loop by testing whether the organisation can recover its important assets and workflows if the chosen platform later stops fitting.
+The choice therefore comes after the required work is understood. Starting from a vendor comparison encourages feature shopping. Starting from operating responsibilities reveals which capabilities matter, who can own them, and how the decision can be tested.
 
-## Map Responsibilities Before Products
-<!-- section-summary: A responsibility map reveals which capabilities need a common platform and which can remain with existing systems. -->
+## List The ML Workloads The Platform Must Support
+<!-- section-summary: A workload inventory and capability map describe real user journeys, constraints, evidence, and service expectations before products enter the discussion. -->
 
-Start from the platform architecture: workspace and identity, data and features, compute and training, pipelines, experiment evidence, artifact and model registry, serving, observability, cost, governance, and developer experience.
+The evaluation starts with a **workload inventory**. This is a short record of the ML work the organization expects the platform to support. It describes workload shape rather than listing every existing script.
 
-For each responsibility, record the current system, required service level, consumers, data sensitivity, owner, and pain. Some capabilities may already be strong. A company with a governed warehouse and reliable Kubernetes platform should not replace them merely to adopt an “end-to-end” ML suite.
+Suppose the organization has three common journeys. A weekly CPU training pipeline reads governed warehouse tables and publishes one candidate model. A distributed GPU job fine-tunes a large model and needs checkpoint recovery. A low-latency endpoint serves thousands of requests per second and must roll back within ten minutes. These journeys need different compute, orchestration, evidence, and reliability.
 
-The map also prevents feature-count comparisons. A vendor may advertise monitoring while the team needs delayed-label quality by segment. An open-source registry may store versions while the organization needs cross-region approval, audit, and retention. Requirements should be expressed as outcomes and evidence.
+For each journey, capture who uses it and how often it runs. Record where its data lives and how large the workload is. Add the accelerator and runtime requirements, output, production consequence, recovery target, and current pain.
 
-## Hard Constraints Remove Invalid Options
-<!-- section-summary: Data residency, latency, availability, workload, identity, network, regulation, and existing estate define the feasible set. -->
+Include difficult work that is likely to influence the architecture. A platform pilot built only around a small scikit-learn notebook will reveal little about private networking, large artifacts, queue policy, or serving recovery.
 
-Hard constraints are conditions an option must satisfy. They may include data residency, private networking, customer-managed keys, identity provider integration, audit retention, GPU type, custom runtime, online latency, regional availability, or existing warehouse access.
+Next, translate the journeys into a **capability map**. The map describes outcomes the platform must provide:
 
-Service-level objectives should cover training job start and completion, pipeline recovery, registry availability, endpoint latency and availability, rollback time, and support response. Workload shape matters: notebook research, scheduled batch training, distributed GPU training, low-latency inference, and many small models place different demands on a platform.
+- **Development interface** gives a team a reviewed way to define and test its work.
+- **Lifecycle control** coordinates data preparation, training, evaluation, release, and status.
+- **Execution** supplies suitable CPU, GPU, distributed, batch, and online runtimes.
+- **Evidence** connects source, data, runs, models, evaluations, approvals, and deployments.
+- **Governance** applies identity, data access, policy, audit, and environment boundaries.
+- **Operations** covers telemetry, capacity, cost, recovery, support, and service ownership.
 
-Data gravity can dominate architecture. Moving large governed datasets across clouds or into a vendor-managed copy adds cost, latency, privacy, and lifecycle complexity. The platform should meet data near its authoritative home unless a measured benefit justifies movement.
+```mermaid
+flowchart TD
+    Inventory["Workload Inventory<br/>(users, scale, data, runtime, and consequence)"] --> Journeys["Representative Journeys<br/>(ordinary, difficult, and production-critical work)"]
+    Journeys --> Capabilities["Capability Map<br/>(the platform outcomes each journey requires)"]
+    Capabilities --> Criteria["Acceptance Criteria<br/>(evidence, performance, recovery, and security)"]
+    Criteria --> Options["Plausible Options<br/>(only products that can support the required work)"]
+```
 
-Hard constraints must be tested rather than accepted from sales language. “Private” can describe several network models. “Portable” can mean only the model artifact. “Managed monitoring” may omit the product outcomes the team needs.
+Write acceptance criteria as observable results. “Has monitoring” is too vague. “Exports endpoint latency, error, saturation, model version, and request correlation into the operating team’s telemetry system” can be demonstrated. Private data access, separate identities, an approval record, and an exportable audit trail provide a concrete governance test.
 
-## Delivery Models Trade Control For Operating Work
-<!-- section-summary: Managed, composable, and internal platforms differ in customization, integration, portability, and operational ownership. -->
+This map also prevents unnecessary replacement. A team may already have strong identity, lakehouse data, workflow orchestration, and observability. The platform decision can preserve those systems and fill the missing ML lifecycle connections.
 
-Managed platforms can shorten setup for training jobs, pipelines, registries, endpoints, permissions, and monitoring. They also impose provider APIs, supported runtimes, regional availability, quotas, upgrade cadence, and cost structure.
+## Decide Which Capabilities Need Custom Design
+<!-- section-summary: The organization should invest internal engineering in capabilities that express unique product or risk needs and prefer proven services for repeated infrastructure work. -->
 
-Composable platforms select the strongest component for each responsibility. They preserve existing data and operations investments but require well-designed handoff contracts and unified identity, metadata, and observability.
+Some platform capabilities express how the organization competes or manages a distinctive risk. Others solve common infrastructure problems that many providers already handle well.
 
-Internal platforms provide the most opinionated integration with company workflows and constraints. They require product management, documentation, support, upgrades, reliability, security, and a long-term engineering team. Internal platform code is a product, not a one-time project.
+A capability is **differentiating** if its behaviour is closely tied to the product, operating model, or a constraint that standard services cannot satisfy. A marketplace may need a release policy that evaluates quality separately for buyers and sellers. A medical workflow may require a reviewed evidence packet and a human decision before a model can influence care. A trading system may require a specialized latency path and deterministic fallback.
 
-The correct level of control follows differentiating constraints. Custom scheduling, specialized accelerators, strict multi-tenancy, or a unique release workflow may justify internal work. Rebuilding ordinary experiment tracking or endpoint orchestration without a concrete advantage usually consumes scarce engineering attention.
+Commodity work is repeated machinery whose details rarely create product value. Provisioning an ordinary training worker, storing an immutable artifact, rotating service credentials, or keeping a metadata database available often fits this category. Mature managed services can reduce setup and operating work here.
 
-## Ownership Includes The Night And Weekend
-<!-- section-summary: A responsibility assignment names who patches, supports, scales, secures, audits, and recovers each platform layer. -->
+The label depends on the organization. GPU scheduling can be ordinary for a team that runs a few managed jobs. It may be strategic for a research lab with thousands of accelerators, custom network topology, and a scheduler that directly affects research throughput. The same technical capability belongs on a different side of the boundary because the scale and consequence differ.
 
-For every capability, assign a responsible owner, service owner, security reviewer, cost owner, and escalation path. A managed service still requires customer ownership for configuration, access, data, model behaviour, integration, quotas, and vendor escalation.
+```mermaid
+flowchart TD
+    Capability["Platform Capability<br/>(one outcome from the capability map)"] --> ProductFit{"Unique Product Or Risk<br/>behaviour required?"}
+    ProductFit -->|Yes| InternalContract["Internal Product Contract<br/>(own the semantics and supported path)"]
+    ProductFit -->|No| ProvenService{"Proven Managed Capability<br/>meets constraints?"}
+    ProvenService -->|Yes| ManagedDefault["Managed Default<br/>(buy the repeated machinery)"]
+    ProvenService -->|No| Compose["Composable Or Internal Layer<br/>(own the verified gap)"]
 
-For internal components, include cluster and database upgrades, dependency vulnerabilities, backup and recovery, telemetry, user support, SDK compatibility, documentation, capacity, and incident response. The relevant question is not whether the team can build a demo. It is whether the organization will fund continuous operation.
+    class InternalContract,Compose custom
+```
 
-Skills and hiring matter. A small team with strong data engineering and weak Kubernetes operations should account for that mismatch. Existing platform teams can reduce incremental ownership if the ML layer follows their standards.
+This analysis should name the exact gap. “We need flexibility” gives no design direction. “The managed trainer cannot schedule our required accelerator topology” identifies a testable reason to operate a different execution layer. Internal work then stays focused on the gap instead of recreating an entire suite.
 
-## Security And Governance Need End-To-End Evidence
-<!-- section-summary: Platform choice is evaluated through identity, network, data, artifact, release, audit, and supplier controls. -->
+## Decide What The Provider And Internal Team Will Operate
+<!-- section-summary: The operating boundary assigns configuration, patching, scaling, security, recovery, support, and product responsibilities for every capability. -->
 
-Compare single sign-on, workload identity, least privilege, tenant isolation, network paths, secrets, encryption, audit exports, data retention, model and artifact integrity, approval enforcement, and incident evidence.
+The **operating boundary** separates provider work from customer work. Marketing categories such as fully managed or cloud native do not define that boundary precisely enough. The evaluation must examine each capability.
 
-A vendor's certifications support supplier review but do not automatically make the customer's model use compliant. The organization still owns data selection, evaluation, human oversight, production monitoring, and business decisions.
+Take managed model serving. The provider may provision hosts, replace failed machines, autoscale replicas, and expose endpoint metrics. The customer usually supplies the model package and dependency contract. It configures network access, authentication, scaling limits, traffic policy, alerts, and cost controls. The model team owns prediction quality and the application owns user-facing fallback.
 
-Open-source components also create supplier and patching obligations. The team needs version policy, vulnerability response, provenance, upgrade testing, and end-of-life planning. A broad stack can increase supply-chain surface faster than it increases product value.
+Now take self-managed MLflow on Kubernetes. The project supplies tracking and registry software. The internal team owns the database, artifact store, identity integration, upgrades, backups, availability, SDK compatibility, monitoring, and incident response. Open-source licensing removes a subscription fee; it does not remove those operating duties.
 
-## Three-Year Economics Include Opportunity Cost
-<!-- section-summary: Total cost includes vendor consumption, infrastructure, engineers, support, migration, downtime risk, and work the team cannot do. -->
+```mermaid
+flowchart TD
+    Provider["Provider Responsibility<br/>(managed infrastructure and documented service behaviour)"] --> Boundary["Operating Boundary<br/>(configuration, integration, and escalation contract)"]
+    Boundary --> PlatformTeam["Platform Team<br/>(supported paths, policy, reliability, and user support)"]
+    PlatformTeam --> ModelTeam["Model Team<br/>(data meaning, model code, evaluation, and quality)"]
+    ModelTeam --> ProductTeam["Product Team<br/>(decision policy, user impact, and fallback)"]
 
-Managed cost includes subscriptions, compute, storage, network transfer, endpoint idle capacity, observability, support, and premium governance features. Internal cost includes infrastructure plus engineering for build, operation, upgrades, security, on-call, and user support.
+    class Boundary boundary
+```
 
-Estimate cost under realistic growth and utilization. GPU list price means little without idle time, queueing, reservation, and workload scheduling. A managed endpoint may cost more per hour and reduce engineering delay. An internal cluster may lower unit compute cost and require several platform engineers.
+For every capability, name who handles setup, routine operation, security patches, and capacity. Assign backups, user support, incident response, and recovery testing too.
 
-Opportunity cost is often decisive. Engineers building a generic pipeline UI are not improving data quality, model evaluation, or product integration. Conversely, a vendor limitation that blocks a critical workload can impose recurring workaround cost.
+Add vendor escalation where a managed service is involved. An internal owner still needs enough evidence to decide whether the fault lies in customer configuration or provider infrastructure.
 
-Use ranges and sensitivity analysis rather than one precise three-year number. Identify which assumptions—traffic, team size, storage growth, vendor discount, or migration—can change the decision.
+Ownership includes time. A team may have the skill to build a controller during a quarter and lack the staffing to maintain it for three years. The credible boundary is the one the organization can fund through upgrades, staff changes, security events, and production incidents.
 
-## Proof Of Concept Tests The Riskiest Claims
-<!-- section-summary: A proof of concept uses representative workloads and an evidence scorecard rather than a polished demo. -->
+## Compare Total Cost With Team Capacity
+<!-- section-summary: Total cost combines consumption, infrastructure, engineering, support, migration, reliability risk, and the work delayed by platform ownership. -->
 
-Select two or three real workflows: one ordinary training pipeline, one difficult workload, and one production serving or governance path. Use real identity, network, data volume, artifact size, and approval constraints in a safe environment.
+Subscription price and cloud compute are only part of platform cost. A useful comparison covers the complete operating period, often three years, and models growth rather than the first pilot month.
 
-Measure time to first successful run, developer effort, reproducibility evidence, failure recovery, queue and startup time, performance, permissions, audit export, deployment and rollback, observability, and estimated cost. Include an upgrade or version change if platform lifecycle is a concern.
+For a managed option, include subscription or consumption charges, storage, network transfer, idle endpoint capacity, observability, premium security features, support, and internal integration. For an internal option, include infrastructure plus platform engineers, security work, upgrades, on-call, user support, backup and recovery, and capacity planning.
 
-The scorecard weights hard constraints separately from preferences. A failed data-residency or latency requirement disqualifies an option regardless of notebook polish. User research with ML engineers and operators captures workflow friction the technical benchmark misses.
+Team capacity turns those numbers into a delivery decision. Four platform engineers assigned to a custom training layer are four engineers unavailable for data quality, evaluation, monitoring, or product integration. That **opportunity cost** may dominate the invoice difference.
 
-Vendors such as SageMaker, Vertex AI, Azure Machine Learning, and Databricks should be compared through these dimensions. An open-source Kubernetes stack receives the same test. Product categories do not determine the result.
+Consider two serving options. A managed endpoint costs more per replica-hour and gives the team autoscaling, host recovery, deployment APIs, logs, and provider support. A Kubernetes service has a lower raw compute rate because it shares an existing cluster. The internal cost also includes serving-controller upgrades, image patching, accelerator scheduling, traffic management, dashboards, and on-call. A fair model compares the complete service delivered to users.
 
-The scorecard needs testable acceptance criteria. It should describe one workload and its expected evidence rather than copy a vendor feature list.
+```mermaid
+flowchart TD
+    Consumption["Service Consumption<br/>(compute, storage, network, and subscriptions)"] --> TCO["Total Cost Of Ownership<br/>(the complete operating cost)"]
+    Engineering["Engineering Capacity<br/>(build, integration, upgrades, and support)"] --> TCO
+    Risk["Reliability And Security Risk<br/>(downtime, recovery, and incident exposure)"] --> TCO
+    Migration["Change Cost<br/>(adoption, migration, and future exit)"] --> TCO
+    TCO --> Sensitivity["Sensitivity Review<br/>(growth, utilization, discounts, and staffing assumptions)"]
+```
 
-| Capability under test | Representative action | Passing evidence |
-| --- | --- | --- |
-| Private data path | train from governed data with public egress blocked | network and audit logs show the approved private path |
-| Failed-step recovery | stop a training worker after useful work | pipeline resumes safely without duplicating a dataset or model version |
-| Release trace | deploy a reviewed candidate to a small canary | endpoint reports the expected run, model, image, and schema identities |
-| Rollback | trigger a stop rule during canary | previous complete release serves fixtures inside the recovery objective |
-| Audit export | reconstruct one approval and deployment | exported evidence identifies actor, decision, artifact, and traffic change |
-| Cost attribution | run ordinary and accelerator workloads | spend maps to team, model, environment, and idle or queued capacity |
+Use ranges instead of one precise number. Model low, expected, and high workload growth. Test GPU utilization, endpoint idle time, storage retention, vendor discounts, support load, and staffing assumptions. The decision should identify which assumption could reverse the result.
 
-The failed-worker exercise exposes **idempotency**, which means that repeating one logical operation leaves one final result. A platform that reruns validation and creates another dataset snapshot needs an operation ID or a compensating design. The release trace checks whether training evidence survives into serving. The rollback drill measures restoration and prediction behaviour rather than accepting a successful control-plane response.
+## Check Every Integration Between Platform Components
+<!-- section-summary: Integration seams are the handoffs where identity, state, data, evidence, and ownership move between platform components. -->
 
-Run the same scorecard against every plausible option and retain raw logs, resource identities, timings, and operator notes. A failure report should identify the pipeline state before injection, the resumed step, duplicate side effects, the final run identity, and the platform work required to pass. That evidence reveals hidden ownership. A managed service may recover the worker and still leave the customer responsible for idempotent publication. An internal stack may offer full control and require the team to build the entire reconciliation path.
+A **seam** is the handoff between two parts of the platform. Composable platforms have visible seams between the orchestrator, compute service, experiment tracker, registry, deployment system, and observability backend. Integrated managed platforms have seams too, especially where they meet the organization’s source control, data platform, identity provider, application, and incident process.
 
-The proof also establishes a baseline for future review. If production scale later violates the same recovery, cost, or latency criteria, the team can compare the new result with the original evidence and decide whether to tune the system, replace one layer, or exercise the exit plan.
+The important question is what must survive each handoff. A training request carries source and data identity into the execution service. The completed run carries its model and metrics into evaluation. A release carries the approved model into serving. Production telemetry carries the deployed version and request identity into investigation.
 
-## Adoption Tests The Platform As A Product
-<!-- section-summary: Platform adoption measures whether real users can complete supported paths safely and whether the operating team can sustain the service. -->
+```mermaid
+flowchart TD
+    Workflow["Workflow System<br/>(run identity and expected inputs)"] --> Compute["Execution Service<br/>(job state, logs, and outputs)"]
+    Compute --> Tracking["Evidence System<br/>(run, dataset, metric, and model identities)"]
+    Tracking --> Release["Release System<br/>(approval, target, and rollback version)"]
+    Release --> Serving["Serving Runtime<br/>(traffic and observed model version)"]
+    Serving --> Operations["Operations System<br/>(telemetry, incident, and outcome joins)"]
 
-A technically capable platform can fail because users cannot discover the supported path, migrate existing runs, debug failures, or obtain help. The decision therefore needs an adoption plan with target users, paved workflows, migration support, documentation, service ownership, and success measures.
+    class Compute,Release seam
+```
 
-Start with a small number of representative teams. Give them a complete path from data access through training, review, deployment, monitoring, and recovery. Record where they leave the platform for manual work, copy credentials, create untracked artifacts, or require platform engineers to repair ordinary runs. Those observations show missing interfaces and ownership more clearly than a satisfaction score alone.
+Suppose a managed training job succeeds, yet its artifact upload fails. The orchestrator may show a green compute step while the registry has no usable model. The seam needs an output contract and a publication status. A retry must avoid creating two competing model versions. The incident also needs a named owner across the workflow and artifact services.
 
-Measure adoption through outcomes: lead time for a safe model change, percentage of releases with complete lineage, recovery time, support volume, repeated custom exceptions, idle accelerator cost, and the number of teams using the paved path without platform intervention. High signup counts can hide a workflow that teams abandon before production.
+Evaluate seams through failure, not only the happy path. Expire a credential during a job. Block artifact storage. Cancel a workflow during checkpoint publication. Remove endpoint capacity during rollout. The evidence should identify the failed boundary, retain the operation identity, and support a safe retry or rollback.
 
-The rollout should include an exception process. A research workload may need an unsupported accelerator or library. The platform team can approve a bounded escape hatch, capture its owner and risk, and decide whether repeated exceptions justify a new shared capability. Without this path, teams either wait for the platform or build invisible parallel systems.
+Integration effort continues after launch. APIs change, SDKs move, identity policies evolve, and each system follows its own maintenance cycle. A composable design earns its flexibility only if the organization can operate these contracts reliably.
 
-Adoption evidence feeds the build-versus-buy decision after launch. Persistent vendor limitations may support replacing one layer. Repeated internal support load may justify buying a managed capability. The platform remains an operating product whose fit requires regular review.
+## Protect Data And Compliance Boundaries
+<!-- section-summary: Platform evaluation must trace sensitive data, identities, network paths, encryption, audit evidence, and decision responsibility through the complete lifecycle. -->
 
-## Architecture Often Combines Buy And Build
-<!-- section-summary: Many organizations buy commodity control planes and build a thin opinionated layer for company-specific workflows. -->
+Data location can remove options before a pilot begins. Large governed datasets often live in a warehouse, lakehouse, or object store with established permissions and retention. Copying them into another cloud or vendor-controlled store adds transfer cost, lifecycle work, and another security boundary.
 
-A practical platform may keep the warehouse and identity systems, use managed training and registry, deploy custom low-latency serving on Kubernetes, and provide an internal CLI or portal that hides provider differences. Another may use a data platform for features and experiments, then a cloud model endpoint for regulated deployment.
+Trace the data path from authoritative source through feature preparation, training, artifacts, serving, prediction logs, and outcomes. Record which system stores each copy, which identity reads it, which region processes it, how long it remains, and which audit trail proves the access.
 
-The internal layer should encode company-specific contracts: project templates, data access, approved runtimes, required evaluation, artifact identity, deployment policy, observability, and cost tags. It should avoid reimplementing generic scheduling, storage, or dashboards unless the proof of concept showed a real gap.
+```mermaid
+flowchart TD
+    Source["Authoritative Data<br/>(governed tables and retention policy)"] --> Training["Training Boundary<br/>(private access and workload identity)"]
+    Training --> Artifact["Model And Evidence<br/>(encryption, integrity, and governed storage)"]
+    Artifact --> Serving["Serving Boundary<br/>(runtime identity and network controls)"]
+    Serving --> Logs["Production Records<br/>(redaction, access, and retention)"]
+    Audit["Audit Evidence<br/>(actor, asset, action, policy, and time)"] --> Training
+    Audit --> Artifact
+    Audit --> Serving
+    Audit --> Logs
+```
 
-Handoff contracts preserve flexibility. Versioned datasets, OCI images, portable model formats where appropriate, OpenTelemetry, and exported metadata can reduce coupling. Portability has a cost and should protect a plausible migration, not an imaginary future.
+Supplier certifications support vendor review. The organization still decides whether a particular data use, model, approval process, and production action meets its obligations. Cloud shared-responsibility guidance makes the same boundary explicit: the provider secures managed infrastructure, while the customer owns content, configuration, access, and service-specific use.
 
-## Exit Strategy Is Part Of The Initial Design
-<!-- section-summary: A platform decision records export, data and artifact ownership, contract boundaries, migration triggers, and dual-run options. -->
+Test concrete controls. Verify private network paths with egress blocked. Use workload identity instead of long-lived keys. Confirm customer-managed encryption requirements, regional availability, audit export, deletion, backup, and legal retention. Review subprocessors and incident-notification terms through the organization’s supplier process.
 
-Identify which metadata, models, datasets, reports, lineage, audit records, and configurations can be exported. Test the export. Record proprietary runtime or feature dependencies that would require redesign.
+Open-source components change the supplier shape. The internal team owns vulnerability response, provenance, patching, version policy, and end-of-life planning. A larger stack increases the number of components that security and operations must follow.
 
-Contract and pricing changes, regional requirements, service retirement, reliability, or strategy may trigger migration. A staged exit can move one responsibility at a time if handoffs are clear. Dual-running critical release or serving paths may provide evidence before cutover.
+## Test How The Team Would Leave Or Replace The Platform
+<!-- section-summary: Lock-in is the measured cost of moving data, metadata, runtime behaviour, workflows, identities, and operating knowledge to another implementation. -->
 
-Internal platforms need exit plans too. Components lose maintainers, open-source projects enter limited maintenance, and custom abstractions can trap teams as effectively as vendor APIs.
+**Lock-in** is the cost and difficulty of changing the chosen platform. Every production system creates some coupling. The useful question is which coupling protects valuable capability and which coupling creates an expensive future constraint.
 
-## The Decision Is An Operating Commitment
-<!-- section-summary: A sound platform choice connects responsibilities, constraints, owners, economics, proof, and a reversible architecture. -->
+Data lock-in appears through proprietary storage or difficult export. Metadata lock-in appears if runs, lineage, approvals, or audit history cannot be reconstructed elsewhere. Runtime lock-in appears through provider-specific model packaging, feature services, endpoint behaviour, or accelerators. Operational lock-in appears through dashboards, alerts, runbooks, and staff knowledge.
 
-Build versus buy cannot be answered by one vendor matrix. The organization maps the platform responsibilities, removes infeasible options, assigns long-term ownership, tests security and integration, models economics, and proves risky claims with real workloads.
+Standards can reduce specific parts of the move. OCI images can preserve a container package. OpenTelemetry can preserve an instrumentation interface. Delta Lake or Apache Iceberg can make table data accessible through multiple engines. MLflow APIs can preserve common experiment and model interactions. Each standard protects one boundary; the team must still test semantics, permissions, history, and production behaviour.
 
-The selected platform should reduce repeated work while keeping the company's differentiating ML and governance responsibilities explicit. That is the value of the framework: products implement the decision after the organization knows which problem and ownership model it is choosing.
+```mermaid
+flowchart TD
+    Export["Export Critical Assets<br/>(data, models, metadata, policy, and audit records)"] --> Rebuild["Rebuild One Workflow<br/>(train or serve outside the chosen control plane)"]
+    Rebuild --> Compare["Compare Behaviour<br/>(quality, performance, lineage, and permissions)"]
+    Compare --> Estimate["Estimate Migration Cost<br/>(engineering, dual run, downtime, and retraining)"]
+    Estimate --> Trigger["Define Exit Triggers<br/>(cost, reliability, region, strategy, or service retirement)"]
+
+    class Rebuild,Compare test
+```
+
+Run a small exit test during evaluation. Export one model with its environment and evidence. Reconstruct one training run or serve the model through a second runtime. Compare predictions, schema handling, latency, identity, and audit records. Record the manual conversion work.
+
+The exit plan can move one layer at a time. An organization may keep managed training and replace serving, or keep lakehouse data and replace the workflow control plane. Clear seams and stable identifiers make staged migration possible. Internal platforms need the same plan because maintainers can leave and open-source projects can change direction.
+
+## Compare Four Practical Platform Delivery Models
+<!-- section-summary: Managed, composable, internal, and hybrid platforms place the operating boundary differently and fit different constraints. -->
+
+A **delivery model** describes how platform responsibilities are bundled and who operates the bundle. It gives the evaluation a small set of plausible architectures instead of a long list of products. Managed, composable, internal, and hybrid models place the boundary differently.
+
+The earlier analysis determines which models deserve a pilot. A team with governed lakehouse data and ordinary training may test an integrated managed platform. A team with a mature Kubernetes estate and specialized accelerators may test a composable execution layer. Product selection now answers a defined ownership problem.
+
+### Use A Managed Platform
+
+A managed platform places more control and execution services with one provider. Current examples include Amazon SageMaker AI, Azure Machine Learning, Google Cloud’s Gemini Enterprise Agent Platform (formerly Vertex AI), and Databricks. They provide different combinations of managed training, pipelines, model records, governance, and endpoints.
+
+This model fits teams centered on one cloud or lakehouse whose ordinary workloads match the provider’s supported paths. It can reduce infrastructure operation and connect identity, storage, telemetry, and support through existing enterprise agreements. Provider limits, quotas, regions, pricing, and lifecycle APIs become part of the design.
+
+### Build A Composable Platform
+
+A composable platform selects services by responsibility. A common stack may use GitHub Actions for repository automation, Airflow or Dagster for workflows, managed cloud jobs or Kubernetes for execution, Ray for specialized distributed work, MLflow 3 for experiment and model records, and object storage with Delta Lake or Apache Iceberg. OpenTelemetry with cloud monitoring or Prometheus and Grafana commonly supports operations. Terraform manages cloud resources; Argo CD or Flux often manages Kubernetes delivery.
+
+This model fits a strong existing platform estate, a need for specialized runtimes, or a genuine portability requirement. The internal team owns more seams, upgrades, and end-to-end reliability.
+
+### Add An Internal Product Layer
+
+An internal product layer gives users company-specific interfaces over either managed or composable services. A CLI might submit a governed training request to SageMaker AI today and another execution backend later. The internal contract can enforce ownership, data references, evaluation evidence, cost tags, and release policy.
+
+This layer is often the part worth building because it captures the organization’s workflow and risk decisions. It should stay thin enough to preserve the provider capabilities underneath.
+
+### Combine Provider And Internal Systems
+
+Many organizations use a hybrid boundary. They may keep data and features in Databricks, run specialized training on Kubernetes, store model evidence in MLflow 3, and use a cloud managed endpoint for production. Another team may use managed training and registry while retaining an existing internal serving platform.
+
+```mermaid
+flowchart TD
+    Requirements["Required Capabilities<br/>(workloads, evidence, governance, and operations)"] --> Managed["Managed Platform<br/>(provider operates more shared machinery)"]
+    Requirements --> Composable["Composable Platform<br/>(internal team integrates selected services)"]
+    Requirements --> Hybrid["Hybrid Boundary<br/>(ownership differs by capability)"]
+    Managed --> Product["Internal Product Layer<br/>(company-specific paths and policy)"]
+    Composable --> Product
+    Hybrid --> Product
+
+    class Product product
+```
+
+The hybrid design should have a reason for each boundary. A collection of tools assembled through historical accident creates operating cost without deliberate flexibility.
+
+## Run A Fair Platform Pilot
+<!-- section-summary: A fair pilot runs the same representative work, failure tests, evidence requirements, and exit exercise across every plausible option. -->
+
+A polished demo proves that a happy path can work. A useful pilot tests the claims most likely to change the decision.
+
+Choose a small set of representative journeys from the workload inventory. Include one ordinary pipeline so daily usability is visible. Include the hardest expected workload, such as distributed GPU training or a strict private-data path. Include one production release, serving, or governance journey that exercises approval, telemetry, and recovery.
+
+Keep the comparison matched. Use the same model, data volume, source revision, network restrictions, quality checks, service targets, failure injections, and team time. Give each option the same opportunity to use its supported path. Record provider help and internal engineering separately because expert assistance can hide the steady-state support burden.
+
+The pilot should collect evidence in five passes:
+
+1. **Complete the journey.** Measure setup effort, time to first run, repeatability, and user intervention.
+2. **Inspect the records.** Connect source, data, run, model, evaluation, approval, deployment, and telemetry.
+3. **Inject failure.** Exhaust quota, stop a worker, block artifact publication, or trigger a rollout stop rule. Measure diagnosis and recovery.
+4. **Operate the service.** Inspect alerts, capacity, unit cost, support path, and the work required for an upgrade.
+5. **Exercise exit.** Export one complete asset chain and run part of the workflow through another implementation.
+
+```mermaid
+flowchart TD
+    Baseline["Matched Baseline<br/>(same workload, constraints, targets, and team budget)"] --> Journey["Complete Journey<br/>(development through production evidence)"]
+    Journey --> Failure["Failure Drill<br/>(diagnosis, retry, rollback, and ownership)"]
+    Failure --> Operations["Operating Review<br/>(support, capacity, cost, and upgrades)"]
+    Operations --> Exit["Exit Exercise<br/>(export and rebuild one critical path)"]
+    Exit --> Evidence["Decision Evidence<br/>(raw results, gaps, assumptions, and owner notes)"]
+
+    class Failure,Exit test
+```
+
+Define pass criteria before running the options. A private path passes only after network and audit evidence proves the required route. A rollback passes only after the previous complete release serves known fixtures within the recovery target. A traceability test passes only after an operator can reconstruct the release without consulting the people who built the pilot.
+
+Record raw timings, logs, resource identities, support interactions, duplicate side effects, and manual steps. Feature checkmarks cannot show how much integration or operational work the organization inherits.
+
+## Define Who Owns And Operates The Platform
+<!-- section-summary: The final decision records scope, ownership, evidence, exceptions, costs, exit triggers, and review dates so the commitment can be operated. -->
+
+Every platform choice has an **operating model**. This names the platform product owner and service owners. It assigns the security partner, cost owner, support route, on-call boundary, vendor escalation, and model-team responsibilities.
+
+The operating model also describes which paths receive full support and how teams request an exception.
+
+The decision record should explain why the selected boundary fits the current workloads and team. It should preserve rejected options, pilot evidence, key assumptions, and the trigger for review. A concise record might use this structure:
+
+```yaml
+decision:
+  scope: training-and-model-evidence
+  selectedBoundary: managed-training-with-internal-release-path
+  providerOwns:
+    - worker-provisioning
+    - host-recovery
+  platformTeamOwns:
+    - workload-contract
+    - identity-integration
+    - release-policy
+    - support-and-escalation
+  evidence:
+    pilotRun: platform-evaluation-17
+    exitTest: artifact-and-run-export-passed
+  reviewTriggers:
+    - unsupported-accelerator-demand
+    - queue-slo-missed-for-two-review-periods
+    - forecast-cost-exceeds-approved-range
+```
+
+The record avoids a vague declaration such as “we chose managed MLOps.” It identifies which responsibilities moved to the provider and which stayed inside. A different serving decision can live beside it without changing the training boundary.
+
+Exceptions need owners and expiry. If one research team receives direct cluster access for an unsupported accelerator, record the risk, support limit, and review point. Repeated exceptions are evidence that the capability map or chosen boundary needs revision.
+
+## Adopt The Platform In Stages
+<!-- section-summary: Staged adoption proves one complete path, expands through measured demand, and keeps migration and reversal manageable. -->
+
+Start with one complete journey for a small group of representative teams. Give them governed data access, training, evidence, release, telemetry, support, and recovery. A narrow complete path teaches more than ten disconnected platform features.
+
+Measure where users leave the path, copy credentials, create untracked artifacts, or wait for platform engineers. Improve those gaps before inviting the whole organization. Migrate a second workload with a different shape to test whether the interfaces generalize.
+
+Expand through repeated demand. Add a feature-store capability after several teams need consistent online and offline features. Add specialized Kubernetes scheduling after managed jobs fail a proven topology or capacity requirement. Add another serving profile after a production workload demonstrates a distinct latency or scaling need.
+
+```mermaid
+flowchart TD
+    First["First Complete Path<br/>(one journey with operation and recovery)"] --> Observe["Adoption Evidence<br/>(friction, support, reliability, and cost)"]
+    Observe --> Expand["Measured Expansion<br/>(the next repeated capability)"]
+    Expand --> Review["Boundary Review<br/>(assumptions, exceptions, provider fit, and exit triggers)"]
+    Review --> First
+
+    class Review review
+```
+
+Review the operating boundary on a regular cadence and after major triggers. Workload scale may change. A managed service may add a missing capability. An internal component may lose maintainers. The decision remains useful because its evidence and assumptions show exactly what should be reconsidered.
+
+## The Main Idea
+<!-- section-summary: A sound platform choice assigns each capability to an owner through workload evidence, operating cost, boundary constraints, and a tested exit path. -->
+
+Build versus buy has no single answer for the whole ML platform. The organization chooses an operating boundary for each capability. Required workloads and evidence define the problem. Differentiation, constraints, team capacity, total cost, integration seams, compliance, and exit cost shape the plausible options.
+
+A matched pilot then tests the risky claims through real work, failure, recovery, operation, and export. The final decision names who owns each responsibility and stages adoption around complete user journeys. This approach produces a platform the organization can operate, rather than a collection of products it has purchased or installed.
 
 ## References
 
-- [AWS SageMaker documentation](https://docs.aws.amazon.com/sagemaker/)
-- [Google Vertex AI documentation](https://cloud.google.com/vertex-ai/docs)
-- [Azure Machine Learning documentation](https://learn.microsoft.com/en-us/azure/machine-learning/)
-- [Databricks machine learning documentation](https://docs.databricks.com/aws/en/machine-learning/)
-- [CNCF Cloud Native Landscape](https://landscape.cncf.io/)
+- [CNCF Platform Engineering Technical Community Group](https://contribute.cncf.io/community/tcgs/platform-engineering/)
+- [Amazon SageMaker AI security and shared responsibility](https://docs.aws.amazon.com/sagemaker/latest/dg/security.html)
+- [Amazon SageMaker AI training](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html)
+- [Azure Machine Learning pipelines](https://learn.microsoft.com/en-us/azure/machine-learning/concept-ml-pipelines?view=azureml-api-2)
+- [Azure Machine Learning managed online endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online?view=azureml-api-2)
+- [Google Cloud Gemini Enterprise Agent Platform training pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/create-training-pipeline)
+- [Google Cloud Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
+- [Databricks machine learning](https://docs.databricks.com/aws/en/machine-learning/)
+- [Databricks reference architectures](https://docs.databricks.com/aws/en/lakehouse-architecture/reference)
+- [MLflow 3 Tracking](https://mlflow.org/docs/latest/ml/tracking/)
+- [OpenTelemetry overview](https://opentelemetry.io/docs/what-is-opentelemetry/)
+- [Open Container Initiative specifications](https://specs.opencontainers.org/)
+- [Delta Lake](https://docs.delta.io/)
+- [Apache Iceberg](https://iceberg.apache.org/docs/latest/)
 - [FinOps Framework](https://www.finops.org/framework/)

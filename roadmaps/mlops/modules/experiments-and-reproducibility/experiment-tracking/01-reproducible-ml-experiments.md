@@ -12,16 +12,16 @@ id: "article-mlops-experiments-and-reproducibility-reproducible-ml-experiments"
 1. [Running the Code Again Is Only the First Step](#running-the-code-again-is-only-the-first-step)
 2. [An ML Experiment Is a Structured Question](#an-ml-experiment-is-a-structured-question)
 3. [Training Depends on More Than Source Code](#training-depends-on-more-than-source-code)
-4. [The Evidence Bundle Reconstructs a Run](#the-evidence-bundle-reconstructs-a-run)
-5. [Immutable Data Gives the Experiment a Stable World](#immutable-data-gives-the-experiment-a-stable-world)
-6. [Capture the Code, Configuration, and Environment That Executed](#capture-the-code-configuration-and-environment-that-executed)
-7. [Randomness and Hardware Set the Numerical Boundary](#randomness-and-hardware-set-the-numerical-boundary)
-8. [Metrics and Artifacts Need Evaluation Context](#metrics-and-artifacts-need-evaluation-context)
-9. [Lineage Connects Inputs, Runs, Models, and Decisions](#lineage-connects-inputs-runs-models-and-decisions)
-10. [Reproducibility Has Several Useful Levels](#reproducibility-has-several-useful-levels)
-11. [A Focused MLflow 3 Run](#a-focused-mlflow-3-run)
-12. [Tracking Platforms Store Evidence; Teams Define It](#tracking-platforms-store-evidence-teams-define-it)
-13. [Replay Tests the Original Conclusion](#replay-tests-the-original-conclusion)
+4. [Record Everything Needed To Reproduce A Run](#record-everything-needed-to-reproduce-a-run)
+5. [Preserve The Exact Training Data](#preserve-the-exact-training-data)
+6. [Record The Exact Code, Configuration, And Environment](#record-the-exact-code-configuration-and-environment)
+7. [Control Randomness And Record The Hardware](#control-randomness-and-record-the-hardware)
+8. [Record How Every Metric And Artifact Was Produced](#record-how-every-metric-and-artifact-was-produced)
+9. [Trace A Model Back To Its Inputs And Training Run](#trace-a-model-back-to-its-inputs-and-training-run)
+10. [Choose The Required Level Of Reproducibility](#choose-the-required-level-of-reproducibility)
+11. [Track One Reproducible Run With MLflow 3](#track-one-reproducible-run-with-mlflow-3)
+12. [Decide What The Tracking Platform Must Record](#decide-what-the-tracking-platform-must-record)
+13. [Use A Replay To Test The Original Result](#use-a-replay-to-test-the-original-result)
 14. [Common Gaps and Their Consequences](#common-gaps-and-their-consequences)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
@@ -52,13 +52,13 @@ flowchart TD
     E -->|"Yes"| F["Original conclusion is supported"]
     E -->|"No"| G["Investigate missing evidence or instability"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#FB7185,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#FFE04F,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-secondary
+    class F dp-mermaid-quaternary
+    class G dp-mermaid-tertiary
 ```
 
 Reproducibility gives a result a history that another person can inspect. It supports fair model comparison, debugging, audits, incident investigation, and the ability to rebuild an important model after infrastructure or team members change.
@@ -89,13 +89,13 @@ flowchart TD
     E --> G
     F --> G
 
-    style A fill:#FFE04F,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#FFE04F,stroke:#536A9A,color:#111827
-    style G fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-primary
+    class G dp-mermaid-quaternary
 ```
 
 The hypothesis should survive a disappointing result. If the team changes its preferred metric or tolerance after seeing the output, the experiment has lost its original decision rule. New observations can motivate a new question and a new protocol.
@@ -121,21 +121,21 @@ flowchart TD
     R --> H["Metrics and predictions"]
     R --> I["Logs and evaluation reports"]
 
-    style R fill:#FFE04F,stroke:#536A9A,color:#111827
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#FB7185,stroke:#536A9A,color:#111827
-    style E fill:#93C5FD,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style I fill:#93C5FD,stroke:#536A9A,color:#111827
+    class R dp-mermaid-primary
+    class A dp-mermaid-secondary
+    class B dp-mermaid-tertiary
+    class C dp-mermaid-quaternary
+    class D dp-mermaid-primary
+    class E dp-mermaid-secondary
+    class F dp-mermaid-tertiary
+    class G dp-mermaid-quaternary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-secondary
 ```
 
 The practical consequence is clear: source control alone cannot reproduce an ML result. It remains essential, but it identifies only one part of the state. Reproducibility requires an evidence bundle that connects every material input and output to one execution.
 
-## The Evidence Bundle Reconstructs a Run
+## Record Everything Needed To Reproduce A Run
 <!-- section-summary: An evidence bundle records the material identities, settings, outputs, and relationships needed to understand and replay a run. -->
 
 The **evidence bundle** is the complete record needed to explain and reconstruct a run. It is a framework, not a single file format. An experiment tracker can store much of it, while a source repository, versioned data platform, container registry, and artifact store preserve the underlying objects.
@@ -163,19 +163,19 @@ flowchart TD
     F --> G
     G --> H["Replay and release evidence"]
 
-    style A fill:#FFE04F,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#93C5FD,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FFE04F,stroke:#536A9A,color:#111827
-    style F fill:#FB7185,stroke:#536A9A,color:#111827
-    style G fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style H fill:#93C5FD,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-primary
+    class G dp-mermaid-secondary
+    class H dp-mermaid-tertiary
 ```
 
 The bundle should be machine-readable enough for a replay job to verify identities before consuming expensive compute. It also needs plain-language notes so a reviewer can understand the question and outcome without reverse-engineering parameter keys.
 
-## Immutable Data Gives the Experiment a Stable World
+## Preserve The Exact Training Data
 <!-- section-summary: A dataset snapshot preserves the exact records, schema, labels, and split used by an experiment. -->
 
 Data is usually the largest reproducibility gap. A query can be versioned in Git while the table it reads continues to change. The same SQL text can therefore return different rows a day later.
@@ -198,18 +198,18 @@ flowchart TD
     E --> G["Tracked run input"]
     F --> G
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style C fill:#FFE04F,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#93C5FD,stroke:#536A9A,color:#111827
-    style F fill:#FB7185,stroke:#536A9A,color:#111827
-    style G fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-primary
+    class G dp-mermaid-quaternary
 ```
 
 Retention must match the importance of the decision. Keeping experiment metadata for years has little value if the referenced snapshot expires after a short period. Production candidates and high-impact decisions usually need longer retention than casual exploratory runs.
 
-## Capture the Code, Configuration, and Environment That Executed
+## Record The Exact Code, Configuration, And Environment
 <!-- section-summary: Reproducibility records the exact code state, resolved settings, and runtime environment used by the training process. -->
 
 A Git commit identifies reviewed source, but it can miss local edits. Record the commit and the working-tree state. If a controlled development run uses uncommitted changes, preserve the patch as an artifact and label the run clearly. Production candidates should normally come from a clean revision built by CI.
@@ -244,7 +244,7 @@ evaluation:
 
 The manifest uses references and identities, so it contains no credentials or raw sensitive records. Access to the underlying evidence follows the same governance as the data and model artifacts themselves.
 
-## Randomness and Hardware Set the Numerical Boundary
+## Control Randomness And Record The Hardware
 <!-- section-summary: Seeds control declared random streams, while algorithms, parallelism, libraries, and hardware can still change numerical results. -->
 
 A random seed initializes a pseudorandom number generator. Training may use several generators: Python, NumPy, the ML framework, data-loader workers, augmentation libraries, and distributed samplers. Recording one seed controls only the generator connected to it.
@@ -269,19 +269,19 @@ flowchart TD
     H --> I
     I --> J["Exact checks plus tolerance-based checks"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
-    style H fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style I fill:#FFE04F,stroke:#536A9A,color:#111827
-    style J fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-secondary
+    class E dp-mermaid-quaternary
+    class F dp-mermaid-primary
+    class G dp-mermaid-primary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-primary
+    class J dp-mermaid-secondary
 ```
 
-## Metrics and Artifacts Need Evaluation Context
+## Record How Every Metric And Artifact Was Produced
 <!-- section-summary: Parameters describe intended inputs, metrics record observations, and artifacts preserve the evidence needed to interpret those observations. -->
 
 At a high level, an experiment tracker stores both the settings supplied to a run and the evidence produced by it. Most trackers offer four related record types. Parameters and metrics describe inputs and observations. Tags and artifacts provide identity, context, and durable evidence. Each type answers a different question.
@@ -300,7 +300,7 @@ Average metrics also hide behavior. Preserve validation predictions or a governe
 
 Failures are outputs too. A run that ends with out-of-memory, non-finite loss, or a deterministic-algorithm error should retain its parameters, environment, logs, and status. Hiding failed runs biases the experiment history toward successful configurations and encourages repeated mistakes.
 
-## Lineage Connects Inputs, Runs, Models, and Decisions
+## Trace A Model Back To Its Inputs And Training Run
 <!-- section-summary: Lineage records how versioned inputs move through executions to produce models, evaluations, and release evidence. -->
 
 **Lineage** is the relationship graph connecting what a workflow consumed and produced. It lets a reviewer move from a model back to its training snapshot and code, or from a dataset forward to every model that used it.
@@ -320,19 +320,19 @@ flowchart TD
     H --> D
     H --> G
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#FFE04F,stroke:#536A9A,color:#111827
-    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
-    style H fill:#FFE04F,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-secondary
+    class F dp-mermaid-primary
+    class G dp-mermaid-primary
+    class H dp-mermaid-quaternary
 ```
 
 Run tags alone form a weak lineage system because humans can mistype references. Prefer tracker-native dataset inputs and logged-model relationships, pipeline input/output metadata, and governed catalog identities. W&B Artifacts, Vertex ML Metadata, and managed MLflow environments can all represent parts of this graph. The evidence requirements remain the same across products.
 
-## Reproducibility Has Several Useful Levels
+## Choose The Required Level Of Reproducibility
 <!-- section-summary: Different experiment decisions require different levels of auditability, replayability, numerical stability, and portability. -->
 
 Teams use the word reproducible for several strengths of evidence. Naming the required level prevents an exploratory run from being judged like a regulated production model, or a high-impact candidate from relying on a screenshot.
@@ -354,16 +354,16 @@ flowchart TD
     C --> D["Conclusion-stable<br/>(support the same decision)"]
     D --> E["Portable<br/>(survive a declared platform change)"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#FFE04F,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
 ```
 
 These levels are an operational vocabulary, not universal scientific terminology. Write the exact requirement in the experiment policy: required identities, replay environment, number of seeds, exact checks, metric tolerances, segment bounds, and evidence retention.
 
-## A Focused MLflow 3 Run
+## Track One Reproducible Run With MLflow 3
 <!-- section-summary: MLflow 3 can connect a run, versioned dataset inputs, resolved parameters, artifacts, a logged model, and model-linked evaluation metrics. -->
 
 MLflow Tracking organizes executions as runs inside experiments. In MLflow 3, logged models are first-class objects with their own model IDs. Metrics can link directly to a logged model and a dataset, which is valuable for checkpoint comparison and reproducibility.
@@ -446,7 +446,7 @@ The snippet intentionally leaves training and metric computation in tested funct
 
 MLflow autologging can reduce instrumentation work for supported libraries. It should complement an explicit evidence contract. Autologging cannot infer the product hypothesis, validate that a source URI is immutable, choose protected segments, or decide which tolerances preserve the conclusion.
 
-## Tracking Platforms Store Evidence; Teams Define It
+## Decide What The Tracking Platform Must Record
 <!-- section-summary: Tracking products provide run storage, comparison, artifacts, and lineage, while experiment policy defines which evidence is required. -->
 
 Open-source MLflow is a common default because it supports runs, parameters, metrics, datasets, logged models, artifacts, search, and a separate tracking server. Teams can host it with a database-backed metadata store and durable object storage, or use a managed implementation.
@@ -459,7 +459,7 @@ Provider-native systems such as Vertex ML Metadata and SageMaker Experiments can
 
 Selection criteria come from the evidence framework. Check whether the platform preserves immutable input references and distinct run and model identities. Then examine dataset-aware metrics and artifact lineage. Operational requirements include access control, retention, search, export, and backup. Integration with the team's training platform matters too. A polished comparison dashboard cannot compensate for mutable data or missing evaluation semantics.
 
-## Replay Tests the Original Conclusion
+## Use A Replay To Test The Original Result
 <!-- section-summary: A replay verifies evidence identities before execution and compares new outputs with a predeclared acceptance policy. -->
 
 A replay should create a new run linked to the original through a tag such as `replay.of_run_id`. Reusing the original run would mix two executions and destroy the audit trail.
@@ -480,16 +480,16 @@ flowchart TD
     H -->|"Yes"| I["Accept reproduction"]
     H -->|"No"| J["Investigate instability or missing evidence"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style C fill:#FFE04F,stroke:#536A9A,color:#111827
-    style D fill:#FB7185,stroke:#536A9A,color:#111827
-    style E fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#93C5FD,stroke:#536A9A,color:#111827
-    style H fill:#FFE04F,stroke:#536A9A,color:#111827
-    style I fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style J fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-secondary
+    class G dp-mermaid-primary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-secondary
+    class J dp-mermaid-quaternary
 ```
 
 An unavailable ingredient does not need to end all learning. A **migration replay** can replace the retired GPU, framework, or data format and state that change explicitly. It answers a portability question. Keeping it separate from an exact-condition replay prevents a plausible new result from being mistaken for reconstruction of the old one.
@@ -503,31 +503,31 @@ Reproducibility usually fails through small missing links. The training job may 
 
 The following patterns describe common symptoms, their consequence, and the corrective habit that closes the evidence gap.
 
-### A seed is treated as the whole solution
+### A Seed Alone Cannot Reproduce A Run
 
 The run records `seed=42` and omits data-loader workers, split membership, libraries, hardware, and deterministic settings. The replay differs, and the team has no evidence to separate random-stream drift from environment drift. Record the whole numerical boundary and use several seeds for conclusions that should survive initialization noise.
 
-### The tracker is treated as storage for the world
+### Tracker Metadata Cannot Preserve Missing Data
 
 The run contains a dataset digest and source name, but the underlying table version has expired. Tracker metadata describes an object; it does not guarantee that the object still exists. Align snapshot and artifact retention with experiment risk.
 
-### Mutable names stand in for identities
+### Mutable Names Can Point To Different Inputs
 
 Inputs such as `features_current`, container tag `latest`, or a model alias can move. Resolve them to a table snapshot, image digest, and concrete model version at execution time. Store both the human-friendly name and immutable identity.
 
-### Only the final score is saved
+### A Final Score Leaves Too Little Evidence
 
 The dashboard shows a higher average metric, while validation predictions and segment reports are gone. The team cannot test a metric bug, recalculate a threshold, or investigate harm concentrated in one group. Preserve decision-relevant outputs under governed access.
 
-### Configuration hides in defaults and notebooks
+### Notebook State Can Override Recorded Configuration
 
 The committed YAML records the expected value. An old notebook cell has changed a global setting in the active process. Run candidate training from a clean entry point and log the resolved configuration after all overrides.
 
-### Autologging is mistaken for experiment design
+### Autologging Cannot Define The Experiment
 
 The framework captures optimizer settings and training loss, yet the question, data snapshot, segment guardrails, and acceptance rule are absent. Automatic capture reduces boilerplate; the team still owns the evidence contract.
 
-### The tolerance is chosen after replay
+### Set Replay Tolerances Before Running The Replay
 
 The reproduced score misses the expected value, so the team widens the bound until it passes. Predeclare exact checks and statistical tolerances in a versioned evaluation protocol. A changed bound creates a new policy and needs its own review.
 

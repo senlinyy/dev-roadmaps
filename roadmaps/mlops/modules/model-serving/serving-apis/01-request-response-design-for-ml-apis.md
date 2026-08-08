@@ -12,248 +12,413 @@ aliases:
 
 ## Table of Contents
 
-1. [A Request Contract Is The Product Shape Of A Prediction](#a-request-contract-is-the-product-shape-of-a-prediction)
-2. [A Delivery ETA Contract Under Real Constraints](#a-delivery-eta-contract-under-real-constraints)
-3. [Name The Inputs The Caller Understands](#name-the-inputs-the-caller-understands)
-4. [Shape The Response For Decisions And Debugging](#shape-the-response-for-decisions-and-debugging)
-5. [Version The Contract And The Model Separately](#version-the-contract-and-the-model-separately)
-6. [Support Single And Batch Calls](#support-single-and-batch-calls)
-7. [Design Error Bodies Before Incidents](#design-error-bodies-before-incidents)
-8. [Review The Contract With Real Consumers](#review-the-contract-with-real-consumers)
-9. [Putting It Together](#putting-it-together)
-10. [References](#references)
+1. [What An ML API Must Communicate](#what-an-ml-api-must-communicate)
+2. [Define The Product Decision Before Designing JSON](#define-the-product-decision-before-designing-json)
+3. [Give Each Identifier One Purpose](#give-each-identifier-one-purpose)
+4. [Keep The API Schema And Feature Definitions Separate](#keep-the-api-schema-and-feature-definitions-separate)
+5. [Explain The Prediction Meaning In The Response](#explain-the-prediction-meaning-in-the-response)
+6. [Version The API, Model, And Policy Separately](#version-the-api-model-and-policy-separately)
+7. [Choose A Single Request, Small Batch, Or Asynchronous Job](#choose-a-single-request-small-batch-or-asynchronous-job)
+8. [Define Stable Validation And Error Categories](#define-stable-validation-and-error-categories)
+9. [Migrate Clients Without Breaking Existing Requests](#migrate-clients-without-breaking-existing-requests)
+10. [Design The Payload For Privacy, Logging, And Security](#design-the-payload-for-privacy-logging-and-security)
+11. [Use OpenAPI And Contract Tests To Detect Breaking Changes](#use-openapi-and-contract-tests-to-detect-breaking-changes)
+12. [Verify The API Contract During Releases And Incidents](#verify-the-api-contract-during-releases-and-incidents)
+13. [The Main Idea](#the-main-idea)
+14. [References](#references)
 
-## A Request Contract Is The Product Shape Of A Prediction
-<!-- section-summary: ML API request design defines the fields, units, versions, and response evidence that product services use when they ask a model for a prediction. -->
+## What An ML API Must Communicate
+<!-- section-summary: An ML API surrounds a model call with defined product meaning, timing, identities, outputs, errors, and operational evidence. -->
 
-**ML API request design** is the work of deciding what a caller sends to a model service and what the service returns. The design includes field names, types, units, required values, schema versions, response metadata, error format, and batch behavior. It turns a model call into a stable product contract.
+At a high level, an **ML API contract** is the agreement between a product service and a prediction service. It defines what decision the caller is asking for, which facts the caller supplies, what the result means, and how both sides behave after uncertainty or failure.
 
-This topic comes right after the FastAPI article because a framework can only enforce the contract you give it. FastAPI and Pydantic can validate JSON, generate OpenAPI docs, and return clear errors. They still need a serving team to decide which fields belong in the request, which fields belong in the response, and which changes require a new version.
+That description reaches beyond JSON types. A number can satisfy a schema and still carry the wrong meaning. Consider a response with `"score": 0.82`. One caller may read it as an 82 percent probability of fraud. The model may actually return the probability of a legitimate transaction. The JSON is valid, the HTTP status is successful, and the product decision is reversed.
 
-The contract should use the language of the product workflow. If a delivery app asks for an ETA, it should send fields such as `pickup_latitude`, `dropoff_latitude`, `driver_available_minutes`, and `restaurant_ready_state`. It should receive fields such as `eta_minutes`, `confidence_band`, and `model_version`. The API should avoid exposing training-only names such as `f_37` or a pandas column order that only the training notebook understands.
+Units create the same risk. A request field called `amount` accepts `1200` as a valid integer. One client may mean twelve dollars in cents; another may mean twelve hundred dollars. A stable contract names the unit, such as `amount_minor`, and pairs it with `currency`.
 
-Good request design also lowers incident cost. During a bad prediction incident, the team needs to know which request came in, which schema version interpreted it, which model answered it, and what the service told the caller. Those details should exist in the response and logs from the first design review, not as a rushed patch after the first outage.
+An ML API therefore needs several connected layers. Product semantics define the decision, units, and deadline. Identifiers connect a request to traces, releases, and eventual outcomes. The request schema then validates the facts supplied by the caller.
 
-The design has seven connected responsibilities. **Product semantics** define what each field means at prediction time. **Boundary validation** rejects requests the model cannot interpret safely. **Response evidence** tells the caller what happened and which model produced it. **Compatibility policy** separates safe additions from breaking changes. **Invocation shape** defines single, batch, synchronous, and asynchronous use. **Error semantics** let callers distinguish repairable input problems from service failures. **Consumer verification** proves the contract works in the real product path. The rest of the article follows these responsibilities; one ETA API appears only to make the consequences concrete.
+Inside the service, a feature contract governs derived model inputs. The response explains prediction meaning, uncertainty, abstention, and fallback. Version fields identify each changing layer, while error and compatibility policies tell consumers how to react as the service evolves.
 
-These responsibilities cannot be designed independently. A new required feature changes product semantics and validation, may break old clients, affects batch payload size, and needs a recognizable error when absent. A response field is useful operationally only if logs and traces carry the same request and model identities. Treating the contract as a JSON sample misses these interactions.
+```mermaid
+flowchart TD
+    A["Product Request<br/>(decision and caller facts)"] --> B["API Contract<br/>(meaning identity and validation)"]
+    B --> C["Feature Construction<br/>(governed model inputs)"]
+    C --> D["Model And Policy<br/>(score translated into an action)"]
+    D --> E["Decision Response<br/>(result uncertainty and evidence)"]
+    E --> F["Outcome Join<br/>(later evidence for quality)"]
 
-## A Delivery ETA Contract Under Real Constraints
-<!-- section-summary: A delivery ETA example shows how latency, product meaning, and incident diagnosis constrain an otherwise simple prediction contract. -->
-
-Imagine **ForkLane**, a food delivery company. The checkout page shows customers an estimated arrival time before they place an order. The current rule-based estimate uses distance and average preparation time. The ML platform team has trained a model that uses restaurant readiness, driver availability, weather, traffic, distance, and recent delivery history to predict `eta_minutes`.
-
-The prediction sits directly in a user workflow. If the API is slow, checkout waits. If the output is confusing, product engineers cannot decide what to display. If the model version is missing, the on-call team cannot connect a spike in late deliveries to the release that caused it.
-
-The serving contract needs to support three consumers:
-
-| Consumer | Needs from the API | Example decision |
-|---|---|---|
-| Checkout service | One fast ETA for the current basket | Show `Arrives in 31-38 min` |
-| Dispatch service | Batch ETAs for nearby driver choices | Rank candidate drivers |
-| Support tools | Prediction metadata for a past order | Explain why an ETA changed |
-
-One model can serve all three if the request and response are designed carefully. The rest of the article builds that design one piece at a time.
-
-![ForkLane delivery ETA request contract shared by checkout, dispatch, and support tools, with request fields flowing into ETA response fields.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/forklane-eta-contract.png)
-
-*A useful ML API contract names the caller-facing fields, the shared endpoint, and the response evidence every consumer needs later.*
-
-## Name The Inputs The Caller Understands
-<!-- section-summary: Request fields should match the product event and use clear units, types, required fields, and schema versions. -->
-
-The request should describe the product situation, not the internal feature array. A request is a message from one service to another. It should carry fields the caller can produce reliably and the serving team can validate.
-
-Here is a first Pydantic request shape for a single ETA prediction:
-
-```python
-from typing import Literal
-
-from pydantic import BaseModel, Field
-
-
-class DeliveryEtaRequest(BaseModel):
-    request_id: str = Field(min_length=12, max_length=100)
-    order_id: str = Field(min_length=8, max_length=80)
-    customer_region: Literal["nyc", "chicago", "austin", "seattle"]
-    pickup_latitude: float = Field(ge=-90, le=90)
-    pickup_longitude: float = Field(ge=-180, le=180)
-    dropoff_latitude: float = Field(ge=-90, le=90)
-    dropoff_longitude: float = Field(ge=-180, le=180)
-    order_value_cents: int = Field(ge=0, le=200_000)
-    item_count: int = Field(ge=1, le=80)
-    restaurant_ready_state: Literal["not_started", "preparing", "ready"]
-    driver_available_minutes: float = Field(ge=0, le=180)
-    weather_condition: Literal["clear", "rain", "snow", "storm", "unknown"]
-    traffic_level: Literal["low", "medium", "high", "unknown"]
-    requested_at_utc: str
-    feature_schema_version: Literal["delivery_eta_features_v5"]
+    class A input
+    class B,C,D,E,F process
 ```
 
-The field names carry units where units can cause mistakes. `order_value_cents` avoids floating-point currency confusion. `driver_available_minutes` says time unit directly in the name. Latitude and longitude use normal geographic bounds. The enum values force the caller to use a controlled vocabulary for weather, traffic, and restaurant state.
+A web framework can enforce this agreement after the team defines it. FastAPI and Pydantic v2 can validate request bodies, filter response fields, and generate OpenAPI documentation. Product and model owners still decide whether `0.82` means fraud, safety, relevance, or repayment.
 
-The `feature_schema_version` field is important. It tells the service which contract the caller believes it is using. If ForkLane later adds `delivery_zone_id` and changes the feature builder, the serving team can introduce `delivery_eta_features_v6` while still rejecting mismatched calls clearly.
+## Define The Product Decision Before Designing JSON
+<!-- section-summary: A contract starts with the actor, decision, prediction target, units, timing, and cost of mistakes so field names and outputs represent the real product action. -->
 
-The request should avoid raw free text unless the model needs text. Free text can carry privacy risk, high-cardinality logs, and prompt-like surprises for LLM systems. This ETA model can use structured fields, so the first API keeps text out of the contract.
+The contract discussion starts with a sentence about the product. It should name the caller, the decision, and the latest time at which an answer can still affect that decision. This sentence gives every field a reason to exist.
 
-## Shape The Response For Decisions And Debugging
-<!-- section-summary: The response should give the caller a usable decision value and give operators enough metadata to debug the prediction later. -->
+For a payment risk API, the sentence could say: “The authorization service requests a risk decision for one transaction before its dependency deadline. The result selects approve, review, or decline under the active policy.” The API now has a concrete unit: one transaction at one decision time.
 
-The response should answer the caller's product question first. Checkout needs an ETA range. Dispatch may need a numeric score. Support needs the metadata that ties the answer back to a model version and feature schema.
+For a support triage API, the caller may request a priority class for one case after a new message arrives. The result places the case into `standard`, `urgent`, or `specialist_review`. A generic `score` field would force every consumer to reproduce threshold logic. Returning the decision class plus the underlying score keeps product behavior consistent.
+
+For a demand forecast API, the prediction target needs a horizon and unit. `expected_units` means little by itself. `expected_units_next_7_days` states the quantity and period. The request also needs the location, product identity, forecast origin time, and data cutoff that define the forecast.
+
+Product semantics answer details that types alone miss. A timestamp needs a timezone and an event meaning; `transaction_occurred_at` differs from `request_received_at`. Money needs a currency and representation. Categories need controlled definitions. Probabilities need a positive class and calibration meaning. Missing data needs a policy because an absent field, an unknown value, and zero may produce different model behavior.
+
+These details belong in the API description, schema field metadata, and consumer documentation. A model card can explain training behavior, though callers need the production meaning at the endpoint boundary.
+
+```mermaid
+flowchart TD
+    A["Decision Actor<br/>(service or person using result)"] --> B["Decision Unit<br/>(transaction case item or interval)"]
+    B --> C["Prediction Target<br/>(label score quantity or ranking)"]
+    C --> D["Units And Time<br/>(currency horizon timezone and cutoff)"]
+    D --> E["Decision Policy<br/>(threshold abstention and action)"]
+    E --> F["API Fields<br/>(names that preserve meaning)"]
+
+    class A input
+    class B,C,D,E,F process
+```
+
+## Give Each Identifier One Purpose
+<!-- section-summary: Request IDs, trace context, idempotency keys, entity IDs, event IDs, and model identities solve separate correlation and safety problems. -->
+
+Production APIs carry several identifiers because one identifier rarely serves every purpose safely. Giving each identity one job prevents accidental coupling.
+
+A **request ID** identifies one API invocation in product logs. The caller can create it and the service returns it. Support teams use this value to locate the request and response record.
+
+A **trace ID** identifies a distributed trace across services. W3C Trace Context propagates this identity through the `traceparent` header, and OpenTelemetry instrumentation turns service operations into related spans. A retry may create a new request attempt inside the same broader workflow, so request and trace identities should remain separate fields.
+
+An **idempotency key** identifies a logical operation whose side effects must occur once. Repeating a pure prediction may simply calculate another score. Repeating a payment decision, notification, or async job creation can duplicate real actions. The service stores the key with a request fingerprint and returns the earlier result for an identical replay. Reusing the key with a different payload should return a conflict.
+
+An **entity ID** identifies the subject of prediction, such as a transaction, case, or product. An **event ID** identifies the business event that triggered the decision. These values later connect predictions to outcomes. Access controls and retention rules may require pseudonymous references in operational stores.
+
+Model evidence has its own identities. A model name and immutable model version identify the artifact. A release ID identifies the deployed combination of model, code, configuration, and traffic policy. A decision-policy version identifies thresholds and business rules applied after scoring.
+
+```mermaid
+flowchart TD
+    A["Caller Workflow<br/>(business operation)"] --> B["Trace ID<br/>(distributed path)"]
+    A --> C["Request ID<br/>(one API attempt)"]
+    A --> D["Idempotency Key<br/>(one logical side effect)"]
+    A --> E["Entity Or Event ID<br/>(subject and outcome join)"]
+    C --> F["Prediction Record<br/>(model release schema and policy)"]
+    B --> F
+    D --> F
+    E --> F
+
+    class A input
+    class B,C,D,E,F process
+```
+
+Trace identifiers should stay out of business idempotency logic. Sampling can remove a trace from the observability backend, while the idempotency record must remain durable for its promised window.
+
+## Keep The API Schema And Feature Definitions Separate
+<!-- section-summary: The request schema describes stable product facts supplied by a caller, while the feature contract governs derived values produced inside the ML system. -->
+
+A request payload should expose product facts that the caller owns. A feature vector contains model inputs produced by transformations, joins, encoders, and freshness rules. Treating these as the same contract makes every client depend on the internal shape of the current model.
+
+Suppose an account-risk model uses `transactions_30d`, `amount_zscore`, `merchant_risk_7d`, and an encoded device category. Asking the payment service to calculate those values spreads feature logic into product code. Training and serving can drift, a model update can force a client release, and the API may expose sensitive aggregates to callers that never needed them.
+
+A stable request can carry the current transaction facts and a governed account reference. The prediction service retrieves approved history, calculates derived features through the shared feature pipeline, checks freshness, and records the feature-set version. A new model can add an internal feature while the product request remains stable.
 
 ```python
-class DeliveryEtaResponse(BaseModel):
-    request_id: str
-    order_id: str
-    eta_minutes: float = Field(ge=0, le=240)
-    display_window_min: int = Field(ge=0, le=240)
-    display_window_max: int = Field(ge=0, le=240)
-    confidence_band: Literal["narrow", "normal", "wide"]
+from datetime import datetime
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class RiskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    transaction_id: str = Field(min_length=8, max_length=80)
+    account_ref: str = Field(min_length=8, max_length=120)
+    amount_minor: Annotated[int, Field(strict=True, ge=0)]
+    currency: Literal["GBP", "EUR", "USD"]
+    merchant_category: str = Field(min_length=2, max_length=12)
+    transaction_occurred_at: datetime
+    schema_version: Literal["risk-request-v3"]
+```
+
+This focused Pydantic v2 model rejects undeclared fields, constrains identifiers, names the currency representation, and pins the request schema. It deliberately omits rolling aggregates and encoded columns. Those fields belong to a feature contract with their own type, source, transformation, freshness, default, and availability rules.
+
+The API can accept product facts or a reference to a versioned feature row if the caller and feature platform share governance. In both designs, the response should record `feature_set_version` and a freshness result. Raw feature vectors are poor default API payloads because they expose internal order, names, and transformations as a public dependency.
+
+## Explain The Prediction Meaning In The Response
+<!-- section-summary: A prediction response should state the product decision, score semantics, uncertainty, abstention, fallback route, and model evidence needed by consumers. -->
+
+The response should answer the product question before it reports model internals. A consumer needs to know what action is permitted and how to handle uncertainty.
+
+For payment risk, the product response may contain `decision`, `risk_probability`, `reason_codes`, and `review_required`. The schema defines `risk_probability` as the calibrated probability of a fraudulent outcome over the label window. This phrase establishes the positive class and time horizon. A bare `score` would leave both ambiguous.
+
+**Confidence** also needs a definition. A class probability, calibration bucket, prediction interval, ensemble disagreement measure, and data-quality flag describe different forms of uncertainty. One generic `confidence` number encourages consumers to invent meanings. Give each supported measure a specific name and documented range.
+
+**Abstention** is a valid model-system outcome. The service may decline to make an automated decision after out-of-distribution input, missing critical evidence, or high uncertainty. An abstention can return HTTP success because the request was valid and the decision policy completed. The response then identifies `review` as the action and records an abstention reason.
+
+**Fallback** records a different execution path. A timeout may use a rules engine or a recent cached score. The response should expose the route through a controlled field such as `decision_source: "model" | "rules" | "cache"`. This allows product analytics and incident response to measure degraded behavior.
+
+```python
+class ModelEvidence(BaseModel):
     model_name: str
     model_version: str
-    feature_schema_version: str
-    served_at_utc: str
+    release_id: str
+    feature_set_version: str
+    policy_version: str
+
+
+class RiskResponse(BaseModel):
+    request_id: UUID
+    decision: Literal["approve", "review", "decline"]
+    risk_probability: Annotated[float, Field(ge=0.0, le=1.0)]
+    decision_source: Literal["model", "rules", "cache"]
+    abstention_reason: str | None = None
+    reason_codes: list[str] = Field(max_length=5)
+    evidence: ModelEvidence
 ```
 
-The `eta_minutes` field gives downstream systems a numeric value. The display window gives the UI a customer-friendly range. The confidence band lets checkout widen the range during storms or sparse data. The model and schema fields give operators evidence when they compare prediction logs to model releases.
+Reason codes should come from a small reviewed vocabulary and represent decision evidence the product is allowed to expose. Arbitrary exception text, raw prompts, unrestricted feature values, and internal paths should stay out of the response.
 
-A realistic response might look like this:
+```mermaid
+flowchart TD
+    A["Model Output<br/>(score logits labels or interval)"] --> B["Calibration<br/>(documented uncertainty meaning)"]
+    B --> C["Decision Policy<br/>(thresholds and abstention)"]
+    C --> D["Fallback Policy<br/>(model rules cache or review)"]
+    D --> E["Product Response<br/>(action and controlled evidence)"]
 
-```json
-{
-  "request_id": "checkout_20260705_180221_9231",
-  "order_id": "ord_93af21c8",
-  "eta_minutes": 34.7,
-  "display_window_min": 31,
-  "display_window_max": 39,
-  "confidence_band": "normal",
-  "model_name": "delivery-eta",
-  "model_version": "delivery-eta-2026-07-03",
-  "feature_schema_version": "delivery_eta_features_v5",
-  "served_at_utc": "2026-07-05T18:02:21Z"
-}
+    class A input
+    class B,C,D,E process
 ```
 
-The response avoids over-sharing internals. It does not expose raw feature vectors, training split names, or model file paths. Those belong in logs and review artifacts. The API response gives the product service what it needs to act and gives support enough metadata to open the right investigation trail.
+## Version The API, Model, And Policy Separately
+<!-- section-summary: API, schema, feature, model, policy, and release versions change for different reasons and should remain independently traceable. -->
 
-## Version The Contract And The Model Separately
-<!-- section-summary: Schema versions and model versions solve different problems, so the API should carry both. -->
+Several independently changing parts can alter a production prediction even though the endpoint and request stay the same. Retraining can replace the model weights. A policy update can move the approval threshold. A service release can change preprocessing or timeout behavior. A single `version` value gives an incident responder too little evidence to identify which change affected the decision.
 
-Two versions matter in serving. A **contract version** describes the request and response shape. A **model version** describes the artifact that generated the prediction. They change for different reasons.
+The practical solution is to record a separate identity for each layer that teams build, approve, or release independently. These identities travel with the decision record, so an engineer can compare affected requests against the exact API, feature logic, model, policy, and deployment that handled them.
 
-ForkLane might retrain the ETA model every week while the input schema stays the same. That changes `model_version` from `delivery-eta-2026-07-03` to `delivery-eta-2026-07-10`. The checkout service should not need a code change for that weekly release.
+The **API version** covers transport-level and product-semantic compatibility. A new path such as `/v2/risk-decisions` is appropriate after a breaking change to request meaning, response meaning, or interaction style.
 
-ForkLane might also add a new field such as `restaurant_queue_depth`. That changes the request contract and the feature schema. The serving team should coordinate that change with callers because older clients cannot magically send the new field.
+The **request and response schema version** identifies the accepted document shape. A compatible optional field may stay inside the same API version, provided consumers tolerate unknown response fields. A new required request field or renamed field usually needs a migration.
 
-A simple versioning policy can look like this:
+The **feature-set version** identifies transformations and governed data inputs. The product request can remain unchanged while the internal feature set evolves.
 
-| Change | Example | Version action |
-|---|---|---|
-| Retrain with same fields | New weights, same request schema | New `model_version` only |
-| Add optional response metadata | Add `calibration_bucket` | Same endpoint, updated response docs |
-| Add required request field | Add `restaurant_queue_depth` | New `feature_schema_version`; often a new API path |
-| Rename a request field | `driver_available_minutes` to `driver_wait_minutes` | New schema version and migration window |
-| Change meaning of output | ETA to pickup time | New endpoint because product meaning changed |
+The **model version** identifies immutable trained weights and packaging. Retraining under the same contract changes this version without forcing client changes.
 
-The API path can stay at `/v1/eta:predict` while the feature schema changes inside the body, or the team can create `/v2/eta:predict` for larger changes. The rule should be boring and written down: if an existing caller can keep working safely, the change can be compatible. If an existing caller must change behavior, plan a new version and migration window.
+The **policy version** identifies thresholds, routing rules, abstention criteria, and allowed fallbacks. A threshold change can alter product actions even if model scores stay identical.
 
-![ForkLane ETA API versioning diagram showing delivery_eta_features_v5 to v6 separately from model versions delivery-eta-2026-07-03 to delivery-eta-2026-07-10.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/schema-and-model-version-tracks.png)
+The **release ID** identifies the deployed bundle. It connects the model, service image, feature set, policy, and environment configuration used for a traffic segment.
 
-*Schema versions and model versions answer different release questions, so the response should carry both pieces of evidence.*
+```mermaid
+flowchart TD
+    A["API Version<br/>(product and transport compatibility)"] --> G["Decision Evidence<br/>(exact production interpretation)"]
+    B["Schema Version<br/>(request and response shape)"] --> G
+    C["Feature Version<br/>(derived input contract)"] --> G
+    D["Model Version<br/>(immutable trained artifact)"] --> G
+    E["Policy Version<br/>(thresholds routes and abstention)"] --> G
+    F["Release ID<br/>(deployed bundle and traffic state)"] --> G
 
-## Support Single And Batch Calls
-<!-- section-summary: Single prediction calls fit user-facing requests, while batch calls fit service-to-service ranking or backfills. -->
+    class A,B,C,D,E,F input
+    class G process
+```
 
-A serving API often needs both single and batch shapes. Checkout sends one order. Dispatch may score twenty candidate driver assignments. Support may replay a small set of historical requests during an incident. The same model can support all of those, but the contract should make batch behavior explicit.
+Separate identities answer real incident questions. A quality regression may come from new weights. A sudden decline-rate increase may come from a policy threshold. A validation spike may come from a schema migration. A latency regression may come from the service image. One `version` string hides these differences.
 
-Here is one batch request shape:
+## Choose A Single Request, Small Batch, Or Asynchronous Job
+<!-- section-summary: API interaction shape should match one immediate decision, a small bounded group, or a durable job whose processing outlives the request. -->
+
+The **interaction shape** defines how much prediction work belongs to one call and how long the caller remains connected. A payment authorization needs one immediate decision inside a short deadline. Reranking twenty search candidates can fit in a small bounded request. Scoring several million customer records needs a durable job that continues after the HTTP connection closes.
+
+These workloads lead to three common API shapes. Each shape needs its own request limits, response format, timeout behavior, and failure rules.
+
+A **single synchronous call** asks for one decision and returns it inside the request deadline. It fits checkout, routing, ranking, and other immediate product actions. The request ID identifies one attempt, and the caller owns a timeout plus fallback.
+
+A **bounded batch call** sends a small list of independent items under one HTTP request. Candidate ranking or a compact replay tool may benefit from this shape. The contract states a maximum item count and payload size. It also defines whether responses preserve input order and how item IDs map results back to requests.
+
+Batch error behavior needs one declared rule. All-or-nothing validation rejects the whole document after any invalid item. Per-item results return a controlled success or error object for every item. The choice follows consumer needs, and the endpoint should avoid mixing both rules unpredictably.
+
+A **durable asynchronous job** fits large payloads or long computation. The initial call returns `202 Accepted` with a job resource and status URL. The caller polls, receives a callback, or reads a result event. The contract defines job states, idempotent creation, retention, cancellation, completion deadline, and terminal errors.
+
+```mermaid
+flowchart TD
+    A["Prediction Work<br/>(payload count and duration)"] --> B{"Interaction Boundary<br/>(connection and work size)"}
+    B --> C["Single Call<br/>(one immediate decision)"]
+    B --> D["Bounded Batch<br/>(small independent item set)"]
+    B --> E["Async Job<br/>(durable long-running work)"]
+    C --> F["Immediate Response<br/>(decision or fallback)"]
+    D --> G["Ordered Results<br/>(item identities and error rule)"]
+    E --> H["Job Resource<br/>(status result and terminal state)"]
+
+    class A input
+    class B gate
+    class C,D,E,F,G,H process
+```
+
+An array with fifty thousand items is an offline data job disguised as an API call. A governed batch pipeline offers stronger snapshot, partition, replay, and publication controls for that scale.
+
+## Define Stable Validation And Error Categories
+<!-- section-summary: Validation protects syntax, schema, product rules, and model preconditions, while a stable error taxonomy tells callers whether repair, retry, fallback, or escalation is appropriate. -->
+
+Validation protects the model boundary from inputs that are syntactically valid yet unsafe to interpret. For example, a request may contain valid JSON and a valid integer for `amount_minor`, while the currency is missing or the event timestamp lies outside the supported feature window. Passing that request to the model would create a plausible prediction with unreliable meaning.
+
+Production services check the request in layers. Each layer returns a stable error category that leads the caller toward one action: repair the payload, change the client, retry within a limit, use a fallback, or escalate the service failure.
+
+Transport validation checks content type, body size, authentication, and parseable JSON. Schema validation checks required fields, types, enums, ranges, and unknown properties. Product validation checks relationships such as an end time after a start time or a currency allowed for the account region. Model precondition checks verify feature availability, supported categories, and evidence freshness.
+
+Pydantic v2 can enforce types and field constraints, while FastAPI turns these models into request validation and OpenAPI schemas. The service still needs explicit validators for cross-field product rules. Coercion deserves care: accepting the string `"1200"` as an integer can hide a client regression. Strict fields make the boundary reject that change early.
+
+A stable error envelope separates machine-readable behavior from human-readable text:
 
 ```python
-class DeliveryEtaBatchRequest(BaseModel):
-    batch_request_id: str = Field(min_length=12, max_length=100)
-    items: list[DeliveryEtaRequest] = Field(min_length=1, max_length=100)
+class FieldViolation(BaseModel):
+    field: str
+    code: str
 
 
-class DeliveryEtaBatchResponse(BaseModel):
-    batch_request_id: str
-    results: list[DeliveryEtaResponse]
-```
-
-The batch size limit protects the service. A batch of 20 or 100 may help throughput because the model can process a frame of rows at once. A batch of 50,000 belongs in offline scoring or a streaming job, not a checkout-facing HTTP call.
-
-Batch responses need ordering rules. The simplest rule is that responses appear in the same order as request items and each response repeats `request_id`. That lets the caller join results safely even if the model service later parallelizes work internally.
-
-The service should also decide partial failure behavior. For this ETA API, the clean default is all-or-nothing validation at the request boundary. If one item has a broken latitude, the API returns a validation error for the whole batch. For offline replay tools, a separate endpoint can allow per-row errors. Mixing those behaviors in one endpoint creates confusion during incidents.
-
-## Design Error Bodies Before Incidents
-<!-- section-summary: Predictable error responses help callers fix bad requests and help operators separate client errors from model service failures. -->
-
-Errors are part of the contract. A caller should know what happens when a field is missing, a schema version is stale, the model service times out, or the model artifact is unavailable. FastAPI and Pydantic already return structured validation errors for many bad requests. The team can add a small top-level error format for business-rule failures and service failures.
-
-```python
 class ApiError(BaseModel):
     error_code: str
     message: str
-    request_id: str | None = None
+    request_id: UUID | None = None
     retryable: bool
-    details: list[dict] = Field(default_factory=list)
+    violations: list[FieldViolation] = Field(default_factory=list)
 ```
 
-Example stale schema response:
+The HTTP status and `error_code` serve different purposes. HTTP groups transport behavior. The domain code identifies a stable reason such as `UNSUPPORTED_SCHEMA`, `FEATURES_STALE`, `PAYLOAD_TOO_LARGE`, or `MODEL_UNAVAILABLE`.
 
-```json
-{
-  "error_code": "UNSUPPORTED_FEATURE_SCHEMA",
-  "message": "delivery_eta_features_v4 is no longer accepted by this endpoint.",
-  "request_id": "checkout_20260705_180221_9231",
-  "retryable": false,
-  "details": [
-    {
-      "field": "feature_schema_version",
-      "accepted_values": ["delivery_eta_features_v5"]
-    }
-  ]
-}
+A practical mapping uses `422` for schema or product validation failures, `409` for an idempotency-key conflict, `413` for payload limits, and `429` for caller rate limits. Service unavailability can use `503`; a missed upstream deadline can use `504` if the service acts as a gateway. The API documentation should state the mapping and retry policy.
+
+`retryable` is a bounded hint under the contract. A caller still applies exponential backoff, jitter, attempt limits, and its remaining product deadline. Validation failures require payload or client repair. A valid abstention belongs in the success response because the policy reached a controlled outcome.
+
+## Migrate Clients Without Breaking Existing Requests
+<!-- section-summary: Compatibility depends on consumer behavior, so schema changes need impact review, dual support, usage telemetry, deprecation communication, and a tested cutoff. -->
+
+Compatibility describes the effect of an API change on real consumers. Suppose the service adds `manual_review` to a decision enum. The response remains valid JSON, yet a mobile client with an exhaustive switch may crash because it only handles `approve` and `decline`. Field-level syntax provides too little information about this consumer behavior.
+
+A safe migration therefore combines schema review with tests from the clients that decode and act on the response. The team keeps both contract versions available during the transition, measures which consumers still use the old version, and retires it through a controlled cutoff.
+
+Adding an optional request field is often compatible because old clients can omit it. Adding an optional response field is safe only for clients that ignore unknown fields. A mobile client with strict decoding may fail after any unrecognized property.
+
+Adding an enum value can break an exhaustive switch even though the field type remains a string. Tightening a numeric range can reject payloads accepted yesterday. Changing a default can alter decisions for clients that omit the field. Renaming a reason code can break dashboards and support workflows.
+
+A migration begins by publishing the new schema and examples. The service can accept old and new request versions through separate models or an explicit adapter. Telemetry counts calls by consumer and schema version, giving owners a concrete migration list. Responses can include deprecation headers or a controlled warning field if the organisation has a standard for them.
+
+During the transition, contract tests run against both versions. The team verifies that the adapter preserves units, missing-value policy, and output meaning. The cutoff happens only after required consumers move or receive an approved exception. Retired schemas should fail with a stable `UNSUPPORTED_SCHEMA` response that points to migration guidance.
+
+```mermaid
+flowchart TD
+    A["Contract Change<br/>(field enum default or meaning)"] --> B["Consumer Impact<br/>(real decoder and behavior tests)"]
+    B --> C["Dual Support<br/>(old schema and new schema)"]
+    C --> D["Usage Telemetry<br/>(consumer migration progress)"]
+    D --> E{"Cutoff Gate<br/>(required consumers moved)"}
+    E -->|No| C
+    E -->|Yes| F["Retire Old Schema<br/>(stable migration error)"]
+
+    class A input
+    class B,C,D,F process
+    class E gate
 ```
 
-The `retryable` field helps the caller avoid harmful retry loops. A validation error is usually a client bug or stale client version, so retrying the same payload wastes traffic. A `503` during model startup may be retryable with backoff. A timeout may trigger a product fallback instead of repeated calls.
+## Design The Payload For Privacy, Logging, And Security
+<!-- section-summary: A production contract minimizes sensitive input, authenticates and authorizes callers, limits abuse, and records safe evidence through allowlisted logs and traces. -->
 
-The service should log all errors with `request_id`, endpoint, schema version, caller identity, and model readiness state. That turns dashboards into clear buckets: client validation failures, model load failures, dependency failures, and slow model calls.
+Every request field creates a data-handling obligation. The serving team should ask why the field is needed, who can send it, who can read it later, how long it is retained, and how deletion works.
 
-## Review The Contract With Real Consumers
-<!-- section-summary: Contract review should include the caller team, serving team, product owner, privacy reviewer, and on-call owner before the endpoint goes live. -->
+Authentication identifies the caller. Authorization checks whether that caller may use this model, decision type, region, or data class. Transport encryption protects data in transit. Network policy can restrict endpoint reachability. Payload-size limits, timeouts, concurrency limits, and rate limits protect service capacity.
 
-The contract is ready for review when it has examples. ForkLane should review one valid checkout request, one valid dispatch batch, one invalid field, one stale schema, and one timeout fallback. Abstract schema talk is weak; examples expose confusing field names and missing metadata quickly.
+The request schema acts as an allowlist. `extra="forbid"` prevents undeclared JSON fields from silently entering application objects. It is one control among several; gateway and application authorization still decide who may call the endpoint.
 
-Use a review packet like this:
+Operational logs should record safe, bounded evidence. Request ID, route, caller service, schema version, release ID, latency, outcome class, fallback route, and error code usually provide high value. Raw feature vectors, direct personal identifiers, document bodies, prompts, credentials, and unrestricted exception text usually belong outside general logs.
 
-| Review question | Evidence to bring |
-|---|---|
-| Can checkout produce every required field? | Sample payload from staging checkout |
-| Are units clear? | Field table with units and ranges |
-| Can support explain a bad order later? | Response metadata and prediction log example |
-| Can privacy approve the payload? | Field list with retention and masking notes |
-| Can on-call debug failures? | Error body examples and dashboard labels |
-| Can the team migrate versions? | Accepted schema versions and sunset date |
+Sensitive source material may need a restricted evidence store with separate access and retention. The prediction record can hold an approved reference or pseudonymous join key. This keeps incident investigation possible without copying the original payload into every log sink.
 
-The best review often changes small things. Maybe `driver_available_minutes` should use seconds because dispatch already measures in seconds. Maybe `weather_condition` should include `unknown` because weather data can lag. Maybe support needs `model_version` in the customer service screen. Those changes are cheap before launch and painful after clients depend on the first shape.
+OpenTelemetry can propagate traces across the caller, gateway, feature service, and model service. Use low-cardinality span names such as `POST /risk-decisions`; placing entity IDs in span names creates expensive, sensitive cardinality. The standard HTTP attributes cover protocol behavior, and approved ML-specific attributes can record model or release identity under a controlled convention.
 
-![ForkLane ETA contract review map showing single checkout calls, batch dispatch calls, stale schema error bodies, timeout fallback, ordered results, and review packet owners.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/single-batch-error-contract.png)
+```mermaid
+flowchart TD
+    A["Caller Identity<br/>(authenticated service)"] --> B["Authorization<br/>(model action and data scope)"]
+    B --> C["Schema Allowlist<br/>(bounded approved fields)"]
+    C --> D["Prediction Path<br/>(feature model and policy)"]
+    D --> E["Safe Telemetry<br/>(IDs versions latency and outcome class)"]
+    D --> F["Restricted Evidence<br/>(governed source reference)"]
 
-*Contract review should exercise single calls, batch calls, stale-schema errors, timeout fallback, and owner sign-off with real examples.*
+    class A input
+    class B,C,D,E,F process
+```
 
-## Putting It Together
-<!-- section-summary: Strong ML API request design gives the serving system a product contract that stays useful across model releases, clients, batch calls, and incidents. -->
+## Use OpenAPI And Contract Tests To Detect Breaking Changes
+<!-- section-summary: Generated schemas document the boundary, while provider and consumer tests prove real clients can send, decode, and act on every supported response. -->
 
-ML API request design is the bridge between model code and product code. A strong contract names inputs in product language, states units and ranges, carries schema and model versions, returns decision-ready outputs, supports batch calls intentionally, and uses predictable error bodies.
+OpenAPI describes paths, operations, request bodies, responses, authentication, and reusable schemas. JSON Schema describes the structure and constraints of JSON instances. FastAPI generates these artifacts from Pydantic request and response models, giving teams a machine-readable contract and interactive documentation.
 
-The ForkLane ETA API shows the pattern. The model predicts one number, yet the API contract carries much more than that number: request IDs, order IDs, schema versions, confidence bands, display windows, model versions, timestamps, and error rules. Those details help product engineers build the feature and help operators investigate the system later.
+Generated documentation records the machine-readable boundary. The spec can identify a field as a number and attach its description. Concrete examples and consumer tests then demonstrate that callers interpret it as a fraud probability over the documented label window.
+
+Provider contract tests exercise the service boundary. They cover a valid request, every documented error class, boundary values, unknown fields, missing values, enum behavior, idempotency replays, and response filtering. Bounded-batch tests verify maximum size, ordering, item identity, and partial-failure policy.
+
+Consumer-driven tests use expectations captured from real clients. A checkout service may assert that `decision` contains the three supported actions and that unknown reason codes remain display-safe. A mobile client may prove it tolerates optional response fields. These tests run against the proposed OpenAPI artifact or a deployed test endpoint before release.
+
+The OpenAPI document should live as a versioned build artifact. A schema-diff gate can flag removed fields, new required fields, narrowed ranges, changed response codes, and new enum values. A human review then evaluates meaning because automated diff tools only compare document shape and declared constraints.
+
+```python
+def test_amount_minor_rejects_string(client):
+    payload = valid_risk_request()
+    payload["amount_minor"] = "1200"
+
+    response = client.post("/v1/risk-decisions", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "REQUEST_VALIDATION_FAILED"
+```
+
+This focused test protects one contract choice: money arrives as a strict integer in minor units. Similar tests should focus on semantic relationships and response meaning. Framework-level unit tests cover the underlying validation machinery separately.
+
+## Verify The API Contract During Releases And Incidents
+<!-- section-summary: Rollout and incident checks follow contract evidence from the caller through schema, feature, model, policy, response, and eventual product outcome. -->
+
+A contract release needs evidence from the real consumer path. Unit tests can pass while an older client sends a deprecated enum, a gateway drops `traceparent`, or a response decoder ignores the new abstention field.
+
+Start rollout with shadow traffic or a small consumer segment. Compare request acceptance, error codes, latency, response distribution, fallback rate, and product actions by schema and release ID. Keep the prior contract adapter and release route available for rollback.
+
+Suppose approval rate changes sharply after a release while HTTP success remains near 100 percent. The investigation first verifies evidence integrity: request IDs join to responses, traces cover the expected path, release identity is present, and policy versions match the traffic route. This prevents a logging gap from being mistaken for model behavior.
+
+The next pass compares schema versions, caller services, feature-set freshness, model versions, policy decisions, abstentions, and fallback routes. A new caller may be sending currency in major units. A policy rollout may have changed thresholds. A model route may be healthy technically while returning a reversed class mapping.
+
+Recovery follows the faulty layer. Route traffic back after a release problem. Re-enable the old schema adapter after a client migration problem. Restore the earlier policy after a threshold problem. Repair trace or decision logging after an evidence problem, then treat uncertain impact separately from confirmed model failure.
+
+```mermaid
+flowchart TD
+    A["Product Symptom<br/>(wrong action errors or latency)"] --> B["Evidence Integrity<br/>(request trace release and policy joins)"]
+    B --> C["Contract Segments<br/>(caller schema and invocation shape)"]
+    C --> D["ML Segments<br/>(features model abstention and fallback)"]
+    D --> E{"Faulty Layer<br/>(contract release policy or evidence)"}
+    E --> F["Targeted Recovery<br/>(adapter rollback route or repair)"]
+    F --> G["Consumer Verification<br/>(decision behavior returns to target)"]
+
+    class A input
+    class B,C,D,F,G process
+    class E gate
+```
+
+## The Main Idea
+<!-- section-summary: A strong ML API preserves product meaning across caller facts, features, model releases, policy decisions, failures, migrations, and operational evidence. -->
+
+An ML API is a stable decision contract around a changing model system. It names the decision unit and timing, gives each identity one job, separates caller facts from derived features, and returns an action with documented uncertainty and evidence.
+
+Independent version fields explain changes to the API, schemas, features, model, policy, and deployed release. Single, bounded-batch, and asynchronous contracts match different work sizes. Validation, errors, privacy controls, OpenAPI artifacts, consumer tests, and incident joins keep the contract safe through real product change.
+
+A well-designed contract lets a caller act on a result without learning the model's internal feature order or threshold implementation. It also gives operators enough evidence to distinguish a client migration problem, a feature problem, a model change, a policy change, and a service release. That separation is the foundation of a durable production boundary.
 
 ## References
 
-- [FastAPI request body tutorial](https://fastapi.tiangolo.com/tutorial/body/)
-- [FastAPI response model tutorial](https://fastapi.tiangolo.com/tutorial/response-model/)
-- [Pydantic models](https://docs.pydantic.dev/latest/concepts/models/)
-- [Pydantic validators](https://docs.pydantic.dev/latest/concepts/validators/)
-- [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)
-- [OpenTelemetry semantic conventions for HTTP spans](https://opentelemetry.io/docs/specs/semconv/http/http-spans/)
+- [FastAPI: Request bodies](https://fastapi.tiangolo.com/tutorial/body/)
+- [FastAPI: Response models](https://fastapi.tiangolo.com/tutorial/response-model/)
+- [FastAPI: Handling errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- [Pydantic: Models](https://pydantic.dev/docs/validation/latest/concepts/models/)
+- [Pydantic: Strict mode](https://pydantic.dev/docs/validation/latest/concepts/strict_mode/)
+- [Pydantic: JSON Schema](https://pydantic.dev/docs/json_schema/latest/concepts/json_schema/)
+- [OpenAPI Specification](https://spec.openapis.org/oas/)
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12)
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/)
+- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/)
+- [OpenTelemetry: HTTP span semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-spans/)

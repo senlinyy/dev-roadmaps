@@ -13,19 +13,19 @@ aliases:
 ## Table of Contents
 
 1. [What the Feedback Flywheel Is](#what-the-feedback-flywheel-is)
-2. [Start With Signals, Feedback, and Labels](#start-with-signals-feedback-and-labels)
+2. [Distinguish Signals, Feedback, And Labels](#distinguish-signals-feedback-and-labels)
 3. [Understand Explicit and Implicit Feedback](#understand-explicit-and-implicit-feedback)
 4. [Connect Delayed Outcomes to the Right Run](#connect-delayed-outcomes-to-the-right-run)
 5. [Sample Useful Evidence Safely](#sample-useful-evidence-safely)
 6. [Use Human Review to Create Trustworthy Labels](#use-human-review-to-create-trustworthy-labels)
 7. [Group Failures Before Choosing a Fix](#group-failures-before-choosing-a-fix)
-8. [Build Evaluation Datasets With Lineage](#build-evaluation-datasets-with-lineage)
+8. [Record Where Every Evaluation Case Came From](#record-where-every-evaluation-case-came-from)
 9. [Update Offline Evaluations Carefully](#update-offline-evaluations-carefully)
-10. [Turn Evidence Into a Change Proposal](#turn-evidence-into-a-change-proposal)
+10. [Choose A Fix And Define How To Test It](#choose-a-fix-and-define-how-to-test-it)
 11. [Release in Stages and Measure the Result](#release-in-stages-and-measure-the-result)
 12. [How Current Production Tools Fit Together](#how-current-production-tools-fit-together)
 13. [Measure the Health of the Flywheel](#measure-the-health-of-the-flywheel)
-14. [The Main Idea](#the-main-idea)
+14. [Use Production Feedback To Improve Evaluations And Releases](#use-production-feedback-to-improve-evaluations-and-releases)
 15. [References](#references)
 
 ## What the Feedback Flywheel Is
@@ -48,10 +48,6 @@ flowchart TD
     G --> H["Measure live outcomes"]
     H --> A
 
-    classDef evidence fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef judgment fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef change fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C evidence
     class D,E judgment
     class F,G change
@@ -62,7 +58,7 @@ Each responsibility protects the next one. Weak identifiers make outcome joins u
 
 The flywheel therefore serves two goals. It helps the product improve, and it makes the evidence behind each improvement traceable.
 
-## Start With Signals, Feedback, and Labels
+## Distinguish Signals, Feedback, And Labels
 <!-- section-summary: Production signals record events, feedback expresses a reaction, and labels interpret evidence under a defined rule or rubric. -->
 
 Three words appear throughout feedback systems: **signal**, **feedback**, and **label**. They describe different levels of evidence, from an event the product recorded to an interpretation the team is prepared to use in an evaluation or decision.
@@ -90,10 +86,6 @@ flowchart TD
     D --> F["Governed label"]
     E --> F
 
-    classDef observed fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef review fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B observed
     class C decision
     class D,E review
@@ -145,7 +137,7 @@ The system needs to answer a precise question: which model output contributed to
 
 That requires an immutable decision or delivery record. In plain language, the record says, “This is the output the product actually showed or used.” It points back to the full trace and captures every version needed to reproduce the decision.
 
-### The decision record is the joining point
+### Use A Decision Record To Link Outcomes Back To Runs
 
 ```yaml
 decision_id: decision_8f31
@@ -218,9 +210,6 @@ flowchart TD
     D --> E["Create restricted review view"]
     E --> F["Store sampling and redaction lineage"]
 
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef protect fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A source
     class B,C,D,E protect
     class F result
@@ -235,7 +224,7 @@ Human review is most valuable for questions that require context: Was the answer
 
 A good review task gives the reviewer the information needed to answer those questions. For an agentic workflow, this may include the user request, final answer, retrieved sources, tool inputs and results, policy version, and relevant outcome. Showing only the final response forces the reviewer to guess.
 
-### The rubric defines the judgment
+### Use A Rubric To Guide Human Review
 
 The **rubric** defines the judgment. Each dimension should explain the positive case, the negative case, and ambiguous boundaries. For example:
 
@@ -277,9 +266,6 @@ flowchart TD
     B -->|"Policy caused the response"| F["Policy and product review"]
     B -->|"Evidence was available and clear"| G["Prompt, workflow, or model review"]
 
-    classDef problem fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef repair fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A problem
     class B decision
     class C,D,E,F,G repair
@@ -289,7 +275,7 @@ Consider a retrieval-augmented assistant that answers from internal policies. Re
 
 Another cluster may show correct retrieval followed by an answer that repeatedly ignores an explicit exception. That evidence supports a prompt, workflow, or model change. The same visible symptom can therefore lead to a different solution.
 
-## Build Evaluation Datasets With Lineage
+## Record Where Every Evaluation Case Came From
 <!-- section-summary: A governed evaluation dataset preserves representative behavior, critical regressions, expected outcomes, and links back to reviewed source evidence. -->
 
 An **evaluation dataset** is a collection of inputs and expected judgments used to compare system versions. Production feedback improves the dataset by adding cases that reflect real usage and real failures.
@@ -305,7 +291,7 @@ The dataset should contain more than failed outputs. It needs:
 
 Each row keeps provenance: the source trace or synthetic origin, redaction version, reviewer decision, rubric version, slice, sampling reason, and expected behavior. The expected behavior can be a deterministic condition, a reference answer, a grading rubric, or a required tool sequence.
 
-### Separate iteration from independent evidence
+### Keep A Separate Test Set For Independent Release Decisions
 
 MLflow’s current GenAI dataset APIs support datasets created from production traces or curated examples and preserve source information. LangSmith supports datasets built from curated cases, production traces, and synthetic examples. Provider tools offer similar managed workflows. These products help manage cases; the team still owns the dataset policy and split design.
 
@@ -322,10 +308,6 @@ flowchart TD
     E --> C
     C --> F["Independent release evidence"]
 
-    classDef cases fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef sets fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef proof fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A cases
     class B,C sets
     class D,E work
@@ -359,7 +341,7 @@ A good comparison asks more than “Did the average score rise?” It checks:
 
 Suppose a candidate improves overall helpfulness by answering more directly. The safety slice now contains more policy violations. The aggregate score hides the release blocker. Slice-level gates keep a common improvement from trading away a critical guarantee.
 
-## Turn Evidence Into a Change Proposal
+## Choose A Fix And Define How To Test It
 <!-- section-summary: A change proposal links one diagnosed problem to an owned system component, an evaluation target, protected metrics, and a rollback plan. -->
 
 The feedback flywheel should produce focused engineering decisions. A change proposal connects one diagnosed production problem to one owned repair and defines the proof required for release. This keeps a broad collection of feedback from turning into an equally broad list of unrelated experiments.
@@ -393,10 +375,6 @@ flowchart TD
     E --> G["Continue outcome monitoring"]
     F --> H["Add regression case and revise"]
 
-    classDef test fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef success fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C test
     class D decision
     class E,G success
@@ -407,7 +385,7 @@ A **shadow release** runs the candidate on copied traffic and discards its outpu
 
 A **canary release** serves the candidate to a small controlled share. An A/B test uses stable assignment to compare variants. These stages can measure product outcomes, provided the assignment and attribution rules remain valid.
 
-### Immediate and delayed gates answer different questions
+### Use Immediate Release Gates And Delayed Outcome Checks
 
 Delayed outcomes require an observation window. A canary that looks healthy after one hour may still increase returns or reopened cases several days later. Teams define immediate gates for safety, errors, latency, and cost, plus delayed gates for business and quality outcomes.
 
@@ -459,10 +437,6 @@ flowchart TD
     H --> I["Service metrics and delayed outcomes"]
     I --> B
 
-    classDef capture fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef assess fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef change fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C capture
     class D,E,F assess
     class G,H change
@@ -493,7 +467,7 @@ Consider a team that adds many regression cases each week, yet only a small shar
 
 The most useful feedback report follows a small number of important changes from source evidence to production outcome. Volume measures support that story; they do not replace it.
 
-## The Main Idea
+## Use Production Feedback To Improve Evaluations And Releases
 <!-- section-summary: A trustworthy feedback flywheel preserves the chain from observation to interpretation, evaluation, release, and verified outcome. -->
 
 Production feedback creates value through a governed evidence lifecycle. Signals record what happened. Stable identifiers connect later outcomes to the exact system run. Sampling and privacy controls select safe, representative evidence. Human review and deterministic rules turn ambiguous events into labels. Failure diagnosis directs work to the responsible system layer. Curated datasets convert reviewed cases into repeatable evaluations. Progressive delivery tests the change with real traffic, and monitoring verifies the intended outcome.

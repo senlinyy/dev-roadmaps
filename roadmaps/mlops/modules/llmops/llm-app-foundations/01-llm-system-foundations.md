@@ -14,16 +14,16 @@ aliases:
 
 1. [See the Whole Application Through One Request](#see-the-whole-application-through-one-request)
 2. [Use Four Responsibilities to Understand the Architecture](#use-four-responsibilities-to-understand-the-architecture)
-3. [Prepare the Model's Working View](#prepare-the-models-working-view)
-4. [Give the Model a Clear Interface](#give-the-model-a-clear-interface)
+3. [Choose The Information The Model Receives](#choose-the-information-the-model-receives)
+4. [Connect The Application To The Model Through One Interface](#connect-the-application-to-the-model-through-one-interface)
 5. [Turn Model Proposals Into Controlled Actions](#turn-model-proposals-into-controlled-actions)
 6. [Use State and Orchestration to Control the Run](#use-state-and-orchestration-to-control-the-run)
 7. [Define Quality With Evaluations](#define-quality-with-evaluations)
 8. [Use Observability to Explain Live Behaviour](#use-observability-to-explain-live-behaviour)
 9. [Build Safety Into Every Boundary](#build-safety-into-every-boundary)
-10. [Release the Complete Behaviour Bundle](#release-the-complete-behaviour-bundle)
+10. [Release Every Component That Can Change Behaviour](#release-every-component-that-can-change-behaviour)
 11. [Map Current Technology Stacks Onto the Framework](#map-current-technology-stacks-onto-the-framework)
-12. [Keep the Architecture Understandable](#keep-the-architecture-understandable)
+12. [Review The Path From User Request To Final Action](#review-the-path-from-user-request-to-final-action)
 13. [References](#references)
 
 At a high level, a **large language model application** is software that uses a model to interpret information or propose a response inside a controlled product workflow. The model supplies flexible language judgement. The surrounding application supplies trusted data, permissions, tools, state, validation, measurement, and recovery.
@@ -80,19 +80,19 @@ Responsibility for this interaction is distributed across the system. The model 
 
 An LLM application can contain many products and libraries, so a long component list obscures how they work together. Four responsibilities provide a simpler framework for understanding the system.
 
-### Prepare
+### Prepare The Information The Model Needs
 
 **Prepare** builds the model's working view for the current decision. It combines instructions, authenticated facts, relevant conversation state, retrieved knowledge, and the tools available at this step. Preparation decides which information reaches the model and how each source is labelled.
 
-### Ask
+### Ask The Model For A Typed Response
 
 **Ask** sends that working view through a model interface. The interface identifies the model and runtime settings, then receives text, structured data, or a tool request. Output schemas and tool definitions turn important responses into machine-readable contracts.
 
-### Act
+### Act Through Trusted Application Code
 
 **Act** interprets the model's proposal inside trusted application code. The system validates arguments, authorizes the operation, calls domain services, records results, and decides whether the model needs another turn. State and orchestration make the run recoverable.
 
-### Improve
+### Improve Through Evaluation And Monitoring
 
 **Improve** uses evaluations, traces, monitoring, and outcome data to guide releases. Teams test expected behaviour before deployment, inspect real runs after deployment, and roll back the complete behaviour bundle if quality or safety degrades.
 
@@ -112,7 +112,7 @@ flowchart TD
 
 Safety crosses all four responsibilities. Preparation filters and labels untrusted content. The model interface limits output shapes and available capabilities. The action path enforces real permissions. The improvement loop tests abuse cases and watches live outcomes.
 
-## Prepare the Model's Working View
+## Choose The Information The Model Receives
 
 <!-- section-summary: Context engineering selects the instructions, trusted runtime facts, retrieved knowledge, and state needed for one model decision. -->
 
@@ -126,7 +126,7 @@ Instructions guide model behaviour. Business enforcement still belongs in code a
 
 Keep instructions versioned and reviewable. A small wording change can alter tool selection, response length, refusals, and escalation. Reusable examples can clarify difficult judgement, provided they represent the real traffic and remain part of the same release evidence.
 
-### Retrieval supplies current or private knowledge
+### Bring Current Or Private Knowledge Into The Request
 
 **Retrieval** searches an external knowledge source during the request and returns a small set of relevant passages or records. It is useful for policies, product documentation, runbooks, contracts, and other information that changes independently from the model.
 
@@ -134,7 +134,7 @@ A production retrieval result needs more than text. Preserve the source ID, vers
 
 Retrieval quality and answer quality are separate. If the correct return policy never reaches the model, even excellent reasoning cannot cite it. Teams therefore evaluate search recall and ranking before evaluating the final response.
 
-### State records what has actually happened
+### Record What Has Actually Happened
 
 **State** is the durable record of the run. In the delivery interaction, it includes the authenticated customer, current step, selected pickup point, confirmation status, tool results, and committed transaction reference.
 
@@ -142,7 +142,7 @@ Conversation history provides useful context; application state remains authorit
 
 Long histories also create cost and distraction. Store authoritative facts in application state, keep recent conversational details that affect the next decision, and retrieve older evidence through stable references. This approach lets the model see a compact working view while the full audit history remains available elsewhere.
 
-## Give the Model a Clear Interface
+## Connect The Application To The Model Through One Interface
 
 <!-- section-summary: The model interface combines model choice, instructions, input items, structured outputs, and tool requests into a versioned contract. -->
 
@@ -154,7 +154,7 @@ Choose a model by measuring it on the task. A small model may handle classificat
 
 Benchmark scores and provider labels cannot make the production decision alone. Run representative evaluations on the complete application path. A model that scores well in isolation may call the wrong tool more often, produce slower first tokens, or struggle with the application's schema.
 
-### Structured output creates a software boundary
+### Use Structured Output For Data The Application Must Read
 
 Free-form text works for a draft shown directly to a person. Software usually needs explicit fields. In the delivery example, the final result can contain `message`, `order_status`, `reroute_status`, and `transaction_reference`.
 
@@ -190,13 +190,13 @@ This check illustrates two validation layers. Zod verifies the response shape. T
 
 A **tool** is a named capability described with a purpose and an input schema. The model can request a tool; the runtime decides whether and how to execute it. This distinction is the foundation of safe tool use.
 
-### Read tools bring fresh facts into the decision
+### Use Read Tools To Fetch Current Facts
 
 A read tool can query an authoritative record, such as the current state of an order. Search tools find relevant items in a catalog or document collection, while inspection tools read live deployment information. Every result should expose the smallest useful projection. `lookup_order` may return delivery state and reroute eligibility while omitting payment details, internal fraud scores, and other tenants' information.
 
 Read tools still require authorization and timeouts. They also need stable error meanings. `ORDER_NOT_VISIBLE` can cover a missing or unauthorized order without revealing which case occurred. The model receives enough information to give a safe response, while detailed diagnostics remain in protected logs.
 
-### Write tools carry business consequences
+### Control Tools That Change External Systems
 
 Write tools change an external system. The application should validate their schemas, attach trusted identity, enforce policy, and require confirmation or approval where risk demands it. Credentials stay in the tool runtime and never enter model context.
 
@@ -236,7 +236,7 @@ A single model call fits extraction, classification, rewriting, and other tasks 
 
 Additional autonomy increases uncertainty, latency, and cost. Begin with the smallest control pattern that satisfies the task. Use fixed transitions for known business stages, reserve model-selected transitions for decisions that genuinely need adaptive judgement, and add durable graph execution only where interruption or branching makes persisted control flow necessary.
 
-### Persist meaningful transitions
+### Save Progress After Important Changes
 
 Persist state after events that change what the system knows or what it has committed. Useful checkpoints include `order_loaded`, `confirmation_requested`, `reroute_authorized`, and `reroute_committed`. A stored checkpoint lets the service resume after a crash without replaying every model response.
 
@@ -265,7 +265,7 @@ Start with the product outcome. For the delivery assistant, successful behaviour
 
 Use deterministic graders for facts that code can verify: schema validity, citation presence, exact calculations, allowed tool names, state transitions, and transaction IDs. Model-based graders can assess qualities such as clarity or evidence use after human reviewers confirm that the grader agrees with the intended standard. Human review remains essential for subjective or high-impact judgements.
 
-### One case can verify a complete safety property
+### Test One Complete Safety Rule At A Time
 
 Suppose the customer asks for a reroute but never confirms the pickup point. The wording of the assistant's response may vary, so the grader focuses on observable behaviour: the read tool runs, the write tool stays blocked, no committed transaction appears, and the response asks for confirmation.
 
@@ -352,7 +352,7 @@ Enforce least privilege at action time. The model receives only tools relevant t
 
 Validate outputs before rendering, storing, or executing them. Escape generated HTML, parameterize database operations, scan generated files where appropriate, and verify citations or transaction references against authoritative data. Release tests should cover prompt injection, data exfiltration, excessive agency, malformed tool calls, and failure recovery.
 
-## Release the Complete Behaviour Bundle
+## Release Every Component That Can Change Behaviour
 
 <!-- section-summary: A production release identifies every model, instruction, schema, tool, retrieval source, policy, and runtime rule that can change behaviour. -->
 
@@ -416,11 +416,11 @@ flowchart TD
 
 Treat this as one implementation. A team can replace the model provider, workflow engine, telemetry backend, or evaluation platform while keeping the same identities and contracts at each boundary.
 
-## Keep the Architecture Understandable
+## Review The Path From User Request To Final Action
 
 <!-- section-summary: A strong LLM foundation keeps model judgement visible while trusted software owns identity, authority, state, evidence, and recovery. -->
 
-An understandable architecture exposes the full path from authenticated input to final evidence. A reviewer can identify which component supplied each fact, authorized each action, and recorded each effect. The four-responsibility framework turns that walkthrough into a practical review method:
+Review an LLM architecture by following one authenticated request from its input to the final action and evidence. At each step, identify which component supplied the facts, authorized the action, and recorded the effect. The four-responsibility framework turns that walkthrough into a practical review method:
 
 1. **Prepare:** Can the team explain which instructions, facts, retrieved sources, state, and tools reach the model?
 2. **Ask:** Is the model interface versioned, and do important outputs use explicit contracts?

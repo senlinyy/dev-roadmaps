@@ -12,18 +12,18 @@ aliases:
 ## Table of Contents
 
 1. [One Offline Score Is An Estimate](#one-offline-score-is-an-estimate)
-2. [Separate Sampling Uncertainty From Evidence Problems](#separate-sampling-uncertainty-from-evidence-problems)
-3. [Define The Estimand And Effect Size First](#define-the-estimand-and-effect-size-first)
+2. [Separate Sample Variation From Broken Or Biased Evidence](#separate-sample-variation-from-broken-or-biased-evidence)
+3. [Define The Exact Quantity And Difference You Want To Measure](#define-the-exact-quantity-and-difference-you-want-to-measure)
 4. [Compare Candidate And Baseline On The Same Units](#compare-candidate-and-baseline-on-the-same-units)
 5. [Understand Confidence Intervals Through Repeated Samples](#understand-confidence-intervals-through-repeated-samples)
-6. [Build A Paired Bootstrap Interval Step By Step](#build-a-paired-bootstrap-interval-step-by-step)
-7. [A Paired Permutation Test Asks A Different Question](#a-paired-permutation-test-asks-a-different-question)
-8. [Choose A Resampling Unit That Preserves Dependence](#choose-a-resampling-unit-that-preserves-dependence)
-9. [Use Stratification Without Hiding Rare Segments](#use-stratification-without-hiding-rare-segments)
+6. [How A Paired Bootstrap Estimates The Range Of Effects](#how-a-paired-bootstrap-estimates-the-range-of-effects)
+7. [What A Paired Permutation Test Can Tell You](#what-a-paired-permutation-test-can-tell-you)
+8. [Resample Whole Users, Sessions, Or Sites When Rows Are Related](#resample-whole-users-sessions-or-sites-when-rows-are-related)
+9. [Sample Important Rare Groups Deliberately](#sample-important-rare-groups-deliberately)
 10. [Separate Practical Importance From Statistical Evidence](#separate-practical-importance-from-statistical-evidence)
-11. [Control Multiple Metrics And Segment Comparisons](#control-multiple-metrics-and-segment-comparisons)
-12. [Make The Evidence Reproducible](#make-the-evidence-reproducible)
-13. [Turn Uncertainty Into Release And Recovery Decisions](#turn-uncertainty-into-release-and-recovery-decisions)
+11. [Account For The Extra False Alarms Created By Many Comparisons](#account-for-the-extra-false-alarms-created-by-many-comparisons)
+12. [Record Everything Needed To Reproduce The Comparison](#record-everything-needed-to-reproduce-the-comparison)
+13. [Use Uncertainty To Pass, Fail, Or Delay A Release](#use-uncertainty-to-pass-fail-or-delay-a-release)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
@@ -60,10 +60,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef population fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef sample fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef score fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef distribution fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A population
     class B,C,D sample
     class E,F,G score
@@ -79,7 +75,7 @@ The release question is therefore larger than “Which score is higher?”
 Reviewers need the estimated change, the precision of that estimate, the assumptions behind it,
 and the amount of change that matters to the product.
 
-## Separate Sampling Uncertainty From Evidence Problems
+## Separate Sample Variation From Broken Or Biased Evidence
 <!-- section-summary: Resampling quantifies variation from finite sampling, while label errors, leakage, stale data, and unrepresentative coverage require evidence repair. -->
 
 Uncertainty is a broad word.
@@ -90,7 +86,7 @@ part of that doubt.
 A valid random or representative sample still contains chance variation.
 Bootstrap intervals and other inferential methods are designed to describe this source.
 
-### Evidence problems need their own repair
+### Fix Label, Data, And Measurement Problems Before Calculating Uncertainty
 
 **Label uncertainty** comes from imperfect ground truth.
 A fraud label may arrive late.
@@ -120,10 +116,6 @@ flowchart TD
     E --> I["Repair the evidence pipeline"]
     F --> J["Collect representative evidence<br/>or narrow the release scope"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef statistical fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef repair fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B question
     class C,D,E,F source
     class G statistical
@@ -142,12 +134,11 @@ Evidence validity comes first.
 Sampling uncertainty is measured after the dataset, labels, and release population pass their
 own checks.
 
-## Define The Estimand And Effect Size First
+## Define The Exact Quantity And Difference You Want To Measure
 <!-- section-summary: The estimand names the exact production quantity under study, and the effect size measures how much the candidate changes it relative to the baseline. -->
 
-Before calculating uncertainty, the team needs a precise answer to: **What quantity are we
-trying to learn about?**
-That quantity is the **estimand**.
+Before calculating uncertainty, the team needs to state the exact quantity it wants to learn
+about. Statisticians call that quantity the **estimand**.
 
 An estimand joins the metric to a population and an operating policy.
 “Candidate recall” is incomplete.
@@ -235,10 +226,6 @@ flowchart TD
     D --> I
     H --> I
 
-    classDef unit fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef difference fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef effect fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,E unit
     class B,C,F,G model
     class D,H,I difference
@@ -290,10 +277,6 @@ flowchart TD
     D --> F
     E --> F
 
-    classDef samples fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef cover fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef miss fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A samples
     class B,C,E cover
     class D miss
@@ -316,7 +299,7 @@ regression is no worse than an approved margin.
 Two-sided intervals show plausible movement in both directions.
 The choice belongs in the evaluation plan before candidate results are reviewed.
 
-## Build A Paired Bootstrap Interval Step By Step
+## How A Paired Bootstrap Estimates The Range Of Effects
 <!-- section-summary: A paired bootstrap repeatedly samples evaluation units with replacement, applies the same indices to both systems, and recalculates the effect. -->
 
 The **bootstrap** approximates the sampling distribution by resampling the observed evaluation
@@ -366,7 +349,7 @@ Percentile and basic intervals are also available.
 The method choice and library version belong in the evaluation configuration because interval
 methods can differ.
 
-### Recalculate the complete registered metric
+### Recalculate The Entire Metric Inside Every Resample
 
 For recall, F1, AUC, or NDCG, the statistic should receive labels and both prediction sets.
 It recalculates each whole metric inside every resample.
@@ -384,7 +367,7 @@ Small samples, rare outcomes, boundary statistics, and very few independent clus
 extra statistical review.
 The bootstrap is a method with assumptions, not a certificate attached to any metric.
 
-## A Paired Permutation Test Asks A Different Question
+## What A Paired Permutation Test Can Tell You
 <!-- section-summary: A paired permutation test measures how unusual the observed effect would be under a registered exchangeability null, while an interval estimates effect size and precision. -->
 
 A confidence interval and a paired permutation test use the same paired evidence to answer
@@ -411,10 +394,6 @@ flowchart TD
     D --> F["Supports practical and<br/>safety boundary decisions"]
     E --> G["Measures extremeness<br/>under the registered null"]
 
-    classDef data fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef method fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef answer fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef use fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A data
     class B,C method
     class D,E answer
@@ -452,7 +431,7 @@ Within-pair swaps should represent the null assignment mechanism.
 Clustered or time-dependent data may require cluster-level swaps or another design-specific
 procedure.
 
-## Choose A Resampling Unit That Preserves Dependence
+## Resample Whole Users, Sessions, Or Sites When Rows Are Related
 <!-- section-summary: The resampling unit should match the source of independent variation so repeated users, sessions, sites, and nearby time periods remain together. -->
 
 Ordinary row bootstrap treats rows as independent draws.
@@ -485,17 +464,13 @@ flowchart TD
     E --> G
     F --> G
 
-    classDef rows fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef question fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef cluster fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A rows
     class B question
     class C,D,E,F cluster
     class G action
 ```
 
-### Cluster bootstrap preserves related rows
+### How Cluster Bootstrap Keeps Related Rows Together
 
 This is a **cluster bootstrap**.
 It preserves dependence inside each sampled cluster while treating clusters as the independent
@@ -522,7 +497,7 @@ Ten thousand rows from six sites still provide only six site-level units.
 More resamples repeat those six sites in different combinations.
 Additional sites, longer time coverage, or a narrower release claim supplies stronger evidence.
 
-## Use Stratification Without Hiding Rare Segments
+## Sample Important Rare Groups Deliberately
 <!-- section-summary: Stratified evaluation preserves important population groups, while weighting and segment-specific reports keep oversampling from distorting the overall effect. -->
 
 An evaluation sample can be representative overall and still contain too little evidence for an
@@ -551,10 +526,6 @@ flowchart TD
     E --> F
     E --> G["Report rare segment separately<br/>with support and interval"]
 
-    classDef population fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef segment fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef sample fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef report fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A population
     class B,C segment
     class D,E sample
@@ -630,10 +601,6 @@ flowchart TD
     F -->|"Yes"| G["Safety and benefit gates pass"]
     F -->|"No"| H["Safety boundary cleared<br/>Useful benefit not established<br/>Hold, stage, or collect evidence"]
 
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef proceed fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A evidence
     class B,D,F decision
     class C,E stop
@@ -646,7 +613,7 @@ A low-risk ranking improvement may proceed to a small online experiment after cl
 offline screen.
 The thresholds should be declared before the final holdout result appears.
 
-## Control Multiple Metrics And Segment Comparisons
+## Account For The Extra False Alarms Created By Many Comparisons
 <!-- section-summary: Predeclared comparison families and appropriate multiplicity control reduce the chance of selecting an attractive result from many noisy tests. -->
 
 Every additional metric, threshold, time window, and segment creates another opportunity for a
@@ -655,7 +622,7 @@ If a team tries twenty independent null tests at the 5 percent level, the chance
 false rejection is much larger than 5 percent.
 This is the **multiple-comparisons problem**.
 
-### Organize the comparison family first
+### Group The Planned Comparisons Before Applying A Correction
 
 Beginners do not need a catalogue of correction formulas to make a sound release review.
 They need a clear comparison hierarchy:
@@ -684,17 +651,13 @@ flowchart TD
     F --> H
     G --> I["Investigation and<br/>future evaluation plan"]
 
-    classDef family fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef group fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef method fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A family
     class B,C,D group
     class E,F,G method
     class H,I result
 ```
 
-### Correction does not create evidence
+### A Statistical Correction Cannot Repair Weak Or Cherry-Picked Evidence
 
 Multiplicity control does not repair post-hoc metric shopping.
 A team that tests hundreds of unrecorded variants and presents one adjusted result has hidden
@@ -708,10 +671,10 @@ Every segment report needs support counts beside its effect and interval.
 Include the number of units, clusters, and outcomes.
 The report also states the comparison family.
 
-## Make The Evidence Reproducible
+## Record Everything Needed To Reproduce The Comparison
 <!-- section-summary: A reproducible uncertainty report versions the dataset, labels, models, estimand, resampling procedure, code, and query-level or unit-level artifacts. -->
 
-Statistical results depend on more than model weights.
+Another engineer needs the full evaluation setup to reproduce a statistical comparison.
 The same predictions can produce different conclusions after a label revision, threshold change,
 weighting rule, cluster definition, or interval method.
 
@@ -767,7 +730,7 @@ Per-user paired results and worst-case examples may contain sensitive identifier
 Store detailed artifacts in governed locations and log access-controlled references where
 appropriate.
 
-## Turn Uncertainty Into Release And Recovery Decisions
+## Use Uncertainty To Pass, Fail, Or Delay A Release
 <!-- section-summary: An uncertainty-aware gate checks evidence validity, paired effects, practical bounds, protected segments, operational readiness, and rollback before authorizing a scope. -->
 
 A production gate converts uncertainty into an action.
@@ -823,10 +786,6 @@ flowchart TD
     G -->|"Yes"| I["Eligible for staged rollout"]
     I --> J["Verify live identity, outcomes,<br/>stop signals, and rollback"]
 
-    classDef start fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef gate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef proceed fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A start
     class B,D,G gate
     class C,E,H stop

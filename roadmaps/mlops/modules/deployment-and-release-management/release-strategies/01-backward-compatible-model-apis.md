@@ -12,21 +12,21 @@ aliases:
 
 ## Table of Contents
 
-1. [Compatibility Keeps Existing Users Working](#compatibility-keeps-existing-users-working)
-2. [Five Contracts Can Change Independently](#five-contracts-can-change-independently)
-3. [Structural Compatibility Protects Shapes and Protocols](#structural-compatibility-protects-shapes-and-protocols)
-4. [Semantic Compatibility Protects Meaning](#semantic-compatibility-protects-meaning)
-5. [Model Signatures Guard the Internal Boundary](#model-signatures-guard-the-internal-boundary)
-6. [Retries Need Stable Outcomes](#retries-need-stable-outcomes)
-7. [Stored Predictions Have Their Own Consumers](#stored-predictions-have-their-own-consumers)
-8. [Compatibility Testing Needs Several Views](#compatibility-testing-needs-several-views)
-9. [Migrate Contracts in Deliberate Stages](#migrate-contracts-in-deliberate-stages)
-10. [Rollback Must Protect the Newest Client](#rollback-must-protect-the-newest-client)
+1. [What Backward Compatibility Means For A Model API](#what-backward-compatibility-means-for-a-model-api)
+2. [The Five Contracts A Model API Must Keep Compatible](#the-five-contracts-a-model-api-must-keep-compatible)
+3. [Keep Request And Response Shapes Compatible](#keep-request-and-response-shapes-compatible)
+4. [Keep The Meaning Of Inputs And Outputs Stable](#keep-the-meaning-of-inputs-and-outputs-stable)
+5. [Use Model Signatures To Check Internal Inputs And Outputs](#use-model-signatures-to-check-internal-inputs-and-outputs)
+6. [Make Retried Requests Produce Safe, Predictable Results](#make-retried-requests-produce-safe-predictable-results)
+7. [Keep Stored Predictions Compatible With Their Readers](#keep-stored-predictions-compatible-with-their-readers)
+8. [Test Compatibility From Several Views](#test-compatibility-from-several-views)
+9. [Change Contracts In Deliberate Stages](#change-contracts-in-deliberate-stages)
+10. [Keep The Rollback Release Compatible With New Clients](#keep-the-rollback-release-compatible-with-new-clients)
 11. [The Main Idea](#the-main-idea)
 12. [References](#references)
 
-## Compatibility Keeps Existing Users Working
-<!-- section-summary: Compatibility lets an existing client keep making a useful request after the service, model, or surrounding data system changes. -->
+## What Backward Compatibility Means For A Model API
+<!-- section-summary: Compatibility keeps an existing client's request valid after the service, model, or surrounding data system changes. -->
 
 At a high level, **model API compatibility** means that an existing client can keep asking for a prediction after the team releases a new implementation. The request remains valid, and the response keeps the meaning the client expects. Failure handling and retry rules also stay predictable. A mobile application or batch job should not require an emergency release because a model changed behind the endpoint.
 
@@ -48,18 +48,18 @@ flowchart TD
     D --> F["Request accepted and meaning preserved"]
     E --> G["Optional additions tolerated or adapted"]
 
-    style A fill:#FFE04F,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style F fill:#FB7185,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-quaternary
+    class F dp-mermaid-primary
+    class G dp-mermaid-primary
 ```
 
-Compatibility therefore covers shape and meaning. A useful release question is: **Which existing clients and stored records must remain usable after this change?** The answer defines the compatibility window and the evidence required before release.
+Compatibility therefore covers shape and meaning. Ask: **Which existing clients and stored records must remain usable after this change?** The answer defines the compatibility window and the evidence required before release.
 
-## Five Contracts Can Change Independently
+## The Five Contracts A Model API Must Keep Compatible
 <!-- section-summary: A production prediction crosses five contracts, each with its own consumers, owners, and failure modes. -->
 
 A prediction endpoint looks like one interface from the outside. Internally, it crosses several boundaries. Treating all of them as one schema makes reviews confusing because a safe internal model change may have no effect on callers, while a tiny policy change may alter every product decision.
@@ -82,14 +82,14 @@ flowchart TD
     E --> G["Stored prediction event"]
     G --> H["Monitoring, feedback, audit, retraining"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
-    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-primary
+    class G dp-mermaid-secondary
+    class H dp-mermaid-tertiary
 ```
 
 Suppose a new churn model replaces three one-hot columns with one categorical column. The model signature has changed, but the public API can remain stable because the service performs the new transformation internally. A different release may keep the model artifact unchanged and lower the retention-offer threshold from `0.70` to `0.55`. The JSON and model signature remain stable, yet decision semantics have changed and require a policy review.
@@ -98,7 +98,7 @@ The stored event deserves equal attention. A live response can be correct while 
 
 Each contract needs an owner and a version or release identifier. That identifier does not need to appear in the URL. A response can carry `contract_version`, `model_version`, and `policy_version`, while the stable route remains `/v1/predict`. Separate identifiers make incidents diagnosable because they reveal which layer changed.
 
-## Structural Compatibility Protects Shapes and Protocols
+## Keep Request And Response Shapes Compatible
 <!-- section-summary: Structural compatibility preserves fields, types, requiredness, status codes, and other machine-readable rules used by clients. -->
 
 **Structural compatibility** concerns the parts a program can validate mechanically: field names, types, required fields, enum values, message numbers, status codes, and content types. OpenAPI is the common contract language for HTTP APIs. Protobuf schemas play a similar role for gRPC and event messages.
@@ -146,30 +146,30 @@ def score(request: RiskRequest) -> RiskResponse:
 
 This code protects the shape. Separate semantic tests confirm that `amount_minor` means the smallest currency unit, `risk_score` is calibrated, and `decision` uses the approved threshold.
 
-### Request evolution
+### How Requests Can Change Safely
 
 New model inputs rarely need to become new caller requirements. A serving layer can derive a feature, fetch it from an online store, or use an explicit missing-value path. If clients eventually need to supply the value, introduce it as optional and publish its meaning. Adoption telemetry then shows whether a deliberately versioned required field is practical.
 
 For example, a ranking model may start using `device_class`. Existing clients omit it. The service assigns `UNKNOWN`, logs that fallback, and exposes an adoption metric by client version. Once every supported client sends a validated value, the team can decide whether requiredness adds enough value to justify a new contract.
 
-### Response and error evolution
+### How Responses And Errors Can Change Safely
 
 Required response fields should keep their names, types, units, and nullability throughout the promised support window. Optional metadata can grow around that stable core. Error responses also form a contract: callers may retry `503`, fix input after `422`, and stop after an authorization error. Stable error codes such as `FEATURE_UNAVAILABLE` are safer for programs than human messages, which can change for clarity or localization.
 
 Timeout behavior belongs here too. If the server deadline is three seconds and a new enrichment call routinely needs four, callers see a compatibility failure even though the OpenAPI schema is unchanged. Define deadlines, cancellation behavior, retryable status codes, and any fallback response as part of the public service contract.
 
-## Semantic Compatibility Protects Meaning
+## Keep The Meaning Of Inputs And Outputs Stable
 <!-- section-summary: Semantic compatibility keeps the same business interpretation even if fields and types appear unchanged. -->
 
 **Semantic compatibility** asks whether the same value still means the same thing. This is the central ML concern because model outputs are estimates, ranks, labels, or vectors whose interpretation depends on data and policy.
 
-### Units, labels, and ranges
+### Preserve Units, Labels, And Ranges
 
 A field called `amount` could represent pounds, pence, dollars, or a normalized training value. A duration could use seconds in one release and milliseconds in another. Both fit inside a number. The contract should name the unit directly, such as `amount_minor` or `latency_ms`, and tests should use boundary values that reveal conversion errors.
 
 Labels need the same care. Suppose a client understands `HIGH` as a risk band and applies its own policy. Replacing that value with `BLOCK` turns an observation into an action. A safe migration adds `decision` while retaining `risk_band`. Callers move to the new field during the support window. Usage telemetry later provides the evidence for removing the old field.
 
-### Calibration, thresholds, and policy
+### Preserve Calibration, Threshold, And Policy Meaning
 
 A probability answers a different question from a ranking score. A calibrated `0.8` should correspond to roughly eight positive outcomes among comparable predictions over an appropriate evaluation set. An uncalibrated score of `0.8` may only mean “ranked higher than another case.” A client threshold cannot safely cross that boundary.
 
@@ -186,7 +186,7 @@ policy_version: "manual-review-7"
 
 This record tells an investigator that the model produced a calibrated probability and a separate policy converted it into an action. A threshold update can then move through policy review without pretending that the model changed. A recalibrated model can move through model review without hiding behind the same policy version.
 
-### Freshness, missing values, and feature order
+### Preserve Freshness, Missing-Value, And Feature-Order Rules
 
 Feature values carry context beyond type. A balance observed ten seconds ago differs from a balance observed two days ago. A missing value may mean “unknown,” “not applicable,” “source unavailable,” or a genuine zero. Replacing all missing values with zero can turn an infrastructure problem into confident predictions.
 
@@ -203,7 +203,7 @@ In an account-risk service, a stale balance might trigger `REVIEW` through a con
 
 Feature ordering deserves special attention for NumPy arrays, tensors, and exported models. Swapping `age_days` and `balance_minor` can produce valid shapes and absurd predictions. Named columns, validated signatures, and golden transformation fixtures reduce that risk.
 
-### Embeddings and vector dimensions
+### Preserve Embedding Dimensions And Meaning
 
 Embeddings create another silent boundary. A search index built with one embedding model should not receive query vectors from a different space. Equal dimensions do not guarantee equal meaning; different dimensions create an immediate structural failure.
 
@@ -219,17 +219,17 @@ flowchart TD
     E -->|"No"| G["Keep v1 active"]
     F --> H["Retain v1 through rollback window"]
 
-    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#FFE04F,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
-    style H fill:#93C5FD,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-tertiary
+    class G dp-mermaid-primary
+    class H dp-mermaid-secondary
 ```
 
-## Model Signatures Guard the Internal Boundary
+## Use Model Signatures To Check Internal Inputs And Outputs
 <!-- section-summary: The public API validates caller input, while the MLflow signature validates the model-ready data after enrichment and transformation. -->
 
 An **MLflow model signature** declares the inputs, outputs, and optional inference parameters expected by a model artifact. It protects the boundary closest to the model. The public API contract protects a different boundary: the one between the product caller and the service.
@@ -246,14 +246,14 @@ flowchart TD
     F --> G["Calibration and decision policy"]
     G --> H["Public response validation"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style E fill:#FB7185,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FFE04F,stroke:#536A9A,color:#111827
-    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-primary
+    class G dp-mermaid-secondary
+    class H dp-mermaid-tertiary
 ```
 
 MLflow can infer a signature from representative input and output data during logging. Production teams should still review the inferred result. A sample may miss optional columns, nullable values, parameter constraints, or an important output structure.
@@ -274,7 +274,7 @@ mlflow.sklearn.log_model(
 
 An internal signature can change without creating a public API version. The serving adapter can map the stable request to the new signature. Its tests check the exact column names and order, then exercise missing values, unit conversions, and stale features. The public validator protects callers, while the model signature protects inference.
 
-## Retries Need Stable Outcomes
+## Make Retried Requests Produce Safe, Predictable Results
 <!-- section-summary: Retry compatibility defines whether repeating a request is safe and how the service recognizes a duplicate action. -->
 
 A prediction request can finish on the server after the client has already timed out. The client sees no response and has to decide whether a retry is safe. A pure scoring endpoint can often recompute the prediction, although a model release between attempts may produce a different answer. An endpoint that also creates a durable action needs stronger protection.
@@ -290,25 +290,25 @@ flowchart TD
     B -->|"Same key and same hash"| F["Return stored response"]
     B -->|"Same key and different hash"| G["Reject key reuse"]
 
-    style A fill:#93C5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#FB7185,stroke:#536A9A,color:#111827
-    style D fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style E fill:#93C5FD,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-quaternary
+    class G dp-mermaid-tertiary
 ```
 
 The operation record should outlive the client's retry window. It should bind the key to a canonical request hash so accidental reuse cannot apply a stale result to different input. The returned prediction, decision, policy version, and action identifier should match the first successful attempt.
 
 HTTP defines safe and idempotent method semantics, but many prediction APIs use POST. The application contract therefore has to state whether POST is retryable, which failures permit a retry, how long deduplication lasts, and whether a second computation may observe a newer model release. Clients should not infer these rules from a generic `500` response.
 
-## Stored Predictions Have Their Own Consumers
+## Keep Stored Predictions Compatible With Their Readers
 <!-- section-summary: Prediction events remain contracts long after the online response has finished. -->
 
 Production predictions are often stored or emitted to a stream. Those records support delayed quality measurement, outcome joins, incident investigation, regulatory evidence, analytics, and retraining. Their compatibility window can be much longer than the online API's window because old events may remain in object storage or a warehouse for months or years.
 
-A useful event contains durable identifiers and provenance:
+A complete prediction event contains durable identifiers and provenance:
 
 - `prediction_id` for feedback joins and incident lookup;
 - `contract_version`, `model_version`, and `policy_version`;
@@ -355,22 +355,22 @@ buf breaking --against '.git#branch=main'
 
 Schema checks still miss business meaning. A producer can keep `risk_score` as `double` and quietly change it from probability to ranking score. Add semantic fixtures and replay tests beside Buf. Monitoring should also track event production rate, decode failures, unknown versions, feedback-join coverage, and lag by contract version.
 
-## Compatibility Testing Needs Several Views
+## Test Compatibility From Several Views
 <!-- section-summary: Schema checks, consumer tests, transformation fixtures, and production-like replays catch different compatibility failures. -->
 
 No single test can prove compatibility because the contracts fail in different ways. A strong CI gate combines fast structural checks with a small amount of production-like evidence.
 
-### Schema and provider checks
+### Run Schema And Provider Checks
 
 Compare the proposed OpenAPI or Protobuf schema with the released baseline. Then start the candidate service and replay requests from every supported public contract. Assert the status code, required fields, types, error codes, and timeout budget. Keep examples small and representative: an ordinary request, optional fields absent, unknown enum, boundary values, missing features, and a dependency failure.
 
-### Consumer-driven checks
+### Run Consumer-Driven Contract Tests
 
 Consumer-driven contracts help if independently deployed teams use the API. With Pact, each consumer records the minimal request and response interaction it relies on. Provider verification replays those interactions against the candidate provider. A Pact Broker compatibility check can then answer whether the selected consumer and provider versions have a verified combination for an environment.
 
 This adds coordination infrastructure, so it should solve a real ownership problem. A single service and client released from one repository may get enough value from typed builds, OpenAPI comparison, and end-to-end fixtures. A shared platform API with many independently released clients benefits much more from consumer-owned expectations.
 
-### Golden transformations
+### Compare Known Inputs With Expected Transformations
 
 A **golden fixture** is a reviewed input with an expected intermediate representation. It tests the adapter between the public request and model-ready data. Golden fixtures should cover unit conversion, category encoding, column order, missing values, and freshness decisions.
 
@@ -386,7 +386,7 @@ def test_public_request_maps_to_model_signature():
 
 The expected prediction itself should usually use a tolerance or semantic property. Floating-point output can shift across compatible model releases. More durable assertions include score range, monotonic relationships, allowed labels, interval ordering, and a stable policy decision for protected fixtures.
 
-### Replay and shadow evidence
+### Use Replay And Shadow Traffic For Production Evidence
 
 Replay a governed sample of recent requests through the current and candidate paths. First count rejected requests and cases that use the missing-feature path. Check whether the latency budget still holds. Then inspect score distributions, decision changes, and important user segments. Shadow traffic can provide fresher evidence without exposing candidate decisions to users. Apply the normal production-data controls to every replay sample.
 
@@ -401,20 +401,20 @@ flowchart TD
     G -->|"Yes"| H["Eligible for progressive delivery"]
     G -->|"No"| I["Repair contract, adapter, or policy"]
 
-    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style B fill:#93C5FD,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#FFE04F,stroke:#536A9A,color:#111827
-    style E fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style F fill:#93C5FD,stroke:#536A9A,color:#111827
-    style G fill:#FB7185,stroke:#536A9A,color:#111827
-    style H fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style I fill:#FB7185,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-tertiary
+    class F dp-mermaid-secondary
+    class G dp-mermaid-primary
+    class H dp-mermaid-tertiary
+    class I dp-mermaid-primary
 ```
 
 Production telemetry closes the gap left by CI. Record contract version, client version, model version, policy version, validation result, deprecated-field usage, adapter path, and fallback reason. These fields let the team see which clients still depend on an old contract and whether the candidate creates a new failure pattern.
 
-## Migrate Contracts in Deliberate Stages
+## Change Contracts In Deliberate Stages
 <!-- section-summary: Safe migrations introduce the new contract alongside the old one, measure adoption, and remove old behavior only after evidence supports it. -->
 
 Some changes cannot stay additive forever. A field may have a misleading name, an event may carry sensitive data, or a score may need a new semantic definition. A staged migration creates time for clients and stored data to move safely.
@@ -440,7 +440,7 @@ stateDiagram-v2
 
 Adapters are especially useful at the public boundary. An old request can map to the new internal feature contract without forcing every caller to understand model details. Dual-read is useful during storage migrations: readers prefer the new field and fall back to the old field. Dual-write supports mixed consumers, although it needs a consistency check because two representations can diverge.
 
-### Route, header, or event version
+### Choose Where The Contract Version Lives
 
 A new URL such as `/v2/risk` is clear and easy to route, document, and retire. It also duplicates endpoint surface and asks callers to migrate. Use it for a genuinely incompatible public meaning or structure.
 
@@ -450,7 +450,7 @@ Event versions often belong in the schema name or topic, such as `predictions.v2
 
 A new model does not automatically need a new public API major version. The same contract can continue if request shape and response meaning remain stable. Decision policy and reliability expectations must remain inside their published bounds too. Public versioning follows caller-visible incompatibility, not the model registry version.
 
-## Rollback Must Protect the Newest Client
+## Keep The Rollback Release Compatible With New Clients
 <!-- section-summary: A release is safely reversible only if clients deployed during the release can still use the retained service or a compatibility adapter. -->
 
 Rollback plans often focus on the server: keep the previous container or model version, then route traffic back. That is only half of the problem. Clients may have deployed during the release and started using an additive field or a new event version. Sending those clients to an older server can turn a model rollback into an API outage.
@@ -473,12 +473,12 @@ flowchart TD
     E --> F["Test newest client against retained release"]
     F --> C
 
-    style A fill:#C4B5FD,stroke:#536A9A,color:#111827
-    style B fill:#FFE04F,stroke:#536A9A,color:#111827
-    style C fill:#2DD4BF,stroke:#536A9A,color:#111827
-    style D fill:#FB7185,stroke:#536A9A,color:#111827
-    style E fill:#93C5FD,stroke:#536A9A,color:#111827
-    style F fill:#2DD4BF,stroke:#536A9A,color:#111827
+    class A dp-mermaid-primary
+    class B dp-mermaid-secondary
+    class C dp-mermaid-tertiary
+    class D dp-mermaid-quaternary
+    class E dp-mermaid-primary
+    class F dp-mermaid-tertiary
 ```
 
 The compatibility facade can ignore an optional field, supply a stable default, translate an old name, or route a request to a compatible implementation. Keep it thin and observable. Log every adapter path and retire it through the same migration evidence used for public fields.

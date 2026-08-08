@@ -10,17 +10,17 @@ id: "article-mlops-training-pipelines-repeatable-training-pipeline"
 ## Table of Contents
 
 1. [A Training Pipeline Makes a Rerun Safe](#a-training-pipeline-makes-a-rerun-safe)
-2. [Learn the Objects Before Drawing the Graph](#learn-the-objects-before-drawing-the-graph)
-3. [Immutable Run Identity Anchors the Workflow](#immutable-run-identity-anchors-the-workflow)
-4. [Stage Contracts Turn the Graph Into an Interface](#stage-contracts-turn-the-graph-into-an-interface)
-5. [The Canonical Training Path](#the-canonical-training-path)
-6. [The Control Plane Coordinates Worker Execution](#the-control-plane-coordinates-worker-execution)
-7. [Retries, Caches, and Idempotency Need Separate Rules](#retries-caches-and-idempotency-need-separate-rules)
-8. [Partial Replay Reuses Proven Outputs](#partial-replay-reuses-proven-outputs)
-9. [Backfills Recreate Historical Runs Deliberately](#backfills-recreate-historical-runs-deliberately)
-10. [Keep the Pipeline Definition Independent of the Orchestrator](#keep-the-pipeline-definition-independent-of-the-orchestrator)
-11. [Local, CI, and Managed Runs Share One Contract](#local-ci-and-managed-runs-share-one-contract)
-12. [Test the Operational Guarantees](#test-the-operational-guarantees)
+2. [Understand The Parts Of A Training Pipeline](#understand-the-parts-of-a-training-pipeline)
+3. [Record Exactly What Each Training Run Uses](#record-exactly-what-each-training-run-uses)
+4. [Define The Input And Output Of Every Pipeline Step](#define-the-input-and-output-of-every-pipeline-step)
+5. [The Steps In A Repeatable Training Pipeline](#the-steps-in-a-repeatable-training-pipeline)
+6. [How The Pipeline Scheduler Runs Each Step](#how-the-pipeline-scheduler-runs-each-step)
+7. [Handle Retries, Reused Results, And Repeated Requests Separately](#handle-retries-reused-results-and-repeated-requests-separately)
+8. [Rerun Only The Failed Part Of The Pipeline](#rerun-only-the-failed-part-of-the-pipeline)
+9. [Rerun The Pipeline For Past Data](#rerun-the-pipeline-for-past-data)
+10. [Keep Training Logic Independent Of The Orchestrator](#keep-training-logic-independent-of-the-orchestrator)
+11. [Run The Same Pipeline Locally, In CI, And On Managed Compute](#run-the-same-pipeline-locally-in-ci-and-on-managed-compute)
+12. [Test How The Pipeline Handles Failures](#test-how-the-pipeline-handles-failures)
 13. [Main Idea](#main-idea)
 14. [References](#references)
 
@@ -44,10 +44,10 @@ flowchart TD
 
 The graph supplies order. Stage contracts supply meaning. Immutable identities keep both tied to the evidence that produced the candidate.
 
-## Learn the Objects Before Drawing the Graph
+## Understand The Parts Of A Training Pipeline
 <!-- section-summary: Pipeline terminology separates workflow structure, execution units, durable outputs, and the mechanisms used to repeat work. -->
 
-A pipeline platform introduces several terms that sound interchangeable at first. They describe different parts of the system, and the differences matter during failure recovery.
+Before reading a pipeline graph, learn the different objects that describe the requested run, each unit of work, and the files passed between them. Those differences determine what the platform can reuse or recover after a failure.
 
 A **pipeline** is the versioned workflow definition plus the rules for running it. One definition can create many pipeline runs. Each run receives concrete inputs and develops its own state.
 
@@ -77,7 +77,7 @@ flowchart TD
 
 This vocabulary gives operators precise questions. They can ask whether one attempt deserves a retry, whether an output qualifies for cache reuse, or whether the team intends to create a historical backfill.
 
-## Immutable Run Identity Anchors the Workflow
+## Record Exactly What Each Training Run Uses
 <!-- section-summary: A resolved run specification freezes the identities that every stage must use and gives duplicate triggers a stable deduplication key. -->
 
 The trigger starts a request. The **run specification** resolves that request into concrete identities before expensive work starts. A schedule might say “train weekly,” and an event might say “labels are ready.” Neither message identifies the exact rows, code, image, or evaluation policy required for a reproducible run.
@@ -110,7 +110,7 @@ Human-readable names remain useful for search, yet they cannot carry identity by
 
 The submission service marks the run specification read-only after accepting it. A corrected data snapshot, new threshold, or rebuilt image creates another run. This preserves a clean answer to a basic review question: which exact conditions produced the candidate?
 
-## Stage Contracts Turn the Graph Into an Interface
+## Define The Input And Output Of Every Pipeline Step
 <!-- section-summary: A stage contract defines inputs, outputs, execution identity, state, repetition policy, and evidence before orchestration code is written. -->
 
 Drawing arrows between functions creates a workflow shape. A **stage contract** makes that shape operational. It tells the author, orchestrator, and operator what one stage accepts and what a successful execution must publish.
@@ -150,7 +150,7 @@ stage:
 
 Stage state also needs one source of truth. Queued and running describe active work. Succeeded, failed, and cancelled describe terminal outcomes. Skipped records an unmet branch condition, while cached records accepted reuse of an earlier output. Attempt state belongs to the orchestrator metadata store. Business evidence belongs in durable artifacts. A dashboard can disappear and rebuild from metadata; the model package and its lineage still survive in governed storage.
 
-## The Canonical Training Path
+## The Steps In A Repeatable Training Pipeline
 <!-- section-summary: A production training workflow moves from one resolved request through data, features, training, evaluation, packaging, and governed candidate handoff. -->
 
 Most batch-training systems can start from the same seven-stage framework. The path first freezes the request and training population. It then turns that population into features and a model before applying an independent evaluation policy. Packaging creates the inference boundary, and registration gives the accepted package a governed candidate identity. Teams may combine lightweight steps or split expensive work further, but every boundary should preserve the contracts described above.
@@ -167,25 +167,25 @@ flowchart TD
     F --> G["Register and hand off<br/>(create a governed candidate identity)"]
 ```
 
-### Trigger and run specification
+### Start The Run And Record Its Settings
 
 The trigger proposes a logical request. It may come from a schedule, a data-ready event, a code release, or an authorised manual action. The first stage validates the trigger, deduplicates its request ID, resolves approved defaults, and writes the immutable run specification.
 
 Consider two identical data-ready events delivered seconds apart. The submission service attempts to claim the same `request_id` in a transactional store. One claim creates the run; the other receives the existing run identity. This is idempotency at the pipeline boundary. A human-requested replay uses a distinct request ID and records the original run as its parent.
 
-### Snapshot and validate data
+### Snapshot And Validate The Data
 
 The data stage resolves source partitions and labels into an immutable snapshot manifest. The manifest may point to an Iceberg snapshot, Delta table version, BigQuery table snapshot, warehouse clone, or versioned object-store files. The storage system varies; the contract always names an immutable population.
 
 Validation checks that population before training consumes it. Typical evidence includes schema compatibility, row counts, event-time coverage, label completeness, key uniqueness, and join coverage. Leakage checks verify that features respect the prediction timestamp. A failed freshness check blocks the run because repeating the same check against the same snapshot will produce the same result. A corrected source creates a new snapshot identity and another run.
 
-### Prepare features
+### Prepare The Features
 
 Feature preparation applies reviewed transformations to the validated population. Its output manifest identifies the feature schema and entity keys. It records the event-time range and row count so reviewers can understand the population. The transformation version and file digests tie that population to the exact computation and bytes. Point-in-time joins need explicit cut-off semantics so historical rows never see future facts.
 
 This stage often deserves caching because feature computation can dominate cost. Cache safety depends on a complete fingerprint. The source snapshot, label snapshot, feature code, image digest, configuration, and engine settings must all participate. A hidden dependency on a mutable lookup table invalidates that promise; the lookup receives its own versioned input identity.
 
-### Train model
+### Train The Model
 
 The training stage consumes the feature snapshot and resolved training configuration. It emits model checkpoints, training metrics, the final raw model, and an environment record. Random-seed policy, distributed topology, accelerator type, library lock, and container digest explain the conditions around the output.
 
@@ -193,25 +193,25 @@ Recovery depends on the framework. A long distributed job may resume from a comm
 
 Training cache reuse deserves a stricter policy than feature reuse. A fully deterministic training stage with pinned inputs may qualify. Stochastic or hardware-sensitive training usually creates a new output so the run records observed variation. The organisation's reproducibility claim should decide this policy explicitly.
 
-### Evaluate candidate
+### Evaluate The Trained Model
 
 Evaluation consumes one exact model digest and one exact evaluation dataset. The policy version defines metrics, thresholds, segments, denominators, and uncertainty rules. The output is a review artifact with both overall and segment-level evidence.
 
 For example, a classifier can clear its overall recall target while failing recall for a low-volume region. The evaluator writes both results and returns a policy-failed state. Retries serve transient compute failures; they cannot repair a genuine guardrail failure. A changed threshold creates a new policy version and another evaluation lineage record.
 
-### Package model
+### Package The Model
 
 Packaging assembles the files required by inference. A complete package may contain weights, preprocessing code, tokenizer or label mappings, input-output signature, dependency lock, loader metadata, and a small test vector. It receives an immutable digest after validation.
 
 The package test loads the artifact in a clean runtime and scores the test vector. This catches missing custom classes and preprocessing dependencies before registry handoff. Security workflows may attach a software bill of materials and scan results to the same package evidence.
 
-### Register and hand off
+### Register The Model For Review
 
 The registration stage creates a governed candidate identity and links it to the pipeline run. It carries the model-package digest, evaluation report, data lineage, code identity, owner, and policy result. An idempotency key built from the package digest plus target registry prevents duplicate candidate versions after a lost response.
 
 Registration records a candidate. Production traffic stays under the release workflow, where approval, deployment configuration, rollout, monitoring, and rollback have their own state. This boundary prevents a successful training job from changing a live endpoint as an incidental side effect.
 
-## The Control Plane Coordinates Worker Execution
+## How The Pipeline Scheduler Runs Each Step
 <!-- section-summary: The control plane owns workflow decisions and state, while workers perform computation and publish durable outputs. -->
 
 Pipeline systems have two architectural roles. The **control plane** stores the graph and run state. It evaluates dependencies, queues ready tasks, applies concurrency limits, decides retries and cache hits, and exposes operational history. The **execution plane** consists of workers that run stage code on local processes, containers, Kubernetes pods, batch services, or managed ML jobs.
@@ -237,7 +237,7 @@ Airflow illustrates this split through its scheduler and pluggable executors. Ai
 
 Credentials follow the same boundary. The run specification carries resource identities and locations. The worker receives a short-lived workload identity with the minimum permissions for its stage. Secret values stay in a secret manager or platform connection and remain absent from run manifests, task arguments, and cache keys.
 
-## Retries, Caches, and Idempotency Need Separate Rules
+## Handle Retries, Reused Results, And Repeated Requests Separately
 <!-- section-summary: Reliable repetition depends on classifying failures, building complete fingerprints, and committing side effects exactly once. -->
 
 Automatic retry is appropriate for failures that may disappear while inputs remain unchanged. Examples include temporary API unavailability, lost workers, capacity shortages, and throttling. Exponential backoff with jitter reduces synchronized retry storms. A maximum attempt count and time budget keep a blocked dependency from consuming capacity forever.
@@ -287,7 +287,7 @@ The platform feature never discovers hidden dependencies by magic. Imported libr
 
 Current managed systems implement the same idea through different fingerprints. Kubeflow Pipelines and Vertex AI Pipelines consider component and input identities. SageMaker Pipelines reuses successful step output after matching step-specific attributes within a configured lifetime. Azure Machine Learning reuses deterministic component output after checking code, environment, inputs, parameters, output settings, and run settings. The team still owns the claim that these declared fields fully determine the output.
 
-## Partial Replay Reuses Proven Outputs
+## Rerun Only The Failed Part Of The Pipeline
 <!-- section-summary: A partial replay creates a new traceable run while reusing verified upstream artifacts and rerunning only invalid or failed work. -->
 
 Suppose feature preparation and training succeed, then evaluation fails because its container lacks a required metrics package. The repaired pipeline definition changes the evaluation image. Recomputing the feature snapshot and model would add cost and could introduce unrelated variation.
@@ -308,7 +308,7 @@ The reuse decision occurs per stage. A changed feature definition invalidates fe
 
 Partial replay also helps after infrastructure interruption. SageMaker Pipelines supports retrying from a failed step, while other managed and open orchestrators expose repair, selective execution, task clearing, or cache-driven reuse. Product controls vary, so the pipeline's own lineage must record which previous execution supplied each reused artifact.
 
-## Backfills Recreate Historical Runs Deliberately
+## Rerun The Pipeline For Past Data
 <!-- section-summary: Backfills apply one declared pipeline policy across historical data intervals while controlling identity, concurrency, and release side effects. -->
 
 A backfill is a batch of runs over past logical intervals. One common case appears after a label pipeline repairs several historical partitions. Another appears after the feature team fixes a transformation and needs comparable model evidence across earlier windows.
@@ -321,7 +321,7 @@ Backfills need stricter operational controls because they multiply load. Limit a
 
 Airflow models a backfill as runs across historical logical dates and provides reprocessing plus concurrency controls. Partition-aware data orchestrators express the same concept through asset partitions. Managed ML pipelines can receive a sequence of historical run parameters from a bounded controller. In every case, the pipeline contract owns interval identity and lineage.
 
-## Keep the Pipeline Definition Independent of the Orchestrator
+## Keep Training Logic Independent Of The Orchestrator
 <!-- section-summary: Portable stage components keep domain logic behind stable command and artifact interfaces while thin adapters express platform control flow. -->
 
 An orchestrator should coordinate the training program. Domain logic remains inside versioned stage components with ordinary entrypoints. A feature component reads a snapshot manifest and writes a feature manifest. A training component reads that feature manifest plus configuration and writes a model manifest. Each can run from a shell, a unit test, or a managed worker.
@@ -345,7 +345,7 @@ flowchart TD
 
 Portability has limits. Identity systems, artifact metadata, cache rules, conditional syntax, and repair controls differ among platforms. The goal is portable stage semantics and evidence, which keeps migration or coexistence bounded. Recreating every orchestration feature behind a custom abstraction would add another platform to operate.
 
-## Local, CI, and Managed Runs Share One Contract
+## Run The Same Pipeline Locally, In CI, And On Managed Compute
 <!-- section-summary: Environment parity comes from shared component code and artifact contracts, with progressively stronger infrastructure tests in local, CI, and managed execution. -->
 
 Local execution gives developers a short feedback loop. A stage runs against a small immutable fixture and writes the same manifest schema used in production. Container execution is valuable for dependency-sensitive components. A local object-store emulator can exercise URI handling, while pure transformations can use a temporary directory through the same storage interface.
@@ -358,7 +358,7 @@ Parity means that the same code and contract move through all three environments
 
 Promoting one tested container digest through CI and production gives stronger evidence than rebuilding an image per environment. Environment-specific values such as bucket roots and workload identities arrive through deployment configuration. Training choices remain in the resolved run specification.
 
-## Test the Operational Guarantees
+## Test How The Pipeline Handles Failures
 <!-- section-summary: Pipeline tests should prove duplicate-trigger handling, stage isolation, cache validity, failure recovery, lineage, and bounded historical execution. -->
 
 A pipeline can pass a happy-path smoke run and still fail during the first incident. Operational tests target the promises that make reruns safe.

@@ -10,16 +10,16 @@ id: "article-mlops-training-pipelines-notebook-to-training-script"
 ## Table of Contents
 
 1. [A Notebook Can Succeed While Its Job Fails](#a-notebook-can-succeed-while-its-job-fails)
-2. [Understand What Notebooks Optimize For](#understand-what-notebooks-optimize-for)
-3. [Turn Hidden State Into Program Contracts](#turn-hidden-state-into-program-contracts)
-4. [Extract Preparation, Training, Evaluation, and Saving](#extract-preparation-training-evaluation-and-saving)
-5. [Create One Testable Entrypoint](#create-one-testable-entrypoint)
-6. [Separate the CLI From Training Configuration](#separate-the-cli-from-training-configuration)
+2. [Why Notebooks Work Well For Exploration](#why-notebooks-work-well-for-exploration)
+3. [Make Every Training Input And Output Explicit](#make-every-training-input-and-output-explicit)
+4. [Move Stable Notebook Logic Into Functions](#move-stable-notebook-logic-into-functions)
+5. [Create One Command For The Full Training Run](#create-one-command-for-the-full-training-run)
+6. [Keep Command-Line Arguments And Training Settings Separate](#keep-command-line-arguments-and-training-settings-separate)
 7. [Package the Code as a Python Project](#package-the-code-as-a-python-project)
 8. [Make Retries Safe](#make-retries-safe)
-9. [Report Progress Through Structured Logs and Exit Status](#report-progress-through-structured-logs-and-exit-status)
+9. [Report Progress And Return A Clear Result](#report-progress-and-return-a-clear-result)
 10. [Test the Program at Three Levels](#test-the-program-at-three-levels)
-11. [Carry the Same Boundary Into a Managed Job](#carry-the-same-boundary-into-a-managed-job)
+11. [Run The Same Training Program As A Managed Job](#run-the-same-training-program-as-a-managed-job)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
@@ -36,7 +36,7 @@ Success has a concrete shape. From a clean checkout, another engineer can instal
 
 This transition is about creating a **program boundary**. At a high level, the boundary states everything the training program receives, everything it controls, every external service it may call, and every result it promises to produce.
 
-## Understand What Notebooks Optimize For
+## Why Notebooks Work Well For Exploration
 <!-- section-summary: Notebooks support exploration through interactive state, while automated jobs need a clean process that reconstructs all required state from declared inputs. -->
 
 Notebooks are designed for exploration. A data scientist can inspect a dataframe, change one transformation, rerun two cells, draw a chart, and keep useful objects in memory. That feedback loop is valuable because model development involves questions whose answers shape the next step.
@@ -55,26 +55,26 @@ flowchart TD
 
 The notebook can remain as an exploration surface. Its durable contribution is the understood algorithm, feature logic, metric choice, and plots that informed the decision. Reusable computation moves into importable modules, and the notebook calls those modules if interactive analysis continues.
 
-## Turn Hidden State Into Program Contracts
+## Make Every Training Input And Output Explicit
 <!-- section-summary: Data, configuration, dependency, and output contracts make every important training assumption visible to callers and tests. -->
 
 A **contract** is an agreement at a program boundary. It describes valid inputs, expected behavior, and the evidence produced after success or failure. Four contracts capture most of the state that notebooks hide.
 
-### Data Contract
+### Define The Training Data
 
 The data contract identifies the exact training and validation inputs. It includes snapshot or manifest identity, schema, required columns, types, label definition, and time boundaries. The program validates these properties before expensive training starts.
 
 For a weekly fraud retrain, `transactions_features@1842` is a useful input identity. `warehouse.latest_features` is fragile because a retry may read different rows. If the label column is missing, the process should fail before allocating a GPU and report the snapshot plus missing field.
 
-### Configuration Contract
+### Define The Training Settings
 
 The configuration contract records choices for this run: model family, feature set, split policy, seed, hyperparameters, and evaluation thresholds. The program writes the resolved configuration as an output artifact so a reviewer can see the values after defaults and approved overrides were applied.
 
-### Dependency Contract
+### Define The Software Environment
 
 The dependency contract defines the Python version, project package, libraries, system dependencies, and external service interfaces required by the program. A lockfile and container image digest make the software environment inspectable. Credentials remain runtime secrets; the program receives clients or secret-backed configuration instead of reading a developer's home directory.
 
-### Output Contract
+### Define The Training Outputs
 
 The output contract defines which evidence marks a successful run. A minimal bundle might contain the serialized model, `metrics.json`, `run.json`, an input-output signature, and a completion manifest. The caller supplies the output destination. The program writes an attempt in a staging location and exposes the completed bundle after verification.
 
@@ -89,7 +89,7 @@ flowchart TD
 
 These contracts also classify failure. Invalid arguments fail at invocation. A schema mismatch fails data validation. A library import failure identifies the runtime environment. A missing completion manifest means publication never completed. The caller can decide whether a retry is safe from the failure class and committed output state.
 
-## Extract Preparation, Training, Evaluation, and Saving
+## Move Stable Notebook Logic Into Functions
 <!-- section-summary: Small functions expose data flow and isolate deterministic model logic from storage, tracking, and other side effects. -->
 
 Notebook cells often mix dataframe mutation, model fitting, metric calculation, plotting, and file writes. The first engineering step gives each responsibility a named function with explicit arguments and returns.
@@ -130,7 +130,7 @@ This structure makes data flow readable. `prepare` receives a dataframe and retu
 
 Importing the package should never start training, connect to a warehouse, create directories, or initialize a cloud client. Imports define functions and types. The entrypoint performs side effects after it has validated invocation and configuration.
 
-## Create One Testable Entrypoint
+## Create One Command For The Full Training Run
 <!-- section-summary: One entrypoint coordinates adapters and pure functions while returning a structured result that tests and callers can inspect. -->
 
 The **entrypoint** is the function that coordinates one complete training attempt. It loads declared data, validates contracts, calls the model functions, saves the bundle, and returns a structured summary.
@@ -167,7 +167,7 @@ def run_training(
 
 `run_training` contains workflow order while domain logic remains in focused functions. The logical `run_id` arrives from the caller, which lets an orchestrator correlate retries. The writer owns the output commit protocol. A tracking adapter can log the same metrics and artifacts to MLflow after the bundle is verified, while the training calculation stays independent from the tracking vendor.
 
-## Separate the CLI From Training Configuration
+## Keep Command-Line Arguments And Training Settings Separate
 <!-- section-summary: The CLI tells a process how to invoke one run, while the configuration file carries the model and evaluation choices for that run. -->
 
 The **command-line interface**, or **CLI**, is the process invocation contract. It should stay small and stable. The configuration file selects the approved training behavior. Immutable input references identify the data, while the output destination and run ID tie the process to its evidence.
@@ -272,14 +272,14 @@ Local filesystems can use a same-filesystem atomic rename. Object stores have di
 
 Side effects outside the output bundle need the same care. Metric logging should use the stable run and attempt identity. Registry promotion belongs after evaluation and approval, far outside the training function. Sending notifications or changing aliases inside `train()` would make an infrastructure retry repeat a release action.
 
-## Report Progress Through Structured Logs and Exit Status
+## Report Progress And Return A Clear Result
 <!-- section-summary: Structured events explain what the job attempted, while exit status gives the runtime one unambiguous success or failure signal. -->
 
 Humans and automation observe training through different surfaces. A human needs enough context to diagnose a failure. A scheduler needs a terminal process status. Structured logs and exit codes serve those needs together.
 
 A **structured log** records an event name plus named fields. Instead of a sentence such as “loading data,” emit an event with `run_id`, `attempt_id`, `snapshot`, and elapsed time. Log records should identify phases, counts, metrics, output URIs, and failure classes. They should exclude raw training records, access tokens, and secret values.
 
-```json
+```jsonl
 {"event":"data_validated","run_id":"retrain-1842","attempt":2,"rows":8204419}
 {"event":"model_evaluated","run_id":"retrain-1842","roc_auc":0.8421}
 {"event":"bundle_committed","run_id":"retrain-1842","output":"s3://ml-runs/retrain-1842"}
@@ -327,7 +327,7 @@ The test suite also needs negative cases. Remove a required feature and assert a
 
 Model-quality gates need representative evaluation data and belong in a separate validation workflow. Pull-request smoke tests prove the training program can execute its contract; they should avoid claiming that a tiny fixture validates production performance.
 
-## Carry the Same Boundary Into a Managed Job
+## Run The Same Training Program As A Managed Job
 <!-- section-summary: A managed job supplies compute, mounted inputs, secrets, and durable outputs while invoking the same packaged command tested locally. -->
 
 The move from laptop to managed training should change adapters and resource configuration, while the program contract remains stable. The container acts as a portable runtime envelope for the installed package, dependency lock, and required system libraries. The managed service supplies compute and workload identity. It also maps durable data into paths or URIs that the CLI receives. The container starts the same `train-model` command exercised by the local and CI smoke tests.

@@ -12,19 +12,19 @@ aliases:
 
 ## Table of Contents
 
-1. [Control Ownership Defines the Design](#control-ownership-defines-the-design)
-2. [Use the Lowest Sufficient Degree of Autonomy](#use-the-lowest-sufficient-degree-of-autonomy)
-3. [Deterministic Workflows Keep Stable Paths in Code](#deterministic-workflows-keep-stable-paths-in-code)
-4. [A Bounded Agent Loop Handles Adaptive Work](#a-bounded-agent-loop-handles-adaptive-work)
+1. [Decide Which Steps Code Controls And Which Steps The Model Chooses](#decide-which-steps-code-controls-and-which-steps-the-model-chooses)
+2. [Use The Least Autonomy The Task Needs](#use-the-least-autonomy-the-task-needs)
+3. [Keep Known Business Steps In Code](#keep-known-business-steps-in-code)
+4. [Use A Bounded Agent Loop For Work With An Unknown Path](#use-a-bounded-agent-loop-for-work-with-an-unknown-path)
 5. [An Agent Loop Needs an Orchestrator](#an-agent-loop-needs-an-orchestrator)
-6. [The Orchestrator Owns Lifecycle and Authority](#the-orchestrator-owns-lifecycle-and-authority)
-7. [Durable State and Checkpoints Preserve Progress](#durable-state-and-checkpoints-preserve-progress)
-8. [Tools, Effects, Approvals, and Interrupts Need Separate Controls](#tools-effects-approvals-and-interrupts-need-separate-controls)
-9. [Budgets and Stop Conditions Bound Autonomy](#budgets-and-stop-conditions-bound-autonomy)
-10. [Recovery and Reconciliation Protect One Business Outcome](#recovery-and-reconciliation-protect-one-business-outcome)
-11. [Current Runtimes Fit at Different Layers](#current-runtimes-fit-at-different-layers)
-12. [Multi-Agent Design Needs a Real Boundary](#multi-agent-design-needs-a-real-boundary)
-13. [Evaluate Outcomes and Trajectories](#evaluate-outcomes-and-trajectories)
+6. [What The Orchestrator Must Control](#what-the-orchestrator-must-control)
+7. [Save Checkpoints So A Run Can Resume](#save-checkpoints-so-a-run-can-resume)
+8. [Control Tool Calls, Side Effects, Approvals, And Pauses Separately](#control-tool-calls-side-effects-approvals-and-pauses-separately)
+9. [Set Limits That Stop An Agent Run](#set-limits-that-stop-an-agent-run)
+10. [Recover Without Repeating Or Losing A Business Action](#recover-without-repeating-or-losing-a-business-action)
+11. [Choose A Runtime For The Control Problem](#choose-a-runtime-for-the-control-problem)
+12. [Decide Whether Multiple Agents Are Actually Needed](#decide-whether-multiple-agents-are-actually-needed)
+13. [Evaluate The Final Result And The Steps Taken](#evaluate-the-final-result-and-the-steps-taken)
 14. [What to Carry Into Production](#what-to-carry-into-production)
 15. [References](#references)
 
@@ -36,11 +36,11 @@ An **agent** gives the model some responsibility for choosing the next step. The
 
 Production systems often combine both. Software owns the business lifecycle, permissions, budgets, and irreversible effects. The model receives bounded freedom inside a particular state. The central design question asks which decisions belong to code and which decisions genuinely need model judgment.
 
-## Control Ownership Defines the Design
+## Decide Which Steps Code Controls And Which Steps The Model Chooses
 
 <!-- section-summary: Workflow and agent architecture is mainly a decision about who chooses the next transition, who may create effects, and who decides that the run is finished. -->
 
-The word **autonomy** can sound as though an entire application is either autonomous or controlled. Real systems divide control at a much finer level.
+Start by deciding which individual steps belong to trusted application code and which decisions genuinely need model judgement. This reveals the actual level of autonomy instead of treating the entire application as either autonomous or controlled.
 
 A model may choose the next document to inspect while code fixes the surrounding process. It may draft a refund recommendation while policy code decides eligibility. It may propose a deployment rollback while an operator approves the exact version and environment. Each choice has its own owner.
 
@@ -64,11 +64,6 @@ flowchart TD
     F -->|"Policy or human approval"| G["Trusted runtime executes"]
     F -->|"Denied or needs review"| H["Pause, reject, or escalate"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef code fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,F choice
     class C,E,G code
@@ -80,7 +75,7 @@ Tool count and autonomy measure different things. A fixed workflow can call many
 
 The safest place for model judgment is usually a reversible choice with observable feedback. Searching another log source is reversible and produces evidence. Sending money or deleting a resource has a lasting effect and deserves deterministic policy, explicit authorization, and strong recovery controls.
 
-## Use the Lowest Sufficient Degree of Autonomy
+## Use The Least Autonomy The Task Needs
 
 <!-- section-summary: LLM application designs progress from a single bounded call to workflows, agent loops, orchestration, and multi-agent systems as the task requires more adaptive control. -->
 
@@ -110,7 +105,7 @@ The loop must operate inside a defined tool set, state, budget, and stop policy.
 
 The orchestrator is software around the workflow or agent. It assembles context, validates actions, executes tools, records checkpoints, enforces limits, pauses for approval, and handles recovery. No additional model is implied by this operating layer.
 
-### Multiple agents serve real separation
+### Give Multiple Agents Separate Responsibilities
 
 Several agents are justified by distinct permissions, context boundaries, owners, or independently verifiable parallel work. Prompt titles such as “planner,” “researcher,” and “writer” provide no production boundary by themselves.
 
@@ -128,11 +123,6 @@ flowchart TD
     I -->|"Yes"| J["Multi-agent design"]
     I -->|"No"| K["Keep one workflow or agent"]
 
-    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef simple fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef adaptive fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,D simple
     class C,E,I question
     class F,J adaptive
@@ -142,7 +132,7 @@ flowchart TD
 
 Each step up this progression needs evaluation evidence. If one structured call meets the quality target, a loop adds operating cost without adding product value. If a deterministic workflow repeatedly fails because the required investigation path differs across cases, a bounded agent may be justified.
 
-## Deterministic Workflows Keep Stable Paths in Code
+## Keep Known Business Steps In Code
 
 <!-- section-summary: A deterministic workflow defines business states and legal transitions in software while models perform bounded language tasks inside individual steps. -->
 
@@ -173,7 +163,7 @@ Model calls fit inside workflow nodes for tasks that require language or visual 
 
 This pattern provides strong operational visibility. A support engineer can see that a record is waiting in `HumanReview`, identify its owner, inspect the artifact that entered the state, and apply a deadline or escalation. A chat transcript alone lacks that lifecycle.
 
-## A Bounded Agent Loop Handles Adaptive Work
+## Use A Bounded Agent Loop For Work With An Unknown Path
 
 <!-- section-summary: A bounded agent loop lets the model choose among permitted next actions using environmental feedback, while the runtime validates each proposal and enforces completion limits. -->
 
@@ -194,11 +184,6 @@ flowchart TD
     G -->|"Complete"| H["Return validated outcome"]
     G -->|"Limit or blocker"| I["Return partial result or escalation"]
 
-    classDef observe fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,D,F observe
     class B model
     class C,G gate
@@ -250,7 +235,7 @@ The normal terminal state is `completed`. Runs can instead end as `needs_input`,
 
 These responsibilities belong to the **orchestrator**, sometimes called the agent runtime or harness. It turns a sequence of model turns into one governable production run.
 
-## The Orchestrator Owns Lifecycle and Authority
+## What The Orchestrator Must Control
 
 <!-- section-summary: The orchestrator is trusted software that assembles context, controls transitions and tools, enforces authority and budgets, checkpoints progress, and records the run outcome. -->
 
@@ -279,11 +264,6 @@ flowchart TD
     J -->|"Continue"| C
     J -->|"Finish"| K["Persist final outcome and trace"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef model fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef interrupt fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,C,E,H,I,K control
     class D model
@@ -315,7 +295,7 @@ completion:
 
 This is application policy rather than syntax from a particular framework. A production service can store it with the run version, validate it during deployment, and include its identifier in traces. The policy makes autonomy concrete: the agent may investigate and diagnose; production changes remain outside its authority.
 
-## Durable State and Checkpoints Preserve Progress
+## Save Checkpoints So A Run Can Resume
 
 <!-- section-summary: Durable typed state records business progress, evidence, effects, approvals, and remaining limits so another worker can resume the run safely. -->
 
@@ -379,7 +359,7 @@ Run database setup and migrations during deployment initialization. The example 
 
 Long-running state also needs a change policy. A checkpoint created under `workflow.v3` may not fit `workflow.v4`. Teams can keep older workers for active runs, migrate compatible state, or route resumed work through an explicit upgrade transition. Silent interpretation by new code is risky.
 
-## Tools, Effects, Approvals, and Interrupts Need Separate Controls
+## Control Tool Calls, Side Effects, Approvals, And Pauses Separately
 
 <!-- section-summary: Tool calls are model proposals; trusted runtime code validates them, obtains approval for sensitive effects, and records the authoritative result. -->
 
@@ -417,7 +397,7 @@ The OpenAI Agents SDK exposes tool approvals as interruptions. A paused result c
 
 Side effects around checkpoints require idempotency. LangGraph documents that a node can re-run from its start after an interrupt, so an effect before that interrupt may execute again. Separate effectful work into a controlled node or operation, supply an idempotency key, and reconcile uncertain outcomes.
 
-## Budgets and Stop Conditions Bound Autonomy
+## Set Limits That Stop An Agent Run
 
 <!-- section-summary: A production agent receives explicit limits on turns, tools, time, tokens, cost, and repeated behaviour, plus defined outcomes for completion and escalation. -->
 
@@ -448,11 +428,6 @@ flowchart TD
     G -->|"Yes"| I["Return partial result or escalation"]
     D --> J["Complete"]
 
-    classDef step fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef continue fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B step
     class C,E,G gate
     class H continue
@@ -464,7 +439,7 @@ Progress checks catch loops that simple turn counts miss. Repeating the same fai
 
 Budgets also affect product design. A three-minute interactive assistant and an overnight research run need different deadlines, interruption paths, and user expectations. Define those expectations before selecting a runtime.
 
-## Recovery and Reconciliation Protect One Business Outcome
+## Recover Without Repeating Or Losing A Business Action
 
 <!-- section-summary: Recovery classifies failures before retrying, and reconciliation checks authoritative systems so uncertain effects do not turn into duplicates. -->
 
@@ -497,7 +472,7 @@ Durable workflow engines support this operating model. Temporal, for example, re
 
 Test recovery deliberately. Crash a worker after an effect commits and before the result checkpoint. Deliver the same event twice. Resume after an approval expires. Hold a dependency beyond the deadline. The expected result is one coherent business outcome with a trace that explains every attempt.
 
-## Current Runtimes Fit at Different Layers
+## Choose A Runtime For The Control Problem
 
 <!-- section-summary: Provider SDKs, agent SDKs, state-graph runtimes, and durable workflow engines solve different parts of the control stack and can be combined. -->
 
@@ -535,10 +510,6 @@ flowchart TD
     F --> G["Domain services and data"]
     B --> H["Human approval and external events"]
 
-    classDef product fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef durable fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef agent fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef external fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A product
     class B durable
     class C,D,E agent
@@ -549,7 +520,7 @@ Most deployments use only the layers their requirements need. A short read-only 
 
 Choose the smallest combination that meets the durability and control requirements. Evaluate failure recovery and operational visibility before committing to a framework, because abstraction alone does not supply a correct business model.
 
-## Multi-Agent Design Needs a Real Boundary
+## Decide Whether Multiple Agents Are Actually Needed
 
 <!-- section-summary: Multiple agents are justified by separate trust, context, ownership, or parallel-work boundaries, and each interaction needs a typed contract and merge policy. -->
 
@@ -574,10 +545,6 @@ flowchart TD
     I --> K["Validate typed result and merge"]
     J --> K
 
-    classDef question fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef separate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef simple fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
     class A simple
     class B,C,D,H question
     class G,I,J separate
@@ -590,7 +557,7 @@ Every specialist receives a typed input and returns a typed output. Its contract
 
 Multi-agent systems introduce routing errors, duplicated context, conflicting outputs, larger cost, and deeper traces. Compare the design against one capable agent with well-designed tools on the same evaluation set. Separate agents only if the boundary improves measured outcomes or enforces a necessary production constraint.
 
-## Evaluate Outcomes and Trajectories
+## Evaluate The Final Result And The Steps Taken
 
 <!-- section-summary: Agent evaluation measures both the final business result and the sequence of tools, transitions, approvals, retries, and evidence used to reach it. -->
 
@@ -632,11 +599,6 @@ flowchart TD
     H -->|"Yes"| I["Canary and monitor"]
     H -->|"No"| J["Revise control, prompt, tool, model, or runtime"]
 
-    classDef input fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef grade fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef gate fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input
     class B,C run
     class D,E,F,G grade

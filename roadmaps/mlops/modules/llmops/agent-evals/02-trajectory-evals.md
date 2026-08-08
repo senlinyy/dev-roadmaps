@@ -10,18 +10,18 @@ id: "article-mlops-llmops-trajectory-evals"
 ## Table of Contents
 
 1. [A Trajectory Shows How the Agent Reached Its Answer](#a-trajectory-shows-how-the-agent-reached-its-answer)
-2. [Traces, Spans, Events, and State Transitions](#traces-spans-events-and-state-transitions)
+2. [Understand The Records Inside A Trajectory](#understand-the-records-inside-a-trajectory)
 3. [Step Graders and Whole-Trajectory Graders See Different Problems](#step-graders-and-whole-trajectory-graders-see-different-problems)
 4. [Tool Evaluation Covers Selection, Arguments, and Effects](#tool-evaluation-covers-selection-arguments-and-effects)
-5. [Valid Paths Need Invariants and Partial Orders](#valid-paths-need-invariants-and-partial-orders)
+5. [Allow Different Valid Paths While Enforcing Required Order](#allow-different-valid-paths-while-enforcing-required-order)
 6. [Handoffs and Guardrails Are Part of the Path](#handoffs-and-guardrails-are-part-of-the-path)
 7. [Recovery Evaluation Tests the Difficult Branches](#recovery-evaluation-tests-the-difficult-branches)
 8. [Scores Need Partial Credit and Severity](#scores-need-partial-credit-and-severity)
 9. [Model Judges Need Their Own Evaluation](#model-judges-need-their-own-evaluation)
-10. [Trace Privacy and Completeness Set the Evidence Boundary](#trace-privacy-and-completeness-set-the-evidence-boundary)
+10. [Protect Sensitive Trace Data Without Hiding Required Evidence](#protect-sensitive-trace-data-without-hiding-required-evidence)
 11. [Replay Needs a Deterministic Environment](#replay-needs-a-deterministic-environment)
-12. [Industrial Tools Connect Traces, Scorers, and Review](#industrial-tools-connect-traces-scorers-and-review)
-13. [A Useful Report Points to the Repair](#a-useful-report-points-to-the-repair)
+12. [Use Current Tools To Store Traces And Run Scorers](#use-current-tools-to-store-traces-and-run-scorers)
+13. [Write Reports That Identify The Failed Step And Owner](#write-reports-that-identify-the-failed-step-and-owner)
 14. [References](#references)
 
 ## A Trajectory Shows How the Agent Reached Its Answer
@@ -49,13 +49,13 @@ Trajectory evaluation complements outcome evaluation. An environment grader can 
 
 The eval dataset supplies the task, starting state, tool environment, and expectations. The trajectory is produced by running the agent inside that case. This boundary matters: a trace is evidence from a run, while the case defines the conditions under which that evidence should be judged.
 
-## Traces, Spans, Events, and State Transitions
+## Understand The Records Inside A Trajectory
 
 <!-- section-summary: A trace is the whole run, spans group timed operations, events record important moments, and state transitions show how the world changed. -->
 
 Tracing vocabulary can feel abstract at first, so start with an ordinary request. Suppose an agent must check a policy and then prepare an approval request. The whole piece of work is one **trace**. The policy lookup, model decision, and approval-tool call are **spans** inside it. A retry or guardrail result can appear as an **event**. The move from `policy_unknown` to `approval_required` is a **state transition**.
 
-### The record hierarchy
+### A Trace Contains Spans, Events, And State Changes
 
 A **trace** represents one end-to-end operation. It has a trace identifier and usually contains a tree of spans. A **span** represents one operation with a start, an end, a status, and a parent relationship. Parent links show which model turn caused a tool call or which agent created a subagent. OpenTelemetry uses this structure across distributed systems, and current agent platforms extend spans with model, tool, retrieval, guardrail, and handoff details.
 
@@ -74,7 +74,7 @@ flowchart TD
 
 OpenAI’s Agents SDK currently records model generations, function tools, handoffs, guardrails, and agent runs as spans. Its trace is the enclosing workflow. MLflow and LangSmith use their own trace models, while OpenTelemetry supplies a widely adopted observability foundation. A trajectory evaluator should preserve the common meaning even if provider field names differ.
 
-### A normalized event keeps the contract portable
+### Use One Event Format Across Runtimes
 
 A compact normalized event can look like this:
 
@@ -100,7 +100,7 @@ A **step-level grader** evaluates one bounded decision. It may check whether the
 
 Step tests lose part of the system around that decision. A correct tool choice can still participate in an unsafe path. The agent may select `request_approval` correctly, then execute the side effect before approval arrives. It may retrieve the right source during one turn and lose the source version after a handoff.
 
-### Whole-trajectory graders protect relationships
+### Use Whole-Trajectory Graders For Cross-Step Rules
 
 A **whole-trajectory grader** reads the full path. It can check that identity stayed consistent, evidence appeared before a claim, approval happened before a write, retries remained within policy, and the final response matched the actual tool outcome. These graders capture relationships across time.
 
@@ -116,7 +116,7 @@ flowchart TD
 
 Use both levels for important workflows. A tool router can have a fast unit-style dataset for first-step selection. Full cases can then exercise the router with real prior steps, tool failures, and downstream effects. The step suite helps developers iterate quickly. The trajectory suite shows whether those local decisions compose into safe behaviour.
 
-### Each grader receives a focused evidence view
+### Give Each Grader Only The Evidence It Needs
 
 The grader should read the smallest sufficient view. A tool-argument check may need one call and the case input. An approval invariant may need the approval event, effect event, and artifact identifier. A semantic path judge may need a concise trace summary. Sending every token and payload to every grader increases cost, privacy exposure, and distraction.
 
@@ -144,7 +144,7 @@ Tool order can carry risk. Identity verification may need to precede account loo
 
 Tool versions matter too. A candidate tested against `search_policy@8` should never be compared silently with a baseline that used `search_policy@7`. Store the tool contract version and fixture version with the run. If normalization cannot prove which contract executed, the case lacks enough evidence for a release claim.
 
-## Valid Paths Need Invariants and Partial Orders
+## Allow Different Valid Paths While Enforcing Required Order
 
 <!-- section-summary: Most agent tasks allow several good paths, so graders should protect required relationships without demanding one exact trace. -->
 
@@ -284,7 +284,7 @@ Disagreement needs review. The judge may have missed evidence, the trace summary
 
 Models can also learn to satisfy surface cues in a judge rubric. Periodic expert review and hidden calibration cases help detect this behaviour. Pin the judge model and prompt version in every eval report. A judge change can move scores without any change to the agent.
 
-## Trace Privacy and Completeness Set the Evidence Boundary
+## Protect Sensitive Trace Data Without Hiding Required Evidence
 
 <!-- section-summary: Traces must capture enough evidence for grading while limiting sensitive prompts, tool payloads, and business records. -->
 
@@ -331,7 +331,7 @@ Replay should preserve relevant causality without imitating every production det
 
 Some integrations need a live test because authentication, latency, or provider behaviour is the subject. Keep those cases in a separate integration suite and record the external dependency version. Stable sandbox cases support repeatable release comparisons; live cases detect contract and service drift.
 
-## Industrial Tools Connect Traces, Scorers, and Review
+## Use Current Tools To Store Traces And Run Scorers
 
 <!-- section-summary: Current platforms collect agent traces, apply code or model scorers, attach human feedback, and turn production failures into offline cases. -->
 
@@ -360,11 +360,11 @@ results = mlflow.genai.evaluate(
 
 The scorer logic still belongs to the application’s contract. A platform can store and execute a grader; it cannot decide which approval, handoff, or recovery rules matter to the product. Keep a portable normalized schema or adapter tests so platform migration does not erase the meaning of historical results.
 
-## A Useful Report Points to the Repair
+## Write Reports That Identify The Failed Step And Owner
 
 <!-- section-summary: Trajectory reports should identify the violated property, earliest evidence, affected layer, severity, and exact evaluation versions. -->
 
-An overall score helps compare many runs, but engineers need case-level evidence. A useful finding says: `hold_flight` committed before `user_confirmation`, the relevant events were `e7` and `e11`, the failure is a blocker, and the likely owner is the orchestration control. That is much more actionable than “trajectory score 0.42.”
+An overall score compares many runs, while an engineer needs case-level evidence for a repair. A case-level finding can say: `hold_flight` committed before `user_confirmation`, the relevant events were `e7` and `e11`, the failure is a blocker, and the likely owner is the orchestration control. This gives the team a concrete starting point that “trajectory score 0.42” cannot provide.
 
 Failure attribution should separate model decisions, context and retrieval, tool contracts, orchestration, guardrails, environment fixtures, trace infrastructure, and graders. The earliest trustworthy evidence usually points toward the best owner. A wrong tool chosen from a correct tool list differs from a correct tool call rejected by a broken schema.
 

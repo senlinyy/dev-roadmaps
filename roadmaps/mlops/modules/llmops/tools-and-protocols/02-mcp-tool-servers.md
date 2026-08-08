@@ -9,21 +9,21 @@ id: "article-mlops-llmops-mcp-tool-servers"
 
 ## Table of Contents
 
-1. [MCP Standardizes A Connection Boundary](#mcp-standardizes-a-connection-boundary)
-2. [Host, Client, And Server Own Different Work](#host-client-and-server-own-different-work)
-3. [The Current MCP Core Uses Self-Contained Requests](#the-current-mcp-core-uses-self-contained-requests)
-4. [Tools, Resources, And Prompts Solve Different Problems](#tools-resources-and-prompts-solve-different-problems)
-5. [Discovery Turns Capabilities Into A Live Dependency](#discovery-turns-capabilities-into-a-live-dependency)
-6. [The Tool Contract Still Governs Execution](#the-tool-contract-still-governs-execution)
-7. [Local And Remote Servers Need Different Security Controls](#local-and-remote-servers-need-different-security-controls)
-8. [Consent Protects Actions And Data Disclosure](#consent-protects-actions-and-data-disclosure)
-9. [State And Long-Running Work Need Explicit Handles](#state-and-long-running-work-need-explicit-handles)
-10. [Operate An MCP Server As A Production Dependency](#operate-an-mcp-server-as-a-production-dependency)
-11. [Choose MCP For A Real Interoperability Boundary](#choose-mcp-for-a-real-interoperability-boundary)
-12. [The Complete MCP Production Path](#the-complete-mcp-production-path)
+1. [What MCP Standardizes](#what-mcp-standardizes)
+2. [Understand Host, Client, And Server Responsibilities](#understand-host-client-and-server-responsibilities)
+3. [How MCP Requests Carry Their Own Context](#how-mcp-requests-carry-their-own-context)
+4. [Choose Tools, Resources, Or Prompts For The Capability](#choose-tools-resources-or-prompts-for-the-capability)
+5. [Discover Live MCP Capabilities At Runtime](#discover-live-mcp-capabilities-at-runtime)
+6. [Apply The Tool Contract During MCP Execution](#apply-the-tool-contract-during-mcp-execution)
+7. [Protect Local And Remote MCP Servers Differently](#protect-local-and-remote-mcp-servers-differently)
+8. [Require Consent For Actions And Data Sharing](#require-consent-for-actions-and-data-sharing)
+9. [Use Explicit Handles For State And Long-Running Work](#use-explicit-handles-for-state-and-long-running-work)
+10. [Operate An MCP Server Reliably](#operate-an-mcp-server-reliably)
+11. [Use MCP For Cross-System Interoperability](#use-mcp-for-cross-system-interoperability)
+12. [How A Production MCP Request Works](#how-a-production-mcp-request-works)
 13. [References](#references)
 
-## MCP Standardizes A Connection Boundary
+## What MCP Standardizes
 
 <!-- section-summary: MCP gives an AI application a common way to discover and use external capabilities while the host and server retain their own policy responsibilities. -->
 
@@ -71,7 +71,7 @@ sequenceDiagram
 
 MCP owns the shared language used across the middle of this path. The host still owns model context, consent, tool disclosure, and user experience. The server still owns its domain contract, authorization, downstream credentials, execution, and audit evidence. This separation is the key to understanding the rest of the protocol.
 
-## Host, Client, And Server Own Different Work
+## Understand Host, Client, And Server Responsibilities
 
 <!-- section-summary: The host coordinates the AI experience, one client represents each server connection, and the server exposes a focused domain capability. -->
 
@@ -87,7 +87,7 @@ A repository server understands repositories; a warehouse server understands gov
 
 These responsibilities guide incident response. A wrong tool appearing in model context points to host disclosure policy. A correctly formed call reading the wrong repository points to server authorization. A request rejected because client and server support different protocol behavior points to the MCP boundary. The trace should preserve enough evidence to make that distinction.
 
-## The Current MCP Core Uses Self-Contained Requests
+## How MCP Requests Carry Their Own Context
 
 <!-- section-summary: Current MCP requests carry their own version and client capabilities, which removes the earlier requirement for a connection handshake. -->
 
@@ -95,7 +95,7 @@ The current MCP core is **stateless at the protocol layer**. Each request carrie
 
 This is an important change from earlier MCP revisions, which used an `initialize` exchange and a protocol session before normal calls. New implementations should follow the current self-contained request model. Compatibility adapters may still support the earlier handshake for older clients or servers, and that path should be tested as a distinct protocol mode.
 
-### The data layer describes the message
+### Use The Data Layer To Describe The Message
 
 MCP uses JSON-RPC 2.0 for requests, responses, errors, and notifications. The data layer defines operations such as `tools/list` and `tools/call`, along with the shapes of tools, resources, prompts, results, progress, and cancellation.
 
@@ -135,7 +135,7 @@ Content-Type: application/json
 
 Set `<current-version>` from reviewed runtime configuration and test that value against every supported server release. Pin the version for each deployment and roll out protocol changes through compatibility tests. Production code should use the official SDK for its language where possible, since the SDK handles wire details and revision negotiation that application code should avoid recreating.
 
-### The transport layer carries the message
+### Use The Transport Layer To Carry The Message
 
 **Standard input/output**, usually called **stdio**, connects a host to a local server process through its input and output streams. It fits developer tools and local integrations where the host launches and supervises the server.
 
@@ -143,7 +143,7 @@ Set `<current-version>` from reviewed runtime configuration and test that value 
 
 The protocol message can describe the same tool over either transport. The operating model changes greatly. A local process inherits selected machine permissions and supply-chain risk. A remote service introduces network identity, external data disclosure, service availability, and data-residency questions.
 
-## Tools, Resources, And Prompts Solve Different Problems
+## Choose Tools, Resources, Or Prompts For The Capability
 
 <!-- section-summary: MCP separates callable actions, addressable context, and reusable interaction templates so hosts can apply suitable policy to each. -->
 
@@ -159,7 +159,7 @@ These distinctions support different controls. A host may load an approved polic
 
 MCP also defines optional extensions. They include durable tasks, interactive applications, and richer skills. Extensions require explicit support from both sides. They should enter an architecture only after the core interaction works and a real requirement justifies the extra lifecycle.
 
-## Discovery Turns Capabilities Into A Live Dependency
+## Discover Live MCP Capabilities At Runtime
 
 <!-- section-summary: Discovery lets servers evolve independently, so hosts need filtering, caching, change review, compatibility tests, and rollback. -->
 
@@ -179,9 +179,6 @@ flowchart TD
     F --> G["Selection and outcome evaluation"]
     G -. evidence .-> D
 
-    classDef discover fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef govern fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef use fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B,C discover
     class D,E govern
     class F,G use
@@ -193,7 +190,7 @@ A change notification or expired time-to-live triggers refresh through the same 
 
 Names are unique only inside one server. A host aggregating several servers can receive two tools called `search`. It needs a deterministic internal identity, often based on trusted server identity plus tool name, and a model-visible naming strategy that avoids confusion. The server's display name alone may be duplicated, so configuration should supply the trusted namespace.
 
-## The Tool Contract Still Governs Execution
+## Apply The Tool Contract During MCP Execution
 
 <!-- section-summary: MCP carries definitions and calls, while application and domain controls decide whether a proposed operation is valid and safe. -->
 
@@ -207,13 +204,13 @@ The execution order remains concrete. The host first permits disclosure, and the
 
 Output schemas improve interoperability for structured results. The server must produce conforming data, and the client should validate it. The host still treats the content as external input. A schema-valid tool result can contain misleading instructions, stale data, an unauthorized link, or text designed to influence the model.
 
-## Local And Remote Servers Need Different Security Controls
+## Protect Local And Remote MCP Servers Differently
 
 <!-- section-summary: Local servers require process isolation and supply-chain control, while remote servers require strong network identity, delegated authorization, and data-boundary review. -->
 
 The transport determines which security problems surround the same MCP messages. A local server runs as software on the user's machine. A remote server receives requests across a network and may belong to another organization. Each topology therefore needs its own deployment and identity controls.
 
-### A local server runs with machine permissions
+### Protect A Local Server With Machine-Level Controls
 
 A local stdio server often starts as a child process of the host. It may receive a working directory, environment variables, file access, and the operating-system identity of the current user. Even with little network exposure, a compromised package can use every permission granted to that process.
 
@@ -221,7 +218,7 @@ Launch local servers from a pinned and reviewed package or executable. Pass a mi
 
 The host should also capture server version and package digest. Replacing a binary under the same command changes the capability provider even though host configuration appears unchanged.
 
-### A remote server acts as an OAuth protected resource
+### Protect A Remote Server As An OAuth Resource
 
 A remote Streamable HTTP server introduces a service boundary. Before sending user data, the host needs to establish who operates the server and which trusted origin identifies it. The review also covers TLS identity, data location, retention policy, and incident contact.
 
@@ -233,7 +230,7 @@ An MCP server calling another API should obtain an appropriate downstream creden
 
 If a tool needs additional scope, the server can return an insufficient-scope challenge. The host may guide the user through a step-up authorization flow for the required permission. The operation then returns through normal authorization and tool-contract checks.
 
-## Consent Protects Actions And Data Disclosure
+## Require Consent For Actions And Data Sharing
 
 <!-- section-summary: A useful consent decision shows which server receives which data and which effect the selected capability may create. -->
 
@@ -247,7 +244,7 @@ Each MCP client should isolate one server's information. A repository server nee
 
 Result filtering matters too. The host should validate structured output, cap content size, apply media and URI policy, scan files where required, and label returned content as external evidence. High-risk content can enter a quarantine or human-review path before the model consumes it.
 
-## State And Long-Running Work Need Explicit Handles
+## Use Explicit Handles For State And Long-Running Work
 
 <!-- section-summary: Stateless protocol requests carry explicit application handles, while an optional tasks extension supports durable asynchronous work where both sides implement it. -->
 
@@ -280,7 +277,7 @@ Choose the tasks extension if several interoperating hosts need one standard lon
 
 In both cases, the host links its local workflow to the remote task or job. It records the deadline and observed cancellation state. The final record identifies the returned artifact so a resumed run can verify the same outcome.
 
-## Operate An MCP Server As A Production Dependency
+## Operate An MCP Server Reliably
 
 <!-- section-summary: Production MCP requires reliability limits, compatibility control, safe telemetry, supply-chain evidence, and tested recovery. -->
 
@@ -296,7 +293,7 @@ Compatibility tests should run representative host and server releases together.
 
 For local servers, add package provenance, pinned versions, vulnerability response, and sandbox tests. For remote servers, add availability objectives, rate-limit behavior, certificate and OAuth configuration, data-residency review, and an operator escalation path. Keep a last-known-good server release or capability policy for rollback.
 
-## Choose MCP For A Real Interoperability Boundary
+## Use MCP For Cross-System Interoperability
 
 <!-- section-summary: MCP earns its operating cost where reusable capabilities, independent ownership, or standard discovery matter across AI hosts. -->
 
@@ -314,9 +311,6 @@ flowchart TD
     A -->|Durable internal control flow| F["Workflow or agent orchestrator"]
     D --> G["Apply tool contracts, identity, consent, and operations"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef choice fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A question
     class B,C,D,E,F choice
     class G control
@@ -324,7 +318,7 @@ flowchart TD
 
 The deciding questions are practical. Will several hosts reuse the capability? Does another team own and release it independently? Does dynamic discovery provide real value? Can the organization operate and secure another process or service boundary? A positive answer to those questions gives MCP a clear job.
 
-## The Complete MCP Production Path
+## How A Production MCP Request Works
 
 <!-- section-summary: MCP standardizes capability exchange while trusted hosts and servers preserve context boundaries, authority, safe execution, recovery, and evidence. -->
 

@@ -10,18 +10,18 @@ id: "article-mlops-llmops-guardrails-and-risk"
 ## Table of Contents
 
 1. [What Guardrails Do](#what-guardrails-do)
-2. [Separate Guardrails, Policy, Evals, and Human Review](#separate-guardrails-policy-evals-and-human-review)
-3. [Build a Risk-Based Control Plan](#build-a-risk-based-control-plan)
-4. [Control What Enters the Workflow](#control-what-enters-the-workflow)
-5. [Control What the Product Returns](#control-what-the-product-returns)
-6. [Protect Tool Calls and Side Effects](#protect-tool-calls-and-side-effects)
-7. [Give High-Impact Decisions to People](#give-high-impact-decisions-to-people)
-8. [Record Proof That Required Controls Ran](#record-proof-that-required-controls-ran)
-9. [Include Models, Tools, and Data in Supply-Chain Risk](#include-models-tools-and-data-in-supply-chain-risk)
-10. [Use Evals as Release Gates](#use-evals-as-release-gates)
-11. [Monitor Controls in Production](#monitor-controls-in-production)
-12. [Fit Current Industrial Tools to the Layers](#fit-current-industrial-tools-to-the-layers)
-13. [Govern Residual Risk and Exceptions](#govern-residual-risk-and-exceptions)
+2. [Know The Difference Between Guardrails, Policy, Evals, And Human Review](#know-the-difference-between-guardrails-policy-evals-and-human-review)
+3. [Choose Controls From The Product Risk](#choose-controls-from-the-product-risk)
+4. [Check Inputs Before The Workflow Uses Them](#check-inputs-before-the-workflow-uses-them)
+5. [Check Outputs Before The Product Returns Them](#check-outputs-before-the-product-returns-them)
+6. [Authorize Tool Calls And Side Effects](#authorize-tool-calls-and-side-effects)
+7. [Require Human Review For High-Impact Decisions](#require-human-review-for-high-impact-decisions)
+8. [Record Which Required Controls Ran](#record-which-required-controls-ran)
+9. [Assess Supply-Chain Risk Across Models, Tools, And Data](#assess-supply-chain-risk-across-models-tools-and-data)
+10. [Use Evaluations As Release Gates](#use-evaluations-as-release-gates)
+11. [Monitor Guardrail And Policy Performance](#monitor-guardrail-and-policy-performance)
+12. [Choose Industrial Tools For Each Control Layer](#choose-industrial-tools-for-each-control-layer)
+13. [Document Residual Risk And Exceptions](#document-residual-risk-and-exceptions)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
@@ -46,10 +46,6 @@ flowchart TD
     F --> G["Monitoring and feedback"]
     G --> H["Evaluation and safer release"]
 
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A source
     class B,D,E control
     class C,F result
@@ -58,7 +54,7 @@ flowchart TD
 
 No single gate can cover the whole system. A content filter can identify harmful language, yet it cannot decide whether a customer qualifies for a refund. A business policy can validate the amount, yet it cannot judge whether a long explanation is respectful and clear. Production safety comes from several controls with clear responsibilities.
 
-## Separate Guardrails, Policy, Evals, and Human Review
+## Know The Difference Between Guardrails, Policy, Evals, And Human Review
 <!-- section-summary: Automatic guardrails, deterministic policy, evaluations, and human review answer different risk questions and produce different evidence. -->
 
 Teams often use the word *guardrail* for every safety mechanism. That broad use can hide important differences. Four terms provide a clearer design.
@@ -80,10 +76,6 @@ flowchart TD
     C --> D["After release<br/>monitoring and incident review"]
     D --> A
 
-    classDef prerelease fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef runtime fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef learning fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A prerelease
     class B runtime
     class C decision
@@ -92,7 +84,7 @@ flowchart TD
 
 The distinction prevents a dangerous shortcut. A model-based guardrail may estimate that a refund request looks safe. The refund service still applies its authoritative account and amount policy.
 
-## Build a Risk-Based Control Plan
+## Choose Controls From The Product Risk
 <!-- section-summary: A control plan connects each important risk to an intervention point, enforcement method, evidence record, owner, and failure response. -->
 
 A guardrail program starts with the product’s risks. Copying the same filter settings to every assistant produces uneven protection because a writing helper and a payment agent have different consequences.
@@ -136,7 +128,7 @@ release_gates:
 
 This small file gives the workflow an explicit safety contract. It names required controls and release blockers. The application loads the plan by workflow version; the model never chooses which controls apply.
 
-### Choose the right enforcement type
+### Choose Deterministic, Model, Or Human Enforcement
 
 Use deterministic checks for facts code can decide exactly: schema validity, allowed tool, authenticated tenant, amount limit, destination, and approval match.
 
@@ -144,7 +136,7 @@ Use probabilistic checks for judgments with fuzzy boundaries: harmful content, p
 
 People own consequential judgments that require accountability or domain expertise. Contextual interpretation also belongs with a qualified reviewer. Common examples include legal commitments and large financial actions. Medical decisions and public statements often require the same treatment.
 
-## Control What Enters the Workflow
+## Check Inputs Before The Workflow Uses Them
 <!-- section-summary: Input and context guardrails validate content, classify risk, enforce source access, preserve provenance, and limit what reaches the model. -->
 
 Input guardrails protect the first part of the workflow: user messages, uploaded files, external content, and retrieved evidence. They decide which material can enter, how it is classified, and which trust labels follow it into model context.
@@ -159,7 +151,7 @@ Consider a user who uploads a long invoice bundle to dispute one charge. The wor
 
 Input controls have false positives and false negatives. A security report may resemble an attack. A novel injection may evade a classifier. Later policy and tool controls should assume that risky content can still pass.
 
-## Control What the Product Returns
+## Check Outputs Before The Product Returns Them
 <!-- section-summary: Output guardrails check structure, sensitive data, source support, policy, and downstream meaning before a result reaches people or systems. -->
 
 An output guardrail evaluates the artifact the product is about to use: a message, structured decision, generated file, tool result, or action plan.
@@ -182,10 +174,6 @@ flowchart TD
     E -->|"Approved exact artifact"| F
     E -->|"Rejected"| G
 
-    classDef output fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef check fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef success fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef reject fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A output
     class B,C,D,E check
     class F success
@@ -194,7 +182,7 @@ flowchart TD
 
 A model grader can estimate groundedness or policy adherence. Its score remains a probabilistic judgment. High-impact claims need source verification or a qualified reviewer. The final delivery service should also confirm that every required control produced a current result.
 
-## Protect Tool Calls and Side Effects
+## Authorize Tool Calls And Side Effects
 <!-- section-summary: Tool guardrails validate model-proposed arguments, while authorization and business policy decide whether the exact action may execute. -->
 
 Tool calls cross from model reasoning into another system. A useful tool guardrail checks the request immediately before execution and inspects the result before it returns to the model.
@@ -227,7 +215,7 @@ Tool access should also be narrow. A read-only explanation step has no refund to
 
 OpenAI Agents SDK currently provides tool input and output guardrails for function tools. Hosted and built-in tools use different control surfaces, so teams should verify coverage for every actual tool type. Other runtimes expose equivalent middleware or interceptors. The security property is the same: every path into an effect reaches the authoritative gate.
 
-## Give High-Impact Decisions to People
+## Require Human Review For High-Impact Decisions
 <!-- section-summary: Human review pauses a consequential action and gives an accountable person the exact proposal, evidence, policy result, and consequence. -->
 
 Human review is a control for judgment and accountability. It works only if the reviewer can understand the choice, see the evidence, and recognise the consequence of approving the proposed action.
@@ -240,7 +228,7 @@ OpenAI Agents SDK supports durable pause-and-resume flows for tools that require
 
 Approval should stay rare enough to deserve attention. Sending every harmless read to a person creates fatigue and delays. Classify actions by reversibility, financial or safety impact, data sensitivity, external visibility, and user expectation. Use automatic policy for low-risk bounded reads and reserve people for consequential or ambiguous actions.
 
-## Record Proof That Required Controls Ran
+## Record Which Required Controls Ran
 <!-- section-summary: Control evidence ties a policy or guardrail decision to one run, artifact, version, and trusted executor so delivery can detect missing or stale checks. -->
 
 Several guardrails create an operational question: how can the product prove that each required control ran on the exact artifact it will deliver?
@@ -268,7 +256,7 @@ Before delivery or execution, the gate loads the server-owned control plan and c
 
 OPA decision logs can record policy bundle revision, decision ID, trace ID, input, and result. Sensitive fields can be masked before log upload. Similar policy systems provide equivalent decision evidence. Connect the policy decision ID to the agent trace and business audit record so an incident review can follow the whole path.
 
-## Include Models, Tools, and Data in Supply-Chain Risk
+## Assess Supply-Chain Risk Across Models, Tools, And Data
 <!-- section-summary: LLM supply-chain review covers model providers, prompts, packages, containers, parsers, retrieval sources, connectors, tools, and safety services. -->
 
 An LLM product depends on more than its main model. Its behaviour and data exposure can change through a model alias, prompt bundle, embedding model, parser, package, container, retrieval source, MCP server, hosted tool, classifier, or external API.
@@ -283,7 +271,7 @@ Microsoft Foundry’s agent guardrails and tool-call intervention points are cur
 
 If a safety dependency fails, the product needs an explicit response. A low-risk public summariser may continue with reduced features. A refund workflow may enter a read-only mode or manual queue. Silent removal of a required guardrail creates an uncontrolled release.
 
-## Use Evals as Release Gates
+## Use Evaluations As Release Gates
 <!-- section-summary: Risk-based evals test normal work, known failures, adversarial cases, policy boundaries, and full workflow effects before promotion. -->
 
 Runtime guardrails protect individual runs. **Release evals** decide whether a changed system deserves production traffic. They replay normal, difficult, and adversarial cases against one exact candidate before that candidate can affect users.
@@ -306,10 +294,6 @@ flowchart TD
     E --> F["Production gates and gradual promotion"]
     F -->|"Regression"| G
 
-    classDef candidate fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef promote fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A candidate
     class B,C,D,E gate
     class F promote
@@ -320,7 +304,7 @@ MLflow’s current GenAI evaluation APIs can build datasets from production trac
 
 Red-team exercises explore paths beyond the saved suite. OWASP’s AI Agent Security guidance recommends testing after material changes to prompts, tools, memory, retrieval, policy, or providers. Every confirmed failure should gain an owner and a regression case.
 
-## Monitor Controls in Production
+## Monitor Guardrail And Policy Performance
 <!-- section-summary: Production monitoring measures control coverage, trigger rates, false positives, escapes, review load, and the downstream outcomes controls were meant to protect. -->
 
 Production monitoring answers two questions: did every required control run, and did the control reduce the targeted harm? The first question checks enforcement coverage. The second checks whether the safety design works under real traffic.
@@ -342,7 +326,7 @@ Raw prompts, personal data, credentials, and full documents need restricted stor
 
 Alerts should map to a runbook. Missing authorization evidence can disable the affected tool. A spike in output blocks can route traffic to the previous release. A confirmed unauthorized action starts incident response: contain the capability, preserve evidence, scope impact, repair the failed boundary, add a regression case, and verify the recovery.
 
-## Fit Current Industrial Tools to the Layers
+## Choose Industrial Tools For Each Control Layer
 <!-- section-summary: Current platforms provide specialised guardrail, policy, evaluation, tracing, and supply-chain capabilities that teams combine around one control plan. -->
 
 Industrial stacks usually combine several tools because each product covers a different layer. The useful design starts by assigning one clear responsibility to each product and defining the evidence it passes to the rest of the workflow.
@@ -373,7 +357,7 @@ SLSA describes build and source assurance levels plus provenance formats. Sigsto
 
 The architecture stays understandable if every tool maps to a control objective, intervention point, owner, evidence record, and failure response.
 
-## Govern Residual Risk and Exceptions
+## Document Residual Risk And Exceptions
 <!-- section-summary: Governance assigns ownership, documents remaining risk, controls exceptions, and keeps risk decisions current as the workflow changes. -->
 
 Controls reduce risk and leave some uncertainty. A classifier may miss harmful content. A reviewer may make a poor decision. A supplier may change behaviour. **Residual risk** is the risk left after the selected controls operate.

@@ -19,15 +19,15 @@ aliases:
 5. [Preference Optimization Learns From Comparisons](#preference-optimization-learns-from-comparisons)
 6. [Reinforcement Fine-Tuning Learns From A Reward](#reinforcement-fine-tuning-learns-from-a-reward)
 7. [Distillation Transfers A Bounded Behaviour](#distillation-transfers-a-bounded-behaviour)
-8. [Full Fine-Tuning And PEFT Change The Training Footprint](#full-fine-tuning-and-peft-change-the-training-footprint)
-9. [Build Training Data As A Governed Product](#build-training-data-as-a-governed-product)
+8. [Choose How Much Of The Model To Train](#choose-how-much-of-the-model-to-train)
+9. [Prepare And Govern Training Data](#prepare-and-govern-training-data)
 10. [Establish The Baseline Before Training](#establish-the-baseline-before-training)
-11. [Recognize Overfitting And Catastrophic Forgetting](#recognize-overfitting-and-catastrophic-forgetting)
+11. [Detect Overfitting And Lost General Capabilities](#detect-overfitting-and-lost-general-capabilities)
 12. [Test Safety And Reward Regressions](#test-safety-and-reward-regressions)
 13. [Choose A Current Industrial Stack](#choose-a-current-industrial-stack)
-14. [Calculate The Real Economics](#calculate-the-real-economics)
+14. [Compare Training, Serving, And Operating Costs](#compare-training-serving-and-operating-costs)
 15. [Release And Roll Back The Complete System](#release-and-roll-back-the-complete-system)
-16. [A Practical Adaptation Decision](#a-practical-adaptation-decision)
+16. [Choose An Adaptation Method Step By Step](#choose-an-adaptation-method-step-by-step)
 17. [References](#references)
 
 ## What Model Adaptation Means
@@ -56,7 +56,6 @@ flowchart TD
     G --> I
     H --> I
 
-    classDef start fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef choice fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef option fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef check fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B start; class C choice; class D,E,F,G,H option; class I check
 ```
 
@@ -113,7 +112,6 @@ flowchart TD
     D --> H["Increase high-reward behaviour"]
     E --> I["Transfer a bounded capability"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef method fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A question; class B,C,D,E method; class F,G,H,I result
 ```
 
@@ -157,7 +155,7 @@ One chat-style row might look like this:
 
 The JSON format is only the storage contract. The important part is the meaning of the example. It teaches a category, a compact evidence style, and a rule against inventing facts. If the dataset contains many polished but unsupported explanations, SFT may make unsupported explanations more consistent.
 
-### Coverage teaches the boundary of the task
+### Use Coverage To Show The Task Boundary
 
 A useful dataset includes ordinary cases, difficult cases, ambiguous cases, and cases that should be escalated. Suppose an extraction model needs to return `unknown` when an invoice has no due date. If every training invoice has a due date, the model never sees the correct abstention behaviour. It may infer a date from unrelated text because the training set taught that a date should always exist.
 
@@ -203,7 +201,7 @@ A nonsensical rejected answer creates an easy comparison and contributes little 
 
 For a summarization product, two responses might both be fluent. One includes an unsupported conclusion; the other stays within the source. For a coding assistant, both solutions might pass the happy path, while one fails a security constraint. These close comparisons teach the distinction the product actually cares about.
 
-### Reviewer agreement is a model input
+### Measure Reviewer Agreement Before Training
 
 Preference data reflects the people and process that created it. Response order should be randomized, and model identity should be hidden where practical. The rubric should separate factuality, safety, relevance, and style. Teams should record ties and disagreement instead of forcing every pair into a false winner.
 
@@ -228,7 +226,6 @@ flowchart TD
     F -->|"Reward and quality improve"| G["Continue or select checkpoint"]
     F -->|"Reward diverges from quality"| H["Repair grader or stop"]
 
-    classDef data fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef check fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A data; class B,C,D,E work; class F,G check; class H stop
 ```
 
@@ -278,7 +275,6 @@ flowchart TD
     G --> H["Compare student, teacher, and baseline"]
     H --> I["Release only on target slices"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef teach fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef govern fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef release fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A input; class B,C teach; class D,E,F,G,H govern; class I release
 ```
 
@@ -296,7 +292,7 @@ A student has less capacity. It may preserve routine formatting while losing rar
 
 Managed distillation services can generate teacher responses and train a supported student with less infrastructure. Open workflows expose the teacher and filtering stages. They also give the team control over the training loss and student architecture. Both paths need the same production evidence. Keep teacher lineage and permitted-use records. Retain the reviewed examples and independent evaluation. Route unsupported cases back to the teacher.
 
-## Full Fine-Tuning And PEFT Change The Training Footprint
+## Choose How Much Of The Model To Train
 <!-- section-summary: Full fine-tuning updates the base model broadly, while PEFT methods such as LoRA train smaller adapters and reduce compute and artifact size. -->
 
 At a high level, the learning signal describes what the model learns. The training approach determines how much of the model is allowed to change. This second decision controls accelerator memory, artifact size, and the amount of adaptation capacity available.
@@ -318,7 +314,6 @@ flowchart TD
     F --> H["System evaluation"]
     G --> H
 
-    classDef base fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef choice fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef train fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef check fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A base; class B choice; class C,D,E,F,G train; class H check
 ```
 
@@ -342,7 +337,7 @@ PEFT reduces the training footprint and makes it practical to keep several task-
 
 The deployment artifact also needs a precise contract. Record the exact base model, tokenizer, and chat template. Keep the adapter configuration and weights beside their quantization and merge status. The inference library and serving configuration complete the contract. Loading the right adapter over the wrong base revision can fail outright or produce subtle behavioural changes.
 
-## Build Training Data As A Governed Product
+## Prepare And Govern Training Data
 <!-- section-summary: Adaptation data needs permission, provenance, transformations, quality review, leakage-safe splits, versioning, and deletion controls. -->
 
 Production conversations are raw material, not a ready-made training set. They may contain private or copyrighted material. They may also contain unreviewed model mistakes, duplicated incidents, prompt injection, or text whose permitted purpose excludes model training.
@@ -367,7 +362,6 @@ flowchart TD
     F --> H["Immutable dataset version"]
     G --> I["Independent evaluation asset"]
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef process fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef split fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef asset fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A source; class B,C,D,E process; class F,G split; class H,I asset
 ```
 
@@ -394,7 +388,7 @@ The **group ID** keeps related records in the same split. A conversation, its ed
 
 Deduplication also controls hidden weighting. If one production incident generated two hundred similar retries, treating them as two hundred independent examples teaches that one pattern far more strongly than intended.
 
-### Data balance follows product risk
+### Balance Training Data Around Product Risk
 
 An equal number of rows per category is not automatically balanced. The training set should represent normal traffic while deliberately covering rare, costly, and safety-critical situations. A payment assistant may see few chargeback threats, yet those examples deserve careful coverage because mishandling them is expensive.
 
@@ -427,7 +421,6 @@ flowchart TD
     G -->|"Yes"| H["Proceed to staged release"]
     G -->|"No"| I["Revise hypothesis, data, or method"]
 
-    classDef data fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef system fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A data; class B,C,D,E,F system; class G decision; class H,I outcome
 ```
 
@@ -445,7 +438,7 @@ The run record should bind:
 
 MLflow is a common experiment-tracking layer for open and managed training environments. A run can log parameters, metrics, datasets, checkpoints, and artifacts. The model registry or catalogue then links a candidate version to the evidence used for promotion.
 
-## Recognize Overfitting And Catastrophic Forgetting
+## Detect Overfitting And Lost General Capabilities
 <!-- section-summary: Overfitting harms new examples from the target task, while catastrophic forgetting harms capabilities outside the narrow adaptation data. -->
 
 At a high level, training can harm the narrow task or damage capabilities outside it. These two outcomes have different causes and repairs. **Overfitting** describes poor generalization within the target task, while **catastrophic forgetting** describes lost behaviour outside the narrow adaptation data.
@@ -469,7 +462,6 @@ flowchart TD
     F --> H["Train a new candidate"]
     G --> H
 
-    classDef signal fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef failure fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827; classDef action fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef pass fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B signal; class C,D failure; class F,G,H action; class E pass
 ```
 
@@ -515,7 +507,6 @@ flowchart TD
     F -->|"Yes"| G["Eligible for canary"]
     F -->|"No"| H["Reject or retrain"]
 
-    classDef candidate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef eval fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef gate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A candidate; class B,C,D,E eval; class F gate; class G,H result
 ```
 
@@ -568,7 +559,6 @@ flowchart TD
     E --> F["Model Serving candidate"]
     F --> G["Offline gates and canary"]
 
-    classDef data fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef train fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef govern fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef release fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A data; class B,C train; class D,E govern; class F,G release
 ```
 
@@ -580,7 +570,7 @@ A managed customization API is usually simpler for a supported proprietary model
 
 Provider choice does not replace the learning decision. A platform can execute SFT perfectly on a dataset that represents the wrong behaviour.
 
-## Calculate The Real Economics
+## Compare Training, Serving, And Operating Costs
 <!-- section-summary: The financial decision includes data work, teacher generation, training, evaluation, serving, and ongoing operations rather than GPU time alone. -->
 
 At a high level, adaptation adds an upfront investment and changes the cost of every future request. The business case compares both sides at the quality level users actually need. GPU time is only one part of that calculation.
@@ -643,7 +633,6 @@ flowchart TD
     G -->|"No"| I["Roll back"]
     H -->|"Regression"| I
 
-    classDef candidate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827; classDef gate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A; classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A candidate; class B,E,G gate; class D,F,H stage; class C,I stop
 ```
 
@@ -655,7 +644,7 @@ Rollback should change routing to a known-compatible previous bundle. It should 
 
 Retirement stops new routing and revokes artifact access. It updates downstream aliases and applies retention policy to datasets and checkpoints. The minimum evidence needed to explain past decisions remains available. Provider-hosted customized models also need a base-model retirement plan because their inference lifetime may follow the provider's deprecation policy.
 
-## A Practical Adaptation Decision
+## Choose An Adaptation Method Step By Step
 <!-- section-summary: The final choice links a measured failure to the smallest trustworthy signal, the safest training path, and a reversible production release. -->
 
 At a high level, the final decision connects one measured failure to one trustworthy learning signal and one reversible release. Five questions keep the reasoning focused: what failed, which layer owns it, what evidence can teach the correction, where should training run, and which gates authorize production?

@@ -14,10 +14,10 @@ id: "article-mlops-monitoring-and-feedback-logging-prediction-requests-responses
 3. [Give Each Prediction A Stable Identity](#give-each-prediction-a-stable-identity)
 4. [Write A Structured Event That People And Systems Can Read](#write-a-structured-event-that-people-and-systems-can-read)
 5. [Keep Raw Inputs And Secrets Outside General Telemetry](#keep-raw-inputs-and-secrets-outside-general-telemetry)
-6. [Move Prediction Evidence Through A Production System](#move-prediction-evidence-through-a-production-system)
+6. [How Prediction Records Reach Search And Storage](#how-prediction-records-reach-search-and-storage)
 7. [Control Volume, Retention, And Access](#control-volume-retention-and-access)
 8. [Investigate A Production Problem With Prediction Evidence](#investigate-a-production-problem-with-prediction-evidence)
-9. [Prove That The Logging Path Works](#prove-that-the-logging-path-works)
+9. [Test That Prediction Logging Works End To End](#test-that-prediction-logging-works-end-to-end)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
@@ -87,10 +87,6 @@ flowchart LR
     F --> G["Use it for monitoring,<br/>feedback, and investigation"]
     G --> H["Test coverage,<br/>privacy, and recovery"]
 
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef design fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef operate fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef verify fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A source
     class B,C,D design
     class E,F,G operate
@@ -104,7 +100,7 @@ flowchart LR
 ## Decide What The Team Needs To Explain
 <!-- section-summary: Production questions determine which fields are useful, who owns them, and how long the evidence needs to remain available. -->
 
-The easiest logging mistake is to start with fields. A team opens the request object, chooses twenty values that look interesting, and sends them to a logging backend. Months later, the logs are expensive and sensitive, yet they still cannot answer the questions that matter.
+A common logging mistake is to start with fields. A team opens the request object, chooses twenty values that look interesting, and sends them to a logging backend. Months later, the logs are expensive and sensitive, yet they still cannot answer the questions that matter.
 
 A better design starts with future investigations.
 
@@ -123,19 +119,19 @@ Now consider a different question: did the model remain accurate after deploymen
 
 These examples lead to three evidence surfaces.
 
-### Operational logs explain recent service events
+### Use Operational Logs For Recent Service Events
 
 Operational logs help responders inspect recent failures and unusual paths. They usually contain status, duration, error class, dependency result, request or trace identity, and a bounded fallback reason.
 
 They are optimized for fast search. Loki, OpenSearch, Elasticsearch, and managed cloud logging services are common destinations. Their retention is often shorter because indexing a large volume of detailed records is expensive.
 
-### Decision records preserve the model decision
+### Use Decision Records To Preserve Model Decisions
 
 A **decision record** is a durable, structured account of one prediction. It carries the model, feature or prompt, policy, and serving versions needed to reconstruct the decision. It may also contain a score, class, confidence band, safe input summary, and outcome join key.
 
 Decision records are usually stored in analytical systems: a Delta or Iceberg table, a warehouse table, or a managed inference table. These stores handle long retention, reliable joins, schema checks, and aggregate analysis better than a log-search index.
 
-### Restricted source data supports rare deeper review
+### Keep Restricted Source Data For Approved Deep Investigation
 
 Some investigations genuinely need the original document, image, prompt, or feature values. Those values should remain in a governed source system or a dedicated restricted store. General operational access should not reveal them.
 
@@ -164,10 +160,6 @@ flowchart TD
     E --> G
     F -.->|"Approved access only"| G
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef choice fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef store fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B question
     class C choice
     class D,E,F store
@@ -215,9 +207,6 @@ flowchart LR
     C --> E["Product workflow<br/>outcome join key"]
     E --> F["Mature outcome<br/>days or months later"]
 
-    classDef request fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef prediction fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,B request
     class C,D prediction
     class E,F outcome
@@ -230,6 +219,8 @@ The diagram also explains why one identifier should not carry every meaning. The
 
 A human-readable sentence such as “the candidate model returned low confidence and used fallback” is easy to print. It is difficult to analyze across ten million requests. The same fact needs stable fields:
 
+This format is called **structured logging**. Each important fact receives a named field with a predictable type and meaning. Search tools can filter those fields, validation code can check them, and analytical jobs can group them across many predictions.
+
 ```json
 {
   "model_route": "candidate",
@@ -239,11 +230,9 @@ A human-readable sentence such as “the candidate model returned low confidence
 }
 ```
 
-This is **structured logging**. Important facts use named fields instead of being buried inside free-form text. Search tools can filter the fields, validation code can check them, and analytical jobs can group them.
-
 OpenTelemetry defines a stable log data model with fields for the event timestamp, observed timestamp, severity, body, resource, attributes, event name, trace ID, and span ID. A team can use that shared model even if its applications keep their existing logging libraries. For Python, OpenTelemetry traces and metrics are stable while the logs SDK remains under development, so many production teams emit structured JSON through a mature logging library and let an agent or Collector translate it.
 
-### Give the event an explicit contract
+### Define A Contract For The Event
 
 The contract describes more than field names. It defines:
 
@@ -292,7 +281,7 @@ A compact event can look like this:
 
 The record uses a coarse region group and feature counts. It leaves out names, exact addresses, and feature values.
 
-### Change the schema without surprising consumers
+### Change The Schema Without Breaking Consumers
 
 Production schemas evolve. A team may add a new fallback reason, replace `model_id` with `model_version`, or split one decision class into two.
 
@@ -351,7 +340,7 @@ A keyed **Hash-based Message Authentication Code (HMAC)** combines the original 
 
 Suppose a model-quality report compares outcomes over six months. Rotating the HMAC key without a migration plan breaks the historical join. The team can use a short dual-write window or a protected crosswalk, then remove the old value after the agreed join period.
 
-### Managed capture still needs a data boundary
+### Apply Data Boundaries To Managed Capture
 
 Managed platforms can record request and response data with little application code. Azure Machine Learning's data collector can log payloads or custom pandas DataFrames from online endpoints into Azure Blob Storage. It also supports a sampling rate. The collector initializes after traffic first reaches an endpoint, so some early request and response records can be missing or unmatched. A rollout should send warm-up requests, compare endpoint request counts with stored rows, and reconcile unmatched request and response records before the captured data supports a monitoring decision.
 
@@ -367,12 +356,12 @@ Managed features also have lifecycle and availability constraints. Databricks ha
 
 *Operational systems receive reviewed summaries. Original payloads remain behind the stronger controls of their source or a purpose-built restricted store.*
 
-## Move Prediction Evidence Through A Production System
+## How Prediction Records Reach Search And Storage
 <!-- section-summary: Production logging separates fast operational search from durable analytical evidence and isolates telemetry failures from inference. -->
 
-After the application creates an event, the event has to reach storage without slowing or breaking the prediction service.
+The application first creates a prediction record in memory. That record still needs a reliable path to systems where operators can search recent events and analysts can rebuild long-term decision history. The delivery path must avoid slowing or breaking the prediction service during a logging-backend outage.
 
-A beginner-friendly way to picture the design is to follow two copies of the evidence:
+The design sends evidence along two paths:
 
 1. a small operational event goes to recent log search;
 2. a durable decision event goes to analytical storage.
@@ -397,7 +386,7 @@ sequenceDiagram
     Monitor->>Monitor: Join outcomes and compute quality
 ```
 
-### The operational path
+### Send Recent Events To Operational Telemetry
 
 Containers commonly write structured JSON to standard output. A node agent, cloud logging agent, Fluent Bit, or OpenTelemetry Collector reads the stream and attaches trusted service metadata.
 
@@ -405,7 +394,7 @@ The destination may be Cloud Logging, Azure Monitor Logs, CloudWatch Logs, Loki,
 
 The application owns the first allowlist because it knows the meaning of the data. A Collector processor can remove unexpected attributes as a second protection layer. If the application suddenly emits a raw prompt under a new field name, a generic downstream filter may miss it.
 
-### The durable decision path
+### Store Decision Records For Long-Term Use
 
 A low-volume service can send compact decision records through a managed queue or asynchronous writer into a warehouse table. A high-volume platform may publish them to Kafka or a managed event stream, validate them with Spark Structured Streaming, and write an append-only Delta or Iceberg table.
 
@@ -422,7 +411,7 @@ The analytical table usually feeds dbt or Spark models for:
 
 Databricks AI Gateway inference tables and Azure Machine Learning data collection provide convenient capture paths for supported endpoints. Their stored rows need the same freshness, count, and join-coverage checks as a custom pipeline. Azure endpoints also need warm-up and request-response reconciliation; Databricks inference tables use best-effort delivery. An application-owned outbox or durable event stream remains the stronger design for decisions whose evidence must be complete.
 
-### Avoid a fragile dual write
+### Avoid Writing The Same Decision Independently To Two Systems
 
 Suppose the service writes the business decision to a database and then sends the decision event to Kafka. The database write succeeds, but the process crashes before Kafka acknowledges the event. The user received a decision with no durable evidence.
 
@@ -432,7 +421,7 @@ The outbox does not guarantee exactly one delivery. A crash after publication ma
 
 For a model service without a business database, a bounded local queue, sidecar, or managed capture path can isolate telemetry delivery. The correct choice depends on how serious evidence loss is.
 
-### Define behavior during an evidence outage
+### Define What Happens During An Evidence Outage
 
 Telemetry must not consume unlimited memory or block inference forever.
 
@@ -483,17 +472,13 @@ flowchart TD
     E --> G
     F --> G
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef keep fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef compact fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef metadata fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,D source
     class C,E keep
     class F compact
     class G metadata
 ```
 
-### Retention follows the question
+### Set Retention From The Investigation Or Audit Need
 
 Operational logs may need a few weeks of fast search for incident response. Decision records may need several months because labels mature slowly. Restricted payloads may deserve a shorter period because they carry greater risk.
 
@@ -510,7 +495,7 @@ The team chooses each period from:
 
 Table maintenance needs careful wording. Deleting old decision rows controls business-data retention. Delta `VACUUM` and Iceberg snapshot expiration clean up unreferenced historical files and snapshots. Those maintenance operations do not automatically apply the business retention policy to active rows. Generic object-store deletion can damage a table if it removes files without updating table metadata.
 
-### Access follows job responsibility
+### Grant Access From Job Responsibility
 
 Service responders need sanitized errors, latency, route, and correlation values. Model teams need approved decision attributes and aggregate segments. A narrow review group may access original payloads through a purpose-bound workflow.
 
@@ -567,20 +552,20 @@ The investigation can reveal a different problem. Request traffic may remain ste
 
 *Metrics locate the affected population. Prediction records identify the route and version. Logs, traces, and release evidence support the cause and recovery decision.*
 
-## Prove That The Logging Path Works
+## Test That Prediction Logging Works End To End
 <!-- section-summary: Contract, privacy, delivery, reconciliation, and reconstruction tests verify that prediction evidence stays safe and useful. -->
 
 Prediction logging can fail silently. The service keeps answering requests while a renamed field breaks label joins, a stalled consumer delays every record, or a new exception path leaks a secret.
 
 Testing therefore covers the entire evidence path.
 
-### Test the event before deployment
+### Validate The Event Before Deployment
 
 Contract tests validate required fields, types, allowed values, timestamps, identifiers, and units. Privacy tests send representative inputs containing names, tokens, and other forbidden values. They then assert that those values never appear in application output, Collector output, log search, or decision tables.
 
 The test uses realistic error paths too. Exception objects often contain URLs, query values, file paths, or input fragments. The application should map known failures to bounded classes such as `feature_timeout` or `model_runtime_error`.
 
-### Test the analytical table
+### Validate The Analytical Table
 
 dbt data tests can protect the curated decision model:
 
@@ -601,7 +586,7 @@ This example assumes one terminal `prediction_completed` row per prediction. A t
 
 The dbt test runs after ingestion and deduplication. Producer tests still validate the complete JSON contract before publication. These layers catch different failures.
 
-### Reconcile service work with stored evidence
+### Compare Service Request Counts With Stored Evidence
 
 If the service accepted 100,000 predictions, the durable store should explain how many rows arrived, how many were rejected, and how many remain in flight.
 
@@ -611,7 +596,7 @@ A useful reconciliation reports:
 
 The comparison uses the same route and time window on both sides. It also allows for documented delivery delay. A healthy ratio close to one is more trustworthy than a single “pipeline succeeded” flag.
 
-### Exercise failure and recovery
+### Test Logging Failure And Recovery
 
 Stop the stream consumer or make the storage sink unavailable in a safe environment. Observe:
 

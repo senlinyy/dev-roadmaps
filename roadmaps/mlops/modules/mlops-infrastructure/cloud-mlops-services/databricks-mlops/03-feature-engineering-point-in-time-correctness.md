@@ -10,15 +10,15 @@ id: "article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-
 ## Table of Contents
 
 1. [What Feature Engineering And Point-In-Time Correctness Mean](#what-feature-engineering-and-point-in-time-correctness-mean)
-2. [From Raw Records To A Feature System](#from-raw-records-to-a-feature-system)
-3. [Time Decides What A Historical Prediction Was Allowed To Know](#time-decides-what-a-historical-prediction-was-allowed-to-know)
+2. [Turn Raw Records Into Model Features](#turn-raw-records-into-model-features)
+3. [Use Only Information Available At Prediction Time](#use-only-information-available-at-prediction-time)
 4. [How A Point-In-Time Join Builds One Training Row](#how-a-point-in-time-join-builds-one-training-row)
-5. [Building The Historical Feature Path In Databricks](#building-the-historical-feature-path-in-databricks)
-6. [Keeping Training And Inference Aligned](#keeping-training-and-inference-aligned)
-7. [Choosing Offline, Online, And On-Demand Features](#choosing-offline-online-and-on-demand-features)
-8. [Designing And Operating Features As Production Assets](#designing-and-operating-features-as-production-assets)
+5. [Build Historically Correct Training Data In Databricks](#build-historically-correct-training-data-in-databricks)
+6. [Use The Same Feature Logic For Training And Inference](#use-the-same-feature-logic-for-training-and-inference)
+7. [Choose Offline, Online, Or On-Demand Features](#choose-offline-online-or-on-demand-features)
+8. [Operate Shared Features As Production Assets](#operate-shared-features-as-production-assets)
 9. [When A Feature Store Is Worth The Cost](#when-a-feature-store-is-worth-the-cost)
-10. [The Complete Feature Path](#the-complete-feature-path)
+10. [Follow The Complete Feature Lifecycle](#follow-the-complete-feature-lifecycle)
 11. [References](#references)
 
 ## What Feature Engineering And Point-In-Time Correctness Mean
@@ -54,14 +54,14 @@ Databricks Feature Store helps connect these paths. Historical feature values li
 
 The platform handles storage, lookup, lineage, and serving integration. The team still owns the difficult decisions: what a feature means, which events qualify, which clock controls its history, how fresh it must be, and what the system should do after a value is missing or late.
 
-## From Raw Records To A Feature System
+## Turn Raw Records Into Model Features
 <!-- section-summary: A feature system gives raw records a stable subject, row meaning, calculation, history, and lookup contract that training and inference can share. -->
 
 Raw operational tables describe events at the grain needed by the product. A transaction table may contain one row per payment attempt. A support table may contain one row per conversation. An account table may hold one current row per account. These sources have different keys, update schedules, and timestamp meanings.
 
 A model expects something simpler: one row for one prediction, with one column for each input. Moving from the source records to that row requires a small set of objects. Those objects define the subject of the prediction, the meaning of each feature, the prediction time, and the rule that joins past feature values to that time.
 
-### The entity and grain say what one row describes
+### Define What One Feature Row Represents
 
 The **entity** is the subject of a feature. It could be an account, device, merchant, product, or a pair such as `(viewer_id, item_id)`.
 
@@ -71,7 +71,7 @@ This distinction changes the questions the data can answer. A current-state tabl
 
 Keys also need a stable meaning across systems. If the observation table uses a regional customer number while the feature table uses a global account identifier, the lookup may miss an entire population even though both columns are strings. Production teams define the identifier source, format, null policy, and migration path as part of the feature contract.
 
-### A feature definition explains more than a column name
+### Define The Meaning And Calculation Of Each Feature
 
 Consider a column named `transactions_30d`. The name suggests a count, although it leaves important choices open:
 
@@ -86,7 +86,7 @@ Two pipelines can answer those questions differently and still produce a valid i
 
 A production feature definition records the entity, formula, eligible events, window boundary, timestamp source, null and default behaviour, update schedule, owner, and sensitive-data classification. In essence, the feature is a maintained data product whose output happens to feed models.
 
-### An observation row marks a prediction opportunity
+### Record Each Historical Prediction Opportunity
 
 The feature table stores knowledge about entities. The **observation table** stores the moments the model is learning from.
 
@@ -100,7 +100,7 @@ The row means: “At 10:00, the system could have predicted whether account `A-1
 
 `observation_id` matters because one account may have many prediction opportunities. It gives each opportunity a durable identity for joins, validation, and investigation.
 
-### The lookup contract connects observations to features
+### Define How Observations Find Historical Features
 
 A **feature lookup** states:
 
@@ -121,10 +121,6 @@ flowchart TD
     E --> F["Point-in-time training set"]
     F --> G["Model with recorded<br/>feature dependencies"]
 
-    classDef source fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef meaning fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef rule fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef output fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,D source
     class B,C meaning
     class E rule
@@ -133,14 +129,14 @@ flowchart TD
 
 In Databricks, a Unity Catalog Delta table can hold the feature history, a `FeatureLookup` expresses the retrieval rule, and a `TrainingSet` represents the joined result. These product objects now have a clear job because the underlying relationship is already visible.
 
-## Time Decides What A Historical Prediction Was Allowed To Know
+## Use Only Information Available At Prediction Time
 <!-- section-summary: Feature history uses several clocks, and the production availability cutoff determines whether a value genuinely belonged to a past prediction. -->
 
 Time-based leakage often starts with a reasonable-looking timestamp. An event happened before the prediction, so the training pipeline treats it as known. That assumption fails whenever the event reached the production system later.
 
 To reconstruct a past prediction honestly, the team needs to distinguish several clocks.
 
-### Event time and arrival time answer different questions
+### Separate When An Event Happened From When It Arrived
 
 **Event time** records the business action. A card payment may happen at 09:42.
 
@@ -150,7 +146,7 @@ For a prediction made at 10:00, the event belongs to the business past and the s
 
 This is why a timestamp such as `payment_time` may be insufficient for strict historical replay. The feature pipeline may also need ingestion time, source publication time, or another reliable record of availability. The correct clock depends on the production path the historical evaluation is trying to reproduce.
 
-### Feature time says which state a row represents
+### Record Which Historical State A Feature Row Represents
 
 **Feature time** is the historical point represented by a feature row. A row with `feature_ts = 10:00` may summarize eligible account activity through 10:00.
 
@@ -158,7 +154,7 @@ Feature time needs a precise calculation rule. A window ending at 10:00 could in
 
 The feature row should preserve enough evidence to explain that cutoff. Useful evidence includes the source versions, pipeline run, code revision, maximum arrival time consumed, and publication time.
 
-### Prediction time controls the historical lookup
+### Use Prediction Time To Choose Historical Features
 
 **Prediction time** belongs to the observation row. It says when the past decision could have happened.
 
@@ -166,7 +162,7 @@ During training, the lookup searches backward from this time. For account `A-104
 
 Prediction time also needs one agreed meaning. An API may receive a request at 10:00 and finish at 10:00:00.350. The contract should state whether the cutoff is request acceptance, policy evaluation, or another event. A small difference can matter for fast-moving features.
 
-### Label time belongs to the future outcome
+### Keep Future Outcomes Out Of Model Inputs
 
 The **label** is the outcome the model tries to predict. A thirty-day missed-payment label cannot mature at prediction time because the next thirty days have not happened yet.
 
@@ -177,7 +173,7 @@ Feature and label timing therefore point in opposite directions:
 
 Training should wait until the label window is complete. A row from yesterday cannot carry a reliable thirty-day outcome today. Label-maturity checks and point-in-time feature joins protect different boundaries, and a trustworthy dataset needs both.
 
-### Backfills require an explicit historical policy
+### Define How Backfills Handle Late Data
 
 Late data creates a second decision. Suppose a payment failure happened on Monday, arrived on Wednesday, and entered a Thursday backfill. The corrected Monday feature row now contains that failure.
 
@@ -202,7 +198,7 @@ The selection rule is simple:
 3. choose the eligible feature row with the greatest timestamp;
 4. reject it if it exceeds the permitted age.
 
-### Walk through two observations
+### See How Two Observations Select Different Feature Rows
 
 Suppose the feature table holds this history for account `A-1042`:
 
@@ -224,7 +220,7 @@ For the 12:00 observation, the join can use 09:00 or 11:30. It selects 11:30 bec
 
 A latest-value join would give both observations the 13:00 row. The code would run, the columns would have the expected types, and the model might report stronger validation metrics. The training set would still be false because both rows received future behaviour.
 
-### A lookback window controls staleness
+### Reject Features That Are Too Old
 
 The newest earlier value may be too old to trust. Imagine that the last feature row for an active account is forty days old because its identifier stopped matching after a migration.
 
@@ -234,7 +230,7 @@ Missing and zero have different meanings. Zero failed payments can describe a kn
 
 The feature contract should define any default and the pipeline should measure its use. A sudden rise in defaults is often an operational signal rather than a change in customer behaviour.
 
-### Point-in-time lookup and Delta time travel solve different problems
+### Understand Point-In-Time Lookup And Delta Time Travel
 
 The names sound similar, so these two mechanisms are easy to confuse.
 
@@ -244,13 +240,13 @@ The names sound similar, so these two mechanisms are easy to confuse.
 
 Exact reconstruction often needs both. The run reads feature table version `418`, then performs point-in-time joins inside that table state. The version protects the stored data snapshot. The lookup protects the historical cutoff for each observation.
 
-### Late corrections can pass the timestamp test
+### Check Whether Late Corrections Were Available Historically
 
 A correct `feature_ts <= prediction_time` condition still depends on honest feature rows. If a later backfill rewrites an old row with newly arrived information, its timestamp may pass even though the value was unavailable in production.
 
 This is why feature correctness extends beyond the join expression. The team preserves feature table versions, arrival or availability evidence, backfill ranges, and publication records. A repaired table can support new training, while the original retained version remains the evidence for an already released model.
 
-## Building The Historical Feature Path In Databricks
+## Build Historically Correct Training Data In Databricks
 <!-- section-summary: A Databricks historical feature path stores entity-time history in Unity Catalog, joins observations through FeatureLookup, and verifies the selected timestamps before training. -->
 
 The previous sections established the mechanism. The Databricks implementation now has to preserve the same entity, history, and cutoff rules in objects that a scheduled training job can use repeatedly.
@@ -263,7 +259,7 @@ That historical path has three main pieces:
 
 The code below is useful because each part now corresponds to an understood responsibility.
 
-### Create a time-series feature table
+### Create A Time-Series Feature Table
 
 A historical feature table needs one entity key and one time key. The pair `(account_id, feature_ts)` identifies one account state at one historical moment.
 
@@ -286,7 +282,7 @@ Unity Catalog primary-key constraints are informational. The declaration documen
 
 Liquid clustering on the entity and time columns is the current Databricks recommendation for improving large point-in-time lookups. It helps the engine skip unrelated data. It cannot repair ambiguous keys or incorrect timestamps, so data validation remains the first control.
 
-### Build the training set from observation rows
+### Build The Training Set From Observation Rows
 
 Assume `observations` contains `observation_id`, `account_id`, `prediction_time`, and the matured label `missed_payment_30d`. The lookup asks for three features from the account history.
 
@@ -327,7 +323,7 @@ model_input = training_set.load_df()
 
 The lookup keys and timestamp still participate in the join before `exclude_columns` removes them from `TrainingSet.load_df()`. The model trains on the returned features and label. For later investigation, the run should separately preserve the versioned observation table and its `observation_id` mapping, along with the feature-table version, lookup definition, row counts, missing-feature rates, and selected-value age evidence.
 
-### Verify the selected time directly
+### Verify The Selected Time Directly
 
 `TrainingSet.load_df()` produces the model input and leaves the matched feature timestamp outside the matrix. A validation-only as-of join can expose that timestamp without teaching the model to use it.
 
@@ -365,7 +361,7 @@ FROM candidate_training_features;
 
 For higher assurance, use a small set of known observations and manually reconstruct their expected source events. Automated aggregate checks find broad failures; known-row checks catch window boundaries, timezone errors, and event-eligibility mistakes.
 
-### Keep preview features behind an adoption decision
+### Review Preview Features Before Production Adoption
 
 Feature tables preserve calculated values, although the calculation itself may still live in a project repository. After several models need the same rolling count or column selection, the team may want that reusable calculation to have its own governed name, owner, and permissions.
 
@@ -375,7 +371,7 @@ The storage choice follows the calculation. A column selected from an existing s
 
 Feature Views are in Public Preview and currently require `databricks-feature-engineering` 0.16.0 or newer. A production team should evaluate preview support, permissions, migration history, and rollback behaviour before moving a critical path. Stable feature tables remain a sensible baseline for teams that require generally available workflows.
 
-## Keeping Training And Inference Aligned
+## Use The Same Feature Logic For Training And Inference
 <!-- section-summary: Databricks can store feature lookup metadata with a model so batch scoring can replay historical retrieval and online scoring can retrieve the latest published values for the same feature identities. -->
 
 A model can fail even after the training dataset was historically correct. The serving application may calculate the same feature differently.
@@ -384,7 +380,7 @@ Imagine that training defines `spend_30d` as a rolling UTC window over settled t
 
 This difference is called **training-serving skew**. One practical defence is to preserve the feature retrieval contract with the model.
 
-### Record the lookup contract with the model
+### Record The Lookup Rules With The Model
 
 Databricks can log the model together with the `TrainingSet`:
 
@@ -421,7 +417,7 @@ The difference comes from the access pattern. Batch scoring searches feature his
 
 The endpoint replaces that historical limit with serving controls. It measures the returned value's age and compares it with the feature's maximum-age policy. Missing or over-age values then follow the reviewed default, fallback model, manual-review route, or request failure chosen for that decision.
 
-### Metadata protects retrieval, while operations protect behaviour
+### Store Feature Retrieval Rules And Monitor Their Results
 
 Stored metadata prevents a caller from quietly choosing another feature table or forgetting a required lookup. It cannot guarantee that the underlying values are fresh, complete, or semantically correct.
 
@@ -436,7 +432,7 @@ The serving path still checks:
 
 This boundary matters during incidents. A successful API lookup proves only that a value arrived. Pipeline freshness and window validation provide the separate evidence needed to trust its source and meaning.
 
-## Choosing Offline, Online, And On-Demand Features
+## Choose Offline, Online, Or On-Demand Features
 <!-- section-summary: Historical scans, low-latency current lookups, and request-time calculations need different delivery paths even when they share one governed feature meaning. -->
 
 Training and live prediction ask different questions of the same feature. Training asks which value belonged to each past prediction time, so it needs large historical scans. A live endpoint asks for the most recent usable value for one entity, usually within a tight request deadline. A third path handles values that can only be calculated from the current request.
@@ -447,13 +443,13 @@ These access patterns share a feature meaning, although their storage and operat
 
 *The three paths serve different access patterns. A shared definition connects them, while each path keeps its own freshness, latency, and failure controls.*
 
-### Offline features preserve history
+### Use Offline Features To Preserve History
 
 The **offline feature table** is the governed Delta history in Unity Catalog. It supports point-in-time training joins, backtests, batch inference, investigation, and large analytical reads.
 
 This is usually the first feature path a team needs. A weekly batch model can read governed offline tables and may gain little from an online store. The table version, feature lookup, and quality evidence already provide reproducibility and historical correctness.
 
-### Online features serve current values quickly
+### Use Online Features For Fast Access To Current Values
 
 An **online feature store** keeps a retrieval-ready copy for low-latency applications. Databricks Online Feature Store is powered by Lakebase, and new stores use the current Lakebase Autoscaling path.
 
@@ -469,9 +465,9 @@ Online serving therefore measures source freshness and publication lag first. Lo
 
 Databricks uses `TRIGGERED`, `CONTINUOUS`, and `SNAPSHOT` publication modes. Triggered publication fits scheduled incremental refreshes. Continuous publication fits features whose changes need to reach serving quickly. Snapshot performs a one-time full synchronization. Change Data Feed is required for the triggered and continuous paths.
 
-The current API uses `publish_mode`. The older `streaming` parameter remains for backward compatibility, so new production code should use the clearer current interface.
+The current API uses `publish_mode`. The older `streaming` parameter remains for backward compatibility, so new production code should use `publish_mode`.
 
-### On-demand features use the current request
+### Use On-Demand Features For Request-Time Values
 
 An **on-demand feature** is calculated during inference because part of its input exists only in the current request.
 
@@ -481,7 +477,7 @@ Request-time functions need the same care as stored features. Input types and un
 
 A slow on-demand calculation also consumes the serving latency budget. Tracing should therefore measure feature lookup, function execution, and model inference as separate stages.
 
-### The fallback follows the decision risk
+### Choose A Fallback Based On The Decision Risk
 
 An online feature failure has no universal response.
 
@@ -491,14 +487,14 @@ A high-risk financial decision may route to manual review or pause the automated
 
 The team chooses the fallback before release, tests it through the actual serving path, and records how often it activates. A fallback that has never been exercised is only an idea.
 
-## Designing And Operating Features As Production Assets
+## Operate Shared Features As Production Assets
 <!-- section-summary: Production features need contracts, compatible change paths, quality signals, and a recovery process that protects both historical evidence and current serving. -->
 
 A feature earns reuse through stable meaning and reliable operation. Sharing a poorly defined column spreads one mistake across several models, which is worse than duplicating a small transformation.
 
 The operational design has three parts: a contract that explains the feature, a change process that protects consumers, and evidence that shows the path is healthy.
 
-### The contract protects meaning
+### Document What Each Feature Means
 
 A useful feature contract records:
 
@@ -515,7 +511,7 @@ Unity Catalog comments, tags, permissions, ownership, and lineage make much of t
 
 Feature tables should group values with compatible keys, refresh rates, and access needs. Fifteen-minute account activity belongs in a different table from yearly compliance attributes. Separating them avoids wide rewrites, broad permissions, and unnecessary online publication.
 
-### Feature changes need a consumer migration
+### Migrate Models Before Changing Feature Meaning
 
 Adding a new independent column is often compatible after validation. Changing the meaning of an existing feature is more dangerous because active models were trained on the old meaning.
 
@@ -525,7 +521,7 @@ A safer migration creates a new feature name or version, writes old and new valu
 
 Key, timestamp, and data-type changes often justify a new table. These fields define retrieval itself, so a parallel table gives consumers an explicit migration boundary and preserves the old model's evidence.
 
-### Monitor the full feature path
+### Monitor Feature Freshness, Quality, And Retrieval
 
 Feature monitoring asks whether models receive valid and timely inputs. The answer requires signals from several boundaries.
 
@@ -539,7 +535,7 @@ Suppose global lookup coverage remains at 99 percent after an identifier migrati
 
 Full feature vectors and direct identifiers should stay inside governed stores. General telemetry can record allowlisted feature names, presence, age, validation result, model route, and a safe correlation identifier.
 
-### Recovery preserves the last trusted path
+### Recover To The Last Trusted Feature Path
 
 Feature failures often return plausible numbers, so restarting a job may simply publish the same defect again.
 
@@ -568,10 +564,6 @@ stateDiagram-v2
     ServingCheck --> Fallback: Check fails
     Fallback --> Contained: Investigate
 
-    classDef trusted fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef work fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef gate fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef risk fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class Trusted trusted
     class Contained,RepairSource,NewContract work
     class Verification,SyncExisting,RedeployModel,ServingCheck gate
@@ -593,7 +585,7 @@ A simple governed Delta pipeline may be enough for one batch model with a small 
 
 A platform-neutral store such as Feast can fit organisations that train or serve across several clouds and runtimes. Feast supplies feature definitions, historical retrieval, and online materialization across supported stores. The organisation operates more of the surrounding transformation, infrastructure, and serving integration.
 
-Four questions make the decision clearer:
+Answer four questions before choosing a feature-store design:
 
 1. **Reuse:** Do several models or teams need the same feature meaning?
 2. **History:** Do repeated training and backtesting workflows need point-in-time retrieval?
@@ -602,7 +594,7 @@ Four questions make the decision clearer:
 
 Start with governed offline features and explicit historical correctness. Add online or on-demand paths after the workload has a real latency or request-time need. This sequence keeps the system proportional while preserving a path to greater reuse.
 
-## The Complete Feature Path
+## Follow The Complete Feature Lifecycle
 <!-- section-summary: A reliable feature path preserves meaning and time from governed source events through historical training, current inference, monitoring, and recovery. -->
 
 The full path starts with a question about the model input: what does this feature mean for one entity at one moment?

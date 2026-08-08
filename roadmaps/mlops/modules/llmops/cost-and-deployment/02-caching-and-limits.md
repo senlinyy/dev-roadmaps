@@ -10,20 +10,20 @@ id: "article-mlops-llmops-caching-and-limits"
 ## Table of Contents
 
 1. [Caching and Limits Control Two Production Problems](#caching-and-limits-control-two-production-problems)
-2. [A Cache Is a Governed Copy of Reusable Work](#a-cache-is-a-governed-copy-of-reusable-work)
+2. [Treat A Cache As A Controlled Copy Of Reusable Work](#treat-a-cache-as-a-controlled-copy-of-reusable-work)
 3. [Provider Prompt Caches Reuse Prefix Computation](#provider-prompt-caches-reuse-prefix-computation)
-4. [Exact and Semantic Result Caches Make Different Promises](#exact-and-semantic-result-caches-make-different-promises)
-5. [Retrieval and Tool Caches Follow Source Semantics](#retrieval-and-tool-caches-follow-source-semantics)
-6. [Identity, Freshness, and Invalidation Decide Cache Correctness](#identity-freshness-and-invalidation-decide-cache-correctness)
+4. [Choose Exact Or Semantic Result Caching](#choose-exact-or-semantic-result-caching)
+5. [Cache Retrieval And Tool Results According To Source Rules](#cache-retrieval-and-tool-results-according-to-source-rules)
+6. [Include Identity And Freshness In Cache Keys And Invalidation](#include-identity-and-freshness-in-cache-keys-and-invalidation)
 7. [Rate Limits, Quotas, and Concurrency Allocate Capacity](#rate-limits-quotas-and-concurrency-allocate-capacity)
-8. [Run Budgets Bound Tokens, Tools, Steps, Time, and Spend](#run-budgets-bound-tokens-tools-steps-time-and-spend)
-9. [Backpressure, Queues, Retries, and Idempotency Work Together](#backpressure-queues-retries-and-idempotency-work-together)
-10. [Safe Fallback Preserves an Honest Product](#safe-fallback-preserves-an-honest-product)
+8. [Set Limits For Tokens, Tools, Steps, Time, And Spend](#set-limits-for-tokens-tools-steps-time-and-spend)
+9. [Control Overload With Backpressure, Queues, Safe Retries, And Idempotency](#control-overload-with-backpressure-queues-safe-retries-and-idempotency)
+10. [Tell Users When The System Falls Back Or Cannot Complete The Request](#tell-users-when-the-system-falls-back-or-cannot-complete-the-request)
 11. [Observability and Evaluation Measure Correctness as Well as Savings](#observability-and-evaluation-measure-correctness-as-well-as-savings)
-12. [Roll Out Each Control With Evidence](#roll-out-each-control-with-evidence)
+12. [Test Each Cache Or Limit Before Full Rollout](#test-each-cache-or-limit-before-full-rollout)
 13. [Common Failures Have Specific Repairs](#common-failures-have-specific-repairs)
-14. [Incident Response Reduces New Work First](#incident-response-reduces-new-work-first)
-15. [Main Idea](#main-idea)
+14. [Reduce Incoming Work Before Repairing An Overload](#reduce-incoming-work-before-repairing-an-overload)
+15. [Protect Correctness As Well As Cost](#protect-correctness-as-well-as-cost)
 16. [References](#references)
 
 ## Caching and Limits Control Two Production Problems
@@ -56,7 +56,7 @@ flowchart TD
 
 Each gate owns a different decision. A cache hit says an earlier computation remains suitable. Admission control says the platform can start more work. A run budget says one accepted task can consume only a bounded amount. Fallback says what useful and truthful service remains after a boundary is reached.
 
-## A Cache Is a Governed Copy of Reusable Work
+## Treat A Cache As A Controlled Copy Of Reusable Work
 
 <!-- section-summary: Cache keys identify reusable work, TTLs limit age, eviction bounds storage, and invalidation removes entries after meaningful source changes. -->
 
@@ -129,7 +129,7 @@ Anthropic supports cache controls on cacheable content blocks and reports cache-
 
 These differences affect pricing, retention, rate-limit accounting, supported content, minimum size, and control fields. Keep provider details in a tested adapter and current runbook. The architecture should depend only on the shared promise: an exact stable prefix may receive model-side computational reuse.
 
-## Exact and Semantic Result Caches Make Different Promises
+## Choose Exact Or Semantic Result Caching
 
 <!-- section-summary: Exact result caches reuse equivalent inputs, while semantic caches infer equivalence from similarity and therefore require stronger evaluation and policy gates. -->
 
@@ -160,7 +160,7 @@ Semantic result caching fits repetitive, low-risk, slowly changing routes such a
 
 Evaluation uses labeled request pairs with a domain-approved equivalence decision. Measure unsafe-hit rate, false misses, answer-quality delta, evidence validity, and savings. Cache hit rate alone rewards aggressive reuse even if the returned meaning is wrong.
 
-## Retrieval and Tool Caches Follow Source Semantics
+## Cache Retrieval And Tool Results According To Source Rules
 
 <!-- section-summary: Retrieval and tool caches inherit the authorization, freshness, side-effect, and invalidation rules of the systems whose work they reuse. -->
 
@@ -188,7 +188,7 @@ An idempotency record is neither a general result cache nor permission. The serv
 
 Errors and partial results deserve conservative caching. A transient provider error should rarely become a normal cached answer. “Record unavailable” may be safe for a few seconds if the source contract says so. Tool output containing a short-lived signed URL should expire before the URL. The source semantics determine the rule.
 
-## Identity, Freshness, and Invalidation Decide Cache Correctness
+## Include Identity And Freshness In Cache Keys And Invalidation
 
 <!-- section-summary: Safe reuse requires a complete identity, an acceptable age, and a reliable response to source, permission, policy, and release changes. -->
 
@@ -250,7 +250,7 @@ Provider limits create an outer ceiling. OpenAI currently documents separate mea
 
 Return `429 Too Many Requests` for a caller-specific admission limit and include `Retry-After` where a temporary window has a meaningful retry time. A `503` can describe temporary service unavailability. The response should identify the user’s next safe action without revealing another tenant’s consumption.
 
-## Run Budgets Bound Tokens, Tools, Steps, Time, and Spend
+## Set Limits For Tokens, Tools, Steps, Time, And Spend
 
 <!-- section-summary: A run budget gives one accepted request finite allowances for context, output, tool calls, agent steps, elapsed time, retries, and estimated cost. -->
 
@@ -283,7 +283,7 @@ The context builder spends input budget intentionally. System and safety instruc
 
 Budget exhaustion is a normal runtime outcome. The orchestrator records which allowance ended the run and chooses a defined response: use verified evidence already collected, ask the user to narrow the task, enqueue an approved background job, or return a partial result marked with its limitation. Quietly continuing under an untracked “emergency” budget defeats the control.
 
-## Backpressure, Queues, Retries, and Idempotency Work Together
+## Control Overload With Backpressure, Queues, Safe Retries, And Idempotency
 
 <!-- section-summary: Backpressure slows producers as downstream capacity fills, bounded queues defer suitable work, and limited idempotent retries recover from transient failures. -->
 
@@ -317,7 +317,7 @@ sequenceDiagram
 
 Idempotency protects retries that may create an external effect. The same key must describe the same normalized operation and scope. The domain service stores the result or detects an in-progress request. A changed payload with the same key should return a conflict. Reads and pure computations may be naturally repeatable; payments, messages, deployments, and record creation need explicit guarantees.
 
-## Safe Fallback Preserves an Honest Product
+## Tell Users When The System Falls Back Or Cannot Complete The Request
 
 <!-- section-summary: Fallback defines a smaller trustworthy service after capacity, budget, cache, model, or tool failure and keeps changed capability visible to the user. -->
 
@@ -361,7 +361,7 @@ Evaluation needs adversarial and load cases. Change a user’s permission after 
 
 The final gate compares task success, latency distributions, cost per successful outcome, valid reuse, stale exposure, rejected demand, and degraded-mode quality. Savings count only after correctness remains within the route’s acceptance threshold.
 
-## Roll Out Each Control With Evidence
+## Test Each Cache Or Limit Before Full Rollout
 
 <!-- section-summary: Safe rollout observes decisions before enforcement, compares cache hits with fresh execution, canaries bounded traffic, and keeps a fast disable path. -->
 
@@ -392,7 +392,7 @@ Warm-cache and cold-cache load tests reveal different behavior. A release can ap
 
 The visible symptom often looks like “the LLM is slow” or “the answer is wrong.” Repair starts by identifying which reuse or admission promise failed.
 
-### A Cache Hit Crossed an Identity Boundary
+### Cached Data Reached The Wrong User Or Tenant
 
 A result appears under the wrong tenant, user, locale, or permission class. Disable the affected namespace, add emergency revocation, and inspect key construction plus authorization on hits. Derived cache entries and traces may contain exposed data. Rebuild under a new version and add negative cross-boundary tests.
 
@@ -400,7 +400,7 @@ A result appears under the wrong tenant, user, locale, or permission class. Disa
 
 An answer cites withdrawn content or old policy. Revoke entries referencing the source, advance the source revision, and measure invalidation lag. The long-term repair may combine versioned keys, source-to-cache lineage, shorter TTL, and a fast deny set for urgent changes.
 
-### A Popular Miss Overloaded the Dependency
+### Many Cache Misses Overloaded A Dependency
 
 Many workers recompute the same expired key. Add request coalescing, TTL jitter, bounded stale reuse for eligible routes, and cold-cache load tests. Confirm that the cache memory policy retains genuinely hot entries without treating the cache as permanent storage.
 
@@ -410,15 +410,15 @@ Application retries, SDK retries, queue redelivery, and agent retries can stack.
 
 Honor `Retry-After` and cap attempts plus elapsed time. Side effects require idempotency. A breaker can stop calls after evidence shows the dependency is unhealthy.
 
-### Limits Produced Unfair or Wasteful Admission
+### Limits Blocked The Wrong Requests
 
 One tenant consumes shared capacity, or cheap work is rejected behind expensive work. Add tenant and route isolation, token-aware reservations, separate interactive and background queues, and tested priority rules. Compare reserved with actual consumption so the estimator improves.
 
-### One Agent Consumed Excessive Work
+### One Run Consumed Too Many Resources
 
 The orchestrator allowed repeated model or tool calls without useful progress. Enforce step, tool, token, retry, time, and cost budgets. Record the exhaustion reason and evaluate the defined partial response. Repeated exhaustion on normal tasks may indicate poor tool design or orchestration rather than an intentionally difficult request.
 
-## Incident Response Reduces New Work First
+## Reduce Incoming Work Before Repairing An Overload
 
 <!-- section-summary: Cache or overload incidents stop unsafe reuse and excess admission, preserve evidence, reconcile effects, repair the control, and recover gradually. -->
 
@@ -436,7 +436,7 @@ Recovery proceeds gradually. Repair and test the authoritative control, invalida
 
 Residual uncertainty remains. Provider cache semantics, billing, model support, retention, and quota behavior can change. Semantic similarity can miss a domain-specific distinction. Token estimators can undercount. A layered design limits those risks through provider adapters, hard identity filters, current documentation checks, conservative budgets, shadow evaluation, and tested disable paths.
 
-## Main Idea
+## Protect Correctness As Well As Cost
 
 <!-- section-summary: Production LLM systems reuse work only under a valid identity and admit new work only inside explicit capacity and run budgets. -->
 

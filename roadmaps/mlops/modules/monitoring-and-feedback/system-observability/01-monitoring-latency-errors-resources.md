@@ -1,7 +1,7 @@
 ---
 title: "Service Health Metrics"
 description: "Learn how traffic, latency, errors, saturation, availability, service objectives, and resource evidence keep model-serving systems reliable."
-overview: "Service health metrics show whether a production model can accept work, return usable predictions quickly, and keep doing so under real demand. This article explains each signal in plain language, works through realistic incidents, and shows how production teams instrument, alert on, and recover ML services."
+overview: "Service health metrics show whether a production model can accept work, return usable predictions quickly, and keep doing so under real demand. Traffic, latency, errors, saturation, availability, and resource evidence expose operational failure and prove recovery."
 tags: ["MLOps", "core", "observability"]
 order: 1
 id: "article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources"
@@ -20,10 +20,10 @@ id: "article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources"
 9. [6. Dependencies: The Model Is One Part Of The Request](#6-dependencies-the-model-is-one-part-of-the-request)
 10. [7. Batch Inference Needs Different Health Signals](#7-batch-inference-needs-different-health-signals)
 11. [8. Every Release Needs Its Own Health View](#8-every-release-needs-its-own-health-view)
-12. [9. SLI, SLO, And SLA Turn Metrics Into Expectations](#9-sli-slo-and-sla-turn-metrics-into-expectations)
-13. [10. Good Alerts Ask For A Real Action](#10-good-alerts-ask-for-a-real-action)
+12. [9. How SLI, SLO, And SLA Define Reliability Expectations](#9-how-sli-slo-and-sla-define-reliability-expectations)
+13. [10. Create Alerts With A Defined Response](#10-create-alerts-with-a-defined-response)
 14. [11. How These Metrics Reach A Dashboard](#11-how-these-metrics-reach-a-dashboard)
-15. [12. A Useful Dashboard Tells A Story](#12-a-useful-dashboard-tells-a-story)
+15. [12. Build A Dashboard That Supports Investigation](#12-build-a-dashboard-that-supports-investigation)
 16. [13. Test The Monitoring And Recovery Path](#13-test-the-monitoring-and-recovery-path)
 17. [The Main Idea](#the-main-idea)
 18. [References](#references)
@@ -44,9 +44,6 @@ flowchart TD
     E --> F["Response Policy<br/>(validate and apply rules)"]
     F --> G["Returned Decision<br/>(caller receives the outcome)"]
 
-    classDef request fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stage fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,C,D,E,F stage
     class G outcome
@@ -75,7 +72,7 @@ Five core signals help answer those questions. **Traffic** measures incoming wor
 ## Service Health And Model Health Are Different
 <!-- section-summary: Service health measures reliable delivery, while model health measures whether predictions remain accurate and useful. -->
 
-An ML system can work perfectly in one sense and fail badly in another. Service health describes whether the production system delivers a result reliably. Model health describes whether that result is still accurate, safe, and useful.
+An ML system can work perfectly in one sense and fail badly in another. Service health describes whether the production system delivers a result reliably. Model health describes whether that result is still accurate, safe, and suitable for the decision it supports.
 
 Suppose an endpoint answers every request in 80 milliseconds and has 99.99 percent availability. Operationally, it looks excellent. Now suppose customer behaviour changes and the fraud model starts missing half of the fraud it used to catch. The service is reliable, while the model's predictions are poor.
 
@@ -93,10 +90,6 @@ flowchart TD
     E --> G["Delivery Repair<br/>(restore reliable service)"]
     F --> H["Model Repair<br/>(correct data model or policy)"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef service fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B question
     class C,E service
     class D,F model
@@ -133,9 +126,6 @@ flowchart TD
     C --> F["Current Pressure<br/>(load and queue demand)"]
     D --> G["Latency Distribution<br/>(p50 p95 p99 and target)"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef instrument fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef answer fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A request
     class B,C,D instrument
     class E,F,G answer
@@ -147,33 +137,7 @@ Labels divide one metric into stable operational groups. A query grouped by `mod
 
 Each distinct label combination creates another time series, so label values need controlled sets. Adding `prediction_id` or `customer_id` would create a new series for almost every request. That volume consumes monitoring resources and exposes sensitive identifiers. Exact request evidence belongs in a trace, structured log, or governed decision record.
 
-### The instrumentation and the monitoring platform have different jobs
-
-The application first records the measurement. A Prometheus client library can expose the current counters, gauges, and histograms on a `/metrics` endpoint. A Prometheus server scrapes that endpoint, stores timestamped samples, and evaluates queries and alert rules.
-
-OpenTelemetry offers another common instrumentation path. Its APIs and SDKs create metrics in application code, and an OpenTelemetry Collector can receive, process, and export them. A managed cloud service may provide its own endpoint metrics automatically while also accepting custom Prometheus or OpenTelemetry data.
-
-The dashboard is the last part of the path. Grafana can query Prometheus or another compatible backend and turn the stored series into charts. CloudWatch, Google Cloud Monitoring, and Azure Monitor provide collection, storage, queries, dashboards, and alerts within their cloud platforms.
-
-In essence, the application knows what happened, the instrumentation represents it as a metric, the monitoring backend keeps the time series, and the dashboard helps a person read it. Separating these responsibilities identifies the failed layer during a telemetry incident, even if one product supplies several of them.
-
-```mermaid
-flowchart TD
-    A["Instrumented Service<br/>(create counter gauge or histogram)"] --> B["Telemetry Collection<br/>(scrape metrics or receive OTLP)"]
-    B --> C["Time-Series Backend<br/>(store and query measurements)"]
-    C --> D["Operational Response<br/>(dashboard alerts and investigation)"]
-
-    classDef service fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef create fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef platform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    class A service
-    class B create
-    class C platform
-    class D action
-```
-
-Traffic usually comes from counters and an in-progress gauge. Latency comes from histograms. Error ratios compare error and request counters. Saturation uses gauges such as queue depth, memory use, and active GPU work alongside counters for rejected demand.
+Traffic usually comes from counters and an in-progress gauge. Latency comes from histograms. Error ratios compare error and request counters. Saturation combines gauges such as queue depth, memory use, and active GPU work with counters for rejected demand. These instruments describe the service locally; a separate collection path carries their measurements to shared dashboards and alert rules.
 
 ## 1. Traffic: How Much Work Is Arriving?
 <!-- section-summary: Traffic measures the demand entering an ML service in units that match the actual work. -->
@@ -198,9 +162,6 @@ flowchart TD
     B -->|"10 throttled"| E["Throttled Demand<br/>(record delayed admission)"]
     C --> F["Service Work<br/>(complete or remain in flight)"]
 
-    classDef demand fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef outcome fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A demand
     class B,C choice
     class D,E,F outcome
@@ -384,9 +345,6 @@ flowchart TD
     D --> E["Tail Latency<br/>(p95 and p99 rise first)"]
     E --> F["User Harm<br/>(timeouts and rejections rise)"]
 
-    classDef healthy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef warning fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef impact fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B healthy
     class C,D warning
     class E,F impact
@@ -418,7 +376,7 @@ The runtime also reports how much work it is carrying. **Active sequences** are 
 
 Suppose time to first token rises from 300 milliseconds to three seconds while inter-token latency stays stable. Users are waiting before generation starts, so queueing or admission is the likely problem. If inter-token latency also rises and token throughput stops increasing, the GPU is more likely at its compute limit. If the runtime rejects new sequences while KV-cache use is near its limit, memory or batching is the more useful place to investigate.
 
-On NVIDIA GPU nodes, DCGM Exporter exposes Prometheus telemetry for GPU activity, framebuffer memory, temperature, and hardware health. A vLLM server adds workload signals such as `vllm:num_requests_waiting`, `vllm:time_to_first_token_seconds`, `vllm:inter_token_latency_seconds`, and `vllm:kv_cache_usage_perc`. Reading both layers separates “the GPU is busy” from “requests are waiting because this runtime has exhausted a specific serving resource.”
+On NVIDIA GPU nodes, the Data Center GPU Manager (DCGM) Exporter exposes Prometheus telemetry for GPU activity, framebuffer memory, temperature, and hardware health. A vLLM server adds workload signals such as `vllm:num_requests_waiting`, `vllm:time_to_first_token_seconds`, `vllm:inter_token_latency_seconds`, and `vllm:kv_cache_usage_perc`. Reading both layers separates “the GPU is busy” from “requests are waiting because this runtime has exhausted a specific serving resource.”
 
 ### The fix depends on the saturated resource
 
@@ -505,9 +463,6 @@ flowchart TD
     D --> E["Other Work<br/>(40 milliseconds)"]
     C --> F["Feature Investigation<br/>(latency timeouts quota and pool)"]
 
-    classDef total fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stage fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A total
     class B,C,D,E stage
     class F action
@@ -553,9 +508,6 @@ flowchart TD
     H --> I["Atomic Publication<br/>(recheck gates and switch version)"]
     E -->|"Yes"| I
 
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stage fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A source
     class B,C,D,G,H stage
     class E,F,I action
@@ -607,9 +559,6 @@ flowchart TD
     C -->|"Regression appears"| D
     D --> A
 
-    classDef stable fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef review fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,E stable
     class B,C review
     class D action
@@ -625,7 +574,7 @@ Service health is one release decision. Model-quality and safety checks are anot
 
 After a rollback, verify that the original symptoms recover. If latency and errors remain high, the release may only have exposed a shared dependency or capacity problem.
 
-## 9. SLI, SLO, And SLA Turn Metrics Into Expectations
+## 9. How SLI, SLO, And SLA Define Reliability Expectations
 <!-- section-summary: SLIs measure the user experience, SLOs set the target, and SLAs describe an external commitment. -->
 
 A dashboard can contain hundreds of graphs and still leave one question unanswered: is the service reliable enough for its users? SLIs, SLOs, and SLAs give the measurements a clear meaning by connecting them to an expectation.
@@ -656,7 +605,7 @@ A **Service Level Agreement**, or **SLA**, is usually a customer-facing or contr
 
 Many internal services have SLIs and SLOs without an external SLA.
 
-### Error budgets turn reliability into a decision
+### Use Error Budgets To Guide Release Decisions
 
 An SLO intentionally allows a small amount of failure. If the target is 99.9 percent availability across one million valid requests, the service can miss its objective for 1,000 requests before using the full allowance.
 
@@ -672,9 +621,6 @@ flowchart TD
     D -->|"Severe"| G["Incident Response<br/>(page and contain harm)"]
     D -->|"Exhausted"| H["Reliability Priority<br/>(restore budget before risk)"]
 
-    classDef measure fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C measure
     class D decision
     class E,F,G,H action
@@ -684,7 +630,7 @@ A five-minute error spike might use only a small part of a monthly budget. A sev
 
 **Burn rate** measures that speed. Production alerting often combines a short window for fast outages with a longer window for sustained problems. This catches severe incidents quickly without paging someone for every tiny fluctuation.
 
-## 10. Good Alerts Ask For A Real Action
+## 10. Create Alerts With A Defined Response
 <!-- section-summary: Useful alerts focus on user harm or an approaching hard limit and provide enough context for a clear response. -->
 
 A dashboard supports exploration. A page interrupts someone, so it should describe a problem that needs action. A page-ready alert connects a user-visible symptom to an owner, a severity, and a first-response guide.
@@ -742,13 +688,9 @@ Production services often use SLO burn-rate alerts because one static ratio capt
 ## 11. How These Metrics Reach A Dashboard
 <!-- section-summary: Applications and runtimes create measurements, a collection layer moves them, and a time-series backend powers dashboards and alerts. -->
 
-Follow one metric from the application to the responder to identify every production responsibility. The application creates the measurement. Collection moves it, the backend stores it, a dashboard displays it, and an alert rule evaluates it against an operational limit.
+An application can record the right measurements and still leave responders blind if those measurements never reach a shared monitoring system. The production path has four responsibilities: the service creates the metric, collection moves it, a time-series backend stores it, and dashboards and alert rules turn it into an operational decision.
 
-Suppose the API records `ml_inference_requests_total` after every completed request. A Prometheus server can **scrape** the service by reading its `/metrics` endpoint at regular intervals.
-
-The service can also send measurements to an OpenTelemetry Collector. **OTLP**, the OpenTelemetry Protocol, is the standard format used to carry that telemetry. The Collector receives it, applies approved processing, and forwards it to the monitoring backend.
-
-The backend stores each metric value with a timestamp. This is why it is called a **time-series** system: it can show how request rate or latency changed over time. Grafana or a cloud dashboard reads those stored values, while alert rules check them for harmful conditions.
+Suppose the API increments `ml_inference_requests_total` after each completed request. A Prometheus server can **scrape** the service by reading its `/metrics` endpoint at regular intervals. Another service may export through **OTLP**, the OpenTelemetry Protocol, to an OpenTelemetry Collector. The Collector can batch, filter, and route the approved measurements before a backend stores them with timestamps.
 
 ```mermaid
 flowchart TD
@@ -759,31 +701,30 @@ flowchart TD
     E --> F["Alert Routing<br/>(group and notify owner)"]
     F --> G["Recovery Check<br/>(confirm user signals recover)"]
 
-    classDef source fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef platform fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A source
     class B,C,D platform
     class E,F,G action
 ```
 
-For Kubernetes, the application layer uses a Prometheus client or OpenTelemetry SDK to record request outcomes and latency. Prometheus-compatible storage retains the time series, while Grafana and Alertmanager support investigation and notification routing.
+### Combine Application And Platform Metrics In Self-Managed Systems
 
-The cluster layer needs separate evidence. kube-state-metrics reports the desired and observed state of Kubernetes objects such as Deployments and Pods. Node and container metrics cover CPU, memory, and restarts. NVIDIA DCGM Exporter adds GPU telemetry on NVIDIA nodes.
+On Kubernetes, application metrics expose request outcomes and latency. kube-state-metrics exposes the desired and observed state of objects such as Deployments and Pods. Node and container metrics expose CPU, memory, and restarts, while NVIDIA DCGM Exporter adds GPU telemetry on NVIDIA nodes. These sources answer separate questions: user impact, scheduling and readiness, and the capacity underneath each worker.
 
-These sources answer different questions. Application metrics expose user impact, Kubernetes object metrics expose scheduling and readiness gaps, and resource exporters expose the capacity underneath each worker.
+A Prometheus-compatible backend retains the time series. Grafana queries that backend for investigation, while Alertmanager receives evaluated alerts and routes notifications to the responsible team.
 
-OpenTelemetry provides one cross-language way to produce metrics. For production OTLP pipelines, the OpenTelemetry project recommends placing a Collector between SDKs and Prometheus. The Collector can centralise routing, enforce approved resource attributes, remove disallowed attributes, and deliver approved signals to several backends. A small service with a direct Prometheus scrape path may need no Collector.
+OpenTelemetry gives services a cross-language instrumentation and transport path. The OpenTelemetry project recommends using a Collector beside production services because it can handle retries and batching, secure transport, and filtering of sensitive attributes. A small service with a direct Prometheus scrape path may need no Collector.
 
 If this collection path breaks, the model service may continue serving requests while the dashboard stops receiving new points. Scrape success, Collector queue and export failures, and the timestamp of the newest metric make that loss visible.
 
-Managed serving platforms already expose many operational measurements. SageMaker AI publishes invocation, model and platform latency, 4xx and 5xx errors, concurrency, CPU, memory, and GPU metrics through CloudWatch. Its detailed inference observability uses an OpenTelemetry Collector to scrape node, DCGM, vLLM, and SGLang endpoints, then exports OTel metrics to CloudWatch over OTLP. CloudWatch supports PromQL queries for those metrics; no Prometheus server sits in that managed path.
+### Know Which Infrastructure Managed Endpoints Monitor
 
-Azure Machine Learning online endpoints connect request rate, latency, response status, CPU, GPU, memory, logs, dashboards, and alerts through Azure Monitor. Vertex AI publishes prediction counts, response codes, errors, latency distributions, replica counts, and accelerator signals through Cloud Monitoring. These provider metrics cover the managed boundary, while application metrics still classify semantic success and fallback use.
+Managed serving platforms collect much of this evidence inside the service boundary they own. SageMaker AI publishes endpoint and resource metrics through CloudWatch, AWS's managed monitoring service. Its detailed inference observability uses an OpenTelemetry Collector to scrape node, DCGM, and inference-runtime endpoints and sends OTel metrics to CloudWatch over OTLP. CloudWatch accepts Prometheus Query Language (PromQL) queries for that data, although no Prometheus server sits in this managed path.
 
-The platform still cannot decide whether your response makes sense. It can see HTTP `200`, while only the application knows that `prediction=null` is unusable or that a particular fallback violates product policy. Application metrics add result class, fallback use, and model route.
+Azure Machine Learning connects online endpoints to Azure Monitor, Microsoft's managed monitoring service. A responder can split request latency and response status by deployment, then drill into per-instance CPU, GPU, and memory evidence. Vertex AI sends endpoint and deployed-model measurements to Google Cloud Monitoring, where response counts and latency distributions can be compared with replica and accelerator pressure. The current Google metric catalog marks several online-prediction metrics, including latency and response counts, as Beta, so deployment tests should catch descriptor or label changes before alert rules reach production.
 
-### Keep metric labels small and predictable
+These provider metrics describe the managed endpoint. The application still owns the meaning of the result. A platform can observe HTTP `200`; only application logic can classify `prediction=null` as unusable or record that a fallback violates product policy. Custom metrics supply result class, fallback use, and model route where the managed platform cannot infer them.
+
+### Keep Metric Labels Small And Predictable
 
 A label splits a metric into useful groups. `region="eu-west"` and `model_route="candidate"` let you isolate a problem. Labels stay useful only while their possible values remain small and predictable.
 
@@ -797,10 +738,10 @@ Raw URLs, prompts, feature values, and exception text may contain sensitive data
 
 In essence, each observability signal has a different job. Metrics reveal patterns across many requests. Logs explain individual events. Traces show the path of one request. Prediction records preserve model decisions for later quality analysis.
 
-## 12. A Useful Dashboard Tells A Story
+## 12. Build A Dashboard That Supports Investigation
 <!-- section-summary: A production dashboard moves from user impact to queues, dependencies, releases, and infrastructure. -->
 
-A useful dashboard helps a responder move from “users are having a problem” to “this is the part of the system causing it.” It should read like an investigation, with selected metrics arranged from user impact to likely cause.
+A production dashboard should help a responder move from “users are having a problem” to “this is the part of the system causing it.” It should read like an investigation, with selected metrics arranged from user impact to likely cause.
 
 The top row shows traffic, availability, success and fallback rates, p50, p95, and p99 latency, timeouts, and error-budget consumption. It tells the responder what users are experiencing.
 
@@ -810,7 +751,7 @@ Dependency rows show feature-store latency, database errors, cache hit rate, ext
 
 The order matters because the first graph should describe the problem users feel. The lower graphs should explain it.
 
-### Work through a concrete incident
+### Investigate A Concrete Incident From The Dashboard
 
 At 14:00, an image-classification endpoint receives a sharp traffic increase. Request rate rises from 200 to 500 requests per second. p99 latency rises from 300 milliseconds to 4.2 seconds, the error rate rises from 0.1 to 8 percent, and the queue grows from zero to 9,000. The autoscaler requests twenty replicas, although only ten are ready. Model runtime stays at its normal value.
 
@@ -825,9 +766,6 @@ flowchart TD
     B --> F["Scaling Gap<br/>(20 requested and 10 ready)"]
     F --> C
 
-    classDef demand fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef warning fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef impact fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A demand
     class B,C,F warning
     class D,E impact
@@ -902,5 +840,5 @@ A useful production setup connects these measurements to an SLO, a clear dashboa
 - [vLLM production metrics](https://docs.vllm.ai/en/latest/usage/metrics/)
 - [SageMaker AI metrics in CloudWatch](https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch.html)
 - [SageMaker AI detailed observability for inference endpoints](https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch-detailed-observability.html)
-- [Vertex AI metrics in Cloud Monitoring](https://cloud.google.com/monitoring/api/metrics_gcp_i_o)
+- [Vertex AI metrics in Cloud Monitoring](https://docs.cloud.google.com/monitoring/api/metrics_gcp_a_b#aiplatform)
 - [Azure Machine Learning online endpoint monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints?view=azureml-api-2)

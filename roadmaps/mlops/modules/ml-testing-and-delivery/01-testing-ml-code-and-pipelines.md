@@ -1,7 +1,7 @@
 ---
 title: "Testing ML Pipelines"
-description: "Explain tests for data transforms, training code, and pipeline behavior."
-overview: "Learn how to test ML pipelines at the code, data, training, and pipeline-behavior layers before a bad change reaches expensive jobs or production models."
+description: "Build layered tests for transformations, data contracts, training jobs, workflow graphs, integrations, model behavior, evaluation gates, and incident replay."
+overview: "An ML pipeline can finish successfully while producing the wrong dataset, model, or release evidence. Layered tests expose those failures close to the system that caused them."
 tags: ["MLOps", "production", "ci-cd"]
 order: 1
 id: "article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines"
@@ -13,433 +13,436 @@ aliases:
 
 ## Table of Contents
 
-1. [Why ML Pipeline Tests Need More Than Unit Tests](#why-ml-pipeline-tests-need-more-than-unit-tests)
-2. [Test The Transform Before The Model](#test-the-transform-before-the-model)
-3. [Validate Data Contracts](#validate-data-contracts)
-4. [Add A Training Smoke Test](#add-a-training-smoke-test)
-5. [Test Pipeline Behavior](#test-pipeline-behavior)
-6. [Mock Services At The Boundary](#mock-services-at-the-boundary)
-7. [Gate Candidate Models With Evaluation Tests](#gate-candidate-models-with-evaluation-tests)
-8. [Test Model Behavior, Not Only One Metric](#test-model-behavior-not-only-one-metric)
-9. [Run The Right Tests In CI](#run-the-right-tests-in-ci)
-10. [Save Test Reports As Artifacts](#save-test-reports-as-artifacts)
-11. [Build Useful Test Fixtures](#build-useful-test-fixtures)
-12. [Common Mistakes](#common-mistakes)
-13. [Review Changes Through The Test Layers](#review-changes-through-the-test-layers)
-14. [References](#references)
+1. [Why ML Pipelines Need Layered Tests](#why-ml-pipelines-need-layered-tests)
+2. [Test Each Part Of The ML Pipeline In Order](#test-each-part-of-the-ml-pipeline-in-order)
+3. [Test Small Data Transformations First](#test-small-data-transformations-first)
+4. [Define And Test What Data Each Pipeline Step Accepts](#define-and-test-what-data-each-pipeline-step-accepts)
+5. [Run A Small End-To-End Training Test](#run-a-small-end-to-end-training-test)
+6. [Check The Pipeline Graph Before Running It](#check-the-pipeline-graph-before-running-it)
+7. [Test External Services With Adapters And Sandboxes](#test-external-services-with-adapters-and-sandboxes)
+8. [Test How Predictions Respond To Meaningful Input Changes](#test-how-predictions-respond-to-meaningful-input-changes)
+9. [Check Model Quality And Regressions Before Release](#check-model-quality-and-regressions-before-release)
+10. [Turn Production Failures Into Regression Tests](#turn-production-failures-into-regression-tests)
+11. [Build Small Test Datasets With A Clear Purpose](#build-small-test-datasets-with-a-clear-purpose)
+12. [Save Enough Test Evidence To Reproduce A Failure](#save-enough-test-evidence-to-reproduce-a-failure)
+13. [Investigate The Earliest Failed Test Layer First](#investigate-the-earliest-failed-test-layer-first)
+14. [Keep Test Commands Separate From CI Scheduling](#keep-test-commands-separate-from-ci-scheduling)
+15. [The Main Idea](#the-main-idea)
+16. [References](#references)
 
-## Why ML Pipeline Tests Need More Than Unit Tests
-<!-- section-summary: ML pipeline tests cover code, data contracts, training behavior, evaluation gates, orchestration, and release evidence. -->
+## Why ML Pipelines Need Layered Tests
+<!-- section-summary: ML pipeline testing checks the assumptions connecting code, data, training, orchestration, external systems, model behavior, and release evidence. -->
 
-Testing an ML pipeline is different from testing a small web function. You still test Python functions, SQL transforms, and API clients, but the pipeline can fail even when every function imports. A feature column can silently change units. A join can multiply rows. A training job can finish with a model that has terrible recall for the segment that matters most. A pipeline can run in the wrong order and publish a model trained on yesterday's labels.
+At a high level, **testing an ML pipeline** means checking every important assumption that turns raw data into a candidate model. An ML pipeline is the repeatable chain that collects data, creates features, trains a model, evaluates it, and publishes the resulting artifacts. The chain may contain Python, SQL, an orchestrator, cloud storage, managed training jobs, and a model registry.
 
-Think about a company called `FleetLens` that predicts which delivery vans need maintenance next week. The pipeline reads telematics events, joins them with repair tickets, creates rolling features, trains a gradient boosting model, evaluates by vehicle type, registers a candidate model, and publishes batch scores. If a developer changes the tire-pressure transform, a normal unit test may pass while the fleet operations team loses trust in every prediction.
+The difficult part is that a pipeline can complete without producing trustworthy results. A warehouse query can duplicate each customer three times. Training still returns exit code zero. The model file still loads. An evaluation job may even report a higher score if the duplicate rows caused leakage between the training and validation sets. The system looks healthy from the outside while its evidence has become unreliable.
 
-You want a layered test suite:
+This is why one end-to-end test cannot carry the whole burden. A failure at the final metric tells the team that something changed, yet it gives weak clues about the cause. A focused transformation test can identify a reversed subtraction. A data contract can identify duplicate customer-period keys. A training smoke test can identify a missing dependency. A graph test can identify a validation step that no longer precedes training.
 
-- Fast code tests for pure functions and feature transforms.
-- Data contract tests for schemas, missing values, ranges, and uniqueness.
-- Training smoke tests that run on a tiny dataset.
-- Evaluation tests that block weak candidates.
-- Pipeline tests that check task wiring, artifact names, and promotion gates.
-- Production replay tests for scary historical cases.
+A useful suite therefore has layers. Each layer answers one question with the smallest realistic input available. Its failure report points to the team that owns the boundary.
+
+## Test Each Part Of The ML Pipeline In Order
+<!-- section-summary: The test framework moves from deterministic code toward representative evidence, placing cheap and precise checks before broader and more expensive ones. -->
+
+The layers follow the path taken by a production training run. Early layers test small deterministic units. Later layers need more infrastructure, more representative data, or an actual candidate model.
 
 ```mermaid
-flowchart TB
-    U["Transform and unit tests\nfast, local, deterministic"] --> D["Data-contract tests\nschema, ranges, keys, time"]
-    D --> S["Training smoke test\ntiny end-to-end execution"]
-    S --> G["Pipeline graph and integration tests\nwiring, artifacts, boundaries"]
-    G --> E["Model behaviour and evaluation gates\ncohorts, robustness, regression"]
-    E --> R["Replay and release tests\nknown incidents and production path"]
+flowchart TD
+    A["Transform Tests<br/>(check deterministic feature logic)"] --> B["Data Contracts<br/>(protect schema and meaning)"]
+    B --> C["Training Smoke Tests<br/>(exercise the real entrypoint cheaply)"]
+    C --> D["Pipeline Plan Tests<br/>(inspect tasks, edges, and artifacts)"]
+    D --> E["Boundary Tests<br/>(exercise adapters and isolated services)"]
+    E --> F["Behavior Tests<br/>(check relationships between predictions)"]
+    F --> G["Evaluation Gates<br/>(judge candidate and regression evidence)"]
+    G --> H["Replay Tests<br/>(preserve lessons from production failures)"]
+    H --> I["Test Evidence<br/>(record inputs, rules, results, and ownership)"]
 ```
 
-The layers answer different questions. A transform test can identify a reversed subtraction precisely. A data contract can stop a malformed batch before training. A smoke test proves the entry point and artifact path work. Evaluation and replay operate later because they need a trained candidate and more representative evidence.
+The order also guides investigation. A data-contract failure deserves attention before anyone debates a drop in model recall. The candidate was evaluated on evidence that already violated its input assumptions. If every earlier layer passes and a segment regression remains, the investigation can concentrate on training data, model behavior, or the release policy.
 
-The goal is early, cheap feedback. A pull request should catch obvious issues in minutes, long before a GPU job, Spark cluster, or managed training service burns money.
+Each layer needs positive and negative cases. A positive case proves that an accepted input follows the expected path. A **negative test** deliberately supplies an invalid condition and confirms that the system rejects it with a useful error. Without negative tests, a validator may appear healthy because every fixture already satisfies its rules.
 
-![FleetLens ML pipeline test layers](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/fleetlens-test-layers.png)
-*FleetLens uses several cheap test layers so a pull request can catch feature, data, training, graph, and report problems before a costly run starts.*
+## Test Small Data Transformations First
+<!-- section-summary: Deterministic transformation tests protect feature calculations, filtering, joins, and time logic with exact, local examples. -->
 
-## Test The Transform Before The Model
-<!-- section-summary: Focused transform tests catch feature errors close to the code that introduced them. -->
+A **deterministic transformation** produces the same output from the same declared inputs. It has no hidden dependency on the current clock, a live database, an environment variable, or unseeded randomness. Most feature logic should move toward this shape because exact tests can then describe the intended rule.
 
-Most production model failures start in the data path. If you only test final metrics, you find data bugs late and with weak clues. Test transforms close to the code that creates each feature.
+### Make Hidden Inputs Explicit
 
-Here is a tiny transform for FleetLens:
+Consider an account-age feature used by a subscription model. The feature must measure whole days between account creation and prediction time. A future creation timestamp signals corrupt input. The transformation and its tests can express both rules directly:
 
 ```python
 import pandas as pd
+import pytest
 
 
-def add_pressure_features(events: pd.DataFrame) -> pd.DataFrame:
-    events = events.copy()
-    events["pressure_delta"] = events["recommended_psi"] - events["measured_psi"]
-    events["under_pressure_flag"] = (events["pressure_delta"] >= 7).astype(int)
-    return events
+def account_times(created: str, predicted: str) -> pd.DataFrame:
+    return pd.DataFrame({
+        "created_time": pd.to_datetime([created]),
+        "prediction_time": pd.to_datetime([predicted]),
+    })
+
+
+def add_account_age_days(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    age = result["prediction_time"] - result["created_time"]
+    if (age < pd.Timedelta(0)).any():
+        raise ValueError("created_time cannot be after prediction_time")
+    result["account_age_days"] = age.dt.days
+    return result
+
+
+def test_account_age_uses_prediction_time():
+    frame = account_times("2026-04-01T10:00:00Z", "2026-04-11T09:59:00Z")
+    actual = add_account_age_days(frame)
+    assert actual["account_age_days"].tolist() == [9]
+
+
+def test_account_age_rejects_future_creation_time():
+    frame = account_times("2026-04-12T00:00:00Z", "2026-04-11T00:00:00Z")
+    with pytest.raises(ValueError, match="created_time cannot be after"):
+        add_account_age_days(frame)
 ```
 
-A useful unit test checks behavior that matters to the model, rather than only checking that a column exists:
+The first test protects the time boundary: nine full days have elapsed, even though the two dates are ten calendar dates apart. The second test protects the failure behavior. Silent clipping to zero would hide upstream corruption and give the model a plausible value.
 
-```python
-import pandas as pd
-from fleetlens.features import add_pressure_features
+### Test Decisions And Rejections
 
+Transform tests should cover the decisions made by the code. Time-window inclusivity and null handling need explicit cases. Category mapping, unit conversion, deduplication order, and join keys also deserve focused assertions. A test that checks only the presence of a new column misses most of those mistakes.
 
-def test_under_pressure_flag_uses_recommended_minus_measured():
-    events = pd.DataFrame(
-        {
-            "vehicle_id": ["van-7", "van-8"],
-            "recommended_psi": [44, 44],
-            "measured_psi": [35, 43],
-        }
-    )
+The feature author normally owns this layer. A failure points to local code or an incorrect rule captured by the fixture. Domain review still matters: a perfectly tested calculation can encode the wrong business meaning. The feature definition should state who approved that meaning and which prediction-time inputs it may use.
 
-    actual = add_pressure_features(events)
+## Define And Test What Data Each Pipeline Step Accepts
+<!-- section-summary: Data contracts check the structure, relationships, time semantics, and statistical expectations required at important pipeline boundaries. -->
 
-    assert actual["pressure_delta"].tolist() == [9, 1]
-    assert actual["under_pressure_flag"].tolist() == [1, 0]
-```
+A **data contract** is a versioned agreement about data crossing a boundary. It tells a producer what must be supplied and tells a consumer what it may safely assume. Raw ingestion needs one contract. Large joins, final training tables, and prediction batches need contracts shaped around their own responsibilities.
 
-That test catches a common bug: reversing the subtraction. It also documents the business rule in a way a new teammate can understand.
+### Test Data Structure And Business Meaning Separately
 
-## Validate Data Contracts
-<!-- section-summary: Data contracts describe what the pipeline expects at a boundary. They are useful at ingestion, after joins, before training, and before publishing scores. -->
+Contracts have several kinds of rules. Schema rules describe column names, types, and nullability. Semantic rules describe meaning, such as one row per `customer_id` and `snapshot_date`, or `feature_time <= prediction_time`. Statistical rules describe a batch as a population, such as an expected category domain, missing-value limit, or row-count range.
 
-Data contracts describe what the pipeline expects at a boundary. They are useful at ingestion, after joins, before training, and before publishing scores.
+These rules catch different failures. Suppose a feature join produces three rows for customers with three active addresses. Every column can have the correct type, so the schema passes. The unique customer-snapshot rule fails and shows the duplicated keys. A separate time rule can expose a feature computed after the prediction. The contract needs all three dimensions because valid-looking values can still represent the wrong training examples.
 
-For local pandas-heavy projects, `pandera` gives you a readable schema:
+### Choose A Data Testing Tool That Fits The Pipeline
+
+Pandera is a practical choice for pandas or Polars dataframes inside Python code. The schema can live beside the transformation and return all discovered failures through lazy validation:
 
 ```python
 import pandera.pandas as pa
 from pandera.typing import Series
 
 
-class TelematicsBatch(pa.DataFrameModel):
-    vehicle_id: Series[str] = pa.Field(str_length={"min_value": 1})
-    event_ts: Series[pa.DateTime]
-    measured_psi: Series[float] = pa.Field(ge=0, le=120)
-    recommended_psi: Series[float] = pa.Field(ge=20, le=80)
-    odometer_miles: Series[float] = pa.Field(ge=0)
+class TrainingBatch(pa.DataFrameModel):
+    prediction_id: Series[str] = pa.Field(unique=True)
+    prediction_time: Series[pa.DateTime]
+    feature_time: Series[pa.DateTime]
+    account_age_days: Series[int] = pa.Field(ge=0)
+    label: Series[int] = pa.Field(isin=[0, 1])
 
-
-def validate_telematics(df):
-    return TelematicsBatch.validate(df, lazy=True)
+    class Config:
+        strict = True
 ```
 
-For warehouse-scale validation, teams often use Great Expectations or TensorFlow Data Validation. Current GX Core separates an **Expectation Suite** containing rules, a **Batch Definition** describing the data slice, a **Validation Definition** connecting the two, and an optional **Checkpoint** that runs validations and actions. The same framework applies regardless of library: identify the exact batch, apply a versioned contract, retain the result, and stop the pipeline when a required condition fails.
+The class protects column presence and types. It also protects unique prediction identity, non-negative age, and the label domain. A focused assertion outside the schema can reject `feature_time > prediction_time`, an ML-specific rule the schema cannot infer. Separate negative fixtures can then exercise a duplicate ID, a future feature timestamp, and an unexpected label.
 
-FleetLens checks `vehicle_id` nulls, allowed `maintenance_label` values, tire-pressure ranges, duplicate entity-week keys, and row-count bounds. Freshness and leakage still need time-aware assertions because generic schema validation cannot decide what was knowable at prediction time. The release record should retain the contract version, batch identity, result, and human-readable report instead of one pass/fail log line.
+Warehouse-first teams often use dbt at this layer. dbt unit tests feed small static inputs into SQL model logic before the full model is materialized. dbt data tests query already-built resources for failing rows, including uniqueness, nulls, relationships, accepted values, and custom semantic violations. Enforced dbt model contracts can check column names and data types before materialization, subject to the selected data platform's constraint support.
 
-Keep contracts specific. "The dataframe has rows" is weak. "Each vehicle has at most one label for a target week" is much stronger.
+Great Expectations organizes rules into Expectation Suites and binds them to concrete batches through Validation Definitions. Checkpoints can execute actions from the results. TensorFlow Data Validation compares dataset statistics with a schema and reports anomalies. Teams using TensorFlow Extended, usually shortened to TFX, can use those reports for domain errors and differences between training and serving data.
 
-![FleetLens data contract checkpoints](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/fleetlens-data-contract-checkpoints.png)
-*A data contract turns the FleetLens telematics batch into concrete release checks for freshness, ranges, labels, and leakage.*
+The data execution path guides the choice. Pandera fits in-process frames, while dbt fits warehouse SQL. Great Expectations coordinates validation workflows across its supported data sources. TFDV provides TensorFlow ecosystem statistics and schema analysis.
 
-## Add A Training Smoke Test
-<!-- section-summary: A smoke test proves the training entrypoint can run end to end on a tiny fixture. It should finish quickly and avoid external services where possible. -->
+A failed contract does not automatically mean that the producer is wrong. A new legitimate category may require a reviewed contract change. The pipeline should quarantine the violating batch and show representative failed rows or aggregate counts. The data producer and contract owner then decide whether to repair the data or revise the agreement. Automatically learning a new schema from the failing production batch would turn the guardrail into an approval mechanism.
 
-A smoke test proves the training entrypoint can run end to end on a tiny fixture. It should finish quickly and avoid external services where possible.
+## Run A Small End-To-End Training Test
+<!-- section-summary: A training smoke test runs the real entrypoint with tiny data and cheap settings, then verifies loadable artifacts and required metadata. -->
+
+A **training smoke test** asks a narrow question: can the real training entrypoint complete a small run and produce artifacts that the next component understands? It catches broken imports, missing configuration, incompatible library changes, invalid artifact paths, and disagreements between training and loading code.
+
+### Use The Real Entry Point With Small Inputs
+
+The fixture should be tiny yet structurally complete. A binary classifier needs both target classes and every required feature type. One awkward category and enough rows for the selected estimator protect basic preprocessing. Cheap training parameters keep the purpose clear. One tree, one epoch, or a small sample can prove execution; the smoke metric cannot prove production quality.
 
 ```python
-from pathlib import Path
-from fleetlens.train import train_model
+import joblib
+import pytest
+
+from training.entrypoint import TrainingConfigError, train
 
 
-def test_training_smoke_run(tmp_path: Path):
-    result = train_model(
+def test_training_smoke_writes_a_loadable_model(tmp_path):
+    result = train(
         train_path="tests/fixtures/tiny_train.parquet",
-        valid_path="tests/fixtures/tiny_valid.parquet",
+        validation_path="tests/fixtures/tiny_validation.parquet",
         output_dir=tmp_path,
-        max_rounds=5,
+        max_iterations=3,
+        publish=False,
     )
 
-    assert (tmp_path / "model.joblib").exists()
-    assert result.metrics["valid_auc"] >= 0.50
-    assert result.signature.inputs["measured_psi"] == "float"
+    model = joblib.load(tmp_path / "model.joblib")
+
+    assert result.metrics["validation_log_loss"] < float("inf")
+    assert result.signature.target == "label"
+    assert model.predict_proba(result.example_input).shape == (1, 2)
+
+
+def test_training_rejects_target_in_feature_list(tmp_path):
+    with pytest.raises(TrainingConfigError, match="target cannot be a feature"):
+        train(config="tests/fixtures/leaky_config.yml", output_dir=tmp_path, publish=False)
 ```
 
-The metric threshold is intentionally low because the dataset is tiny. The test is checking that the code path works, artifacts are written, and model metadata is present. Real quality gates belong in evaluation jobs with real validation data.
+The first test checks the contract between training and model loading. It also requires finite metrics and a recorded signature, so `NaN` loss or missing metadata cannot pass as a successful run. The second test exercises a dangerous configuration failure before any expensive compute begins.
 
-Smoke tests should also catch dependency mistakes:
+Reproducibility settings belong in the smoke path: fixed seeds, explicit data files, pinned dependencies, and declared parameters. Some GPU algorithms remain numerically nondeterministic, and different hardware can produce small floating-point changes. Tests should use tolerances tied to the product decision instead of demanding byte-identical model files. A large unexplained change still deserves investigation.
 
-- The training package imports in a clean environment.
-- The entrypoint accepts the same config keys used by the orchestrator.
-- Artifacts are written to the configured output path.
-- The model can be loaded after training.
-- The prediction function accepts the expected feature schema.
+### Use Smoke-Test Outputs To Find The Failure
 
-## Test Pipeline Behavior
-<!-- section-summary: An ML pipeline is a graph of steps. A bug in the graph can skip validation, publish the wrong artifact, or run training before the feature backfill finishes. -->
+The training-code owner handles entrypoint, dependency, serialization, and configuration failures. A smoke test that fails because a fixture contains one class points to fixture design. A failure limited to the production image points to an environment gap. Reproduce it with that image before changing model logic.
 
-An ML pipeline is a graph of steps. A bug in the graph can skip validation, publish the wrong artifact, or run training before the feature backfill finishes.
+## Check The Pipeline Graph Before Running It
+<!-- section-summary: Pipeline-plan tests load or compile the workflow, inspect required tasks and dependencies, and reject unsafe paths before cloud jobs start. -->
 
-For Airflow, you can parse DAGs in CI:
+An orchestrator turns components into a **directed acyclic graph**, usually shortened to DAG. Each node is a task or asset, and each edge describes a dependency or data flow. The graph decides whether validation happens before training, which artifact reaches evaluation, and which condition permits publication.
+
+### Check The Steps And Dependencies In The Pipeline Graph
+
+A pipeline-plan test inspects that structure without launching the full workflow. It proves that the definition loads, required parameters exist, and component inputs and outputs agree. It also checks mandatory gates and rejects every route that could publish before evaluation.
+
+Negative cases make those claims credible. A test can remove the validation edge from a fixture and expect a graph assertion to fail. Another can pass an artifact of the wrong type or omit a required snapshot parameter and expect compilation to reject the plan.
+
+Airflow supports loader and DAG-structure tests. The current Airflow interface exposes `DagBag` from `airflow.dag_processing.dagbag`, so a focused pytest check can verify import health and the required dependency:
 
 ```python
-from airflow.models import DagBag
+from airflow.dag_processing.dagbag import DagBag
 
 
-def test_fleetlens_dag_imports():
+def test_training_dag_keeps_validation_before_training():
     dag_bag = DagBag(dag_folder="dags", include_examples=False)
+    dag = dag_bag.get_dag("weekly_training")
+
     assert dag_bag.import_errors == {}
-
-
-def test_validation_runs_before_training():
-    dag = DagBag(dag_folder="dags", include_examples=False).get_dag("fleetlens_training")
+    assert dag is not None
     assert "validate_training_data" in dag.task_ids
-    assert "train_model" in dag.task_ids
-    assert dag.get_task("validate_training_data") in dag.get_task("train_model").upstream_list
+    assert "train_candidate" in dag.task_ids
+    assert "validate_training_data" in (
+        dag.get_task("train_candidate").upstream_task_ids
+    )
 ```
 
-For Kubeflow, Prefect, Dagster, or managed cloud pipelines, apply the same idea: check the compiled graph or pipeline definition before a real run. Look for required steps, artifact names, environment variables, resource requests, and promotion gates.
+An import error identifies missing scheduler dependencies or invalid DAG code. A missing edge identifies a workflow-definition problem. The task implementations may be correct while the plan connects them incorrectly. The failure report should name the absent node or edge rather than returning only a serialized graph diff.
 
-## Mock Services At The Boundary
-<!-- section-summary: Boundary adapters and dry-run clients keep pipeline tests away from production warehouses, registries, buckets, and notification services. -->
+### Compile And Inspect Managed Pipeline Definitions
 
-Pipeline tests should avoid touching production systems. That sounds obvious, yet many ML projects accidentally run tests against the real warehouse, real registry, or real object bucket because the training script reads environment variables directly.
+Compiled pipeline systems apply the same principle. Kubeflow Pipelines compiles a Python pipeline into an intermediate-representation YAML file and performs static type checks on connected component inputs and outputs. Vertex AI Pipelines can execute KFP templates, and SageMaker Pipelines produces a JSON DAG definition. A test can compile the definition, parse the resulting document, and assert required components, parameter defaults, artifact types, condition branches, and resource limits. Dagster projects can load definitions and exercise small asset selections with test resources before running the deployed job.
 
-Create a boundary around each external dependency:
+Compiled output should be treated as generated evidence. Human-readable source remains the reviewed definition; the test proves that its executable form preserves the intended graph. Provider submission and permissions belong to the boundary layer because compilation alone cannot prove that a managed service will accept or run the job.
 
-- A data reader that can load from a fixture path during tests.
-- An artifact writer that can write to a temporary directory.
-- A registry client wrapper that can run in dry-run mode.
-- A feature store client that can return a small in-memory table.
-- A notification client that records messages instead of posting to Slack.
+## Test External Services With Adapters And Sandboxes
+<!-- section-summary: Adapter tests verify requests and failure handling locally, while sandbox integration tests verify real provider behavior and permissions in an isolated namespace. -->
 
-The boundary contract should be small enough to fake without recreating the provider SDK. For a registry adapter, the test double can record model name, artifact URI, source run, signature, and required tags. CI then verifies the call and returns a synthetic version. A separate integration environment tests authentication and the real registry API with an isolated namespace.
+ML pipelines depend on warehouses, object storage, feature stores, experiment trackers, model registries, and notification systems. A unit test that contacts those production services creates unstable tests and can mutate real state. A test that mocks every provider call can miss authentication, serialization, and API-contract failures.
 
-This division keeps PR tests fast and safe while still exercising release logic. It also distinguishes two failures: application code built the wrong registry request, or the external integration rejected a correct request.
+The solution has two levels. First, place an application-owned adapter around each provider client. An **adapter** is a small layer that translates the pipeline's stable request into provider SDK calls. A local test supplies a **test double**, a controlled substitute that records calls or returns planned failures. Second, run a smaller integration suite against an isolated project, schema, bucket prefix, or registry namespace. That suite checks the real SDK, network path, identity, and service response without sharing production resources.
 
-## Gate Candidate Models With Evaluation Tests
-<!-- section-summary: Training can pass while the model should still stay out of production. Evaluation tests decide whether a candidate is good enough for the next environment. -->
+### Put Cloud And Provider APIs Behind A Small Adapter
 
-Training can pass while the model should still stay out of production. Evaluation tests decide whether a candidate is good enough for the next environment.
-
-FleetLens could use gates like:
-
-```yaml
-# config/model-quality-gates.yaml
-model_quality_gates:
-  global:
-    roc_auc_min: 0.82
-    precision_at_10_percent_min: 0.35
-  segments:
-    electric_vans:
-      recall_min: 0.62
-    diesel_vans:
-      recall_min: 0.58
-  regression_checks:
-    compare_to_alias: champion
-    max_auc_drop: 0.01
-    max_segment_recall_drop: 0.03
+```mermaid
+flowchart TD
+    A["Pipeline Component<br/>(request data or publish an artifact)"] --> B["Owned Adapter<br/>(translate the application contract)"]
+    B --> C["Local Test Double<br/>(record calls and inject failures)"]
+    B --> D["Sandbox Service<br/>(verify the real API and identity)"]
+    C --> E["Adapter Evidence<br/>(request, retry, and error assertions)"]
+    D --> F["Integration Evidence<br/>(read, write, load, and cleanup result)"]
 ```
 
-Then the evaluator can fail the pipeline with a clear message:
+Local negative tests should inject the failures your component promises to handle. Start with a timeout and a permission denial. Separate cases can cover duplicate requests and partial uploads. Missing objects, malformed responses, and an exhausted retry budget need their own cases.
 
-The evaluator has a straightforward responsibility: load the immutable candidate report, resolve the concrete baseline version behind the configured alias, evaluate every rule, and return a structured list of failures. A missing required segment fails the comparison instead of disappearing from the average.
+Each assertion should cover the observable response. The component may delete a temporary object, preserve an **idempotency key** that identifies retries of the same request, or quarantine the result. It may also return a classified error to the orchestrator.
 
-Test the policy engine separately from model training. Start with one passing candidate and baseline, then parameterize cases that violate one rule at a time. Each case should identify the expected rule ID. Add explicit cases for a missing candidate segment, missing baseline segment, wrong baseline identity, malformed report, and a value exactly on each boundary.
+### Verify One Complete Contract In A Sandbox
 
-Use gates carefully. A single global accuracy number can hide harm. Segment gates make the release process more honest. Store the decision report with the policy digest, candidate report digest, concrete baseline version, sample counts, and uncertainty evidence so the result can be reproduced after aliases move.
+The sandbox test performs one complete contract. A registry adapter may create a temporary candidate entry, read it back, confirm its signature and tags, and remove or expire the namespace. An object-storage adapter may upload a small artifact and verify its digest after download. A second idempotent call should return the same logical result. Production credentials and production names remain outside this suite.
 
-## Test Model Behavior, Not Only One Metric
-<!-- section-summary: Model behavior tests check invariants, directional expectations, robustness, slices, and statistical tolerances that one aggregate score can miss. -->
+A local adapter failure belongs to the application owner. A sandbox failure with a correct request may belong to identity, networking, provider configuration, or API compatibility. Keeping both evidence sets prevents an incident from being dismissed as “the cloud test failed.”
 
-An evaluation threshold answers whether a candidate cleared one measured bar. A **model behavior test** checks a relationship the model should preserve across inputs. These tests are useful because many ML outputs have no single exact expected value. FleetLens cannot write a unit test for the precise failure probability of every van, but it can test properties that the maintenance workflow depends on.
+## Test How Predictions Respond To Meaningful Input Changes
+<!-- section-summary: Behavior tests check invariants, directional expectations, metamorphic relations, robustness, and important slices where exact predictions are unavailable. -->
 
-The useful test families are:
+Many models have no single exact prediction that should be hard-coded forever. Retraining a valid classifier can change a probability from `0.713` to `0.709` while preserving the same product behavior. A **model-behavior test** checks a reviewed relationship between inputs and outputs instead.
 
-| Test family | FleetLens example | What failure means |
-|---|---|---|
-| **Invariant** | Reordering input rows does not change each vehicle's score | Batch code mixes state between examples |
-| **Directional** | Holding other fields fixed, a severe pressure deficit should not lower maintenance risk | Feature sign, preprocessing, or model behavior conflicts with the reviewed rule |
-| **Metamorphic** | Converting a fixture from miles to kilometres and applying the matching conversion keeps the decision stable | Unit handling differs across paths |
-| **Robustness** | Small sensor noise stays inside an agreed score tolerance | The model is too sensitive near ordinary measurement noise |
-| **Slice regression** | Electric and diesel van recall stay inside approved deltas from the champion | A global improvement hides a fleet-specific regression |
-| **Replay** | Historical tire-pressure and battery incidents still trigger the expected review band | A known production failure returned |
+### Choose A Behavior The Product Depends On
 
-An **invariant** is a property that should stay unchanged. A **directional expectation** says which way an output should move under a controlled input change. A **metamorphic test** creates a second input through a known transformation, then checks the expected relationship between the two outputs. These tests need domain review. A convenient rule that lacks product or engineering support can freeze the wrong behavior into CI.
+An **invariant** is a property that should stay unchanged, such as prediction identity after input rows are reordered. A **directional expectation** says that a controlled input change should move the output in a reviewed direction. A **metamorphic relation** creates two equivalent or deliberately related inputs and checks the relationship between their predictions. Robustness tests apply small realistic perturbations, while slice tests evaluate behavior for important cohorts.
 
-For example, FleetLens receives odometer readings in miles or kilometres. The reviewed preprocessing contract converts either unit to miles before scoring. A metamorphic test creates two representations of the same van and requires the model score to stay equal within floating-point tolerance:
+Suppose a building-energy model accepts temperatures in Celsius or Fahrenheit and the preprocessing contract converts both to the same canonical unit. Two representations of the same reading should produce the same score within numerical tolerance:
 
 ```python
-import numpy as np
-import pandas as pd
+import pytest
 
 
-def prepare_model_input(frame: pd.DataFrame) -> pd.DataFrame:
-    prepared = frame.copy()
-    factor = prepared["odometer_unit"].map({"miles": 1.0, "kilometres": 0.621371})
-    prepared["odometer_miles"] = prepared["odometer_value"] * factor
-    return prepared.drop(columns=["odometer_value", "odometer_unit"])
-
-
-def test_equivalent_distance_units_preserve_maintenance_score(model):
-    miles = pd.DataFrame(
-        [{"vehicle_id": "van-7", "odometer_value": 62_137.1,
-          "odometer_unit": "miles", "measured_psi": 35.0}]
-    )
-    kilometres = pd.DataFrame(
-        [{"vehicle_id": "van-7", "odometer_value": 100_000.0,
-          "odometer_unit": "kilometres", "measured_psi": 35.0}]
-    )
-
-    score_miles = model.predict_proba(prepare_model_input(miles))[:, 1]
-    score_km = model.predict_proba(prepare_model_input(kilometres))[:, 1]
-
-    np.testing.assert_allclose(score_miles, score_km, rtol=1e-5, atol=1e-7)
+@pytest.mark.parametrize(
+    "celsius,fahrenheit",
+    [(0.0, 32.0), (25.0, 77.0), (37.0, 98.6)],
+)
+def test_equivalent_units_preserve_score(score_energy_use, celsius, fahrenheit):
+    score_c = score_energy_use(value=celsius, unit="celsius")
+    score_f = score_energy_use(value=fahrenheit, unit="fahrenheit")
+    assert score_c == pytest.approx(score_f, abs=1e-6)
 ```
 
-This test catches a unit branch that skips conversion or applies the factor in the wrong direction. The tolerance allows insignificant floating-point rounding while still rejecting a product-visible change.
+This test can reveal a skipped conversion, a reversed formula, or different preprocessing paths between batch and online scoring. It avoids freezing one exact model probability. A failure first points to the unit contract and preprocessing path. Investigate model sensitivity after those checks pass.
 
-Numerical assertions should use tolerances and enough repeated evidence for the model type. A training smoke test can use a loose floor because it checks mechanics. A candidate comparison should report sample size, paired deltas, uncertainty where appropriate, and pre-agreed segment limits. Tests should avoid requiring byte-identical floating-point output across different hardware when the release decision only needs predictions to stay inside a meaningful tolerance.
+### Tie The Tolerance To A Real Decision
 
-The full test framework now has distinct jobs: code tests check deterministic logic, data tests protect inputs, smoke tests prove the job runs, behavior tests protect model relationships, evaluation gates judge candidate evidence, pipeline tests protect orchestration, and replay tests preserve lessons from production incidents. This hierarchy gives a failed check one clear owner and response.
+Directional tests need domain approval. “Higher income must always reduce default risk” may sound intuitive and still be false across products, time horizons, or interactions. Encoding it without evidence can freeze a convenient belief into the release process. Monotonic constraints, causal expectations, and fairness requirements should link to an approved policy or model-design decision.
 
-## Run The Right Tests In CI
-<!-- section-summary: Your pull-request workflow should separate fast checks from expensive checks. Fast checks run on every PR. Heavier checks run on main, nightly, or when training code changes. -->
+Tolerance also needs meaning. Sensor noise can define an acceptable input perturbation. A score tolerance can come from the decision threshold and the cost of crossing it. If a tiny change flips many decisions near the boundary, report both score movement and action movement. A numerical epsilon chosen only to make the test pass offers no protection.
 
-Your pull-request workflow should separate fast checks from expensive checks. Fast checks run on every PR. Heavier checks run on main, nightly, or when training code changes.
+## Check Model Quality And Regressions Before Release
+<!-- section-summary: Evaluation gates compare a candidate with absolute requirements, a pinned baseline, important segments, and uncertainty on a versioned dataset. -->
 
-:::expand[Implement the split CI workflow]{kind="example"}
+Behavior tests protect specific relationships. An **evaluation gate** decides whether the candidate has enough measured evidence to continue toward release. It runs on a versioned dataset whose label observation windows have closed. The report records the exact candidate, baseline, metric policy, code revision, and data identity.
 
-```yaml
-name: ml-pipeline-tests
+### Use A Versioned Evaluation Dataset
 
-on:
-  pull_request:
-    paths:
-      - "src/**"
-      - "pipelines/**"
-      - "dags/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ml-pipeline-tests.yml"
+The gate usually combines several decisions. Absolute thresholds protect minimum acceptable quality. A **regression limit** bounds how far the candidate may fall below a concrete baseline model version. Segment gates prevent a global average from hiding a serious decline for an important population. Operational constraints can cover model size or inference time if those measurements use a representative environment.
 
-jobs:
-  fast-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.3.2
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv lock --check
-      - run: uv sync --locked --all-extras --dev
-      - run: uv run pytest tests/unit tests/contracts tests/pipeline -q
+For example, a document classifier may improve overall F1 while recall for handwritten forms falls sharply. The missing cases then reach a manual queue and increase customer waiting time. A useful gate records overall metrics, handwritten-form recall, sample counts, and the exact baseline version. It also records a confidence interval or another approved range that expresses uncertainty in the estimate. A missing handwritten segment is a failed evaluation input, not a passing zero-row calculation.
 
-  training-smoke:
-    runs-on: ubuntu-latest
-    needs: fast-tests
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.3.2
-        with:
-          python-version: "3.12"
-      - run: uv sync --locked --all-extras --dev
-      - run: uv run pytest tests/smoke/test_training_entrypoint.py -q
+### Automate The Release Check And Keep Its Evidence
+
+MLflow can evaluate traditional classification and regression models. It logs metrics and artifacts, then `mlflow.validate_evaluation_results()` can apply `MetricThreshold` rules. A focused absolute gate looks like this:
+
+```python
+import mlflow
+from mlflow.models import MetricThreshold
+
+
+candidate = mlflow.models.evaluate(
+    model=candidate_uri,
+    data=evaluation_frame,
+    targets="label",
+    model_type="classifier",
+)
+
+mlflow.validate_evaluation_results(
+    candidate_result=candidate,
+    validation_thresholds={
+        "recall_score": MetricThreshold(threshold=0.80, greater_is_better=True),
+        "log_loss": MetricThreshold(threshold=0.45, greater_is_better=False),
+    },
+)
 ```
 
-:::
+The example checks two absolute requirements. A production policy should add the pinned baseline comparison and project-specific segment rules rather than relying on a moving registry alias during the decision. MLflow validation also supports candidate-versus-baseline metric thresholds; the stored decision should retain the resolved model version and both evaluation results.
 
-This workflow avoids running a full training job on every documentation change. It also installs the dependency set recorded in `uv.lock`; CI fails if `pyproject.toml` and the lockfile disagree. Teams using Poetry, PDM, pip-tools, or the standard `pylock.toml` format can apply the same rule: commit a reviewed lock, check that it is current, and install from that lock without resolving a fresh environment during every run.
+Gate failures need interpretation. A broad decline with stable data contracts may point to training code or hyperparameters. A decline in one segment may point to coverage, label quality, or an interaction learned by the candidate. A confidence interval that is too wide calls for more evidence instead of an automatic pass. The model owner investigates the candidate, while the domain or risk owner approves the metric policy and any exception.
 
-## Save Test Reports As Artifacts
-<!-- section-summary: CI artifacts give reviewers durable validation reports, feature summaries, smoke metrics, and release decisions. -->
+## Turn Production Failures Into Regression Tests
+<!-- section-summary: Replay tests convert a confirmed production failure into durable evidence that can reject the same failure mechanism in a future change. -->
 
-When a pipeline blocks a model, the reviewer should see why without digging through raw logs. CI can upload validation reports, feature summaries, smoke-run metrics, and evaluation decisions as artifacts.
+A production incident reveals a gap in the existing suite. A **replay test** preserves the smallest approved evidence that reproduces that gap. It might contain a late-arriving label, an unseen category, a duplicate source record, a timezone boundary, a corrupt artifact manifest, or a sequence that triggered an unsafe fallback.
 
-For example, a PR check can produce:
+### Preserve The Smallest Input That Reproduces The Failure
 
-```json
-{
-  "pipeline": "fleetlens_training",
-  "commit": "abc123",
-  "checks": {
-    "unit_tests": "passed",
-    "data_contracts": "passed",
-    "training_smoke": "passed",
-    "pipeline_graph": "passed"
-  },
-  "fixtures": {
-    "tiny_train_rows": 32,
-    "tiny_valid_rows": 16
-  },
-  "release_ready": false,
-  "reason": "full validation runs after merge on scheduled training data"
-}
+The first step is to identify the failure mechanism. If a batch scored the same customer twice, preserve the duplicate-key shape and the expected deduplication rule. If a category parser mapped an accented value to “unknown,” preserve the minimal encoded input and expected category. Copying a large production dataset into `tests/fixtures` hides the reason for the test and can violate privacy or retention policy.
+
+```mermaid
+flowchart TD
+    A["Confirmed Incident<br/>(establish the observed failure)"] --> B["Failure Mechanism<br/>(identify the violated assumption)"]
+    B --> C["Minimal Fixture<br/>(retain approved decisive evidence)"]
+    C --> D["Layered Replay<br/>(place the test near the cause)"]
+    D --> E["Regression Proof<br/>(show the old behavior fails the test)"]
+    E --> F["Repair Proof<br/>(show the fix passes the same test)"]
+    F --> G["Durable Evidence<br/>(record incident, owner, and fixture version)"]
 ```
 
-Upload the report as a CI artifact using the current supported artifact action for the runner environment. GitHub-hosted runners receive supported runner updates automatically; self-hosted runners need an explicit upgrade policy. Pin third-party actions according to the organisation's supply-chain policy and keep those pins current through dependency automation.
+### Confirm The New Test Fails On The Old Code
 
-Evidence turns CI from a red or green icon into a teaching tool. A junior engineer can open the report and learn which layer failed.
+The regression proof is important. Run the new test against the affected revision or reproduce the old behavior through a controlled mutation. If the test also passes before the repair, it does not observe the incident mechanism. The repair proof then uses the same fixture and assertion.
 
-![FleetLens test evidence report](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/fleetlens-test-evidence-report.png)
-*The report gives reviewers a quick path from a failed gate to the next fix, instead of sending them through raw CI logs first.*
+Some incidents require a larger replay. A pipeline backfill may need the original dataset snapshot, feature definitions, and label policy. It may also need the model artifact, container digest, and orchestration parameters. That replay belongs in an isolated environment with bounded data. Its evidence should distinguish an exact historical reproduction from a simulation that uses substituted data or infrastructure.
 
-## Build Useful Test Fixtures
-<!-- section-summary: Fixtures are small datasets designed to catch mistakes. They should be tiny, readable, and intentionally awkward. -->
+Replay ownership follows the cause. A transform incident adds a transform-level fixture. A registry idempotency incident adds adapter and sandbox cases. A segment regression adds an evaluation slice. Keeping every incident only in a slow end-to-end suite weakens diagnosis and allows the expensive suite to become a collection of unrelated mysteries.
 
-Fixtures are small datasets designed to catch mistakes. They should be tiny, readable, and intentionally awkward.
+## Build Small Test Datasets With A Clear Purpose
+<!-- section-summary: Small, deliberate fixtures represent normal cases, boundaries, violations, and incidents while preserving provenance and privacy. -->
 
-Good ML fixtures include:
+A **fixture** is controlled test input. Good fixtures are small enough to read, large enough to exercise the rule, and documented through names and assertions. Random rows often produce variety without meaning. A useful fixture includes the exact boundary cases that could change the result.
 
-- A row with a missing optional feature.
-- A row with a missing required feature.
-- A rare category.
-- A known leakage column that should be dropped.
-- A segment with a different label rate.
-- A duplicate entity and timestamp.
-- A historical incident example.
+### Test One Boundary Case At A Time
 
-For FleetLens, keep `tests/fixtures/tiny_train.parquet` small enough for CI and add a markdown note describing why each row exists. A future developer should be able to say, "Row 8 protects us from the tire-pressure units bug."
+Start with a tiny valid dataset that completes the main path. Separate fixtures can cover nulls, duplicate keys, unseen categories, and time boundaries. Imbalanced labels, missing segments, and invalid configurations deserve cases whose names identify those risks.
 
-## Common Mistakes
-<!-- section-summary: Production ML tests must cover data, features, artifacts, orchestration, integrations, and release decisions alongside model quality. -->
+Incident fixtures preserve confirmed failure mechanisms. A **golden dataset** is a curated reference set expected to stay stable across candidate comparisons. Larger golden datasets can support evaluation. They need a version, known provenance, an owner-approved purpose, and a refresh policy.
 
-The easiest mistake is treating model quality as the only test. A production ML pipeline also needs tests for data shape, feature logic, artifact metadata, orchestration, and release decisions.
+### Protect Sensitive And Long-Lived Test Data
 
-Other common mistakes:
+Synthetic data works well for code paths, schema violations, and public examples. Sampled production data may be necessary for rare encodings or realistic model behavior. That sample must follow access, minimization, de-identification, retention, and deletion rules. A synthetic replacement should be preferred after the team understands which structure caused the issue.
 
-- Tests depend on live production databases.
-- Tests use random data without fixed seeds.
-- Fixtures are too large for PR feedback.
-- Pipeline graph checks are skipped because the graph is "just configuration."
-- Evaluation gates use only global metrics.
-- CI checks write to the real model registry.
-- The same test suite handles every risk, so no one knows which layer failed.
+Fixtures also need negative controls. If a contract test is supposed to detect leakage, include a fixture that contains one post-prediction feature and confirm the test fails. If a behavior test protects unit conversion, add a controlled faulty converter during test development and confirm the assertion reacts. These checks prove that the test can observe the defect it claims to cover.
 
-Start small. Add one good transform test, one data contract, one smoke test, and one quality gate. Then extend the suite each time an incident or review exposes a missing guardrail.
+Large fixtures drift if nobody owns them. Record their source or generation method first. Then record schema version, target definition, intended use, and protected cases. Privacy classification and ownership complete the fixture record. A refresh should explain which rows changed and rerun the baseline evidence. Replacing a golden set silently can erase a regression without changing model code.
 
-## Review Changes Through The Test Layers
-<!-- section-summary: A pipeline review traces a change through focused code, data, training, workflow, integration, and model-behaviour evidence. -->
+## Save Enough Test Evidence To Reproduce A Failure
+<!-- section-summary: Test evidence records the exact input, rule, environment, result, and ownership required to understand or reproduce a decision. -->
 
-The layered test framework also gives code review a stable order. Start at the cheapest layer that can observe the change, then follow its contracts into later layers. A feature transform needs a focused unit test and a data contract. A changed training input needs a smoke run and artifact evidence. A changed release rule needs an evaluation gate and an isolated integration test.
+A green check says that a command exited successfully. **Test evidence** explains what was tested. It lets a reviewer answer which data contract ran, which pipeline definition was compiled, which candidate and baseline were evaluated, and which fixture exposed a failure.
 
-When you review an ML pipeline pull request, use these questions to trace that path:
+### Record The Inputs Needed For Reproduction
 
-- Which transform changed, and where is the focused test for that transform?
-- Which schema or data contract protects the new column?
-- Which tiny fixture proves the code path runs without a warehouse-sized dataset?
-- Which artifact metadata will help you reproduce the run later?
-- Which test fails if the target leaks into the feature list?
-- Which segment metric protects the users most likely to be harmed?
-- Which external service is mocked or isolated during CI?
-- Which report will a reviewer open when the check fails?
+A compact machine-readable report can use the same core fields across layers. A **digest** is a hash fingerprint used to identify exact content. For a failed graph rule, the report might record `suite=pipeline_plan`, code and environment digests, fixture version, pipeline-spec digest, and `rule=validation_precedes_training`. The observed value would state that `train_candidate` lacks a validation dependency, while the owner field routes the failure to the ML platform team.
 
-The questions support the test layers; they do not replace them. The review should identify which failure surface changed, which test observes it earliest, and which later evidence proves the whole pipeline still preserves its contracts.
+The fields vary by layer. A data-contract report adds batch identity, failed-row counts, and contract version. A smoke report adds configuration digest, output artifact digest, and model signature. An evaluation report starts with dataset snapshot, label policy, candidate version, and resolved baseline version. It then records metrics, segments, sample counts, uncertainty, and the gate-policy digest.
+
+### Protect Sensitive Test Evidence And Investigate Flaky Tests
+
+Keep enough evidence to reproduce the decision without copying restricted rows into a broad-access report. Failed-row samples can use governed tables with narrow access, while the general report stores counts and approved references. Logs should avoid raw features, labels, tokens, direct identifiers, and signed URLs.
+
+A **flaky test** changes between pass and fail without a relevant code or input change. Evidence helps diagnose that instability. A failure report should show seed, library and container versions, hardware class where relevant, retry count, and tolerance. Re-running a failed test without preserving those inputs can turn a real nondeterministic defect into an unexplained green result.
+
+## Investigate The Earliest Failed Test Layer First
+<!-- section-summary: Failure interpretation starts at the earliest violated layer and follows evidence forward only after the lower-level contract is restored. -->
+
+The layered framework gives investigation a stable order. Begin with the earliest failed layer because every later result depends on it. Restore that contract, rerun the affected path, and then decide whether the higher-level failure remains.
+
+Suppose a candidate loses recall for one region. The data-contract report also shows that region's training rows fell by 70 percent after a join change. The first action is to inspect eligibility, keys, and source coverage. Tuning the classifier at this point would adapt the model to broken evidence. After the join is repaired and the contract passes, the team rebuilds the candidate and repeats the segment evaluation.
+
+If transform and data tests pass while the smoke test cannot load the saved model, investigate serialization, dependency, and signature compatibility. If the smoke test passes while the compiled graph skips evaluation, repair the workflow definition. If the graph passes locally and the sandbox registry rejects the request, inspect the adapter request, identity, network, and provider policy. If all system layers pass and a reviewed metamorphic relation fails, examine preprocessing parity and model behavior.
+
+Every failure should include the violated rule, expected behavior, observed behavior, affected artifact or batch, and owner. “Pipeline test failed” forces responders to reconstruct the layers from logs. “Training data contract failed: 412 duplicate `prediction_id` values in snapshot `2026-W18`” identifies both the problem and the first investigation boundary.
+
+Approved exceptions should remain visible evidence. A domain owner may accept a temporary coverage shortfall for one cohort. The record needs a reason, scope, approver, expiry, and follow-up test. Disabling the test or weakening its threshold for the whole pipeline removes the original safety claim.
+
+## Keep Test Commands Separate From CI Scheduling
+<!-- section-summary: Test suites should expose clear commands and resource needs, leaving trigger, identity, caching, and expensive-job scheduling to the CI design. -->
+
+Test suites should expose proof and resource contracts through separate commands or markers. Local commands can cover deterministic pytest checks and warehouse contracts. Other commands can expose the training smoke path and pipeline compilation. Sandbox integration and versioned evaluation retain separate entrypoints because they require different resources.
+
+Each suite should declare its expected duration and compute class. Network and credential requirements identify the isolation boundary, while the evidence contract identifies the expected output. These declarations let the delivery workflow schedule the suite safely without changing its meaning.
+
+The CI layer decides pull-request triggers, protected identities, dependency caches, artifact transport, and concurrency. It also defines deliberate launch rules for expensive work. A five-minute smoke suite and a two-hour full evaluation may share test definitions while requiring different execution controls.
+
+## The Main Idea
+<!-- section-summary: Reliable ML testing places a focused test at each boundary from deterministic code to production replay and preserves evidence for every decision. -->
+
+An ML pipeline is a chain of assumptions. Reliable testing gives each assumption a matching layer: deterministic transforms, data contracts, a training smoke path, an inspected workflow plan, isolated external boundaries, reviewed model relationships, evaluation and regression gates, and incident replay.
+
+The value comes from diagnosis as much as prevention. A failed layer identifies which contract broke, what evidence exposed it, and which owner can act. Small fixtures and focused negative tests catch mistakes near their source. Representative evaluation and replay preserve the broader behavior that local tests cannot prove.
+
+The final result is a test system that explains its decisions. It can show which inputs were used, which rule ran, which artifact was produced, why a candidate stopped, and how the same claim can be checked again.
 
 ## References
 
-- [pytest documentation](https://docs.pytest.org/en/stable/getting-started.html)
-- [Google Research: The ML Test Score](https://research.google/pubs/the-ml-test-score-a-rubric-for-ml-production-readiness-and-technical-debt-reduction/)
-- [Google: Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
-- [GitHub Actions workflow syntax](https://docs.github.com/actions/using-workflows/workflow-syntax-for-github-actions)
+- [pytest documentation](https://docs.pytest.org/en/stable/)
+- [Pandera DataFrame Models](https://pandera.readthedocs.io/en/stable/dataframe_models.html)
+- [dbt unit tests](https://docs.getdbt.com/docs/build/unit-tests)
+- [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
+- [dbt model contracts](https://docs.getdbt.com/docs/mesh/govern/model-contracts)
 - [Great Expectations Validation Definitions](https://docs.greatexpectations.io/docs/core/run_validations/create_a_validation_definition/)
-- [Great Expectations Checkpoints and Actions](https://docs.greatexpectations.io/docs/core/trigger_actions_based_on_results/run_a_checkpoint/)
-- [uv locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/)
 - [TensorFlow Data Validation](https://www.tensorflow.org/tfx/data_validation/get_started)
-- [Pandera documentation](https://pandera.readthedocs.io/en/stable/)
-- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
+- [Airflow testing best practices](https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html#testing-a-dag)
+- [Kubeflow Pipelines compilation](https://www.kubeflow.org/docs/components/pipelines/user-guides/core-functions/compile-a-pipeline/)
+- [SageMaker AI pipeline definitions](https://docs.aws.amazon.com/sagemaker/latest/dg/define-pipeline.html)
+- [Prefect workflow testing](https://docs.prefect.io/v3/how-to-guides/workflows/test-workflows)
+- [MLflow model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
+- [The ML Test Score](https://research.google/pubs/the-ml-test-score-a-rubric-for-ml-production-readiness-and-technical-debt-reduction/)

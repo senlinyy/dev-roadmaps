@@ -9,19 +9,19 @@ id: "article-mlops-model-evaluation-when-not-to-ship-a-model"
 
 ## Table of Contents
 
-1. [A No-Ship Decision Keeps Authority Behind the Evidence](#a-no-ship-decision-keeps-authority-behind-the-evidence)
+1. [Why Some Models Must Stay Out Of Production](#why-some-models-must-stay-out-of-production)
 2. [Choose Reject, Defer, Shadow, or Restricted Release Deliberately](#choose-reject-defer-shadow-or-restricted-release-deliberately)
 3. [Block a Release With an Unclear or Expanding Use](#block-a-release-with-an-unclear-or-expanding-use)
 4. [Block a Release Built on Invalid Evidence](#block-a-release-built-on-invalid-evidence)
 5. [Block Unacceptable Behaviour and Unresolved Harm](#block-unacceptable-behaviour-and-unresolved-harm)
 6. [Block a Release That Operators Cannot Control](#block-a-release-that-operators-cannot-control)
 7. [Block a Release Without Accountable Authority](#block-a-release-without-accountable-authority)
-8. [Turn the Block Into Enforceable Repair Work](#turn-the-block-into-enforceable-repair-work)
-9. [Return a New Candidate to the Full Review](#return-a-new-candidate-to-the-full-review)
+8. [Record The Required Repair And Preserve The Failed Decision](#record-the-required-repair-and-preserve-the-failed-decision)
+9. [Run The Full Review Again After Repair](#run-the-full-review-again-after-repair)
 10. [The Main Idea](#the-main-idea)
 11. [References](#references)
 
-## A No-Ship Decision Keeps Authority Behind the Evidence
+## Why Some Models Must Stay Out Of Production
 <!-- section-summary: A no-ship decision denies production influence if the proposed use exceeds the release's evidence, behaviour, controls, or accountable approval. -->
 
 Imagine a model that prioritizes patient messages for nurse review. The candidate improves the overall ranking score. The same evaluation shows that it misses too many urgent messages in one language, and the rollback drill cannot prove which version handles new requests after recovery.
@@ -52,9 +52,6 @@ flowchart TD
     A -- "No" --> B4["Hold production authority"]
     A -- "Yes" --> R["Authorize the supported scope"]
 
-    classDef question fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef block fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class E,Q,O,A question
     class B1,B2,B3,B4 block
     class R release
@@ -143,13 +140,13 @@ Immature labels create a quieter error. Suppose the target is “missed payment 
 
 Coverage can also distort the comparison. If the candidate drops invalid or difficult requests before scoring, it receives credit only for cases it completed. The report should preserve the denominator from eligible traffic through attempted predictions, successful outputs, fallbacks, errors, and mature-label joins.
 
-### Identity determines which system the evidence describes
+### Pin The Exact Model, Code, Features, And Policy Under Review
 
 The decision should pin the model artifact, serving image, feature definitions, schema, preprocessing, threshold, and policy. A movable name such as `latest` or `candidate` can point elsewhere after review. If the deployed combination differs from the evaluated combination, the evidence describes another release.
 
 Modern MLflow Registry guidance uses model versions, tags, and aliases because fixed model stages are deprecated. A tag can record a no-ship finding, and an alias can help people locate a candidate. The decision and deployment should still pin the exact version or digest.
 
-### Repair the failing comparison directly
+### Repair The Evidence Before Repeating The Comparison
 
 Extra plots and threshold tuning cannot rescue leaked features or incorrect labels. The team repairs the failing boundary:
 
@@ -210,7 +207,7 @@ A release should remain blocked until operators can answer:
 
 Suppose a rollback drill changes a registry alias from the candidate to the production version. New prediction events still report the candidate because each worker loaded it during startup. The control-plane command succeeded, while the data plane continued serving the blocked version. The team needs a recovery action that restarts or reroutes the actual workers and verification based on new events.
 
-### Containment should match the failure boundary
+### Choose Containment That Matches The Failure
 
 Full rollback is one option. A feature incident may call for disabling the feature and using a reviewed default. A failure limited to one route may send that route to the retained release. A high-risk action may return to human review. A broken batch output may remain unpublished while the prior complete dataset stays available.
 
@@ -235,7 +232,7 @@ NIST's AI Risk Management Framework connects these responsibilities through Gove
 
 Disagreement should produce a precise record. One reviewer may support an English-language shadow while another blocks any storage of raw shadow inputs. The resulting proposal can use approved summaries, strict retention, and no user-facing action if those controls answer both concerns. If they do not, the shadow remains blocked.
 
-## Turn the Block Into Enforceable Repair Work
+## Record The Required Repair And Preserve The Failed Decision
 <!-- section-summary: A useful no-ship record binds exact findings and denied authority to owners, allowed work, corrective action, and evidence required for re-entry. -->
 
 A no-ship decision should stay attached to the exact release it evaluated. Editing the old record into a pass would erase why that artifact lacked authority. Retraining, changing a threshold, repairing telemetry, or altering the scope creates a new proposal with new evidence.
@@ -277,7 +274,7 @@ findings:
 
 This record does two useful things. It keeps unsafe authority closed, and it preserves a safe route for collecting evidence. The deployment system checks the requested action against `allowed_authority` and the pinned digest. A request using another digest also needs its own decision.
 
-### Map every finding to a production-depth repair
+### Define A Complete Repair For Every Finding
 
 “Improve recall” is too vague. The owner should inspect the failed cases and label process, decide whether the problem belongs to data, modelling, threshold, or routing, and record the chosen change. A revised candidate reruns overall, segment, robustness, workload, and operating tests so a local repair does not create another regression.
 
@@ -299,7 +296,7 @@ The block should remain material and testable. Vague discomfort can create endle
 
 *A no-ship record can preserve offline and isolated-shadow work while denying every authority that changes production decisions.*
 
-## Return a New Candidate to the Full Review
+## Run The Full Review Again After Repair
 <!-- section-summary: Re-entry uses a new release identity and fresh evidence, repeats every gate, and proves the original failure plus adjacent risks are controlled. -->
 
 Repairing the named blocker earns another review. Approval still depends on the complete evidence because the candidate may have changed other metrics, segments, dependencies, or costs.
@@ -326,10 +323,6 @@ flowchart TD
     D -- "Yes" --> A["New scoped approval"]
     A --> V["Verify running identity,<br/>traffic, and outcomes"]
 
-    classDef blocked fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef approved fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class B,B2 blocked
     class W,D work
     class N,T,V evidence

@@ -11,18 +11,18 @@ aliases:
 
 ## Table of Contents
 
-1. [The Model Only Knows the Values It Receives](#the-model-only-knows-the-values-it-receives)
-2. [A Feature Contract Explains What a Value Means](#a-feature-contract-explains-what-a-value-means)
-3. [Follow the Value and Its Timestamps](#follow-the-value-and-its-timestamps)
-4. [Health Checks Ask Several Different Questions](#health-checks-ask-several-different-questions)
-5. [Parity Means Replaying the Same Case](#parity-means-replaying-the-same-case)
-6. [Historical Features Must Stop at the Prediction Time](#historical-features-must-stop-at-the-prediction-time)
-7. [A Small Production Stack Can Cover the Important Boundaries](#a-small-production-stack-can-cover-the-important-boundaries)
-8. [Recover the Failing Feature Path](#recover-the-failing-feature-path)
+1. [Model Predictions Depend On The Feature Values They Receive](#model-predictions-depend-on-the-feature-values-they-receive)
+2. [What A Feature Contract Records](#what-a-feature-contract-records)
+3. [Trace A Feature From Source To Prediction](#trace-a-feature-from-source-to-prediction)
+4. [The Different Checks Needed For Feature Health](#the-different-checks-needed-for-feature-health)
+5. [Compare Training And Serving With The Same Case](#compare-training-and-serving-with-the-same-case)
+6. [Prevent Historical Features From Using Future Data](#prevent-historical-features-from-using-future-data)
+7. [How A Small Production Stack Checks Feature Health](#how-a-small-production-stack-checks-feature-health)
+8. [How To Recover From A Broken Feature Path](#how-to-recover-from-a-broken-feature-path)
 9. [The Main Idea](#the-main-idea)
 10. [References](#references)
 
-## The Model Only Knows the Values It Receives
+## Model Predictions Depend On The Feature Values They Receive
 <!-- section-summary: Feature health checks whether live model inputs still carry the same meaning and timing as the data used during training. -->
 
 A model never sees a customer, a house, or a delivery truck directly. It sees **features**: values such as account age, number of bedrooms, current inventory, or distance to a destination. **Feature health** checks whether those live values are present, valid, fresh, and meaningful when the model uses them.
@@ -39,7 +39,7 @@ The complete path looks like this:
 
 The definition is the shared starting point. Health checks ask whether live delivery respected that definition. Parity replay compares the two calculation paths. Once the team knows which boundary failed, it can repair the data path instead of reaching immediately for a model rollback.
 
-## A Feature Contract Explains What a Value Means
+## What A Feature Contract Records
 <!-- section-summary: A feature contract records the business meaning, time rules, validation limits, ownership, and serving behaviour of one model input. -->
 
 A **feature contract** is the reviewed description of one feature. It explains what the value represents and which rules must remain true when the feature moves through training and production, so every pipeline answers the same business question.
@@ -60,7 +60,7 @@ These tools overlap, and each sees a different moment. A dbt test can catch that
 
 Enforcement also has a release path. A contract change is proposed with compatibility expectations and sample data. Producers publish the new field or formula alongside the old version, consumers dual-read or shadow the new path, and parity checks compare the results. Only after dependent models and dashboards understand the new meaning does the owner retire the previous version. This staged change prevents an innocent data migration from silently changing a model input.
 
-## Follow the Value and Its Timestamps
+## Trace A Feature From Source To Prediction
 <!-- section-summary: Feature telemetry records which value reached the model, where it came from, when it was produced, and whether a fallback path supplied it. -->
 
 **Feature telemetry** is the evidence showing what the model actually received. The value matters, and its timing matters just as much. A stock count of `42` can be correct now, stale by three hours, or copied from a fallback cache after the normal source failed.
@@ -117,7 +117,7 @@ Consider a Kafka-to-Flink pipeline that materializes `current_inventory` into Re
 
 *Following one feature across the production path turns a generic stale-value alert into a boundary diagnosis. Stream lag, watermark delay, store-write health, request-time age, and fallback evidence each describe a different handoff.*
 
-## Health Checks Ask Several Different Questions
+## The Different Checks Needed For Feature Health
 <!-- section-summary: Feature checks cover structure, completeness, validity, freshness, relationships, and population movement because each failure has a different cause. -->
 
 A **feature-health check** turns one contract rule into a test that can run in the data pipeline, the inference service, or the monitoring job. Several kinds of tests are needed because a valid-looking number can still be wrong in many ways.
@@ -144,7 +144,7 @@ Great Expectations fits this kind of Python or Spark pipeline when the rules nee
 
 A Checkpoint runs that definition and triggers configured actions from the result. In this incident, the orchestrator keeps the candidate partition private when the Checkpoint fails and stores the failed rows for investigation. The publish task runs only after the corrected adapter passes the same suite. When the feature table already lives in a SQL warehouse, dbt data tests can enforce the same publication boundary with less additional infrastructure.
 
-## Parity Means Replaying the Same Case
+## Compare Training And Serving With The Same Case
 <!-- section-summary: Row-level parity reconstructs a live feature with the training logic for the same entity and time, then explains every meaningful mismatch. -->
 
 **Row-level parity** compares the training and serving calculations for one real prediction. You can think of it as asking two kitchens to prepare the same recipe with the same ingredients and the same cutoff time. If the dishes differ, the team looks for a different ingredient, instruction, or timing rule.
@@ -169,7 +169,7 @@ The parity result can guard releases as well as monitor production. Before promo
 
 In a lakehouse stack, sampled prediction records can land in a Delta table and trigger a Spark parity job. The job loads the same versioned Python wheel used by training, reconstructs features from the offline history, and writes row-level mismatches back to a governed table. Airflow runs that job for every canary image and blocks promotion when the mismatch or unavailable-reconstruction limits fail. The serving team sees the affected prediction IDs and mismatch categories, while Prometheus receives only the aggregate rate used by the release gate.
 
-## Historical Features Must Stop at the Prediction Time
+## Prevent Historical Features From Using Future Data
 <!-- section-summary: Point-in-time joins build each training row from information that was genuinely available when the historical decision would have happened. -->
 
 **Point-in-time correctness** means that a historical training row uses only information available at its prediction time. It keeps offline training inside the same information boundary that the live model will face and prevents the pipeline from borrowing facts from the future.
@@ -218,7 +218,7 @@ The returned training rows still need boundary fixtures and coverage checks. One
 
 Every model trained on the contaminated data is evaluated again. If a production model earned approval from leaked results, the release owner can route traffic to the last approved artifact trained on clean data. A replacement model then passes segment evaluation, shadow traffic, and a canary before taking the full route. Historical reports receive a corrected revision, and the registry records which approvals changed. Recovery includes the dataset, the affected artifacts, and every downstream consumer of the old evidence.
 
-## A Small Production Stack Can Cover the Important Boundaries
+## How A Small Production Stack Checks Feature Health
 <!-- section-summary: Teams usually combine existing data tests, shared transformations, operational metrics, and replay before adding a dedicated feature platform. -->
 
 The simplest credible stack follows the path the data already takes. A warehouse-based batch model can use dbt data tests for table contracts, a versioned Python package for transformations, scheduled SQL for replay, and the existing cloud monitor for alerts. An online model adds request-time validation and low-cardinality freshness metrics.
@@ -262,7 +262,7 @@ Feast is useful when a team needs a common feature registry plus point-in-time h
 
 The alerting path remains deliberately small. The feature pipeline writes detailed validation failures to a warehouse audit table or Great Expectations validation store. Prometheus, Grafana, or the cloud monitor receives aggregates such as stale share, missing share, parity mismatch rate, and job freshness. Airflow or Dagster carries task failures and dataset dependencies. This separation gives the responder fast notification and enough row-level evidence to investigate without placing customer identifiers in metrics.
 
-## Recover the Failing Feature Path
+## How To Recover From A Broken Feature Path
 <!-- section-summary: A feature incident limits unsafe decisions, repairs the first broken boundary, verifies the replacement path, and restores traffic gradually. -->
 
 When a feature alert fires, the team first finds the affected time window and serving route. Prediction records then show which feature and model versions passed through that route. Stable segment fields reveal whether the problem is global or limited to one part of traffic.

@@ -1,7 +1,7 @@
 ---
 title: "Distributed Training"
 description: "Learn how distributed workers share data, model state, communication, checkpoints, and recovery to complete one trustworthy training run."
-overview: "Distributed training uses several processes and accelerators to solve a speed or memory limit that one device cannot solve alone. This article explains the worker model, collective communication, data and optimization semantics, parallelism strategies, recovery, scaling tests, and the frameworks that implement them."
+overview: "Distributed training uses several processes and accelerators to solve a speed or memory limit that one device cannot solve alone. The learning path covers the worker model, collective communication, data and optimization semantics, parallelism strategies, recovery, scaling tests, and the frameworks that implement them."
 tags: ["MLOps", "advanced", "compute"]
 order: 2
 id: "article-mlops-training-pipelines-distributed-training-basics"
@@ -11,20 +11,20 @@ id: "article-mlops-training-pipelines-distributed-training-basics"
 
 1. [What Distributed Training Means](#what-distributed-training-means)
 2. [Start With the Single-Device Limit](#start-with-the-single-device-limit)
-3. [Understand Workers, Ranks, and Process Groups](#understand-workers-ranks-and-process-groups)
-4. [Understand Collective Communication](#understand-collective-communication)
-5. [Choose a Parallelism Strategy From the Constraint](#choose-a-parallelism-strategy-from-the-constraint)
-6. [Start With Distributed Data Parallel](#start-with-distributed-data-parallel)
-7. [Give Every Worker the Right Data](#give-every-worker-the-right-data)
-8. [Keep the Optimization Problem Consistent](#keep-the-optimization-problem-consistent)
-9. [Understand Communication Cost and Stragglers](#understand-communication-cost-and-stragglers)
-10. [Use State Sharding for Memory Pressure](#use-state-sharding-for-memory-pressure)
-11. [Use Tensor and Pipeline Parallelism for Larger Models](#use-tensor-and-pipeline-parallelism-for-larger-models)
-12. [Where DeepSpeed and Ray Train Fit](#where-deepspeed-and-ray-train-fit)
-13. [Checkpoint the Complete Distributed Run](#checkpoint-the-complete-distributed-run)
-14. [Recover Through Rendezvous and Coordinated Restart](#recover-through-rendezvous-and-coordinated-restart)
+3. [Learn How Distributed Workers Are Identified](#learn-how-distributed-workers-are-identified)
+4. [Understand How Workers Exchange Results](#understand-how-workers-exchange-results)
+5. [Choose What To Divide Across Devices](#choose-what-to-divide-across-devices)
+6. [Start By Splitting Data Across GPUs](#start-by-splitting-data-across-gpus)
+7. [Give Each Worker A Different Part Of The Data](#give-each-worker-a-different-part-of-the-data)
+8. [Keep Batch Size And Optimizer Behavior Consistent](#keep-batch-size-and-optimizer-behavior-consistent)
+9. [Measure Communication Delays And Slow Workers](#measure-communication-delays-and-slow-workers)
+10. [Split Training State Across GPUs To Reduce Memory Use](#split-training-state-across-gpus-to-reduce-memory-use)
+11. [Split Very Large Models Across GPUs](#split-very-large-models-across-gpus)
+12. [Understand The Different Jobs Of DeepSpeed And Ray Train](#understand-the-different-jobs-of-deepspeed-and-ray-train)
+13. [Save Everything Needed To Resume Distributed Training](#save-everything-needed-to-resume-distributed-training)
+14. [Restart The Worker Group After A Failure](#restart-the-worker-group-after-a-failure)
 15. [Measure Scaling Efficiency](#measure-scaling-efficiency)
-16. [Managed Platforms Implement the Same Contract](#managed-platforms-implement-the-same-contract)
+16. [How Managed Platforms Run Distributed Training](#how-managed-platforms-run-distributed-training)
 17. [The Main Idea](#the-main-idea)
 18. [References](#references)
 
@@ -64,9 +64,6 @@ flowchart TD
     B -->|"Depth or Activations"| F["Pipeline Parallelism<br/>(Split Layer Stages)"]
     B -->|"Accelerator Waits for Data"| G["Repair Input Pipeline<br/>(Storage, Decode, Prefetch)"]
 
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef strategy fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A evidence
     class B decision
     class C,D,E,F,G strategy
@@ -76,12 +73,12 @@ This diagnosis also prevents a common cost mistake. If one GPU spends 45 percent
 
 Before moving to multiple machines, test multiple GPUs inside one machine. GPUs connected through NVLink or another high-bandwidth local fabric usually communicate faster than GPUs connected across hosts. A single multi-GPU node also removes part of the network, scheduling, and failure complexity. Use multi-node training after the local node can no longer meet the memory or completion target.
 
-## Understand Workers, Ranks, and Process Groups
+## Learn How Distributed Workers Are Identified
 <!-- section-summary: A distributed runtime gives each worker an identity, a device, and membership in one or more communication groups. -->
 
 Distributed frameworks use a small set of terms to describe who is doing the work. These identities tell you which process owns a GPU, which ranks must communicate, and which worker produced a log or failure.
 
-### Worker identity
+### Identify Each Worker And Process
 
 A **worker** is one participant in the training job. In PyTorch GPU training, a worker is usually a separate operating-system **process** running the training program on one GPU. Separate processes isolate device contexts and allow every GPU to execute the same program with different data.
 
@@ -104,28 +101,24 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef job fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef host fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef worker fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef group fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A job
     class B,C host
     class D,E,F,G worker
     class H group
 ```
 
-### Group formation
+### Connect The Workers Into One Group
 
 Before communication can begin, the workers need to find one another and agree on group membership. This step is called **rendezvous**. A launcher such as `torchrun` starts the processes. It supplies `LOCAL_RANK`, `RANK`, and `WORLD_SIZE`, along with the coordinator address and port. The training program reads those values instead of hard-coding a machine name or GPU number.
 
 Rank 0 often handles coordination work such as logging one summary or publishing a consolidated artifact. Rank 0 is still a normal participant in training. If it disappears during a synchronous collective, the other ranks cannot continue as if the optimizer step were complete.
 
-## Understand Collective Communication
+## Understand How Workers Exchange Results
 <!-- section-summary: Collective operations move tensors across a process group so every worker receives the information required for the next calculation. -->
 
 A **collective** is one communication operation performed by an entire process group. Every participating rank calls a compatible operation in the same logical order. The runtime then moves and combines tensors across the devices.
 
-### Four common collectives
+### Four Common Collective Operations
 
 Four collectives appear often in distributed training:
 
@@ -134,7 +127,7 @@ Four collectives appear often in distributed training:
 - **Reduce-scatter** combines values and leaves each rank with one shard of the result. Fully sharded training uses it to keep gradient shards distributed.
 - **Broadcast** sends one rank's value to the rest of the group. It can distribute initial state or a small coordination value.
 
-### A two-worker all-reduce
+### See How Two Workers Average Gradients
 
 Suppose rank 0 calculates the local mean gradient `[2, 4]` and rank 1 calculates `[6, 0]`. Averaging the two local gradients gives `[4, 2]`. Both workers receive `[4, 2]`, so identical optimizers starting from identical parameters apply the same update.
 
@@ -147,10 +140,6 @@ flowchart TD
     D --> F["Identical Optimizer Update"]
     E --> F
 
-    classDef local fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef collective fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef update fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B local
     class C collective
     class D,E result
@@ -161,12 +150,12 @@ The example assumes equal local batch sizes and a mean loss on each worker. If r
 
 Collectives also create a strict dependency. If one rank calls all-reduce for tensor A while another rank calls it for tensor B, or if one rank skips the operation after an exception, the group may hang or fail. Distributed debugging therefore compares rank-specific logs around the last completed collective, tensor shapes, and the training branch followed by each worker.
 
-## Choose a Parallelism Strategy From the Constraint
+## Choose What To Divide Across Devices
 <!-- section-summary: Each parallelism strategy divides a different object, so the measured memory or throughput constraint determines the useful choice. -->
 
 At a high level, a parallelism strategy decides which object will be divided across devices. That object might be the batch, the persistent training state, the calculation inside a layer, or the model's sequence of layers. Dividing the correct object relieves the measured constraint. Dividing a different object adds communication while leaving the original limit in place.
 
-### Four ways to divide the work
+### Four Ways To Divide The Work
 
 **Data parallelism divides the batch.** Every worker keeps a full copy of the model and optimizer state. Each worker processes different examples, then the workers synchronize gradients. This is the usual starting point for a model that fits on one GPU and needs higher throughput.
 
@@ -180,12 +169,12 @@ Many large-model systems use a hybrid. For example, eight GPUs inside a host mig
 
 Choose the smallest combination that solves the measured problem. DDP is usually the first experiment for throughput. State sharding follows if training state memory is the limit. Tensor or pipeline parallelism enters after a layer, activation set, or full model still cannot fit efficiently.
 
-## Start With Distributed Data Parallel
+## Start By Splitting Data Across GPUs
 <!-- section-summary: DDP runs one model replica per worker, gives each replica different data, and synchronizes gradients during backpropagation. -->
 
 PyTorch **DistributedDataParallel**, usually called **DDP**, is the standard starting point for synchronous GPU data parallelism. Each process owns one model replica and one optimizer. During the backward pass, DDP groups gradients into buckets and starts all-reduce operations as gradients become ready. Every replica then applies the same optimizer step.
 
-### The mechanism in code
+### Set Up Distributed Data Parallel In Code
 
 The important parts of a minimal training setup are visible below. The launcher provides the local rank. The process binds itself to that GPU. `DistributedSampler` gives the worker its data shard. DDP wraps the model and installs gradient-synchronization hooks.
 
@@ -214,7 +203,7 @@ for epoch in range(num_epochs):
         optimizer.step()
 ```
 
-### Launch the worker group
+### Launch One Worker Per GPU
 
 Launchers create one process per device. A two-node job with eight GPUs on each node has a world size of 16:
 
@@ -232,7 +221,7 @@ For CUDA GPUs, PyTorch recommends NCCL as the distributed backend. A production 
 
 DDP does not split input data automatically. It also does not reduce model memory because every worker holds a full replica. Those two boundaries explain why the sampler matters and why larger models eventually need a different strategy.
 
-## Give Every Worker the Right Data
+## Give Each Worker A Different Part Of The Data
 <!-- section-summary: Data-parallel workers need disjoint, deterministic data partitions so the cluster processes the intended global batch. -->
 
 The dataset still represents one training corpus, even though several workers read it. A **distributed sampler** maps records to ranks so each worker receives a different portion. In essence, it turns one logical stream of examples into coordinated local streams.
@@ -247,7 +236,7 @@ Iterable and streaming datasets need extra care because no fixed index list exis
 
 Variable-length examples can also create **data stragglers**. One GPU may receive short sequences while another receives several long sequences and takes twice as long. Length-aware batching or balanced input shards can reduce this gap. The batching policy must still preserve the intended sample distribution and should be stored with the run.
 
-## Keep the Optimization Problem Consistent
+## Keep Batch Size And Optimizer Behavior Consistent
 <!-- section-summary: World size, local batch, gradient accumulation, and loss reduction combine into the effective global batch seen by the optimizer. -->
 
 Distribution can change the learning problem even if the model code stays the same. The key quantity is the **global batch size**: the total number of examples contributing to one optimizer update.
@@ -266,7 +255,7 @@ Loss reduction matters too. DDP synchronizes gradients across ranks; it has no k
 
 Record at least the per-device batch, data-parallel world size, accumulation count, effective global batch, optimizer, learning-rate schedule, warm-up, precision, and loss reduction. Compare training and validation curves against the single-device baseline. Small floating-point differences are normal because collective reduction changes addition order, so reproducibility gates should use appropriate numerical and quality tolerances.
 
-## Understand Communication Cost and Stragglers
+## Measure Communication Delays And Slow Workers
 <!-- section-summary: Distributed speed is limited by tensor communication, network topology, input delays, and the slowest worker in each synchronous step. -->
 
 Every distributed strategy trades local memory or compute for communication. A worker can only advance after it receives the tensors needed for the next calculation. The exposed communication time determines how much of the added hardware turns into useful speed.
@@ -283,7 +272,7 @@ Measure a step as separate spans or profiler regions: data wait, forward compute
 
 The useful operational response follows the evidence. Data wait points toward caching, prefetching, local storage, or balanced shards. Exposed collective time points toward topology, placement, bucket configuration, tensor sizes, or network configuration. One slow host points toward eviction, hardware inspection, or scheduler isolation.
 
-## Use State Sharding for Memory Pressure
+## Split Training State Across GPUs To Reduce Memory Use
 <!-- section-summary: State-sharded training reduces per-device memory by dividing parameters, gradients, and optimizer state across data-parallel workers. -->
 
 DDP keeps full training state on every GPU. For an optimizer such as Adam, memory includes parameters, gradients, and multiple optimizer-state tensors, plus activations created during the forward pass. The optimizer state can therefore exceed the parameter memory by a large margin.
@@ -296,7 +285,7 @@ The maturity boundary is important. PyTorch's current documentation encourages F
 
 State sharding does not automatically solve activation memory. Activation checkpointing, shorter sequences, smaller micro-batches, lower precision, or activation offload may still be needed. CPU or NVMe offload expands capacity further, though it moves pressure to host memory, PCIe, and storage bandwidth. Profile step time after every memory-saving change.
 
-## Use Tensor and Pipeline Parallelism for Larger Models
+## Split Very Large Models Across GPUs
 <!-- section-summary: Tensor and pipeline parallelism divide computation inside or across layers after state sharding alone cannot satisfy the model constraint. -->
 
 State sharding stores less state on each GPU, yet a layer may still need a large parameter all-gather or create an oversized activation. **Tensor parallelism** addresses this by splitting the layer's calculation itself.
@@ -313,12 +302,12 @@ A pipeline has a bubble while stages fill and drain. It also slows down if one s
 
 Tensor and pipeline parallelism are commonly combined with data parallelism or state sharding. A device mesh gives each dimension a role, such as `tp=8` inside a host and `dp=16` across hosts. This scale demands topology-aware placement and a checkpoint format that understands every sharding dimension.
 
-## Where DeepSpeed and Ray Train Fit
+## Understand The Different Jobs Of DeepSpeed And Ray Train
 <!-- section-summary: DeepSpeed supplies memory and parallelism strategies, while Ray Train supplies worker orchestration around an underlying framework such as PyTorch. -->
 
 Framework names can make distributed training look like a list of competing products. Their responsibilities sit at different layers: some change how tensors and state are divided, while others provision and supervise the worker processes.
 
-### DeepSpeed changes the memory strategy
+### Use DeepSpeed To Reduce Memory Use
 
 **DeepSpeed** is a distributed training system with memory, communication, and large-model optimizations. Its **ZeRO** family partitions the redundant state used by ordinary data parallelism:
 
@@ -342,7 +331,7 @@ A focused ZeRO configuration makes the choice visible:
 
 The global batch still depends on micro-batch size, data-parallel world size, and accumulation. DeepSpeed configures the mechanism; the team still owns those optimization semantics and the checkpoint contract.
 
-### Ray Train coordinates the workers
+### Use Ray Train To Start And Coordinate Workers
 
 **Ray Train** works at a different layer. `TorchTrainer` launches worker processes and creates the PyTorch distributed environment. It runs the training function on every worker and allocates resources through `ScalingConfig`. Ray's runtime then receives the reported metrics and checkpoints. The numerical strategy can still be DDP, FSDP, DeepSpeed, or a framework integration used inside that worker function.
 
@@ -350,7 +339,7 @@ Ray is useful if training already runs on a Ray cluster, data arrives through Ra
 
 In essence, DDP, FSDP2, and ZeRO describe how training state and communication behave. Ray Train, Kubernetes operators, and managed training services describe how worker processes receive resources, start together, report progress, and restart.
 
-## Checkpoint the Complete Distributed Run
+## Save Everything Needed To Resume Distributed Training
 <!-- section-summary: A resumable distributed checkpoint stores every state that influences the next optimizer update and publishes only complete shard sets. -->
 
 A model-weights file is enough for many inference tasks. Resuming training requires more. The checkpoint must recreate the state that determines the next batch, gradient, and optimizer update.
@@ -368,10 +357,6 @@ flowchart TD
     D -->|"No"| F["Leave Checkpoint Uncommitted"]
     E --> G["Restore Test<br/>(Load and Run the Next Steps)"]
 
-    classDef state fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef success fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef failure fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,C state
     class D decision
     class E,G success
@@ -382,7 +367,7 @@ Write shard files under a temporary checkpoint prefix. Publish the manifest only
 
 Restore testing is part of checkpoint validation. Start a separate run, load the checkpoint, execute several steps, and compare loss and progress with a continuous baseline. Also test the supported topology change, such as loading eight-way shards onto four workers, before relying on resharding during an incident.
 
-## Recover Through Rendezvous and Coordinated Restart
+## Restart The Worker Group After A Failure
 <!-- section-summary: Synchronous workers recover as a group because one missing rank can leave the others blocked inside a collective. -->
 
 A distributed worker can fail because its process crashes, its GPU resets, its host disappears, or the scheduler preempts it. The remaining workers may be blocked inside a collective and cannot know that their shared optimizer step is complete. Recovery therefore happens at the worker-group level.
@@ -429,7 +414,7 @@ Measure more than aggregate GPU utilization. Record examples or tokens per secon
 
 The best cluster size is the smallest allocation that satisfies the completion objective with acceptable cost and reliability. An eight-GPU run may be worthwhile for a release deadline even at 70 percent efficiency. A routine nightly retrain may choose four GPUs because it still meets the window at lower cost.
 
-## Managed Platforms Implement the Same Contract
+## How Managed Platforms Run Distributed Training
 <!-- section-summary: Managed training services provision workers, networks, images, logs, and storage around the same parallelism and recovery decisions. -->
 
 At a high level, a managed training platform turns a job request into a running worker group. It finds the requested accelerator capacity and starts the selected image on each node. The service gives the workers enough connection information to form their process group. Logs and artifacts then return through the platform's storage and monitoring paths, while the job policy controls retries after a host failure.

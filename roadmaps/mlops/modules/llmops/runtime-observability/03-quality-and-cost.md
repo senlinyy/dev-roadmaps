@@ -12,18 +12,18 @@ id: "article-mlops-llmops-quality-and-cost"
 1. [What Quality And Cost Mean](#what-quality-and-cost-mean)
 2. [Start With A User Task And An Acceptable Outcome](#start-with-a-user-task-and-an-acceptable-outcome)
 3. [Build A Quality Scorecard](#build-a-quality-scorecard)
-4. [Understand Where Quality Evidence Comes From](#understand-where-quality-evidence-comes-from)
-5. [Calculate The Complete Cost Of A Run](#calculate-the-complete-cost-of-a-run)
-6. [Turn Spend Into Unit Economics](#turn-spend-into-unit-economics)
-7. [Record Usage Without Hard-Coding Prices](#record-usage-without-hard-coding-prices)
-8. [Give Each Observability Signal A Clear Job](#give-each-observability-signal-a-clear-job)
+4. [Use Several Sources Of Quality Evidence](#use-several-sources-of-quality-evidence)
+5. [Calculate The Full Cost Of A Run](#calculate-the-full-cost-of-a-run)
+6. [Measure Cost Per Successful User Outcome](#measure-cost-per-successful-user-outcome)
+7. [Record Usage Separately From Changing Prices](#record-usage-separately-from-changing-prices)
+8. [Use Metrics, Traces, Logs, And Evals For Different Questions](#use-metrics-traces-logs-and-evals-for-different-questions)
 9. [Store Detailed Evidence Safely](#store-detailed-evidence-safely)
-10. [Build Dashboards Around Decisions](#build-dashboards-around-decisions)
-11. [Set Quality Objectives And Cost Budgets](#set-quality-objectives-and-cost-budgets)
-12. [Diagnose A Quality Or Cost Change](#diagnose-a-quality-or-cost-change)
-13. [Repair Common Sources Of Waste](#repair-common-sources-of-waste)
-14. [Test The Quality-Cost Tradeoff](#test-the-quality-cost-tradeoff)
-15. [Choose A Production Tooling Path](#choose-a-production-tooling-path)
+10. [Build Dashboards For Product And Operating Decisions](#build-dashboards-for-product-and-operating-decisions)
+11. [Set Quality Targets And Cost Budgets](#set-quality-targets-and-cost-budgets)
+12. [Investigate Quality Or Cost Changes](#investigate-quality-or-cost-changes)
+13. [Reduce Common Sources Of Wasted Spend](#reduce-common-sources-of-wasted-spend)
+14. [Test Quality And Cost Tradeoffs Together](#test-quality-and-cost-tradeoffs-together)
+15. [Choose Production Quality And Cost Tools](#choose-production-quality-and-cost-tools)
 16. [Operate A Continuous Quality-Cost Loop](#operate-a-continuous-quality-cost-loop)
 17. [References](#references)
 
@@ -65,8 +65,6 @@ flowchart TD
     F --> G["Join delayed product or human outcomes"]
     G --> H["Calculate quality and cost per task"]
 
-    classDef start fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef work fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef evidence fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef result fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A,B start;
     class C,D work;
     class E,F,G evidence;
@@ -142,7 +140,7 @@ Each measure needs an exact numerator and denominator. It also needs an observat
 
 Slices deserve the same care. A global average can look healthy while one language, task type, customer tier, or tool route fails. Use a bounded set of product-relevant dimensions and require a minimum sample size before making a decision from a small segment.
 
-## Understand Where Quality Evidence Comes From
+## Use Several Sources Of Quality Evidence
 <!-- section-summary: Deterministic checks, evaluators, human judgement, and product outcomes answer different quality questions. -->
 
 Quality is partly latent: the system cannot directly observe whether every answer is genuinely useful and correct. Teams estimate it from several forms of evidence, each with strengths and limitations.
@@ -173,7 +171,7 @@ An evaluator is another measurement system. Calibrate it against reviewed exampl
 
 Suppose a retrieval assistant receives an answer that is fluent and relevant. A deterministic check confirms that citations exist. An LLM judge says the answer is supported. A reviewer later finds that one citation refers to the wrong document version. The incident should improve the evidence system: add document-version checks, include similar cases in the evaluation set, and recalibrate the supportedness scorer. The repair is broader than changing a dashboard threshold.
 
-## Calculate The Complete Cost Of A Run
+## Calculate The Full Cost Of A Run
 <!-- section-summary: Complete run cost includes model usage, data access, tools, infrastructure, evaluation, and human work. -->
 
 The provider charge for a model call is **model cost**. The amount required to operate the user task is **workflow cost**. The difference matters most in agentic and retrieval-heavy applications.
@@ -205,8 +203,6 @@ flowchart TD
     F1 --> H
     G1 --> H
 
-    classDef task fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef category fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef detail fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef total fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A task;
     class B,C,D,E,F,G category;
     class B1,C1,D1,E1,F1,G1 detail;
@@ -223,7 +219,7 @@ Evaluation also has a cost. Running an LLM judge on every production trace can a
 
 Human work belongs in the model if it changes the operating decision. A low model bill can coexist with expensive manual correction. For a workflow that requires expert review, report machine cost and human minutes separately; combine them only after finance and operations agree on a conversion method.
 
-## Turn Spend Into Unit Economics
+## Measure Cost Per Successful User Outcome
 <!-- section-summary: Unit economics relates technology cost to a product unit that represents completed value. -->
 
 **Unit economics** connects technology spending to the value-producing unit of a product. In LLMOps, useful units include a completed task, accepted draft, resolved case, verified document, successful research run, or active user served.
@@ -278,7 +274,7 @@ GROUP BY workflow, release_version;
 
 The left join keeps every attempted task in the denominator even if its delayed outcome is still missing. Missing-outcome coverage should appear beside the unit-cost result so operators can distinguish a real quality change from a delayed or broken outcome feed. Segment the result by task family, risk tier, language, and route. Comparing unrelated task mixes can make a release appear more or less efficient than it truly is.
 
-## Record Usage Without Hard-Coding Prices
+## Record Usage Separately From Changing Prices
 <!-- section-summary: Telemetry preserves raw usage and joins it to a versioned price catalogue for reproducible cost calculation. -->
 
 Provider prices and billing categories change. An event emitted today should remain interpretable after a price update. Store raw usage separately from the catalogue used to value it.
@@ -317,7 +313,7 @@ Label the view clearly. Revaluing old usage with current rates can help compare 
 
 Caching needs similar care. Some providers report cached input separately; newer model families may also report cache-write usage. A cache hit is not automatically a saving because an unnecessary cache write, low reuse, stale result, or extra validation call can erase the benefit. Track the provider’s reported categories and calculate the net effect for the complete task.
 
-## Give Each Observability Signal A Clear Job
+## Use Metrics, Traces, Logs, And Evals For Different Questions
 <!-- section-summary: Metrics reveal fleet patterns, traces explain runs, events preserve decisions, and evaluations measure behaviour against criteria. -->
 
 Production observability uses several signals because each answers a different question. Think of them as several views of the same workflow: metrics reveal the broad pattern, while detailed evidence explains individual runs and measures their results.
@@ -338,8 +334,6 @@ flowchart TD
     D --> E["Review evaluator and product outcomes"]
     E --> F["Form a cause-specific repair"]
 
-    classDef fleet fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef inspect fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef evidence fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef action fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A,B fleet;
     class C,D inspect;
     class E evidence;
@@ -374,8 +368,6 @@ flowchart TD
     E --> K["Run investigation"]
     J --> K
 
-    classDef source fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef transport fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef store fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef use fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A,G,H source;
     class B,C transport;
     class D,E,F,I store;
@@ -388,10 +380,10 @@ Sampling should protect rare failures. Random sampling alone may discard every s
 
 For a Databricks implementation, MLflow Tracing can capture application traces and evaluation feedback, while Delta tables provide a governed place for cost events and delayed outcome joins. Unity Catalog can govern access to the resulting data assets. Production teams can implement the same separation with OpenTelemetry, a trace backend, Prometheus-compatible metrics, and Snowflake, BigQuery, PostgreSQL, or another governed analytical store.
 
-## Build Dashboards Around Decisions
+## Build Dashboards For Product And Operating Decisions
 <!-- section-summary: A dashboard connects product health to changed segments and then to representative runs. -->
 
-A useful dashboard connects a fleet-level change to the part of the workflow that caused it. It should help a product owner understand the outcome and help an engineer reach representative runs without searching across unrelated tools. Three questions organize that path:
+A quality-and-cost dashboard connects a fleet-level change to the part of the workflow that caused it. It should help a product owner understand the outcome and help an engineer reach representative runs without searching across unrelated tools. Three questions organize that path:
 
 1. Is the product still delivering acceptable outcomes?
 2. Which workflow, release, route, or segment changed?
@@ -407,7 +399,7 @@ Coverage belongs on the dashboard. If only 5% of production tasks receive an LLM
 
 A concrete investigation might start from a 25% rise in cost per accepted task. The breakdown shows one document type and one release. Example traces reveal that a parser change causes schema validation to fail, so the orchestrator repeats the model call with the same invalid instruction. The useful dashboard connects the aggregate alert to that repeated step without placing raw document IDs in metric labels.
 
-## Set Quality Objectives And Cost Budgets
+## Set Quality Targets And Cost Budgets
 <!-- section-summary: Objectives define acceptable service behaviour, while budgets contain individual runs and total consumption. -->
 
 A **quality objective** defines the level of product behaviour the team intends to maintain. A **cost target** defines the expected resource consumption per value-producing unit. A **budget** sets a boundary on consumption.
@@ -444,7 +436,7 @@ The values above are examples rather than universal defaults. Derive limits from
 
 Alerts should distinguish growth from inefficiency. Total spend can rise because traffic grows while cost per successful task remains stable. Unit cost can rise with flat traffic because contexts expand or retries increase. Monitor both total consumption and unit economics.
 
-## Diagnose A Quality Or Cost Change
+## Investigate Quality Or Cost Changes
 <!-- section-summary: Investigation verifies evidence, locates the changed population, examines run structure, and tests one causal hypothesis. -->
 
 An alert reports that a measured condition crossed a boundary. It does not identify the cause. A disciplined investigation separates failures in the evidence pipeline from genuine changes in application behaviour before the team changes a model or rolls back a release.
@@ -470,9 +462,6 @@ flowchart TD
     K -->|No| H
     K -->|Yes| L["Promote and keep monitoring"]
 
-    classDef alert fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px; classDef verify fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px;
-    classDef inspect fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px; classDef test fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px;
-    classDef good fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A alert;
     class B,C,D verify;
     class E,F,G inspect;
@@ -489,12 +478,12 @@ The direction of change narrows the search:
 
 Suppose a knowledge assistant costs more after a release. The changed slice contains questions about recently updated procedures. Traces show failed retrieval followed by two broad searches and a larger-model fallback. The durable repair is likely in indexing freshness or metadata, followed by a regression case for that procedure. Routing every request to a cheaper model would leave the retrieval failure in place.
 
-## Repair Common Sources Of Waste
+## Reduce Common Sources Of Wasted Spend
 <!-- section-summary: Effective optimization removes a measured source of unnecessary work and verifies the result against the same quality scorecard. -->
 
 Waste means resource consumption that does not contribute enough to the acceptable outcome. The solution depends on the location of that waste.
 
-### Context keeps growing
+### Stop Unbounded Context Growth
 
 Repeated instructions, full conversation history, overly broad retrieval, and duplicated tool output can inflate input usage and latency.
 
@@ -504,7 +493,7 @@ Remove duplicated instructions. Retrieve fewer, better passages. Summarize or co
 
 OpenAI’s cost and latency guidance recommends reducing input and output tokens, making fewer requests, and selecting smaller models where evaluation supports the choice. Prompt caching can improve repeated-prefix efficiency, though current accounting differs across model families. Keep stable reusable prefixes together, record cache read and write usage, and compare net task cost.
 
-### The orchestrator repeats work
+### Prevent Repeated Workflow Steps
 
 A retry loop may turn one recoverable error into several expensive model calls. Common causes include ambiguous stop conditions, invalid structured output, non-idempotent tools, and retry policies that treat permanent errors as transient.
 
@@ -512,31 +501,31 @@ Classify failures before retrying. A timeout may deserve bounded exponential bac
 
 For example, if traces show three calls producing the same invalid JSON, improve the schema description and validator feedback, then allow one targeted repair attempt. Add the failing payload shape to regression tests. A lower retry limit alone protects cost but may leave users with avoidable failures.
 
-### Retrieval work produces little evidence
+### Reduce Retrieval That Adds Little Evidence
 
 Search, reranking, and long context can consume resources while returning irrelevant or stale material. Measure retrieval separately: query count, hit rate, selected-document versions, reranker latency, and citation support.
 
 Repair the earliest broken layer. Update stale source ingestion, fix metadata filters, improve chunking, or rewrite the query before changing the answer model. Test the repair on a retrieval evaluation set, then verify answer quality and complete task cost.
 
-### A cache has high activity and low value
+### Remove Or Fix Low-Value Caching
 
 A high cache-hit rate looks efficient, yet reused content may be stale or may trigger extra validation and correction. Define cache value as avoided correct work.
 
 Inspect cache identity, freshness, invalidation, and downstream outcomes. Include the model route, prompt version, tool-policy version, knowledge version, and relevant user scope in the key. Apply a time-to-live that matches data freshness. Remove caching from paths where safe identity or invalidation cannot be guaranteed.
 
-### A large model handles simple tasks
+### Route Simple Tasks To A Smaller Model
 
 Model routing can lower cost if task complexity is predictable. Start with explicit eligible classes, such as language detection, intent classification, extraction with a strict schema, or low-risk drafting. Evaluate each class against the full scorecard.
 
 Run the current and candidate routes on the same representative cases. Compare accepted outcomes, severe errors, latency, and cost. Release by task class and retain a fallback reason in telemetry. Route complexity must not exceed the savings it creates.
 
-### Production evaluation consumes too much capacity
+### Limit Production Evaluation Cost
 
 LLM judges can be expensive, especially across every trace and every score. Split quality controls by purpose. Run deterministic checks on all eligible traffic. Keep all high-risk events and failures. Sample routine successful traces. Apply expensive judges to a smaller stratified sample and periodically review their agreement with experts.
 
 Databricks MLflow 3 supports applying the same scorers in development and sampled production monitoring. Its managed continuous production-monitoring capability is currently Beta, so adoption should include a maturity review and fallback plan. A stable alternative is MLflow tracing plus scheduled evaluation jobs that write scores to governed tables.
 
-## Test The Quality-Cost Tradeoff
+## Test Quality And Cost Tradeoffs Together
 <!-- section-summary: A candidate optimization must prove its effect on representative tasks before gradual production release. -->
 
 Quality and cost changes should be tested as product changes. The candidate includes every altered component: model route, prompt, context policy, tool set, cache behaviour, orchestration limits, and evaluator version.
@@ -558,9 +547,6 @@ flowchart TD
     H -->|Yes| I["Expand gradually"]
     I --> J["Keep rollback and monitoring active"]
 
-    classDef define fill:#164E63,stroke:#67E8F9,color:#ECFEFF,stroke-width:2px; classDef evaluate fill:#312E81,stroke:#A5B4FC,color:#EEF2FF,stroke-width:2px;
-    classDef decide fill:#3F2A00,stroke:#FACC15,color:#FEFCE8,stroke-width:2px; classDef stop fill:#7F1D1D,stroke:#FCA5A5,color:#FEF2F2,stroke-width:2px;
-    classDef ship fill:#14532D,stroke:#86EFAC,color:#F0FDF4,stroke-width:2px;
     class A define;
     class B,C,F,G evaluate;
     class D,H decide;
@@ -572,7 +558,7 @@ Offline results cannot reproduce every production condition. Use shadow traffic 
 
 Some candidates form a **quality-cost frontier**: no candidate is both cheaper and better on every dimension. The decision then depends on risk and product value. A high-risk legal review may choose a costlier configuration with stronger supportedness. A low-risk suggestion feature may prefer a faster, cheaper route with similar acceptance.
 
-## Choose A Production Tooling Path
+## Choose Production Quality And Cost Tools
 <!-- section-summary: A production stack needs tracing, aggregate metrics, evaluations, governed analytical joins, dashboards, and budget controls. -->
 
 The architecture matters more than a product list. Teams need a path from application events to a production decision, with enough detail to investigate one run and enough structure to compare thousands of tasks. Six capabilities support that path:

@@ -11,18 +11,18 @@ id: "article-mlops-model-evaluation-segment-evaluation-edge-cases"
 
 1. [Why One Average Can Hide a Production Failure](#why-one-average-can-hide-a-production-failure)
 2. [Segment, Slice, Cohort, and Edge Case Mean Different Things](#segment-slice-cohort-and-edge-case-mean-different-things)
-3. [Start With the Release Population](#start-with-the-release-population)
-4. [Build a Segment Taxonomy From Real Product Boundaries](#build-a-segment-taxonomy-from-real-product-boundaries)
-5. [Use Intersections Without Creating Dashboard Noise](#use-intersections-without-creating-dashboard-noise)
-6. [Read Every Segment Metric With Its Evidence](#read-every-segment-metric-with-its-evidence)
+3. [Define Which Cases The Model Is Allowed To Handle](#define-which-cases-the-model-is-allowed-to-handle)
+4. [Choose Groups From Real Product, Data, Policy, And System Boundaries](#choose-groups-from-real-product-data-policy-and-system-boundaries)
+5. [Check Important Group Combinations Without Flooding The Dashboard](#check-important-group-combinations-without-flooding-the-dashboard)
+6. [Interpret Every Segment Metric With Counts And Uncertainty](#interpret-every-segment-metric-with-counts-and-uncertainty)
 7. [Collect Better Evidence for Rare and High-Harm Segments](#collect-better-evidence-for-rare-and-high-harm-segments)
 8. [Treat Edge Cases as Boundary Conditions and Failure Modes](#treat-edge-cases-as-boundary-conditions-and-failure-modes)
-9. [Use an Error Taxonomy to Find the Failing Layer](#use-an-error-taxonomy-to-find-the-failing-layer)
-10. [Separate Predeclared Gates From Discovered Slices](#separate-predeclared-gates-from-discovered-slices)
+9. [Group Similar Errors To Find Which Layer Is Failing](#group-similar-errors-to-find-which-layer-is-failing)
+10. [Separate Planned Release Checks From Newly Discovered Groups](#separate-planned-release-checks-from-newly-discovered-groups)
 11. [Compare Candidate and Production Models on Identical Slices](#compare-candidate-and-production-models-on-identical-slices)
-12. [Implement the Framework With Current Evaluation Tools](#implement-the-framework-with-current-evaluation-tools)
-13. [Turn Segment Evidence Into a Release Decision](#turn-segment-evidence-into-a-release-decision)
-14. [Carry the Same Segment Definitions Into Production](#carry-the-same-segment-definitions-into-production)
+12. [How Current Tools Calculate And Record Segment Results](#how-current-tools-calculate-and-record-segment-results)
+13. [Use Segment Results To Approve, Limit, Or Reject A Release](#use-segment-results-to-approve-limit-or-reject-a-release)
+14. [Monitor The Same Segments After Release](#monitor-the-same-segments-after-release)
 15. [The Main Idea](#the-main-idea)
 16. [References](#references)
 
@@ -61,10 +61,6 @@ flowchart TD
     F --> G["Overall result looks healthy"]
     E --> H["One important group<br/>still fails often"]
 
-    classDef population fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef group fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef risk fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A population
     class B,C group
     class D,E,F,G result
@@ -147,7 +143,7 @@ Consider a document classifier:
 
 A good review therefore needs meaningful groups, executable definitions, time-aware cohorts where relevant, and a small set of concrete failure conditions.
 
-## Start With the Release Population
+## Define Which Cases The Model Is Allowed To Handle
 <!-- section-summary: The release population defines which cases the model is expected to serve, so every segment result has a clear denominator and scope. -->
 
 Before choosing segments, define the **release population**.
@@ -189,10 +185,6 @@ flowchart TD
     G --> H
     H --> I["Production router enforces<br/>the same scope"]
 
-    classDef traffic fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef scope fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B traffic
     class C scope
     class E,F,G evidence
@@ -208,10 +200,10 @@ The identifier lets the candidate report, approval record, deployment configurat
 If the business expands the population later, the team evaluates that added scope as a new question.
 The older metric keeps its original meaning.
 
-## Build a Segment Taxonomy From Real Product Boundaries
+## Choose Groups From Real Product, Data, Policy, And System Boundaries
 <!-- section-summary: A segment taxonomy organizes the product, data, policy, and system boundaries that can change model behaviour or user consequences. -->
 
-Once the release population is clear, choose the groups that deserve separate evidence.
+After defining the release population, choose the groups that deserve separate evidence.
 The strongest choices come from how the product works, how the data is produced, how decisions are made, and how the system serves predictions.
 
 This organized set of segment dimensions is a **segment taxonomy**.
@@ -220,7 +212,7 @@ The taxonomy keeps teams from selecting whichever columns look interesting after
 
 Four perspectives uncover most useful segments.
 
-### Product segments describe different uses and consequences
+### Group Cases By Different Product Uses And Consequences
 
 Product segments include use case, customer journey, account stage, item category, language, geography, and new-versus-returning behaviour.
 
@@ -231,7 +223,7 @@ For a triage model, a missed urgent case may carry a different consequence from 
 The question is straightforward: **could this group experience a different benefit, harm, or workflow?**
 If the answer is yes, the group may deserve separate evaluation.
 
-### Data segments describe how the evidence was produced
+### Group Cases By How The Evidence Was Produced
 
 Data segments include source system, missingness pattern, input length, image resolution, label source, feature age, unseen-category status, and confidence in an upstream detector.
 
@@ -243,7 +235,7 @@ Feature availability also deserves attention.
 A fraud model may behave well with complete account history and rely heavily on a fallback score for newly created accounts.
 Separating complete, partially missing, and fallback-feature cases reveals that dependency.
 
-### Policy segments describe how scores become actions
+### Group Cases By How Scores Become Actions
 
 Policy segments include threshold bands, eligibility rules, manual-review routes, automatic-action routes, fallback paths, and different capacity constraints.
 
@@ -254,7 +246,7 @@ Errors near the two thresholds deserve explicit analysis because a small score c
 This perspective connects model behaviour to the actual decision.
 Two cases with similar prediction errors can have very different consequences if one crosses a policy boundary.
 
-### System segments describe the route through production
+### Group Cases By Their Production Route
 
 System segments include model route, client version, serving region, feature-source route, hardware type, and fallback status.
 
@@ -278,9 +270,6 @@ flowchart TD
     F --> G["Executable slice definitions"]
     G --> H["Metrics, evidence limits,<br/>and release consequences"]
 
-    classDef root fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef boundary fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A root
     class B,C,D,E boundary
     class F,G,H result
@@ -296,7 +285,7 @@ They also expose important unknown groups.
 If 4 percent of requests have `language = unknown`, dropping those rows would hide a real production condition.
 Treat unknown and missing values as visible categories until the team understands them.
 
-## Use Intersections Without Creating Dashboard Noise
+## Check Important Group Combinations Without Flooding The Dashboard
 <!-- section-summary: Intersections reveal failures caused by interacting conditions, while deliberate limits keep the review understandable and statistically credible. -->
 
 A model can pass every one-dimensional segment and still fail on a meaningful combination.
@@ -334,10 +323,6 @@ flowchart TD
     G --> I["Use review, pilot, or fallback"]
     D --> J["Avoid unnecessary combinations"]
 
-    classDef start fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef question fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A start
     class B,E question
     class C,D,F,G,J evidence
@@ -353,7 +338,7 @@ A practical taxonomy usually carries many single dimensions and a focused group 
 The exact number depends on the product and evidence volume.
 Every retained intersection should have a traceable purpose.
 
-## Read Every Segment Metric With Its Evidence
+## Interpret Every Segment Metric With Counts And Uncertainty
 <!-- section-summary: A segment score needs counts, coverage, uncertainty, and a comparison point before it can support a release decision. -->
 
 A segment metric can look precise even though it rests on very little evidence.
@@ -393,9 +378,6 @@ flowchart TD
     F --> H
     G --> H
 
-    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef context fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A result
     class B,C,D,E,F,G context
     class H decision
@@ -473,10 +455,6 @@ flowchart TD
     I -->|"Yes"| J["Release within the supported scope"]
     I -->|"Still uncertain"| K["Fallback, human review,<br/>or narrower release"]
 
-    classDef risk fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef method fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A risk
     class B,C,D,E method
     class F,G,H,I evidence
@@ -559,7 +537,7 @@ An edge-case suite complements representative evaluation.
 Passing a curated case proves that the candidate handled that case under the tested conditions.
 The wider population still needs representative data before the team can estimate its error rate.
 
-## Use an Error Taxonomy to Find the Failing Layer
+## Group Similar Errors To Find Which Layer Is Failing
 <!-- section-summary: An error taxonomy turns weak segment metrics into concrete investigations across labels, data, models, policies, and serving paths. -->
 
 A weak segment score tells the team where to look.
@@ -596,10 +574,6 @@ flowchart TD
     I --> J
     J --> K["Re-evaluate every affected segment"]
 
-    classDef result fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef inspect fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef layer fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A result
     class B,C inspect
     class D,E,F,G,H,I layer
@@ -624,7 +598,7 @@ This helps reviewers find differences in data and decision paths instead of expl
 Record the assigned error category, relevant feature or lineage evidence, reviewer confidence, and proposed owner.
 The summary can then show that most errors come from one preprocessing rule or that several independent mechanisms are mixed inside the same segment.
 
-## Separate Predeclared Gates From Discovered Slices
+## Separate Planned Release Checks From Newly Discovered Groups
 <!-- section-summary: Predeclared slices can support release gates, while newly discovered slices need confirmation on fresh evidence before they become permanent rules. -->
 
 Suppose a release report searches hundreds of possible slices after the candidate has been scored.
@@ -659,10 +633,6 @@ flowchart TD
     I -->|"Yes"| J["Add to taxonomy and future gates"]
     I -->|"No"| K["Keep the finding as limited evidence"]
 
-    classDef before fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef confirm fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef discover fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A before
     class B,C,D confirm
     class E,F,G,H discover
@@ -711,10 +681,6 @@ flowchart TD
     H --> I
     I --> J["Overall and segment release evidence"]
 
-    classDef population fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef slice fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef compare fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef result fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B population
     class C,D,E slice
     class F,G,H,I compare
@@ -737,11 +703,11 @@ For example, a new threshold can increase recall and review volume together.
 Evaluate the complete candidate policy and keep the old policy result visible.
 Reviewers can then separate a model change from a threshold change.
 
-## Implement the Framework With Current Evaluation Tools
+## How Current Tools Calculate And Record Segment Results
 <!-- section-summary: TFMA, MLflow, Evidently, and managed evaluation services can automate slice calculations after the population and taxonomy are defined. -->
 
-Once a team has defined the release population, segment taxonomy, evidence fields, and decision rules, it has a repeatable evaluation design.
-The next practical question is how to run that design across a large dataset and keep the result with the candidate model.
+The release population, group definitions, evidence fields, and decision rules form a repeatable evaluation design.
+Current tools can run that design across a large dataset and keep the result with the candidate model.
 
 Evaluation tools automate those responsibilities.
 They apply declared slice rules, calculate metrics, retain per-example evidence, and publish artifacts for a release workflow.
@@ -825,7 +791,7 @@ For release gates, define reviewed conditions explicitly in the pipeline and sto
 
 ### Managed services follow the same framework
 
-SageMaker, Vertex AI, Azure Machine Learning, and Databricks provide managed evaluation, registry, monitoring, and workflow capabilities.
+SageMaker AI, Gemini Enterprise Agent Platform (formerly Vertex AI), Azure Machine Learning, and Databricks provide managed evaluation, registry, monitoring, and workflow capabilities.
 Their APIs and integration details differ.
 The design questions remain the same:
 
@@ -839,7 +805,7 @@ Choose a tool that fits the platform already responsible for models, data, and a
 Avoid duplicating the same segment definitions independently across notebooks, dashboards, and deployment code.
 A shared library, versioned SQL view, or governed feature transformation can keep the membership rules consistent.
 
-## Turn Segment Evidence Into a Release Decision
+## Use Segment Results To Approve, Limit, Or Reject A Release
 <!-- section-summary: Segment results become useful after they lead to an enforceable release scope, fallback, review path, or request for more evidence. -->
 
 A segment report should end with an operational decision.
@@ -871,9 +837,6 @@ flowchart TD
     E --> J
     I --> J
 
-    classDef evidence fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef question fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A evidence
     class B,C,D,H question
     class E,F,G,I,J action
@@ -892,7 +855,7 @@ Release configuration should refer to the population and taxonomy versions used 
 It should also define rollback or fallback behaviour.
 This closes the gap between “the report excluded those rows” and “production actually protects those users.”
 
-## Carry the Same Segment Definitions Into Production
+## Monitor The Same Segments After Release
 <!-- section-summary: Production monitoring reuses the evaluation taxonomy so teams can see traffic mix, coverage, model quality, and route changes for the same populations. -->
 
 Offline evaluation is a snapshot.
@@ -933,10 +896,6 @@ flowchart TD
     I -->|"Yes"| J["Investigate, restrict,<br/>fallback, or retrain"]
     I -->|"No"| K["Continue monitoring"]
 
-    classDef request fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef record fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef monitor fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef action fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A request
     class B,C record
     class D,E,F,G,H,I monitor
@@ -985,4 +944,5 @@ It also tells production monitoring which definitions to continue measuring.
 - [Evidently: Reports](https://docs.evidentlyai.com/docs/library/report)
 - [Evidently: Classification quality](https://docs.evidentlyai.com/metrics/preset_classification)
 - [Evidently: Tests](https://docs.evidentlyai.com/docs/library/tests)
+- [Google Cloud: Gemini Enterprise Agent Platform name changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)

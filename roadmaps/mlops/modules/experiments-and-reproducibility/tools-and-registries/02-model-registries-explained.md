@@ -10,18 +10,18 @@ id: "article-mlops-experiments-and-reproducibility-model-registries-explained"
 ## Table of Contents
 
 1. [A Folder of Model Files Cannot Answer a Release Question](#a-folder-of-model-files-cannot-answer-a-release-question)
-2. [Where the Registry Fits](#where-the-registry-fits)
+2. [What A Model Registry Does](#what-a-model-registry-does)
 3. [Give the Model, Version, and Artifact Separate Identities](#give-the-model-version-and-artifact-separate-identities)
-4. [Connect Every Version to Its Lineage](#connect-every-version-to-its-lineage)
-5. [Store the Interface and Validation Evidence](#store-the-interface-and-validation-evidence)
-6. [Use Aliases and Tags Without Losing Version Identity](#use-aliases-and-tags-without-losing-version-identity)
+4. [Trace Every Model Version Back To Its Training Inputs](#trace-every-model-version-back-to-its-training-inputs)
+5. [Record Expected Inputs, Outputs, And Validation Results](#record-expected-inputs-outputs-and-validation-results)
+6. [Use Movable Labels Without Changing Model Versions](#use-movable-labels-without-changing-model-versions)
 7. [Make Ownership, Permissions, and Approval Explicit](#make-ownership-permissions-and-approval-explicit)
-8. [Treat Promotion as Release Intent](#treat-promotion-as-release-intent)
+8. [Record What A Model Version Is Approved To Do](#record-what-a-model-version-is-approved-to-do)
 9. [Retain Enough Evidence for Audit and Rollback](#retain-enough-evidence-for-audit-and-rollback)
 10. [Keep the Registry Separate From Deployment](#keep-the-registry-separate-from-deployment)
-11. [Implement the Pattern With MLflow 3](#implement-the-pattern-with-mlflow-3)
-12. [Understand Managed Registry Semantics](#understand-managed-registry-semantics)
-13. [Let a Release Gate Read the Registry Record](#let-a-release-gate-read-the-registry-record)
+11. [Implement A Model Registry With MLflow 3](#implement-a-model-registry-with-mlflow-3)
+12. [Compare How Managed Registries Represent Models](#compare-how-managed-registries-represent-models)
+13. [Check Registry Evidence Before Deployment](#check-registry-evidence-before-deployment)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
@@ -38,7 +38,7 @@ You can think of the registry as the model system's control desk. It rarely stor
 
 The visible outcome during the incident is a dependable rollback subject: an immutable version such as `fraud-risk/33`, plus the artifact digest, feature contract, serving environment, and approval history required to restore it safely.
 
-## Where the Registry Fits
+## What A Model Registry Does
 <!-- section-summary: The registry narrows many experimental outputs into governed model versions and hands exact release intent to deployment automation. -->
 
 Model development produces many runs, checkpoints, and evaluation reports. Production systems need a smaller set of candidates with stable identities and reviewed evidence. The registry sits between those two worlds.
@@ -88,13 +88,13 @@ validation_status: pending_review
 
 The version number is an identity inside one registry namespace. It is never a quality score. Version 35 can perform worse than version 34, and two different registries can assign different version numbers to equivalent artifacts. The artifact digest gives the release system a stronger byte-level comparison where the packaging format supports stable hashing.
 
-### Why Immutability Matters
+### Why A Model Version Must Stay Unchanged
 
 Suppose a model engineer replaces the weights behind version 34 after a latency test. The approval record still refers to “version 34,” yet reviewers evaluated different bytes. An incident team can no longer reconstruct the decision. Creating a new version preserves both histories: version 34 remains the reviewed candidate, and version 35 represents the changed artifact.
 
 Azure Machine Learning enforces this idea for model assets by allowing updates to description and tags while keeping the other model-version properties immutable. MLflow and other registries express the same operational pattern through versioned model records. Platform teams should also protect the underlying artifact path from overwrite and deletion.
 
-## Connect Every Version to Its Lineage
+## Trace Every Model Version Back To Its Training Inputs
 <!-- section-summary: Lineage connects a registry version to the run, logged model, data, code, configuration, and environment that produced it. -->
 
 **Lineage** is the evidence chain that explains where a model version came from. In essence, it lets a reviewer walk backward from a production identity to the exact training process and inputs that created it.
@@ -116,7 +116,7 @@ Consider a demand forecast that starts underestimating holiday volume. The model
 
 Lineage has limits. A link to `main` or an unversioned table gives a location, though it cannot recreate historical state. Strong lineage uses immutable commits, dataset versions or manifests, pinned environments, and stable artifact identifiers.
 
-## Store the Interface and Validation Evidence
+## Record Expected Inputs, Outputs, And Validation Results
 <!-- section-summary: A deployable registry version needs an input-output contract and the evidence that supports its release claims. -->
 
 A model file can load successfully and still be unusable by its service. The service may send strings where training expected floats, omit a required feature, change column order, or interpret an output incorrectly. A registry therefore needs an **interface contract** alongside the artifact.
@@ -139,7 +139,7 @@ Quality evidence compares the candidate with its baseline. The primary metric an
 
 The registry database is a poor home for a large report. Store compact decision fields as version metadata and link immutable reports as artifacts. The trust behind a tag such as `validation_status=passed` comes from its links to the policy version, evaluator, report, and exact model version.
 
-## Use Aliases and Tags Without Losing Version Identity
+## Use Movable Labels Without Changing Model Versions
 <!-- section-summary: Versions stay fixed, aliases provide movable names, and tags describe review or lifecycle state without rewriting model identity. -->
 
 An **alias** is a movable name that points to one immutable version. You can think of `candidate`, `champion`, or `rollback` as labeled pointers. Version 34 remains version 34, while the `champion` alias may move from version 33 to version 34 after approval.
@@ -190,7 +190,7 @@ Suppose the clinical validator finds a large error increase for rare procedure c
 
 Provider capabilities vary. Open-source MLflow supplies registry APIs and metadata; access control depends on MLflow Authentication or the surrounding managed platform. Unity Catalog adds centralized privileges, ownership, auditing, and cross-workspace governance. SageMaker uses IAM and resource policies around model package groups and versions. The organization's approval policy should remain explicit even where the provider offers a convenient status field.
 
-## Treat Promotion as Release Intent
+## Record What A Model Version Is Approved To Do
 <!-- section-summary: Promotion records that a reviewed version may enter a release phase, while deployment automation performs the runtime change. -->
 
 **Promotion** means the organization has advanced a model version to a new release intent. For example, version 34 moves from “candidate” to “approved for shadow,” and later to “approved for canary.” The artifact often stays at the same immutable location. The registry changes the reviewed status, protected alias, or environment-specific record that automation consumes.
@@ -243,7 +243,7 @@ flowchart TD
 
 The same separation applies to rollback. The registry identifies the approved recovery version and its evidence. The deployment controller restores it, verifies runtime health, and records the outcome. Airflow, Dagster, Argo Workflows, GitHub Actions, cloud pipelines, or a managed deployment service may perform that work. The registry remains the source of governed model identity across those execution choices.
 
-## Implement the Pattern With MLflow 3
+## Implement A Model Registry With MLflow 3
 <!-- section-summary: MLflow 3 tracks models as first-class objects and registers selected logged models as governed versions with signatures, aliases, and tags. -->
 
 MLflow 3 separates the rich tracking identity of a **logged model** from the governed release identity of a **registered model version**. A logged model receives a unique model ID, can represent a checkpoint within a run, and can carry model-specific parameters and metrics. Registration places the selected model under a stable registered-model name and version.
@@ -298,7 +298,7 @@ release_version = resolved.version
 
 The deployment request should carry `release_version`, the exact artifact identity, and the runtime configuration. That preserves attribution if the alias later moves. Open-source MLflow registries need a database-backed backend store, and production access controls need MLflow Authentication or a governed managed backend.
 
-## Understand Managed Registry Semantics
+## Compare How Managed Registries Represent Models
 <!-- section-summary: Managed registries implement the shared identity-and-evidence pattern through different resources, permissions, aliases, and deployment integrations. -->
 
 Managed registries share broad goals, though their objects and lifecycle rules differ. A portable release process maps the organization's contract onto each platform instead of assuming identical APIs.
@@ -315,11 +315,11 @@ SageMaker groups versions in a **Model Package Group**. Each **model package** i
 
 An `Approved` status expresses eligibility for deployment. A SageMaker Project or EventBridge-driven workflow may react to that status, yet the status change and endpoint update remain distinct operations. Deployment creates a SageMaker model and endpoint configuration, then creates or updates an endpoint. IAM and model-package-group resource policies govern who can register, approve, share, and deploy versions.
 
-### Vertex AI Model Registry
+### Gemini Enterprise Agent Platform Model Registry
 
-Vertex AI Model Registry organizes several versions beneath one model resource. Version aliases are mutable within that model, and one version carries the required `default` alias. Custom aliases can express roles such as a stable or candidate version. A model version can also carry description, labels, and evaluation information.
+Gemini Enterprise Agent Platform Model Registry (formerly Vertex AI Model Registry) organizes several versions beneath one model resource. Version aliases are mutable within that model, and one version carries the required `default` alias. Custom aliases can express roles such as a stable or candidate version. A model version can also carry description, labels, and evaluation information.
 
-The runtime object is separate. Vertex AI deploys a selected model version into an Endpoint as a DeployedModel, and the endpoint owns the traffic split. A deployment request can name a version ID or alias; omitting both selects the default version. Release automation should still record the concrete version that the endpoint loaded.
+The runtime object is separate. Gemini Enterprise Agent Platform deploys a selected model version into an Endpoint as a DeployedModel, and the endpoint owns the traffic split. A deployment request can name a version ID or alias; omitting both selects the default version. Release automation should still record the concrete version that the endpoint loaded.
 
 ### Azure Machine Learning Registries
 
@@ -327,7 +327,7 @@ Azure Machine Learning represents a registered model as a versioned model asset.
 
 Azure Machine Learning registries also share models, environments, components, and data assets across workspaces. This makes the registry useful for development, test, and production workspaces that live in separate subscriptions or regions. A model can be published to the registry and deployed from that asset into an endpoint in another workspace. Azure's versioned asset and archive semantics differ from MLflow's alias-centered workflow, so release code should use Azure's native identifiers and permissions.
 
-## Let a Release Gate Read the Registry Record
+## Check Registry Evidence Before Deployment
 <!-- section-summary: A release gate converts registry evidence into a clear allow or deny decision for one exact version and target release phase. -->
 
 A registry provides the evidence source for an automated release gate. The gate evaluates one immutable version against a versioned policy. It should resolve aliases once, inspect the exact version record, verify evidence links and permissions, and emit a decision that a human can understand.
@@ -377,7 +377,8 @@ The registry records identity and intent. Deployment automation changes endpoint
 - [Amazon SageMaker AI: Model Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html) - Official model package group, version, metadata, lineage, approval, and deployment overview.
 - [Amazon SageMaker AI: Register a Model Version](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-version.html) - Official model-package registration and approval-status fields.
 - [Amazon SageMaker AI: Deploy a Model From the Registry](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-deploy.html) - Official separation between an approved model package and endpoint deployment.
-- [Vertex AI: Use Model Version Aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias) - Official model-version alias, required default alias, and upload semantics.
-- [Vertex AI: Endpoint and DeployedModel API](https://docs.cloud.google.com/vertex-ai/docs/reference/rpc/google.cloud.aiplatform.v1) - Official runtime resources, version references, and endpoint traffic split semantics.
+- [Gemini Enterprise Agent Platform: Use Model Version Aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias) - Official model-version alias, required default alias, and upload semantics.
+- [Gemini Enterprise Agent Platform: Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction) - Official model registry, version, alias, evaluation, and endpoint relationship.
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes) - Official mapping from the former Vertex AI platform name to the current name.
 - [Azure Machine Learning: Work With Registered Models](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-models?view=azureml-api-2) - Official model-version immutability, archive behavior, asset URIs, and CLI or SDK lifecycle operations.
 - [Azure Machine Learning: Registries for MLOps](https://learn.microsoft.com/en-us/azure/machine-learning/concept-machine-learning-registries-mlops?view=azureml-api-2) - Official cross-workspace registry pattern for models, environments, components, and data assets.

@@ -10,19 +10,19 @@ id: "article-mlops-llmops-prompt-versioning-release"
 ## Table of Contents
 
 1. [Prompt Changes Alter Production Behaviour](#prompt-changes-alter-production-behaviour)
-2. [Four Terms Prevent Versioning Confusion](#four-terms-prevent-versioning-confusion)
-3. [A Release Bundle Captures Every Behaviour Dependency](#a-release-bundle-captures-every-behaviour-dependency)
-4. [Immutable Versions Create Reliable Evidence](#immutable-versions-create-reliable-evidence)
+2. [Distinguish Drafts, Versions, Aliases, And Releases](#distinguish-drafts-versions-aliases-and-releases)
+3. [Version Every Component That Can Change Behaviour](#version-every-component-that-can-change-behaviour)
+4. [Keep Released Versions Immutable](#keep-released-versions-immutable)
 5. [Drafts, Versions, Aliases, and Runtime Identity Serve Different Jobs](#drafts-versions-aliases-and-runtime-identity-serve-different-jobs)
-6. [Compatibility Has to Be Designed Across the Bundle](#compatibility-has-to-be-designed-across-the-bundle)
-7. [Review Meaning Alongside Text](#review-meaning-alongside-text)
-8. [Evaluation Gates Protect Known Behaviour](#evaluation-gates-protect-known-behaviour)
-9. [CI/CD Turns Evidence Into a Release Decision](#cicd-turns-evidence-into-a-release-decision)
+6. [Check Compatibility Across Prompts, Schemas, Tools, And Models](#check-compatibility-across-prompts-schemas-tools-and-models)
+7. [Review What A Prompt Change Does](#review-what-a-prompt-change-does)
+8. [Test Expected Behaviour Before Release](#test-expected-behaviour-before-release)
+9. [Use CI/CD To Block An Unsafe Release](#use-cicd-to-block-an-unsafe-release)
 10. [Shadow and Canary Releases Limit Risk](#shadow-and-canary-releases-limit-risk)
 11. [Traces Reconstruct the Request Without Copying Every Secret](#traces-reconstruct-the-request-without-copying-every-secret)
-12. [Roll Back a Compatible Bundle and Reconcile Its Effects](#roll-back-a-compatible-bundle-and-reconcile-its-effects)
-13. [Choose a Registry That Fits the Operating Model](#choose-a-registry-that-fits-the-operating-model)
-14. [A Release Should Be Explainable and Reversible](#a-release-should-be-explainable-and-reversible)
+12. [Roll Back Compatible Components And Check Completed Actions](#roll-back-compatible-components-and-check-completed-actions)
+13. [Choose Where Prompt Versions And Releases Are Stored](#choose-where-prompt-versions-and-releases-are-stored)
+14. [Make Every Release Explainable And Reversible](#make-every-release-explainable-and-reversible)
 15. [References](#references)
 
 At a high level, **prompt versioning and release** applies normal production discipline to the instructions that shape an LLM application's behaviour.
@@ -65,11 +65,6 @@ flowchart TD
     I -->|"Continue"| J["Promote traffic in stages"]
     I -->|"Restore"| K["Move production to the known-good bundle"]
 
-    classDef author fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef release fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef restore fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A,B,F author
     class C,D evidence
     class G,H,J release
@@ -79,7 +74,7 @@ flowchart TD
 
 The amount of control should match the consequence of the change. A punctuation fix and a new instruction that authorizes account changes should travel through different release lanes. Both still need an identity.
 
-## Four Terms Prevent Versioning Confusion
+## Distinguish Drafts, Versions, Aliases, And Releases
 
 <!-- section-summary: A prompt, template, assembled request, and behaviour release bundle describe different parts of the runtime request. -->
 
@@ -107,7 +102,7 @@ For a document-summary request, the identities might look like this:
 
 This vocabulary makes two questions answerable. The release record explains **what the team approved**. The trace explains **what one request actually used**.
 
-## A Release Bundle Captures Every Behaviour Dependency
+## Version Every Component That Can Change Behaviour
 
 <!-- section-summary: Production behaviour depends on instructions, examples, schemas, tools, context assembly, model identity, settings, and safety policy. -->
 
@@ -125,7 +120,7 @@ The visible instruction text is only one input to an LLM system. A reliable rele
 
 **Output schemas** define the machine-readable response contract. They affect prompting, validation, downstream code, and evaluation. A prompt that requests citations must be paired with a schema and validator that can represent and check citations.
 
-### Runtime policies shape the assembled request
+### Apply Runtime Policies To The Final Request
 
 **Context policy** decides which conversation turns, retrieved documents, memory items, and metadata enter the request. It also defines ordering, filtering, truncation, and compaction. The template may stay unchanged while a new context policy produces very different requests.
 
@@ -149,10 +144,6 @@ flowchart TD
     H --> I["Provider response"]
     I --> J["Validation, tools, and product outcome"]
 
-    classDef bundle fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef component fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef runtime fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef outcome fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A bundle
     class B,C,D,E,F component
     class G,H,I runtime
@@ -181,7 +172,7 @@ evaluation_report: evals/summary-candidate-27
 
 The manifest uses references so each component can have a clear owner and lifecycle. The release pipeline resolves every reference, verifies compatibility, packages the resolved files, and computes the bundle digest. Production receives that resolved artifact. It should not assemble a fresh mixture of whatever each registry currently calls `latest`.
 
-## Immutable Versions Create Reliable Evidence
+## Keep Released Versions Immutable
 
 <!-- section-summary: An immutable version keeps its content fixed, while a digest proves which resolved artifact the system loaded. -->
 
@@ -243,7 +234,7 @@ Alias caching requires an explicit policy. MLflow, for example, caches immutable
 
 Provider capabilities also change. Current OpenAI guidance recommends code-managed prompts with typed parameters for new work. Git history, tests, evaluation checks, and feature flags provide the release controls; reusable prompt objects are being retired. Amazon Bedrock Prompt Management supports saved versions and variants that can include model and inference configuration. These are different operating models. An internal runtime identity keeps the rest of the release process consistent across them.
 
-## Compatibility Has to Be Designed Across the Bundle
+## Check Compatibility Across Prompts, Schemas, Tools, And Models
 
 <!-- section-summary: Prompt, model, tool, schema, context, and safety versions must agree on the contracts they exchange. -->
 
@@ -285,7 +276,7 @@ The pipeline should verify exact versions or supported ranges before evaluation 
 
 The table summarises the boundaries. The release bundle remains the unit that proves one specific combination has been exercised together.
 
-## Review Meaning Alongside Text
+## Review What A Prompt Change Does
 
 <!-- section-summary: A semantic review explains the expected behavioural effect, affected users and capabilities, evidence, risk, and rollback plan. -->
 
@@ -317,7 +308,7 @@ Review ownership follows the affected boundary. A domain specialist reviews poli
 
 Automated semantic checks can highlight changed tool names, placeholders, output fields, token budgets, model settings, and safety clauses. They support human review; they cannot determine the business meaning of a sentence. The pull request should place the semantic change summary beside the raw diff so reviewers can compare intent with implementation.
 
-## Evaluation Gates Protect Known Behaviour
+## Test Expected Behaviour Before Release
 
 <!-- section-summary: Release evaluation compares a candidate with the current bundle across representative, golden, regression, and adversarial cases. -->
 
@@ -351,11 +342,6 @@ flowchart TD
     G -->|"No"| H["Inspect failures and revise"]
     G -->|"Yes"| I["Approve for the permitted rollout stage"]
 
-    classDef cases fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef score fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef fail fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A cases
     class B,C run
     class D,E,F score
@@ -393,13 +379,13 @@ review_sample:
 
 Thresholds should come from the product's risk tolerance and a measured baseline. Copying a number from another application gives it the appearance of precision without the supporting evidence.
 
-## CI/CD Turns Evidence Into a Release Decision
+## Use CI/CD To Block An Unsafe Release
 
 <!-- section-summary: A release pipeline resolves dependencies, builds one immutable bundle, runs evaluations, records evidence, and promotes the same artifact. -->
 
 CI/CD connects prompt review to a repeatable deployment. The pipeline does more than upload text. It produces the evidence that the candidate is complete and eligible for a specific environment.
 
-### Build and evaluate one digest
+### Build The Release Once And Test That Exact Version
 
 A practical pipeline performs these steps:
 
@@ -501,10 +487,6 @@ flowchart TD
     H -->|"Yes"| I["Increase traffic in stages"]
     H -->|"No"| J["Restore known-good bundle"]
 
-    classDef start fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef choice fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef stage fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef stop fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class A start
     class B,H choice
     class C,D,E,F,G,I stage
@@ -553,7 +535,7 @@ If a team needs content for debugging or quality review, it can capture a sample
 
 Reconstruction should be tested. Given a trace fixture, the runtime should resolve the same bundle digest and explain which dynamic sources were used. Exact replay may be impossible after an external document changes or a provider model is retired. The trace should report that limitation instead of silently substituting current data.
 
-## Roll Back a Compatible Bundle and Reconcile Its Effects
+## Roll Back Compatible Components And Check Completed Actions
 
 <!-- section-summary: Rollback restores a known-good compatible bundle, while reconciliation handles requests and external effects already produced by the candidate. -->
 
@@ -576,10 +558,6 @@ flowchart TD
     G --> F
     F --> H["Correct the failure and publish a new candidate version"]
 
-    classDef trigger fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef control fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef inspect fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef recover fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A trigger
     class B,E control
     class C,D,F inspect
@@ -590,7 +568,7 @@ Restoring a prompt does not undo an email, ticket, account update, or payment al
 
 After containment, compare candidate and known-good traces. Inspect assembled context, model identity, output validation, tool choices, policy decisions, latency, and outcomes. The apparent prompt regression may originate from retrieval, a model alias, or a tool change. Add confirmed failure patterns to the regression set before publishing the corrected bundle.
 
-## Choose a Registry That Fits the Operating Model
+## Choose Where Prompt Versions And Releases Are Stored
 
 <!-- section-summary: Git, prompt registries, provider services, object stores, and deployment controls cover different parts of the release lifecycle. -->
 
@@ -622,7 +600,7 @@ OpenAI's current direction for new applications is code-managed prompt helpers w
 
 The tools can vary across organisations. The operating model should still answer the same questions: Who can edit a draft? What makes a version immutable? Which evidence permits promotion? How does runtime resolve and record the concrete version? How quickly can operators restore a compatible bundle?
 
-## A Release Should Be Explainable and Reversible
+## Make Every Release Explainable And Reversible
 
 <!-- section-summary: Mature prompt release engineering connects one reviewed change to one evaluated artifact, one controlled rollout, and one reconstructable runtime identity. -->
 

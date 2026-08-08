@@ -10,16 +10,16 @@ id: "article-mlops-llmops-agent-tracing"
 ## Table of Contents
 
 1. [What Agent Tracing Means](#what-agent-tracing-means)
-2. [The Fundamental Objects: Runs, Traces, and Spans](#the-fundamental-objects-runs-traces-and-spans)
-3. [An Agent Trace Follows the Work](#an-agent-trace-follows-the-work)
-4. [Context Propagation Keeps Distributed Work Connected](#context-propagation-keeps-distributed-work-connected)
-5. [Each Agent Step Needs the Right Evidence](#each-agent-step-needs-the-right-evidence)
-6. [OpenTelemetry Provides the Portable Foundation](#opentelemetry-provides-the-portable-foundation)
-7. [Current Platforms Implement the Model Differently](#current-platforms-implement-the-model-differently)
-8. [Sensitive Data Needs Controls Before Export](#sensitive-data-needs-controls-before-export)
-9. [Sampling, Export, and Storage Form a Production Pipeline](#sampling-export-and-storage-form-a-production-pipeline)
-10. [A Debugging Workflow Moves From Outcome to Cause](#a-debugging-workflow-moves-from-outcome-to-cause)
-11. [Trace Completeness Is Part of Reliability](#trace-completeness-is-part-of-reliability)
+2. [Understand Runs, Traces, And Spans](#understand-runs-traces-and-spans)
+3. [Follow Agent Work Through A Trace](#follow-agent-work-through-a-trace)
+4. [Carry Trace Identity Across Services And Queues](#carry-trace-identity-across-services-and-queues)
+5. [Record The Right Evidence For Each Agent Step](#record-the-right-evidence-for-each-agent-step)
+6. [Use OpenTelemetry For Portable Tracing](#use-opentelemetry-for-portable-tracing)
+7. [Understand How Current Platforms Represent Traces](#understand-how-current-platforms-represent-traces)
+8. [Protect Sensitive Data Before Export](#protect-sensitive-data-before-export)
+9. [Control Trace Volume, Export, And Retention](#control-trace-volume-export-and-retention)
+10. [Investigate An Agent Failure From Outcome To Cause](#investigate-an-agent-failure-from-outcome-to-cause)
+11. [Check Whether Traces Cover Real Runs](#check-whether-traces-cover-real-runs)
 12. [The Main Idea](#the-main-idea)
 13. [References](#references)
 
@@ -57,7 +57,7 @@ Suppose a dashboard shows that successful task completion fell after a release. 
 
 Tracing alone cannot prove that an answer is accurate. A model request can finish successfully and still produce a poor answer. The span status describes the operation, while an evaluator or later product outcome supplies the quality judgment.
 
-## The Fundamental Objects: Runs, Traces, and Spans
+## Understand Runs, Traces, And Spans
 
 <!-- section-summary: A run is the work being performed, a trace is its telemetry record, and spans describe the timed operations inside that record. -->
 
@@ -74,13 +74,13 @@ flowchart TD
     B --> F["Span<br/>validate outcome"]
 ```
 
-### A span describes one operation
+### Use A Span To Describe One Operation
 
 A span has a name, start time, end time, and **span context**. The context contains a trace ID, span ID, trace flags, and trace state. The trace ID groups spans into one trace. The span ID identifies the operation. Parent IDs and links express causal relationships.
 
 The duration helps answer performance questions. The name and structured fields explain what the operation did. A retrieval span might say which index version it queried. A tool span might say which tool contract it used and whether the downstream effect succeeded.
 
-### Attributes, events, status, and links add meaning
+### Record Attributes, Events, Status, And Links
 
 An **attribute** is a key-value fact attached to a span. Examples include `service.name`, model name, prompt version, tool name, token count, or a bounded outcome class. Attributes work well for facts that describe the operation and support filtering.
 
@@ -92,13 +92,13 @@ This distinction matters for agents. A model call that returns a fluent hallucin
 
 A **span link** expresses a causal relationship outside the parent-child tree. It is useful for queued work, batch processing, or a new trace created from an earlier task. The link says “this work was caused by that work” without forcing one parent span to stay open for a long time.
 
-### Product terminology needs a mapping
+### Map Product Terms To Trace Terms
 
 Some tools use **run** as their word for a span. LangSmith, for example, defines a trace as a collection of runs and treats each run as one operation. The OpenAI Agents SDK uses a trace for an end-to-end workflow and records agent, generation, function, handoff, and guardrail spans inside it. The labels differ, although both represent a connected hierarchy of operations.
 
 A team should define a small internal glossary and map each platform into it. That prevents queries, dashboards, and incident notes from using “run” for three different levels of work.
 
-## An Agent Trace Follows the Work
+## Follow Agent Work Through A Trace
 
 <!-- section-summary: The trace hierarchy should mirror the product task, agent loop, and external effects without turning every helper function into telemetry. -->
 
@@ -119,13 +119,13 @@ flowchart TD
     A --> J["Outcome validation"]
 ```
 
-### The root follows the task boundary
+### Set The Root Span To The Task Boundary
 
 An incoming HTTP request is sometimes the task boundary, although durable agents may outlive it. A job can pause for approval, resume on a worker, and continue through several services. In that case, the product workflow is the useful root concept. The API request and worker processing are operations within the broader history or causally linked traces.
 
 Long conversations need a deliberate boundary too. One endless trace for an entire chat can grow too large and obscure the latency of each turn. A practical design uses one trace per user turn or completed task, then connects those traces with a governed conversation or session identifier. LangSmith calls this sequence a thread.
 
-### Span only the operations that explain something
+### Create Spans For Operations That Support Investigation
 
 Most helper functions can remain inside their parent span.
 Create spans around model calls, retrieval, tools, guardrails, handoffs, checkpoints, approvals, external dependencies, expensive transformations, and important state transitions.
@@ -133,13 +133,13 @@ These operations explain behavior or consume meaningful time.
 
 A parser that takes microseconds and has no independent failure mode can remain inside its parent. A parser that enforces a safety contract and rejects malformed tool arguments deserves visible evidence. The deciding question is whether an operator would inspect this operation during a quality, reliability, security, latency, or cost investigation.
 
-### Separate intention from effect
+### Trace The Proposed Action And Actual Effect Separately
 
 Agents often propose a tool call before application code executes it. These are two related facts. The model span can record that the model requested `issue_refund`. A child tool span records schema validation, authorization, approval, execution, and the authoritative result.
 
 If the model requests a refund and validation rejects the arguments, the trace should still show the proposed call. It should also show that no payment effect occurred. Combining both facts into one “tool used” attribute would hide the boundary that protects the system.
 
-## Context Propagation Keeps Distributed Work Connected
+## Carry Trace Identity Across Services And Queues
 
 <!-- section-summary: Context propagation carries trace identity across services, workers, queues, and handoffs so separately emitted spans form one causal history. -->
 
@@ -157,7 +157,7 @@ flowchart TD
     F --> G["Tool service span"]
 ```
 
-### Queues and asynchronous work need explicit tests
+### Test Trace Context Across Queues And Asynchronous Work
 
 HTTP instrumentation often propagates context automatically. Queues, workflow engines, background tasks, and custom tool protocols may need manual configuration. Test each boundary with a known trace and verify the resulting parent-child relationship in the backend.
 
@@ -165,7 +165,7 @@ A producer span can represent publishing a message, and a consumer span can repr
 
 Agent handoffs also cross logical boundaries. A child agent running in the same process can inherit the current context. A remote agent service needs propagated context. Record the source agent, destination agent, handoff reason, and a safe reference to the transferred state.
 
-### Baggage is separate and deserves caution
+### Limit What Trace Baggage Carries
 
 OpenTelemetry **baggage** carries key-value context alongside trace context. A value in baggage can be made available across downstream services. It does not automatically become a span attribute.
 
@@ -173,7 +173,7 @@ Baggage travels in request metadata and may reach third-party services. Avoid cr
 
 Propagation failures should produce their own metrics. Count extracted contexts, missing parents, invalid headers, and exporter drops. A user request can succeed while its trace splits into fragments, leaving the later investigation incomplete.
 
-## Each Agent Step Needs the Right Evidence
+## Record The Right Evidence For Each Agent Step
 
 <!-- section-summary: Model, retrieval, tool, handoff, guardrail, and state spans each require a focused set of evidence tied to their operational role. -->
 
@@ -181,7 +181,7 @@ Useful tracing records the evidence needed to explain each kind of agent step. A
 
 The contract says which identifiers, versions, bounded outcomes, timing values, and safe references belong on the span. Rich content can remain disabled by default or stored separately under stricter access.
 
-### Model spans show the request and provider result
+### Record Model Requests And Provider Results
 
 A model span should identify the provider, requested model, resolved response identifier where available, operation type, and model parameters that materially affect behavior. It can record input and output token usage, cached tokens, finish reason, first-token latency, total latency, retry count, and error type.
 
@@ -189,13 +189,13 @@ Prompt or instruction versions matter more than copying the whole prompt into a 
 
 Tool calling creates an important distinction. The model output may contain a requested tool name and arguments. That proposal belongs to the model interaction. The actual execution, authorization, and side effect belong to the tool span.
 
-### Retrieval spans show what evidence entered the context
+### Record Which Evidence Entered The Context
 
 A retrieval span should record the data source or index version, query strategy, filters, returned count, latency, and safe document identifiers. Similarity scores, reranker version, and top-k value can help explain selection. Raw document content is usually too sensitive and too large for ordinary trace attributes.
 
 Suppose an answer cites an obsolete policy. The trace can show that the current-policy filter was absent and the archived document ranked first. That evidence points toward retrieval configuration. A model-only trace might incorrectly suggest that the model invented the policy.
 
-### Tool spans connect intention, controls, and effect
+### Connect Tool Proposals, Controls, And Effects
 
 A tool span needs to connect the requested capability with its execution result.
 Identify the tool and contract version. Classify the effect and approval state.
@@ -223,7 +223,7 @@ Consider a calendar agent that says a meeting was booked. The trace should revea
 
 `UNSET` says that the operation completed without a technical error. `app.tool.result` records the domain result. The effect reference lets an authorized investigator verify the calendar record without putting event details into the trace.
 
-### Handoffs, guardrails, and state show the control path
+### Record Handoffs, Guardrails, And State Changes
 
 A handoff span should identify the source and destination agent versions, reason category, transferred-context reference, and result. This evidence can reveal a routing loop, lost context, or a specialist that never returned.
 
@@ -234,7 +234,7 @@ Record a safe before-state and after-state, transition name, checkpoint version,
 Avoid recording hidden chain-of-thought.
 The trace needs observable decisions, tool evidence, and application state. Private reasoning tokens provide no required operational evidence.
 
-## OpenTelemetry Provides the Portable Foundation
+## Use OpenTelemetry For Portable Tracing
 
 <!-- section-summary: OpenTelemetry standardizes trace structure, context propagation, export, and shared GenAI names so agent telemetry can move across services and backends. -->
 
@@ -251,7 +251,7 @@ flowchart TD
     D --> F["Security or archive destination"]
 ```
 
-### Semantic conventions give shared names to shared operations
+### Use Shared Names For Common Operations
 
 A **semantic convention** defines common span names and attribute keys for a type of operation. HTTP conventions let different services describe HTTP calls consistently. Generative AI conventions aim to do the same for model and agent work.
 
@@ -261,7 +261,7 @@ The GenAI work is still marked as development and evolves more quickly than the 
 
 This maturity detail changes implementation strategy. Adopt the current standard names where they fit. Keep product fields under a controlled namespace such as `app.*`. Avoid rewriting all historical telemetry each time an experimental attribute changes.
 
-### Manual spans add product meaning
+### Add Product Meaning With Manual Spans
 
 Automatic instrumentation can capture provider calls and common framework operations. Application code still owns product decisions and effects. A focused manual span can add that missing layer:
 
@@ -288,7 +288,7 @@ def execute_approved_tool(tool, arguments, approval):
 
 The code traces a boundary that matters to the product: an approved tool execution. It records bounded metadata and keeps raw arguments out of ordinary telemetry. Provider auto-instrumentation can still create HTTP or database children beneath this span.
 
-## Current Platforms Implement the Model Differently
+## Understand How Current Platforms Represent Traces
 
 <!-- section-summary: OpenAI, LangSmith, and MLflow automate different parts of agent tracing, while the portable framework remains trace, span hierarchy, context, evidence, and outcome. -->
 
@@ -323,13 +323,13 @@ For production, MLflow documents asynchronous logging, trace-level sampling, con
 This implementation is useful for teams that want tracing, evaluation, and ML lifecycle evidence in one platform or on self-managed infrastructure.
 The deployment still needs a production database, retention policy, access controls, and monitoring for asynchronous export queues.
 
-### Keep the architecture open
+### Keep Trace Data Portable
 
 A framework integration can send directly to its hosted backend. A larger platform may export OTLP to an OpenTelemetry Collector and then route to MLflow, LangSmith, a general APM backend, or multiple destinations. The choice depends on evaluation workflow, operations ownership, data residency, cost, and existing observability infrastructure.
 
 Avoid sending the same full payload to several backends without a governance reason. Duplicate exports multiply privacy exposure and storage cost. A portable metadata stream plus a restricted content store often provides a cleaner boundary.
 
-## Sensitive Data Needs Controls Before Export
+## Protect Sensitive Data Before Export
 
 <!-- section-summary: Trace data should be classified, minimized, and redacted inside the application before collectors and backends receive it. -->
 
@@ -349,23 +349,23 @@ flowchart TD
     F --> H["Access-controlled backend"]
 ```
 
-### Redact at the source and again in the pipeline
+### Redact Data In The Application And Pipeline
 
 Application code understands which fields contain account numbers, source code, or protected documents. Redact there before export. MLflow span processors can alter trace inputs and outputs client-side. OpenAI Agents SDK users can disable sensitive generation and function payload capture. Similar controls exist in other tracing integrations.
 
 The OpenTelemetry Collector can provide a second layer through attribute, filter, redaction, or transform processors. This defence catches known prohibited fields and enforces an allowlist. It cannot reliably understand every free-form prompt, so it cannot replace source-side classification.
 
-### Identifiers and baggage need special care
+### Protect Identifiers And Baggage
 
 Raw user IDs and document text create privacy risk and high-cardinality indexes. Use an opaque correlation reference or a one-way token where investigation requires linkage. Keep the mapping in an authorized system.
 
 Baggage deserves stricter review because it travels to downstream services and may enter third-party requests. Never place secrets, API keys, prompt text, or unrestricted personal identifiers in baggage. Accept trace context only as correlation data; it must never grant authorization.
 
-### Test the exported result
+### Inspect Exported Traces For Leaks
 
 Redaction tests should send synthetic secrets, emails, account identifiers, and prohibited document text through every instrumented path. Inspect the Collector output and destination backend. Test error paths too, because exception messages and failed tool arguments often leak data that the success path removes.
 
-## Sampling, Export, and Storage Form a Production Pipeline
+## Control Trace Volume, Export, And Retention
 
 <!-- section-summary: Production tracing controls overhead through deliberate sampling, asynchronous OTLP export, Collector processing, monitored queues, and tiered retention. -->
 
@@ -373,7 +373,7 @@ Capturing every span from every high-volume agent can create substantial network
 
 The common path is application SDK to OTLP exporter, then OpenTelemetry Collector, then one or more backends. The Collector receives data, applies processors, and exports it. Batching reduces network overhead. Memory limits and queues protect the service. Redaction and sampling control data volume.
 
-### Head and tail sampling solve different problems
+### Choose Head Or Tail Sampling
 
 **Head sampling** makes the decision near the start of a trace. It is efficient and useful for a representative percentage of normal traffic. At that point, the system has not seen the final latency, guardrail result, or error.
 
@@ -392,7 +392,7 @@ flowchart TD
 
 Critical workflows may require complete tracing for audit or reconciliation. Regulation may also prohibit dropping certain records. Sampling policy therefore belongs to risk and governance owners as well as the observability team.
 
-### The Collector needs production controls
+### Operate The OpenTelemetry Collector Reliably
 
 The OpenTelemetry Collector is the usual control point for batching, retries, filtering, redaction, transformation, and routing. Use TLS and authenticated exporters. Separate tenant or sensitivity classes if access requirements differ. Pin component versions and check each component’s maturity because Collector components have individual stability levels.
 
@@ -401,13 +401,13 @@ The application should also count local export drops.
 If tracing is asynchronous, process shutdown must flush within a bounded period.
 OpenAI’s Agents SDK exposes `flush_traces()` for cases that need immediate delivery after a unit of work.
 
-### Storage needs more than one retention tier
+### Use Retention Tiers For Trace Data
 
 Recent metadata can stay in an indexed trace backend for incident response and dashboards. Restricted payload evidence can use a shorter retention period and narrower access. Long-term aggregates belong in metrics or a warehouse. Confirmed failure traces can be redacted and promoted into eval datasets with explicit labels.
 
 Trace IDs should connect these stores. The trace carries a safe effect reference. The authoritative service keeps the payment, ticket, or calendar record. The eval system stores the reviewed test case. Each system retains the evidence it is designed to govern.
 
-## A Debugging Workflow Moves From Outcome to Cause
+## Investigate An Agent Failure From Outcome To Cause
 
 <!-- section-summary: Effective agent debugging starts with the user-visible outcome and follows causal spans backward to the first meaningful divergence. -->
 
@@ -425,7 +425,7 @@ flowchart TD
     F --> G["Classify cause and create regression case"]
 ```
 
-### A practical investigation sequence
+### Follow A Repeatable Investigation Sequence
 
 First, confirm the final outcome through the authoritative system or a trusted label. Then verify whether the root span recorded that outcome honestly. Check side-effecting tools before read-only steps because they may require reconciliation.
 
@@ -433,13 +433,13 @@ Next, find the earliest meaningful divergence. A retrieval span may show an arch
 
 Finally, compare the prompt, model, tool contract, retrieval index, guardrail, and application release. One trace identifies a mechanism. Similar traces and metrics show its scope. Add a reviewed failure to the regression suite so the repaired behavior stays protected.
 
-### Several common incidents point to different owners
+### Route Common Incidents To The Correct Owner
 
 A fluent answer grounded in the wrong document points toward retrieval filters, corpus versions, or context assembly. A correct tool request rejected by schema validation points toward a contract mismatch. A duplicate write points toward idempotency or retry behavior. A routing loop points toward handoff rules and state. A trace split across services points toward propagation or instrumentation.
 
 Tracing shortens diagnosis because it separates these mechanisms. It also prevents every agent incident from being described as “the model failed.”
 
-## Trace Completeness Is Part of Reliability
+## Check Whether Traces Cover Real Runs
 
 <!-- section-summary: A trace is investigation-ready only after required stages, versions, tool results, links, and terminal outcomes have been recorded. -->
 
@@ -458,13 +458,13 @@ flowchart TD
     D -->|Yes| E["Investigation-ready trace"]
 ```
 
-### Test observability during releases
+### Test Tracing During Releases
 
 Run synthetic tasks through API, queue, worker, model, and tool boundaries. Confirm the tree shape, required attributes, redaction result, and backend query. Stop a worker before flush and verify the expected loss or recovery behavior. Break propagation deliberately and confirm that completeness metrics detect the fragment.
 
 Instrumentation changes need the same release discipline as application changes. A renamed attribute can break dashboards, sampling policies, and incident queries. A new framework integration can capture raw payloads unexpectedly. Pin versions, review diffs, and keep representative trace fixtures for compatibility tests.
 
-### Monitor the tracing system itself
+### Monitor The Tracing Pipeline
 
 Track SDK export failures, Collector refused spans, queue depth, processor errors, backend ingestion latency, and trace completeness rate. Compare accepted root spans with completed product tasks. A sudden gap means the team may be losing the evidence needed for later incident response.
 

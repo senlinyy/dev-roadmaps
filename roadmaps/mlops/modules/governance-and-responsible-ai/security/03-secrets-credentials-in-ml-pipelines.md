@@ -1,7 +1,14 @@
 ---
-title: "Pipeline Secrets"
-description: "Protect ML pipelines by preferring workload identity, issuing short-lived credentials, isolating unavoidable secrets, and designing rotation and incident response."
-overview: "Pipeline security establishes identity and authorization before credential delivery. This article follows a workload from authentication through credential issuance, runtime delivery, use, audit, rotation, and revocation."
+title: "Secrets And Credentials In ML Pipelines"
+description:
+  "Give every human and workload a scoped identity, prefer short-lived
+  credentials, isolate unavoidable secrets, and design verification, rotation,
+  revocation, and recovery."
+overview:
+  "ML pipelines reach data, artifact stores, registries, APIs, clusters, and
+  production services. This article separates identity, permission, credential,
+  and secret, then follows each access path through issuance, delivery, use,
+  audit, expiry, and incident response."
 tags: ["MLOps", "production", "security"]
 order: 3
 id: "article-mlops-governance-and-responsible-ai-secrets-credentials-in-ml-pipelines"
@@ -12,203 +19,689 @@ aliases:
 
 ## Table of Contents
 
-1. [Separate Identity, Credential, Secret, And Permission](#separate-identity-credential-secret-and-permission)
-2. [Prefer Federated, Short-Lived Workload Identity](#prefer-federated-short-lived-workload-identity)
-3. [Split Pipeline Stages by Authority](#split-pipeline-stages-by-authority)
-4. [Use A Secret Manager For Unavoidable Values](#use-a-secret-manager-for-unavoidable-values)
-5. [Deliver Credentials With A Clear Lifetime](#deliver-credentials-with-a-clear-lifetime)
-6. [Design Rotation Before The First Incident](#design-rotation-before-the-first-incident)
-7. [Prevent And Detect Leakage Before Runtime](#prevent-and-detect-leakage-before-runtime)
-8. [Respond By Credential, Identity, And Effect](#respond-by-credential-identity-and-effect)
-9. [Reduce Secrets, Then Govern The Remainder](#reduce-secrets-then-govern-the-remainder)
-10. [References](#references)
+1. [Identity, Permission, Credential, And Secret Are Separate Parts](#identity-permission-credential-and-secret-are-separate-parts)
+2. [Why Long-Lived Credentials Spread Across The Pipeline](#why-long-lived-credentials-spread-across-the-pipeline)
+3. [Replace Stored Cloud Keys With Short-Lived Workload Access](#replace-stored-cloud-keys-with-short-lived-workload-access)
+4. [GitHub Actions Can Exchange OIDC For Cloud Access](#github-actions-can-exchange-oidc-for-cloud-access)
+5. [Kubernetes Workloads Need Audience-Bound, Scoped Tokens](#kubernetes-workloads-need-audience-bound-scoped-tokens)
+6. [Split Training, Evaluation, Release, And Serving Authority](#split-training-evaluation-release-and-serving-authority)
+7. [Store Non-Federated Secrets In A Secret Manager](#store-non-federated-secrets-in-a-secret-manager)
+8. [Use Dynamic Credentials To Reduce Shared Access](#use-dynamic-credentials-to-reduce-shared-access)
+9. [Keys, Certificates, And Envelope Encryption Have Different Jobs](#keys-certificates-and-envelope-encryption-have-different-jobs)
+10. [Limit Secret Delivery To The Intended Process](#limit-secret-delivery-to-the-intended-process)
+11. [Local Development And Third-Party APIs Need The Same Boundaries](#local-development-and-third-party-apis-need-the-same-boundaries)
+12. [Rotation, Revocation, And Break Glass Need Rehearsal](#rotation-revocation-and-break-glass-need-rehearsal)
+13. [Verify The Federated Path And Remove Static Fallbacks](#verify-the-federated-path-and-remove-static-fallbacks)
+14. [Redact Telemetry Without Removing Useful Security Evidence](#redact-telemetry-without-removing-useful-security-evidence)
+15. [Contain The Identity And Credentials During An Incident](#contain-the-identity-and-credentials-during-an-incident)
+16. [The Main Idea](#the-main-idea)
+17. [References](#references)
 
-An ML pipeline reads warehouses and object stores, pulls container images, writes experiment artifacts, registers models, and deploys services. Each connection needs an identity and permission. Some also need a sensitive value such as an API key, password, private key, or signing secret.
+## Identity, Permission, Credential, And Secret Are Separate Parts
 
-The safest credential is the one the pipeline never stores. Modern cloud and CI platforms can often exchange a verified workload identity for a short-lived token. When a target system still requires a secret value, keep it outside source code and pipeline definitions, deliver only the needed value at runtime, and make rotation and revocation ordinary operations.
+<!-- section-summary: A secure access path names the actor, defines allowed actions, issues bounded proof, and protects any reusable sensitive material. -->
 
-## Separate Identity, Credential, Secret, And Permission
-<!-- section-summary: Identity says which workload is acting, a credential proves that identity, a secret is sensitive stored material, and authorization decides what the workload may do. -->
+At a high level, pipeline security answers four questions: who is acting, what
+may they do, how do they prove who they are, and how long does that proof remain
+usable?
 
-These terms are often collapsed into “secrets,” which makes designs harder to reason about.
+A **human identity** represents a person through an identity provider. A
+developer signs in with multi-factor authentication and receives access
+according to their role. A **workload identity** represents software such as a
+GitHub Actions job, Kubernetes Pod, managed training job, or serving endpoint.
 
-- **Identity** names the actor: for example, the training job for churn model version 12.
-- **Credential** is proof presented during authentication: a projected token, certificate, password, or API key.
-- **Secret** is sensitive material whose disclosure can enable misuse. Some credentials are secrets; an identity name is not.
-- **Authorization** is the policy that permits actions after authentication, such as reading one feature bucket and writing one experiment path.
+A **permission** authorizes an action on a resource. Reading one training-data
+prefix and writing one candidate-artifact prefix are separate permissions.
+Authentication proves identity; authorization evaluates permissions.
 
-Use SlateRiver Media as a supporting example. Its churn-model pipeline runs as a Kubernetes Job. It reads an immutable feature snapshot, writes artifacts, logs to a tracking service, and submits a candidate to the model registry.
+A **credential** is evidence presented during authentication. Passwords, signed
+tokens, access-key pairs, and client certificates are credentials. A **secret**
+is sensitive material whose disclosure may enable misuse. Some credentials are
+secrets. An identity name and a permission policy are not secret values.
 
-```mermaid
-flowchart LR
-    J["Training Job and Kubernetes ServiceAccount"] --> I["Identity provider"]
-    I -->|short-lived scoped token| C["Cloud object and registry APIs"]
-    J --> S["Approved secret delivery path"]
-    V["External secret manager"] --> S
-    S -->|tracking token only| T["Tracking client"]
-    J --> A["Authorization policy"]
-    A --> C
-    A --> V
-    C --> L["Audit events"]
-    V --> L
-    J --> L
-```
+A **token** is usually a bounded credential issued by an authority. It may
+contain or refer to a subject, audience, scopes, issue time, and expiry. A
+**key** is cryptographic material used to sign, encrypt, decrypt, or
+authenticate. A **certificate** binds a public key to an identity through a
+trusted issuer; the corresponding private key remains sensitive.
 
-The job does not need one powerful credential for every dependency. It uses workload identity for cloud APIs and receives a separate narrow token only for the legacy tracking service. Compromise of one path does not automatically grant every permission.
-
-## Prefer Federated, Short-Lived Workload Identity
-<!-- section-summary: Workload identity exchanges a platform-issued assertion for temporary credentials, reducing copied long-lived keys and making trust conditions explicit. -->
-
-With **workload identity federation**, the runtime proves who launched the workload using an identity issued by its platform. A cloud or service identity provider verifies that assertion and issues a short-lived credential. No static cloud access key needs to sit in a repository, CI secret, container image, or Kubernetes Secret.
-
-Kubernetes ServiceAccounts provide namespaced workload identities. Current Kubernetes uses the TokenRequest and projected-volume mechanisms for time-bounded, automatically rotated service-account tokens; manually created long-lived service-account token Secrets are still possible but explicitly discouraged. Cloud platforms can trust selected service accounts through their managed workload-identity mechanisms.
-
-GitHub Actions can similarly request an OpenID Connect (OIDC) token. A cloud role trusts claims such as repository, branch, environment, workflow, and audience, then issues temporary credentials. The trust condition matters: trusting every repository in an organization or every branch can turn a safe mechanism into broad access.
-
-```mermaid
-sequenceDiagram
-    participant W as Pipeline workload
-    participant P as Platform identity issuer
-    participant I as Cloud identity service
-    participant R as Protected resource
-    W->>P: Request assertion for intended audience
-    P-->>W: Short-lived signed identity token
-    W->>I: Exchange assertion for scoped credential
-    I->>I: Verify issuer, subject, audience, and trust policy
-    I-->>W: Temporary credential
-    W->>R: Authorized request
-    R-->>W: Result and audit event
-```
-
-Scope identity by workload and purpose. Training, evaluation, registration, and deployment should not automatically share one service account. A training job that reads features and writes artifacts rarely needs permission to change a production endpoint.
-
-Short lifetime reduces exposure but does not replace least privilege. A five-minute token with administrator access can still cause serious harm. Restrict resource, action, environment, network path, audience, and session where the platform supports them.
-
-## Split Pipeline Stages by Authority
-<!-- section-summary: Training, evaluation, registration, and deployment use separate identities because each stage needs different resources and creates a different security consequence. -->
-
-An end-to-end pipeline often appears as one workflow while its stages have sharply different authority. Data preparation reads source data and writes a governed snapshot. Training reads that snapshot and writes candidate artifacts. Evaluation reads candidates and writes reports. Registration records an approved candidate. Deployment changes production desired state.
-
-Using one identity across the workflow lets a compromised training library promote its own artifact or read production secrets. Separate identities create enforceable stopping points. The training role can write only to a candidate prefix. The evaluator can read candidates without overwriting them. The release role can select an approved digest without reading raw training data. The serving role can read the pinned production artifact without changing registry state.
+Consider a training Pod running as the workload identity `trainer`. Policy
+permits it to read one feature snapshot and write one artifact location.
+Kubernetes provides an identity token intended for a cloud identity service. The
+cloud service verifies that token and returns temporary credentials for the
+allowed resources.
 
 ```mermaid
-flowchart LR
-    D["Data-build identity"] -->|"write snapshot"| S["Governed data"]
-    T["Training identity"] -->|"read snapshot, write candidate"| C["Candidate artifacts"]
-    E["Evaluation identity"] -->|"read candidate, write evidence"| V["Evaluation evidence"]
-    R["Release identity"] -->|"promote approved digest"| P["Production desired state"]
-    O["Serving identity"] -->|"read pinned artifact"| P
+flowchart TD
+    A["Workload Identity<br/>(the training job that is acting)"] --> B["Authentication Proof<br/>(token, key, or certificate)"]
+    B --> C["Identity Authority<br/>(verify issuer, subject, audience, expiry)"]
+    C --> D["Permission Policy<br/>(allowed action on allowed resource)"]
+    D --> E["Protected Resource<br/>(data, artifact, registry, or endpoint)"]
+    E --> F["Audit Evidence<br/>(identity, action, resource, and decision)"]
+
+    class A actor;
+    class B,C,E,F work;
+    class D policy;
 ```
 
-The pipeline orchestrator does not need every downstream permission. It can launch a stage with that stage's service account and pass immutable references rather than credentials. The trust policy restricts which workflow, repository, environment, namespace, or scheduler may assume each role.
+This model exposes design errors. Giving a job an identity does not grant access
+by itself. Short lifetime does not repair administrator permissions. Encrypting
+a static key does not stop every workload that can decrypt it from sharing the
+same identity.
 
-Break-glass authority needs separate handling. An incident operator may require emergency rollback or credential revocation. That role should use stronger authentication, short sessions, explicit reason capture, alerting, and later review. Keeping emergency access outside routine automation reduces the chance that a normal job inherits broad production power.
+## Why Long-Lived Credentials Spread Across The Pipeline
 
-## Use A Secret Manager For Unavoidable Values
-<!-- section-summary: Values that cannot be replaced by workload identity belong in a managed store with access policy, versioning, rotation, audit, and controlled delivery. -->
+<!-- section-summary: A reusable secret can be copied into source, logs, images, artifacts, caches, and child processes long after the original job ends. -->
 
-Some systems still accept only a password, API key, signing key, or client certificate. Store those values in an approved secret manager such as a cloud key vault or HashiCorp Vault. The manager should own encryption, versioning, access policy, audit, and rotation metadata.
+A long-lived credential can be copied into source, logs, images, artifacts,
+caches, and child processes long after the original job ends. This type of
+reusable value is a **static credential**. Cloud access keys, database passwords,
+and third-party API keys often begin this way.
 
-The pipeline definition keeps a reference, not the value. A secret reference should identify the logical purpose and permitted version policy without revealing content. Avoid placing real credentials in Helm values, environment-specific YAML, notebook cells, Docker build arguments, Terraform state, experiment parameters, or model metadata.
+An engineer pastes a key into a notebook for one experiment. Notebook autosave
+stores it. Git captures the notebook. CI prints parameters during debugging. A
+Docker build argument enters image history or cache. An experiment tracker
+records the command. A subprocess inherits the environment. An exception object
+prints a connection string. Deleting the visible line cannot remove all of those
+copies.
 
-Kubernetes Secret objects are an in-cluster delivery primitive, not automatically a full secret-management system. Their `data` fields are base64-encoded, not encrypted by that encoding. Protect etcd with encryption at rest, restrict API access with RBAC, isolate namespaces, and prevent workloads from listing unrelated Secrets. Anyone who can create a Pod in a namespace may be able to mount secrets available there, so workload-creation privileges are security-sensitive.
+Environment variables deserve special caution. They provide a delivery mechanism
+and do not create a security boundary. Debug dumps, crash reports, child
+processes, `/proc` access under some conditions, and telemetry instrumentation
+can expose them. Container and CI systems may also preserve environment
+configuration in job metadata.
 
-External Secrets Operator and similar controllers reconcile values from an external manager into Kubernetes Secrets. This can fit applications that expect native Secret mounts, but it creates another copy and another privileged controller. Configure narrow stores, keys, namespaces, service accounts, refresh policy, and audit. Do not sync a whole application JSON secret when one job needs one field.
+Artifacts and caches cross lifetimes. A temporary build container can disappear
+while its layer, remote cache, log archive, or model bundle remains. Signed URLs
+and bearer tokens can grant access to whoever obtains the string until expiry.
 
-An alternative is a CSI driver, sidecar, init process, or direct application client that retrieves the value at runtime. The right choice depends on whether the application can refresh credentials, whether the value may touch the Kubernetes API, and what failure behaviour is acceptable.
+```mermaid
+flowchart TD
+    A["Static Secret<br/>(one reusable credential value)"] --> B["Developer Surface<br/>(shell history and notebook autosave)"]
+    A --> C["CI Surface<br/>(variables, logs, and artifacts)"]
+    A --> D["Image Surface<br/>(layers, build arguments, and cache)"]
+    A --> E["Runtime Surface<br/>(environment, files, and subprocesses)"]
+    A --> F["Telemetry Surface<br/>(errors, traces, and debug dumps)"]
+    B --> G["Unknown Copies<br/>(revocation becomes urgent)"]
+    C --> G
+    D --> G
+    E --> G
+    F --> G
 
-## Deliver Credentials With A Clear Lifetime
-<!-- section-summary: Runtime delivery defines when a credential appears, which process can read it, whether it can refresh, and how it disappears. -->
+    class A,G secret;
+    class B,C,D,E,F surface;
+```
 
-Common delivery forms include environment variables, mounted files, local agent sockets, and direct API retrieval. Each has tradeoffs.
+The strongest reduction is to avoid issuing the reusable credential. Federation
+and managed workload identity make that possible for many cloud access paths.
 
-Environment variables are easy but can be exposed by debug dumps, child processes, or accidental environment logging. Mounted files support updates and narrower filesystem permissions, but the application must reopen or watch them. Direct retrieval keeps the value out of Kubernetes but makes the application responsible for identity exchange, retry, caching, and refresh. A local agent can centralize those concerns while increasing runtime complexity.
+## Replace Stored Cloud Keys With Short-Lived Workload Access
 
-For the SlateRiver job, the deployment contract might say:
+<!-- section-summary: Federation exchanges a platform-issued identity assertion for temporary target credentials under an explicit trust policy. -->
+
+A pipeline can request temporary cloud access from its existing platform
+identity instead of storing a reusable cloud key. This exchange is called
+**workload identity federation**. The pipeline platform issues a signed identity
+token, and the target cloud verifies that token and its trust policy before
+issuing short-lived credentials.
+
+OpenID Connect, or **OIDC**, is a common protocol for this exchange. The token
+contains claims. Important claims include the issuer, which identifies the
+platform; the subject, which identifies the workload context; the audience,
+which identifies the intended recipient; and timestamps that limit validity.
+
+The target trust policy is the main boundary. A GitHub repository, branch, tag,
+environment, or reusable workflow can influence the subject claim. A Kubernetes
+namespace and service account can identify a Pod workload. Trust every
+repository or every service account and the mechanism grants a much larger
+population the ability to request credentials.
+
+The exchanged cloud credential has its own scope and lifetime. Restrict the role
+to the required actions and resources. Set session duration close to job
+duration. A job that outlives its credential must refresh safely or fail with a
+clear recovery route.
+
+```mermaid
+flowchart TD
+    A["Pipeline Workload<br/>(repository, workflow, Pod, or managed job)"] --> B["Platform Assertion<br/>(signed OIDC token for one audience)"]
+    B --> C["Federation Trust<br/>(issuer, subject, audience, and conditions)"]
+    C --> D["Temporary Credential<br/>(scoped role and short lifetime)"]
+    D --> E["Cloud Request<br/>(authorized resource action)"]
+    E --> F["Automatic Expiry<br/>(credential stops working)"]
+
+    class A actor;
+    class B,D,E,F work;
+    class C trust;
+```
+
+AWS uses role assumption through its security token service. Azure supports
+federated identity credentials and managed identities. Google Cloud supports
+Workload Identity Federation and service-account impersonation. Their claim
+syntax and resource models differ, so follow the current official guide for the
+selected platform.
+
+## GitHub Actions Can Exchange OIDC For Cloud Access
+
+<!-- section-summary: A GitHub Actions job requests an OIDC token and exchanges it for temporary cloud credentials constrained by workflow claims. -->
+
+GitHub Actions can mint an OIDC token for a workflow job after the workflow
+grants `id-token: write`. That permission allows token request; it does not
+grant write access to cloud resources. The cloud trust relationship and role
+policy decide what follows.
+
+### How A GitHub Actions Workflow Proves Its Identity
+
+For AWS, the workflow commonly uses the official AWS credentials action to
+assume a role. The repository stores the role name and region as configuration.
+It stores no AWS access-key pair.
 
 ```yaml
-workload: churn-trainer
-identity:
-  kubernetes_service_account: churn-trainer
-  cloud_role: feature-reader-artifact-writer
-static_cloud_keys: forbidden
-secrets:
-  - purpose: tracking-auth
-    source: vault://ml-platform/tracking/trainer
-    delivery: read_only_file
-    audience: tracking.internal
-    refresh: before_expiry
-    owner: ml-platform
-logging:
-  redact_paths: [/var/run/ml-secrets]
-  environment_dump: forbidden
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  train:
+    environment: ml-training
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/ml-training
+          aws-region: eu-west-1
+      - run: aws s3 cp s3://approved-features/snapshot.parquet ./data/
 ```
 
-The exact platform manifest can be generated from this policy. The important part is that identity, purpose, delivery, refresh, ownership, and logging behaviour are reviewable before the job runs.
+The reviewed commit SHAs in this example correspond to `actions/checkout` v7.0.1
+and `aws-actions/configure-aws-credentials` v6.2.3. A dependency bot can propose
+a later SHA, and the team reviews the upstream change before accepting it.
+`persist-credentials: false` removes the checkout authentication token from the
+local Git configuration because this job performs no later Git operation.
 
-Never bake credentials into an image layer. Deleting a later layer does not remove bytes from earlier layers. Do not pass secrets through command-line arguments when process listings or job metadata can expose them. Prevent debug code from printing all environment variables, request headers, connection strings, signed URLs, or exception objects containing client configuration.
+The pinned Checkout v7.0.1 and Configure AWS Credentials v6.2.3 releases use the
+Node 24 action runtime. A self-hosted GitHub Actions runner therefore needs
+runner application version 2.327.1 or later. Checkout also has a separate runner
+requirement of 2.329.0 or later for authenticated Git commands launched from
+Docker container actions that rely on persisted checkout credentials. This
+sample disables credential persistence and performs no later Git command. The
+Docker container authentication path is therefore outside this workflow's
+execution path.
 
-## Design Rotation Before The First Incident
-<!-- section-summary: Rotation is a state transition involving issuer, consumers, overlap, verification, and revocation rather than a one-click value replacement. -->
+GitHub-hosted runners provide a compatible action runtime. Azure Login and
+Google authentication actions implement corresponding exchanges for their
+clouds; verify their current official setup, release, and runner requirements
+before adoption.
 
-**Rotation** replaces a credential without losing required service. Dynamic credentials rotate automatically through re-issuance. Static secrets require an owner and tested process.
+### How The Cloud Verifies The Workflow's Identity
+
+Restrict the cloud trust policy to the expected GitHub organization, repository,
+and branch or environment. GitHub environments can add required reviewers and
+protect environment secrets. Reviewers govern job entry; the cloud still
+verifies the token claims.
+
+To verify the federated execution path, inspect repository and environment
+secrets for known access-key variables, scan workflow files and history, and
+confirm that the action requests OIDC. Cloud audit logs should contain the
+expected role-assumption or federated sign-in event. Policy should deny
+long-lived key creation for the workload role.
+
+Failure needs a safe path. If OIDC issuance or exchange fails, the job stops
+before accessing protected resources. Avoid an automatic fallback to a stored
+administrator key. Operators can repair trust claims, identity-provider
+configuration, audience, clock, or role policy and rerun the job.
+
+## Kubernetes Workloads Need Audience-Bound, Scoped Tokens
+
+<!-- section-summary: Kubernetes projected service-account tokens bind identity to a workload, audience, and lifetime and can support cloud workload identity. -->
+
+A Kubernetes **ServiceAccount** supplies an identity for workloads in a
+namespace. Current Kubernetes guidance recommends TokenRequest or projected
+token volumes for time-bound service-account tokens. Manually created long-lived
+service-account token Secrets remain possible and are discouraged.
+
+### Bind Each Projected Token To Its Intended Service
+
+A projected token declares an audience and requested expiration. The recipient
+must verify that its expected audience appears in the token. The kubelet
+refreshes the projection before expiry. Bound tokens can also refer to the Pod,
+and Kubernetes validation can reject them after the bound object is deleted.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: evaluator
+  namespace: ml-evaluation
+spec:
+  serviceAccountName: evaluator
+  automountServiceAccountToken: false
+  containers:
+    - name: evaluator
+      image: registry.example/evaluator@sha256:4b8d...
+      volumeMounts:
+        - name: workload-token
+          mountPath: /var/run/workload-identity
+          readOnly: true
+  volumes:
+    - name: workload-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: cloud-identity.example
+              expirationSeconds: 3600
+```
+
+`automountServiceAccountToken: false` prevents the default API token mount. The
+explicit projected token serves the declared external audience. The external
+identity system must validate issuer, signature, subject, audience, expiry, and
+the configured trust mapping.
+
+### Cloud Identity And Kubernetes RBAC Remain Separate
+
+Managed cloud integrations connect a Kubernetes service account to cloud
+identity. AWS currently recommends EKS Pod Identity for supported EKS workloads.
+It requires the EKS Pod Identity Agent and a supported AWS SDK using the default
+credential chain. It runs on Linux EC2 worker nodes, excluding Fargate Pods,
+Windows nodes, Outposts, and EKS Anywhere. IAM Roles for Service Accounts (IRSA)
+remains an alternative for needs such as direct cross-account role assumption
+and environments outside those Pod Identity limits.
+
+Azure Workload Identity and Google Cloud Workload Identity Federation for GKE
+map cluster workload identity into cloud authorization. Verify cluster, region,
+version, and feature requirements in current platform documentation.
+
+RBAC still controls Kubernetes API access. Cloud IAM controls cloud resources. A
+Pod that can assume a cloud role does not automatically need permission to list
+Kubernetes Secrets. Separate these trust boundaries.
+
+Distributed training creates many workers. Give them the same narrow job
+identity only if their resource needs match. A coordinator may require
+scheduling or checkpoint permissions that workers do not. Prevent peer workers
+from receiving deployment or registry-promotion authority.
+
+## Split Training, Evaluation, Release, And Serving Authority
+
+<!-- section-summary: Pipeline stages use separate workload identities because their data, artifact, approval, and production consequences differ. -->
+
+A pipeline looks like one workflow and contains several security boundaries.
+Data preparation reads source data and writes a governed snapshot. Training
+reads the snapshot and writes candidates. Evaluation reads candidates and writes
+evidence. Registration records an approved artifact. Deployment changes
+production state. Serving reads the released artifact and production
+dependencies.
+
+One shared identity lets a compromised training dependency promote its own
+output or reach serving secrets. Separate identities make the intended stopping
+points enforceable.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> CurrentActive
-    CurrentActive --> NewIssued
-    NewIssued --> BothAccepted: overlap permitted
-    BothAccepted --> ConsumersVerified
-    ConsumersVerified --> OldRevoked
-    OldRevoked --> NewCurrent
-    NewIssued --> RolledBack: consumer failure
-    BothAccepted --> RolledBack: validation failure
-    RolledBack --> CurrentActive
+flowchart TD
+    A["Data Identity<br/>(read source and write governed snapshot)"] --> B["Training Identity<br/>(read snapshot and write candidate)"]
+    B --> C["Evaluation Identity<br/>(read candidate and write evidence)"]
+    C --> D["Release Identity<br/>(promote approved immutable digest)"]
+    D --> E["Serving Identity<br/>(read released artifact and runtime dependencies)"]
+
+    class A,B,C,E stage;
+    class D release;
 ```
 
-Not every system supports overlap. When it does, issue a new version, update consumers, verify real authentication, then revoke the old version. When it does not, plan a controlled interruption or a coordinated cutover. Rotation success means consumers use the new credential and the old credential no longer works—not merely that the vault contains a newer value.
+The orchestrator launches each stage with the stage identity and passes
+immutable artifact references. It does not need all downstream permissions.
+Separate production and non-production roles, secret paths, keys, clusters, and
+network routes. A test job should never discover production credentials through
+the same default service account.
 
-Track issuer, consumer inventory, owner, purpose, created and expiry times, last use where available, rotation method, and emergency revocation. Avoid indefinite secrets with unknown consumers. Test expiration: a client that loads a token only at process startup may fail hours after an apparently successful rotation.
+## Store Non-Federated Secrets In A Secret Manager
 
-## Prevent And Detect Leakage Before Runtime
-<!-- section-summary: Secret scanning, policy checks, redaction tests, and build provenance catch common credential paths before a pipeline reaches production. -->
+<!-- section-summary: Managed secret stores protect unavoidable passwords, API keys, private keys, and certificates through access policy, versioning, audit, and rotation. -->
 
-Repository secret scanning detects known token shapes and high-entropy values. Pre-commit checks provide fast feedback; server-side scanning is the enforcement boundary because local hooks can be skipped. Scan Git history, notebooks, fixtures, generated manifests, container build context, and infrastructure plans where appropriate.
+Some dependencies still require a stored value. A third-party API may accept
+only an API key, a legacy database may require a password, and a signing
+integration may require a private key. A managed secret store protects these
+values through access policy, versioning, audit, and rotation. Common choices
+include AWS Secrets Manager, Azure Key Vault, Google Secret Manager, and
+HashiCorp Vault.
 
-Scanning has false positives and cannot find every custom credential. Add policy checks: no literal values in secret fields, no static cloud-key variables, no wildcard secret access, no default service account for sensitive jobs, no automatic service-account-token mount when the Pod does not call the Kubernetes API, and no unrestricted environment dumps.
+### Pass A Secret Reference Instead Of The Secret Value
 
-Treat a committed secret as compromised even after deletion. Git history, forks, caches, CI logs, and developer machines may retain it. Revoke or rotate first, then remove and investigate. Do not paste the value into an incident ticket while reporting it.
+The pipeline stores the logical secret's reference. The value stays in the
+manager. The manager authenticates the workload identity, evaluates policy,
+returns the permitted version, and records access. Scope by workload,
+environment, and purpose. Avoid one JSON object containing every application
+credential if a job needs one field.
 
-CI and training logs need tested redaction. Redact before export, and include variants such as URL-encoded credentials, authorization headers, signed query parameters, and multiline private keys. A redaction rule that only matches the exact raw token can miss transformed copies.
+Kubernetes Secret objects are delivery primitives. Their `data` values are
+base64 encoded; that encoding provides no confidentiality. Protect etcd
+encryption, API access, namespaces, workload-creation permissions, and backup
+paths. Kubernetes documentation notes that a person able to create a Pod in a
+namespace may be able to expose Secrets available there.
 
-## Respond By Credential, Identity, And Effect
-<!-- section-summary: An incident response contains the credential, restricts the responsible identity, investigates audited use, and repairs the delivery path that allowed exposure. -->
+External Secrets Operator can reconcile external values into Kubernetes Secrets.
+This adds a copy and a privileged controller. Constrain the store, key paths,
+namespaces, service accounts, refresh interval, and audit. A CSI driver,
+sidecar, or direct client can avoid some copies and introduces different
+availability and refresh dependencies.
 
-When a secret may be exposed, identify its issuer, scope, consumers, and reachable resources. Revoke or disable it. Pause affected jobs if they can continue causing harm. Issue a replacement through the normal trusted path. Search audit logs for use before and after the suspected exposure and correlate calls with workload, network, and job records.
+The secret-manager outage policy must be explicit. A training job can usually
+fail closed and retry. A serving system may cache a still-valid credential for a
+bounded period or use an approved degraded mode. It should not fall back to a
+hard-coded key.
 
-If a workload identity is over-privileged or its trust policy is wrong, rotating a secret may not help. Tighten or disable the role and federation condition. If a Kubernetes service account was misused, inspect its RBAC, bound Pods, token audience, and workload-creation permissions.
+## Use Dynamic Credentials To Reduce Shared Access
 
-Preserve an incident timeline without copying secret material. Record detection, last known legitimate use, revocation confirmation, replacement validation, affected data or artifacts, and preventive changes. Add a regression check to scanning, policy, or logging controls.
+<!-- section-summary: A dynamic secret manager creates a unique leased credential for one workload and revokes it at expiry or on demand. -->
 
-Audit should cover authentication exchanges, secret reads and versions, policy changes, Kubernetes Secret and RBAC access, workload launches, and important resource actions. Minimize sensitive payloads in audit records while keeping identity, time, resource, decision, and request correlation.
+A **dynamic credential** is generated for a specific request or workload instead
+of retrieving one shared static value. HashiCorp Vault’s database secrets engine
+can create a unique database username and password under a configured role.
 
-## Reduce Secrets, Then Govern The Remainder
-<!-- section-summary: A strong pipeline authenticates each workload through short-lived identity, grants least privilege, isolates necessary values, and proves rotation and revocation. -->
+Vault attaches a **lease** with a time to live, renewability, and lease ID.
+Expiry triggers revocation. Operators can revoke one lease or a path prefix.
+Unique credentials improve attribution because database activity identifies a
+workload instance. The fleet does not share one account.
 
-Start by drawing every dependency and the identity used to reach it. Replace stored cloud keys with workload federation where supported. Split identities by pipeline stage and environment. Put unavoidable values in an external manager. Deliver them only to the process that needs them, for the shortest practical lifetime. Keep them out of source, images, parameters, and logs.
+The workload must handle renewal and expiry. If a job may run for six hours and
+receives a one-hour database lease, it renews before expiry or obtains a
+replacement. Inspect the returned lease duration because the backend can limit
+the requested renewal.
 
-Then operate the lifecycle: scan, audit, rotate, expire, revoke, and rehearse incidents. Vault products and Kubernetes manifests implement parts of that lifecycle. The durable security model is identity → authentication → authorization → bounded delivery → observed use → revocation.
+Dynamic credential issuance depends on Vault and the target database. If
+revocation cannot reach the target, a lease can remain usable until the target
+rejects it. Monitor failed and irrevocable leases, and maintain a target-side
+containment path.
+
+Cloud secret managers also support managed rotation for supported secret types.
+Updating the value in the manager is the first rotation step. Verify that
+consumers use the new version and the previous credential fails after the
+planned overlap.
+
+## Keys, Certificates, And Envelope Encryption Have Different Jobs
+
+<!-- section-summary: Keys perform cryptographic operations, certificates bind public keys to identities, and envelope encryption protects data with short-lived data keys. -->
+
+An API key is usually a bearer credential: possession grants access. A
+cryptographic key performs signing or encryption operations. A client
+certificate supports mutual TLS by presenting an identity bound to a public key
+while the client proves possession of the private key.
+
+Keep private keys in a KMS, HSM, key vault, or protected workload store
+according to risk. Prefer calling a signing service over exporting a high-value
+private key. Certificates need issuance, trust-chain validation, expiry
+monitoring, renewal, and revocation. Short certificate lifetime reduces exposure
+and requires reliable automation.
+
+**Envelope encryption** encrypts data with a data-encryption key and then
+encrypts that data key with a managed key-encryption key. The encrypted data key
+can sit beside the ciphertext. A KMS protects the higher-level key and enforces
+decrypt permission.
+
+```mermaid
+flowchart TD
+    A["KMS Data-Key Generator<br/>(creates one random data key)"] --> B["Plaintext Data Key<br/>(held briefly in workload memory)"]
+    C["Plaintext Data<br/>(checkpoint, artifact, or sensitive payload)"] --> D["Local Encryption<br/>(data key encrypts the plaintext)"]
+    B --> D
+    D --> E["Ciphertext<br/>(encrypted data stored with the artifact)"]
+    B --> F["KMS Wrapping Operation<br/>(protect the data key under policy)"]
+    G["KMS Key<br/>(wraps and unwraps data keys)"] --> F
+    F --> H["Encrypted Data Key<br/>(wrapped key safe to store)"]
+    E --> I["Encrypted Envelope<br/>(ciphertext plus encrypted data key)"]
+    H --> I
+
+    class C data;
+    class A,B,F,G key;
+    class D,E,H,I output;
+```
+
+Decryption performs two operations. The workload asks KMS to unwrap the
+encrypted data key under identity and key policy. It then uses the recovered
+plaintext data key locally to decrypt the ciphertext and removes that plaintext
+key from memory as soon as practical.
+
+Encryption protects confidentiality. It does not decide who may decrypt, prevent
+an authorized process from logging plaintext, or replace integrity and
+provenance checks. KMS policy, workload identity, audit, and application
+behaviour remain part of the design.
+
+## Limit Secret Delivery To The Intended Process
+
+<!-- section-summary: Credential delivery defines which process receives a value, how it refreshes, and how the value disappears from memory or storage. -->
+
+Secret storage answers where a sensitive value lives. The delivery design limits
+which running process receives the value, how it observes a replacement, and
+what remains after it exits. Copying a retrieved secret into every worker or log
+would create a large exposure path even if the original store is secure.
+
+Common delivery choices are environment variables, mounted files, local agent
+sockets, and direct API retrieval.
+
+Environment variables fit simple applications and can leak through logs,
+debugging, child processes, and job metadata. Mounted files support filesystem
+permissions and atomic updates; the application must reopen or watch them.
+Direct retrieval keeps values out of pipeline configuration and makes
+application code responsible for retry, caching, renewal, and failure. A local
+agent centralizes those mechanics and adds a privileged runtime component.
+
+Avoid command-line arguments because process listings and job metadata can
+expose them. Avoid Docker build arguments and image layers. Do not serialize
+credentials into experiment parameters, model metadata, checkpoints,
+distributed-worker state, or exception messages.
+
+For distributed jobs, confirm how the launcher propagates environment and files.
+A coordinator may accidentally forward its full environment to every worker.
+Deliver each credential to the smallest process set and keep production-only
+values out of training nodes.
+
+## Local Development And Third-Party APIs Need The Same Boundaries
+
+<!-- section-summary: Developer sessions and external APIs receive named identities, narrow environments, short lifetimes, quotas, and separate production authority. -->
+
+Local development should use human federation, a developer CLI session, or a
+local identity broker. Each developer acts under their own identity. Give access
+to development data and resources. Production access requires a separate
+approved path.
+
+Do not copy CI or Kubernetes credentials into `.env` files. A sample
+`.env.example` contains names and dummy values. Local secret stores and OS
+keychains can protect unavoidable development values, while federation usually
+provides better attribution and expiry for cloud access.
+
+Third-party API keys often remain static bearer secrets. Create separate keys
+for development, training, evaluation, and serving if the provider supports
+them. Apply endpoint restrictions, quotas, network restrictions, spend limits,
+and provider-side audit. Store the provider account owner and revocation
+procedure with the secret metadata.
+
+If the provider supports OAuth client credentials, workload identity federation,
+scoped tokens, or short-lived session keys, prefer that path after reviewing its
+trust boundary. Verify audience, scope, token endpoint, expiry, refresh, and
+revocation semantics in the current provider documentation.
+
+## Rotation, Revocation, And Break Glass Need Rehearsal
+
+<!-- section-summary: Rotation replaces credentials safely, revocation ends their authority, and break-glass access handles emergencies through a separate audited path. -->
+
+**Rotation** issues new credential material and moves consumers to it.
+**Revocation** makes old material unusable. Rotation is incomplete until the new
+path works and the old path fails.
+
+If the target supports overlap, issue a new version, update one consumer group,
+verify real authentication, expand, and revoke the previous version. If overlap
+is unavailable, coordinate a cutover or controlled interruption. Test clients
+that load credentials only at process startup.
+
+Track issuer, identity, permissions, consumers, owner, creation, expiry, last
+use, rotation method, and revocation command. A secret with unknown consumers
+cannot be rotated confidently.
+
+**Break glass** is emergency access outside the routine path. Use strong human
+authentication, short sessions, narrow emergency roles, reason capture,
+immediate alerting, and mandatory review. Common actions include revoking a
+compromised identity, stopping a deployment, or restoring the last approved
+serving release.
+
+The break-glass credential must also rotate and be tested. Store it through a
+protected mechanism with dual control if risk requires it. Routine pipelines
+should have no path to request that authority.
+
+## Verify The Federated Path And Remove Static Fallbacks
+
+<!-- section-summary: Runtime, policy, source, and audit evidence establish the live federated path, remove known static fallbacks, and investigate earlier credential issuance. -->
+
+An architecture diagram can claim that a pipeline uses federation while an old
+access key remains available as a fallback. Verification follows the live job
+from source configuration through identity exchange, authorization, resource
+access, audit, and expiry. Separate controls remove known static fallback paths,
+deny new long-lived key creation, and investigate earlier issuance.
+
+At the source boundary, scan Git history, notebooks, workflow files, images,
+build context, generated manifests, and infrastructure state for credential
+patterns. Inspect CI and environment secret inventories for legacy cloud-key
+names. Remove every discovered fallback and revoke its credential. Use
+server-side scanning because local hooks can be skipped. A clean scan defines
+the checked scope; it cannot establish a universal historical negative.
+
+At the identity boundary, cloud audit logs should show web-identity role
+assumption, federated sign-in, managed identity, or service-account
+impersonation from the expected subject. Session duration and role match policy.
+Kubernetes audit and Pod specs show the expected service account and projected
+token audience.
+
+At the policy boundary, deny creation of long-lived access keys for workload
+principals. Prevent static cloud-key variables in CI policy. Reject default
+service accounts for sensitive namespaces. Disable automatic Kubernetes
+API-token mounting if a Pod does not call the API.
+
+At the historical boundary, search identity and audit records for access-key
+creation, service-account key creation, secret version writes, role assumptions,
+and use of known workload principals. Begin at the earliest retained event and
+record any visibility gap caused by audit retention. Revoke discovered keys and
+trace their resource access.
+
+At runtime, canary tests verify allowed and denied actions. The training role
+reads its feature prefix and cannot change a production endpoint. The release
+role promotes an approved digest and cannot read raw training data.
+
+```mermaid
+flowchart TD
+    A["Known Fallback Removal<br/>(scan sources, CI, images, secrets, and state)"] --> B["Federated Identity Check<br/>(expected issuer, subject, audience, and lifetime)"]
+    B --> C["Issuance Prevention<br/>(long-lived workload key creation denied)"]
+    C --> D["Runtime Authorization Test<br/>(allowed action succeeds and forbidden action fails)"]
+    D --> E["Historical Audit Search<br/>(investigate earlier issuance within retention)"]
+    E --> F["Acceptance Evidence<br/>(live federation works and known fallbacks are closed)"]
+
+    class A,B,C,D,E check;
+    class F result;
+```
+
+## Redact Telemetry Without Removing Useful Security Evidence
+
+<!-- section-summary: Telemetry records identity and access decisions while redaction removes credentials and sensitive payloads before export. -->
+
+Security telemetry should identify the actor and access decision without copying
+the credential or secret itself. It records the acting identity, issuer,
+authentication method, role, resource, action, and authorization decision. Time,
+job ID, and correlation ID connect the event to one pipeline run.
+
+Exclude bearer tokens, authorization headers, signed URLs, private keys, and
+secret values from telemetry fields.
+
+Redact at the source before logs, traces, and events leave the process. Cover
+raw and transformed forms: URL encoding, connection strings, query parameters,
+multiline private keys, bearer headers, and exception objects. Test redaction
+with synthetic secret fixtures in unit and integration tests.
+
+Avoid logging entire environments and request objects. Allowlist safe fields.
+Apply access controls and retention to security logs because identity and
+resource data can still be sensitive.
+
+Audit secret reads by identity and version. Audit federation exchanges, role
+assumptions, policy changes, Kubernetes Secret and RBAC access, workload
+launches, certificate issuance, KMS decrypt calls, and revocation. Alert on
+unexpected subjects, regions, resources, session durations, and access outside
+job windows.
+
+## Contain The Identity And Credentials During An Incident
+
+<!-- section-summary: Credential incidents revoke exposed proof, restrict the underlying identity, investigate resource effects, and repair the path that enabled leakage. -->
+
+Incident containment starts by identifying both the exposed credential and the
+authority behind it. A static API key, temporary token, private key, certificate,
+workload trust policy, and over-privileged identity require different actions.
+
+Revoke or disable the credential and pause harmful workloads. Restrict the
+underlying identity or trust condition if it can mint replacements. For OIDC, a
+stolen temporary token expires, while a weak cloud trust policy may let the
+attacker request another through a compromised workflow.
+
+Search audit logs from the last known safe time through confirmed revocation.
+Identify resources read or changed, artifacts produced, models registered,
+deployments altered, data exposed, and credentials created. Quarantine suspect
+artifacts and restore trusted state through immutable references.
+
+Issue replacements through the normal trusted mechanism. Verify legitimate
+consumers, confirm old credentials fail, and monitor for continued attempts. If
+the secret reached Git, logs, an image, or a cache, treat every copy as exposed
+and remove it after revocation.
+
+```mermaid
+flowchart TD
+    A["Exposure Signal<br/>(secret, token, key, or trust policy)"] --> B["Immediate Containment<br/>(revoke, restrict identity, pause workload)"]
+    B --> C["Effect Investigation<br/>(audit resource reads and changes)"]
+    C --> D["Trusted Recovery<br/>(replace credential and restore artifacts)"]
+    D --> E["Revocation Verification<br/>(old path fails, new path succeeds)"]
+    E --> F["Control Repair<br/>(scanning, policy, delivery, or redaction)"]
+
+    class A incident;
+    class B,C,D,E,F work;
+```
+
+Preserve an incident timeline without copying secret material into tickets.
+Record detection, scope, last legitimate use, revocation confirmation,
+replacement validation, affected resources, and preventive changes. Rehearse
+cloud, Kubernetes, third-party, and serving incidents before production.
+
+## The Main Idea
+
+<!-- section-summary: Secure ML pipelines give every actor a narrow identity, use bounded credentials, isolate unavoidable secrets, and prove expiry and recovery. -->
+
+Identity names the human or workload. Permission defines what it may do. A
+credential proves identity. A secret is reusable sensitive material that
+deserves isolation. Token audience, scope, and lifetime determine where and how
+long proof can be used.
+
+Modern pipelines prefer OIDC federation, managed identities, service accounts,
+role assumption, and projected tokens over stored cloud keys. Secret managers
+and dynamic credentials govern systems that still require values. KMS,
+certificates, delivery controls, stage separation, redaction, and audit address
+other parts of the lifecycle.
+
+Acceptance evidence shows the expected temporary identity in audit logs, a
+successful permitted action, a rejected forbidden action, policy denial for
+long-lived workload-key creation, a tested rotation and revocation path, and a
+recovery exercise that restores trusted pipeline operation.
 
 ## References
 
-- [Kubernetes ServiceAccounts](https://kubernetes.io/docs/concepts/security/service-accounts/)
-- [Kubernetes Secrets](https://kubernetes.io/docs/concepts/configuration/secret/)
-- [Kubernetes Secrets good practices](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)
-- [Kubernetes RBAC good practices](https://kubernetes.io/docs/concepts/security/rbac-good-practices/)
-- [External Secrets Operator](https://external-secrets.io/latest/)
 - [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect)
-- [GitHub secret scanning](https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning)
-- [AWS IAM roles for service accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html)
-- [Azure workload identity](https://learn.microsoft.com/azure/aks/workload-identity-overview)
+- [GitHub Actions OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
+- [GitHub Actions OIDC in Azure](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure)
+- [Checkout action repository](https://github.com/actions/checkout)
+- [Checkout v7.0.1 release](https://github.com/actions/checkout/releases/tag/v7.0.1)
+- [Configure AWS Credentials action repository](https://github.com/aws-actions/configure-aws-credentials)
+- [Configure AWS Credentials v6.2.3 release](https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.2.3)
+- [Google Cloud Workload Identity Federation with deployment pipelines](https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)
+- [Kubernetes ServiceAccounts](https://kubernetes.io/docs/concepts/security/service-accounts/)
+- [Kubernetes projected volumes](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
+- [Kubernetes Secrets good practices](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)
+- [AWS EKS IAM roles for service accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html)
+- [AWS EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html)
+- [Azure Workload Identity](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview)
 - [Google Cloud Workload Identity Federation for GKE](https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity)
-- [HashiCorp Vault dynamic secrets](https://developer.hashicorp.com/vault/docs/secrets)
+- [HashiCorp Vault dynamic database credentials](https://developer.hashicorp.com/vault/docs/secrets/databases)
+- [HashiCorp Vault leases and revocation](https://developer.hashicorp.com/vault/docs/concepts/lease)
+- [AWS KMS envelope encryption](https://docs.aws.amazon.com/kms/latest/developerguide/kms-cryptography.html)
+- [External Secrets Operator](https://external-secrets.io/latest/)

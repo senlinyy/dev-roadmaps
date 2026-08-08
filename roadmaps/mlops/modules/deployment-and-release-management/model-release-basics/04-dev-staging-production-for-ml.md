@@ -12,23 +12,23 @@ aliases:
 
 ## Table of Contents
 
-1. [An ML Environment Is a Controlled World](#an-ml-environment-is-a-controlled-world)
-2. [Each Environment Answers a Different Question](#each-environment-answers-a-different-question)
-3. [Parity Preserves the Boundaries That Matter](#parity-preserves-the-boundaries-that-matter)
-4. [Promote One Release and Supply Environment Configuration](#promote-one-release-and-supply-environment-configuration)
-5. [Enforce Identity, Network, Secret, and Dependency Boundaries](#enforce-identity-network-secret-and-dependency-boundaries)
-6. [Development Optimises the Learning Loop](#development-optimises-the-learning-loop)
-7. [Staging Proves the Complete Release](#staging-proves-the-complete-release)
-8. [Give Every Environment a Deliberate Data Strategy](#give-every-environment-a-deliberate-data-strategy)
-9. [Production Governs Real Decisions](#production-governs-real-decisions)
-10. [Promotion Moves Evidence With the Release](#promotion-moves-evidence-with-the-release)
-11. [Detect Environment Drift and Verify Reality](#detect-environment-drift-and-verify-reality)
-12. [Test Rollback Across the Same Boundaries](#test-rollback-across-the-same-boundaries)
-13. [Choose Boundaries According to Consequence](#choose-boundaries-according-to-consequence)
+1. [What An ML Environment Controls](#what-an-ml-environment-controls)
+2. [What Development, Staging, And Production Are For](#what-development-staging-and-production-are-for)
+3. [Which Parts Must Match Across Environments](#which-parts-must-match-across-environments)
+4. [Promote One Release And Add Environment-Specific Configuration](#promote-one-release-and-add-environment-specific-configuration)
+5. [Separate Identities, Networks, Secrets, And Dependencies](#separate-identities-networks-secrets-and-dependencies)
+6. [How To Keep Development Fast And Reproducible](#how-to-keep-development-fast-and-reproducible)
+7. [What Staging Must Prove Before Production](#what-staging-must-prove-before-production)
+8. [Choose Safe And Representative Data For Each Environment](#choose-safe-and-representative-data-for-each-environment)
+9. [How Production Controls Real Decisions](#how-production-controls-real-decisions)
+10. [Keep Test Results And Approvals Attached During Promotion](#keep-test-results-and-approvals-attached-during-promotion)
+11. [Detect And Verify Differences Between Environments](#detect-and-verify-differences-between-environments)
+12. [Test Rollback Across Every Production Boundary](#test-rollback-across-every-production-boundary)
+13. [Choose How Strongly To Separate Environments](#choose-how-strongly-to-separate-environments)
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
-## An ML Environment Is a Controlled World
+## What An ML Environment Controls
 <!-- section-summary: An ML environment combines infrastructure, data, identity, dependencies, policy, and authority around a model workload. -->
 
 At a high level, an **environment** is the controlled world in which an ML workload runs. Compute is one part of that world. The environment also determines which data the workload can read, which identity it uses, which feature source it calls, where secrets come from, which network paths are open, which policy values apply, and whether its outputs can affect real users.
@@ -52,20 +52,20 @@ flowchart TB
 
 You can think of development, staging, and production as three controlled worlds with different purposes. Development gives people room to learn. Staging gives the release a realistic exam. Production gives an approved release limited authority over real decisions.
 
-## Each Environment Answers a Different Question
+## What Development, Staging, And Production Are For
 <!-- section-summary: Development tests ideas, staging tests the complete release, and production tests real-world operation under governed authority. -->
 
 Environment design starts with the question each world must answer. A name such as `staging` has little value unless its access, infrastructure, and tests support a distinct kind of proof.
 
-### Development asks whether the idea deserves more investment
+### Use Development To Test New Ideas
 
 Development supports exploration, debugging, feature work, training experiments, and early service integration. Feedback speed matters. Engineers may use notebooks, local containers, short-lived cloud jobs, sampled datasets, or disposable endpoints.
 
-The output of development is a reproducible candidate. It carries no customer-facing authority. A useful candidate records its code revision and parameters, then links them to the data reference and dependency environment. Its evaluation travels with the resulting model artifact. That evidence lets another person or automated system load the candidate without relying on a notebook's hidden state.
+The output of development is a reproducible candidate. It carries no customer-facing authority. Its record includes the code revision, parameters, data reference, dependency environment, and evaluation results. That evidence lets another person or automated system load the candidate without relying on a notebook's hidden state.
 
 For example, an engineer testing a new text classifier can begin with a small approved sample and a CPU runtime. The early question concerns tokenisation, label quality, and basic predictive value. Production-scale GPU throughput can wait until the idea has enough evidence to justify a more expensive test.
 
-### Staging asks whether the exact release works as a system
+### Use Staging To Test The Complete Release
 
 Staging tests the packaged release across production-shaped boundaries. It loads the exact model and image, validates supported caller contracts, reaches a controlled feature source, uses a staging workload identity, emits production-format telemetry, and exercises deployment and rollback automation.
 
@@ -73,7 +73,7 @@ The goal is confidence in integration and operation. Staging asks whether a cold
 
 Staging carries no authority over real product decisions. A copied request can exercise the candidate while writes and notifications remain isolated. This separation lets teams create realistic failures without harming users.
 
-### Production asks whether the approved release remains safe in reality
+### Use Production For Approved Real-World Decisions
 
 Production serves real traffic or publishes outputs consumed by real processes. It introduces traffic through an approved scope and watches the combined service, data, prediction, and product evidence. Production also supplies conditions that staging cannot fully reproduce: rare inputs, real dependency contention, shifting user behaviour, and delayed outcomes.
 
@@ -90,32 +90,32 @@ flowchart TB
     P -->|"stop condition reached"| R["Restore known-safe release"]
 ```
 
-## Parity Preserves the Boundaries That Matter
+## Which Parts Must Match Across Environments
 <!-- section-summary: Environment parity keeps behaviourally important interfaces equivalent while allowing intentional differences in scale, data, and cost. -->
 
 **Environment parity** means preserving the assumptions that a release depends on as it moves toward production. Three identical copies of every resource are unnecessary. Full duplication can be expensive and risky, especially for large datasets and accelerator fleets.
 
-The useful question is: which differences could invalidate the evidence collected earlier?
+The parity review asks which differences could invalidate the evidence collected earlier.
 
-### Keep semantic interfaces equivalent
+### Keep Data, API, And Model Meanings Consistent
 
 The request and response contract should have the same meaning in staging and production. Feature definitions should use the same transformation logic, units, missing-value policy, and freshness rules. The release should load through the same artifact path and run the same preprocessing. Telemetry should carry the same field names and release identifiers.
 
 The underlying resources can differ. Staging may call an isolated feature table populated with controlled records, while production calls the live feature table. The table contents and scale differ; the schema and feature semantics stay aligned.
 
-### Match hardware where hardware can change behaviour
+### Match Hardware If It Can Change Model Behaviour
 
 A small CPU staging service may be enough for contract tests. It cannot prove GPU memory use, kernel compatibility, numerical tolerance, model warm-up, or accelerator throughput. If production depends on a GPU or specialised inference chip, at least one pre-production test should use that hardware family and the same runtime image.
 
 Scale can stay smaller while preserving the shape of the test. A two-replica staging endpoint can verify health checks, load balancing, rolling replacement, and scale-out triggers. Capacity modelling then combines measured per-replica behaviour with production traffic assumptions. The evidence should state where extrapolation begins.
 
-### Keep intentional differences visible
+### Document The Differences Between Environments
 
 Every environment will have legitimate differences. Development may use short retention and low quotas. Staging may use masked data and a disabled notification sink. Production may use private networking, multi-zone capacity, longer evidence retention, and stricter policy approval.
 
 Documenting these differences prevents accidental drift from hiding among approved variation. A practical classification gives each setting one of three meanings: shared release behaviour, environment-specific value, or forbidden override. Contract versions belong to shared behaviour. Replica counts are usually environment-specific. Mutable image tags and plaintext credentials should be forbidden everywhere.
 
-## Promote One Release and Supply Environment Configuration
+## Promote One Release And Add Environment-Specific Configuration
 <!-- section-summary: Build-once promotion preserves the tested artifact while controlled configuration connects it to each environment. -->
 
 The strongest promotion path builds the model and serving package once, gives them immutable identities, and moves those identities through the environments. Rebuilding in staging or production can change dependency resolution, source inputs, compiler output, random state, or artifact bytes. The new build lacks the evidence attached to the earlier one.
@@ -144,7 +144,7 @@ Managed ML platforms express this pattern through model resources, deployment re
 
 Secrets receive special treatment. The configuration stores a secret reference. The environment's workload identity gains permission to resolve that reference. The credential value stays out of Git, container layers, model metadata, and deployment logs.
 
-## Enforce Identity, Network, Secret, and Dependency Boundaries
+## Separate Identities, Networks, Secrets, And Dependencies
 <!-- section-summary: Real environment separation comes from access and connectivity controls that prevent lower-trust work from gaining production authority. -->
 
 A folder name or deployment label cannot create a trust boundary by itself. The platform must enforce who can deploy, which data a workload can read, where it can connect, and which actions it can perform.
@@ -159,57 +159,57 @@ Cloud workload identity and short-lived credentials are the current default patt
 
 Production endpoints may need private ingress from internal callers. Serving workloads usually read from a model store and a feature source. They send operational signals to a telemetry collector and may call a small set of approved APIs. Staging should exercise an equivalent connectivity path using staging resources, since open internet access can hide missing private DNS, firewall, or certificate configuration.
 
-Managed platforms expose these controls through project or workspace networking. Azure Machine Learning managed online endpoints can use private endpoints for inbound requests and managed virtual networks for outbound access. Vertex AI offers private endpoint options. Kubernetes uses NetworkPolicy for Pod traffic, provided the installed network implementation enforces that API.
+Managed platforms expose these controls through project or workspace networking. Azure Machine Learning managed online endpoints can use private endpoints for inbound requests and managed virtual networks for outbound access. Gemini Enterprise Agent Platform Online Inference offers private endpoint options. Kubernetes uses NetworkPolicy for Pod traffic, provided the installed network implementation enforces that API.
 
 Namespaces organise namespaced Kubernetes resources and work well with RBAC, quotas, and network policies. A namespace alone leaves cluster-scoped resources and shared control-plane concerns outside its boundary. Separate clusters, cloud accounts, projects, or subscriptions offer stronger isolation for high-consequence production systems.
 
-### Resolve secrets inside the destination environment
+### Load Secrets Inside The Target Environment
 
 Development, staging, and production should use separate secret identities and values. A staging workload must never gain a production database credential through a shared name. Secret stores, managed identities, and environment-scoped CI secrets restrict access to the destination that needs them.
 
 Kubernetes Secrets require additional protection. Official guidance calls for encryption at rest, least-privilege RBAC, restricted Pod access, and consideration of an external secret-store provider. Databricks Model Serving supports secret-backed environment variables; credentials belong in Databricks secrets instead of plain environment values.
 
-### Treat external dependencies as part of the environment
+### Include External Dependencies In Environment Tests
 
 Data dependencies include feature stores, databases, and object stores. Queues and model APIs shape request timing. Notification services can create external side effects, and telemetry backends determine which failures operators can see. Development can use local substitutes for early logic tests. Staging needs contract-compatible sandboxes or isolated instances for the dependencies that affect release evidence. Production uses governed live services with defined timeout and fallback behaviour.
 
-A useful dependency record names the destination, contract version, identity, timeout, retry policy, and failure action. It also states whether staging uses the same service, an isolated tenant, or a validated substitute.
+The dependency record names the destination, contract version, identity, timeout, retry policy, and failure action. It also states whether staging uses the same service, an isolated tenant, or a validated substitute.
 
-## Development Optimises the Learning Loop
+## How To Keep Development Fast And Reproducible
 <!-- section-summary: Development gives practitioners fast feedback while retaining enough reproducibility and data discipline to create a trustworthy candidate. -->
 
 Development should make common experiments cheap and fast. A practitioner can inspect data, alter features, train short runs, and debug prediction code without waiting for production deployment controls. Freedom still needs boundaries so an experiment can mature into a credible candidate.
 
-### Use the smallest realistic setup for the current question
+### Use The Smallest Setup That Answers The Current Question
 
 A unit test can use five handwritten rows. A preprocessing investigation may need a representative sample. A distributed-training change may need a short remote job on the target accelerator. Matching the tool to the question saves time and cost while preserving useful evidence.
 
-Local development commonly uses Python environments managed by `uv` or Poetry, Docker for runtime parity, and MLflow or Weights & Biases for experiment tracking. Remote jobs on SageMaker AI, Vertex AI, Azure Machine Learning, or Databricks provide managed compute for larger tests. The candidate records the code, parameters, data reference, environment, and output regardless of where the experiment runs.
+Local development commonly uses Python environments managed by `uv` or Poetry, Docker for runtime parity, and MLflow or Weights & Biases for experiment tracking. Remote jobs on SageMaker AI, Gemini Enterprise Agent Platform Managed Training, Azure Machine Learning, or Databricks provide managed compute for larger tests. The candidate records the code, parameters, data reference, environment, and output regardless of where the experiment runs.
 
-### Remove hidden state before candidate review
+### Remove Notebook And Local State Before Review
 
 Notebook exploration is valuable, yet execution order and local variables can hide dependencies. Reusable transformations should move into versioned code, and a clean process should run the training or prediction path from declared inputs. Dependency locks or container images preserve the runtime.
 
 Suppose a model works only after an engineer manually downloads a tokenizer into a home directory. A clean-room test exposes that hidden dependency. The fix can package the tokenizer, pin an immutable artifact reference, or add an authenticated startup fetch with a readiness check.
 
-### Keep development authority narrow
+### Limit Development Access
 
 Development endpoints use sandbox callers and isolated outputs. Email, payment, case-management, and notification integrations should point to test sinks. Resource quotas limit accidental cost, especially for GPU jobs. Short retention can clear temporary artifacts, while candidates entering review move to a governed registry with durable evidence.
 
 Development telemetry can use the same OpenTelemetry signal names as production and route them to a separate backend or environment partition. This gives engineers realistic instrumentation without mixing experiments into production alerts.
 
-## Staging Proves the Complete Release
+## What Staging Must Prove Before Production
 <!-- section-summary: Staging tests the immutable candidate across production-shaped data, runtime, security, dependency, telemetry, and recovery boundaries. -->
 
 Staging is the first place where the complete release should operate as one system. The same model, image, contracts, and policy package proposed for production run through the destination deployment mechanism. The environment supplies staging identities, data, endpoints, scale, and secret references.
 
-### Begin with deployment and loading proof
+### Start By Proving The Release Deploys And Loads
 
 Deploy through the same controller used for production. A managed-endpoint team creates or updates a staging endpoint through its SDK, CLI, or infrastructure code. A Kubernetes team lets Argo CD or Flux reconcile the staging overlay. The release then proves that its image pulls, identity resolves, model loads, readiness passes, and expected release ID appears in the platform state.
 
 A health check that only opens a TCP port gives weak evidence. Readiness should depend on model loading and every critical local asset. External dependency failures may remove a replica from traffic or trigger a product fallback according to the service design.
 
-### Exercise the boundaries in a deliberate order
+### Test Production Boundaries In A Deliberate Order
 
 Start with golden requests that verify preprocessing and prediction equivalence. Add contract tests for current and older supported callers. Check feature version, freshness, units, and missing-value handling. Confirm workload permissions and network routes. Then test cold start, warm latency, throughput, memory, accelerator use, autoscaling behaviour, and cost assumptions.
 
@@ -233,36 +233,36 @@ flowchart TB
     G -->|"failure"| X
 ```
 
-### State the limits of staging evidence
+### Record What Staging Cannot Prove
 
 A smaller endpoint can validate request shape and scaling mechanics. It may provide weak evidence for full production throughput. Masked records can preserve many distributions while changing rare-category relationships. A sandbox dependency can confirm API compatibility while missing production contention.
 
 The staging report should state these gaps. Production canary gates then collect the missing evidence under controlled exposure. Honest limits create a stronger release decision than a vague claim of “production-like” testing.
 
-## Give Every Environment a Deliberate Data Strategy
+## Choose Safe And Representative Data For Each Environment
 <!-- section-summary: Fixtures, synthetic records, protected samples, and request replays answer different test questions and carry different privacy risks. -->
 
 ML tests need realistic data because schema validity alone misses distributional behaviour. Real records may be sparse, correlated, or heavily skewed. Rare cases form a long tail, and labels may arrive well after prediction time. Privacy and leakage risk grow with realism. Replayed records can also trigger real side effects if isolation fails. The right data source depends on the question being tested.
 
-### Fixtures make contracts and edge cases repeatable
+### Use Fixtures For Repeatable Contracts And Edge Cases
 
 A fixture is a small, reviewed dataset with known meaning. Teams write fixtures for required fields, missing values, boundary values, unsupported categories, and expected predictions. They are easy to keep in version control after sensitive fields are removed and the content is approved.
 
 Fixtures excel at regression tests and failure paths. They provide little evidence about production distributions or capacity. Their value comes from precise intent instead of realism at scale.
 
-### Synthetic data creates safe volume and controlled cases
+### Use Synthetic Data For Safe Volume And Controlled Cases
 
 Synthetic generators create records from rules or learned distributions. Rule-based data can produce millions of requests with chosen payload sizes and error rates for load tests. More advanced generators can preserve statistical relationships.
 
 Synthetic data can still mislead. A generator built from incomplete assumptions reproduces those assumptions. A generator trained on sensitive records may leak rare examples or preserve re-identification risk. Teams should validate synthetic distributions and govern the source data and generation process.
 
-### Masked samples preserve selected production characteristics
+### Use Masked Samples To Preserve Selected Production Patterns
 
 An approved sample from production can expose real categories, missingness, and correlations. De-identification may use redaction, masking, tokenisation, date shifting, or generalisation. Google Cloud Sensitive Data Protection is one managed implementation of these techniques; equivalent cloud and enterprise tools exist.
 
 Removing names and email addresses is insufficient for many datasets. Free text, exact timestamps, rare diagnoses, location combinations, and linked identifiers can reveal a person. The data owner should review re-identification risk, purpose, access, encryption, retention, and deletion before the copy enters a lower environment.
 
-### Replays test current integration behaviour
+### Use Replays To Test Current Integration Behaviour
 
 A replay sends recorded request shapes through a candidate. Shadow traffic can produce matched candidate and baseline outputs without using the candidate response. Replays are useful for contract compatibility, performance, feature retrieval, and prediction comparison.
 
@@ -284,32 +284,32 @@ flowchart TB
     D1 --> G
 ```
 
-## Production Governs Real Decisions
+## How Production Controls Real Decisions
 <!-- section-summary: Production combines limited release authority with resilient capacity, live dependencies, complete telemetry, and accountable incident response. -->
 
 Production is the environment where model outputs influence users, operations, or regulated processes. Its controls should match that consequence. Stronger identity, networking, change approval, retention, resilience, and incident ownership are common because a mistake can affect real decisions.
 
-### Separate deployment from traffic authority
+### Separate Deployment From Permission To Serve Traffic
 
 A candidate can exist in production with zero decision traffic. Shadowing copies requests while the baseline response controls the product. A canary sends a bounded share to the candidate. Blue-green deployment keeps current and candidate fleets available during the switch.
 
-Managed endpoint platforms provide current industrial implementations. SageMaker AI deployment guardrails support blue-green canary and linear traffic shifting with CloudWatch alarms and automatic rollback. Vertex AI endpoints can route percentages among deployed models. Azure Machine Learning managed online endpoints support multiple deployments, traffic allocation, and mirroring. Databricks Model Serving endpoints can divide traffic among served entities.
+Managed endpoint platforms provide current industrial implementations. SageMaker AI deployment guardrails support blue-green canary and linear traffic shifting with CloudWatch alarms and automatic rollback. Gemini Enterprise Agent Platform Endpoints can route percentages among deployed models. Azure Machine Learning managed online endpoints support multiple deployments, traffic allocation, and mirroring. Databricks Model Serving endpoints can divide traffic among served entities.
 
 These controls move traffic; the team defines the evidence. A rollout gate can combine latency, errors, feature freshness, prediction rates, segment coverage, and immediate product signals. Delayed labels may extend the observation window for higher-risk decisions.
 
-### Keep production capacity and dependencies explicit
+### Record Production Capacity And Dependencies
 
 Production configuration declares minimum and maximum replicas, instance or accelerator type, request limits, autoscaling signals, timeout budgets, and regional placement. Every dependency has an owner and failure action. The model service may fail closed, return a retryable error, use a safe rule, or route work for manual review.
 
 The exact response follows product risk. A delayed recommendation may tolerate a cached result. A safety decision may require a hard stop. Environment configuration can select destination addresses and capacity, while the fallback policy stays versioned with the release.
 
-### Attach telemetry to environment and release identity
+### Link Telemetry To The Environment And Release
 
 OpenTelemetry resources describe the entity producing signals. The stable semantic attribute `deployment.environment.name` can distinguish development, staging, and production. Service name, release ID, model version, and policy version allow dashboards to separate candidate, baseline, and fallback behaviour.
 
 Production access to raw telemetry should follow data governance. Metrics use bounded dimensions. Traces and logs may carry request-level identifiers under approved access and retention. Raw features and outputs require a clear diagnostic or monitoring purpose.
 
-## Promotion Moves Evidence With the Release
+## Keep Test Results And Approvals Attached During Promotion
 <!-- section-summary: Promotion grants a tested release more authority after its evidence satisfies the destination environment's entry conditions. -->
 
 **Promotion** means granting an existing release access to a higher-consequence environment. The release stays fixed. The destination evaluates evidence and supplies its own configuration, identity, and authority.
@@ -336,28 +336,28 @@ The `environment` applies configured protection rules before the job starts. `co
 
 Approval should name the scope being granted. A reviewer might approve shadow execution, a 5% canary, or full batch publication. Each scope has its own stop conditions and required evidence. Recording the approver, release ID, evidence links, and traffic scope creates a durable decision trail.
 
-## Detect Environment Drift and Verify Reality
+## Detect And Verify Differences Between Environments
 <!-- section-summary: Drift control compares declared and actual state so staging evidence continues to describe the production system users reach. -->
 
 **Environment drift** is an unintended difference between the expected environment and the system that actually runs. Some drift changes infrastructure, such as a manually edited timeout or an older image on one replica. Other drift changes meaning, such as a different feature transformation, policy version, or external endpoint.
 
-### Compare desired state with observed state
+### Compare Declared Configuration With What Is Running
 
 Infrastructure as code declares networks, identities, storage, and managed endpoints. GitOps controllers such as Argo CD and Flux reconcile Kubernetes resources. Policy engines reject forbidden overrides. These controls reduce manual variation, while runtime verification confirms the result.
 
 After deployment, query the platform for the active model, image digest, replica state, traffic allocation, identity, and endpoint configuration. Send a smoke request and verify the release ID in its response or telemetry. Confirm that every healthy replica reports the same release. A successful deployment command is an intent signal; observed serving state is the proof.
 
-### Compare environments at semantic boundaries
+### Compare Environment Contracts And Meanings
 
-Raw text diffs produce noise because replica counts, URLs, and secret references are expected to differ. A useful parity check compares shared contracts and classified configuration. It confirms matching model and image identities, feature and policy versions, request schemas, telemetry fields, and deployment behaviour. It separately validates approved differences such as capacity and destination names.
+Raw text diffs produce noise because replica counts, URLs, and secret references are expected to differ. A parity check should compare shared contracts and classified configuration. It confirms matching model and image identities, feature and policy versions, request schemas, telemetry fields, and deployment behaviour. It separately validates approved differences such as capacity and destination names.
 
-### Recognise common failure patterns
+### Recognise Common Environment Failures
 
 Configuration copied by hand often leaves staging on an old timeout or feature version. Mutable image tags can resolve to different bytes across environments. Shared credentials give development unexpected production access. A staging endpoint with open networking can pass while production private DNS fails. Tests built only from clean synthetic rows miss nulls and rare categories. A rollback artifact can expire even though its registry record remains.
 
 Each failure points to a concrete control: immutable digests, typed configuration, workload identity, production-shaped network tests, representative data, retained recovery artifacts, and post-deployment verification. Drift monitoring should alert on differences that invalidate release evidence, instead of alerting on every approved environment variation.
 
-## Test Rollback Across the Same Boundaries
+## Test Rollback Across Every Production Boundary
 <!-- section-summary: A rollback drill proves that the previous release can still start, connect, receive traffic, and serve current callers in the destination environment. -->
 
 A rollback record is only a plan until the destination environment proves it. The previous release may have lost registry access, feature compatibility, secret permission, deployment capacity, or caller support. Staging should deploy the candidate, move to the previous release through the real recovery mechanism, and verify the restored path.
@@ -368,7 +368,7 @@ Production recovery may use a retained managed-endpoint deployment, a Kubernetes
 
 Rollback cannot reverse decisions already consumed. A corrected batch may need a new output version. A declined request may need review. A notification may require follow-up. The incident plan connects affected decision IDs to correction steps and keeps the evidence needed to explain the event.
 
-## Choose Boundaries According to Consequence
+## Choose How Strongly To Separate Environments
 <!-- section-summary: Physical environment structure should be strong enough to isolate risk without creating neglected replicas of the platform. -->
 
 Three environment names are common, and each can use a different physical scale. A small offline scorer may use local development and isolated CI validation, followed by one production account with versioned output paths. A high-impact online service may use separate cloud accounts or projects. Its production design can add dedicated networking, a representative staging endpoint, and several rollout cells.
@@ -394,7 +394,10 @@ Strong environment design lets one immutable release gain authority as its evide
 - [GitHub Actions OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect)
 - [GitLab Protected Environments](https://docs.gitlab.com/ci/environments/protected_environments/)
 - [Amazon SageMaker AI Deployment Guardrails](https://docs.aws.amazon.com/sagemaker/latest/dg/deployment-guardrails.html)
-- [Vertex AI Model Deployment](https://docs.cloud.google.com/vertex-ai/docs/predictions/deploy-model-api)
+- [Gemini Enterprise Agent Platform: Deploy a Model to an Endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/deploy-model-api)
+- [Gemini Enterprise Agent Platform Managed Training](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/overview)
+- [Gemini Enterprise Agent Platform Online Inference Endpoint Types](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/predictions/choose-endpoint-type)
+- [Google Cloud: Gemini Enterprise Agent Platform Name Changes](https://docs.cloud.google.com/gemini-enterprise-agent-platform/vertex-ai-name-changes)
 - [Azure Machine Learning Online Endpoints](https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online)
 - [Azure Machine Learning Managed Endpoint Network Isolation](https://learn.microsoft.com/en-us/azure/machine-learning/concept-secure-online-endpoint)
 - [Databricks Model Serving Traffic Splits](https://docs.databricks.com/aws/en/machine-learning/model-serving/serve-multiple-models-to-serving-endpoint)

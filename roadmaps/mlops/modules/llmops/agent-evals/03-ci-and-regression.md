@@ -10,18 +10,18 @@ id: "article-mlops-llmops-ci-and-regression"
 ## Table of Contents
 
 1. [An Agent Regression Is a Lost Behaviour](#an-agent-regression-is-a-lost-behaviour)
-2. [Regression Evidence Comes From Several Suite Layers](#regression-evidence-comes-from-several-suite-layers)
+2. [Test Regressions At Several Layers](#test-regressions-at-several-layers)
 3. [Deterministic and Stochastic Checks Need Different Rules](#deterministic-and-stochastic-checks-need-different-rules)
-4. [Version the Entire Evaluation Bundle](#version-the-entire-evaluation-bundle)
+4. [Version Cases, Graders, Tools, And Runtime Together](#version-cases-graders-tools-and-runtime-together)
 5. [Baselines Compare Like With Like](#baselines-compare-like-with-like)
 6. [Repeated Trials Measure Uncertainty](#repeated-trials-measure-uncertainty)
 7. [Release Gates Separate Blockers From Quality Budgets](#release-gates-separate-blockers-from-quality-budgets)
 8. [Trace Diffing Explains What Changed](#trace-diffing-explains-what-changed)
-9. [Flake Triage Protects Trust in the Gate](#flake-triage-protects-trust-in-the-gate)
+9. [Investigate Intermittent Test Failures](#investigate-intermittent-test-failures)
 10. [CI Tiers Balance Speed, Cost, and Coverage](#ci-tiers-balance-speed-cost-and-coverage)
-11. [A Focused CI Job Runs the Gate](#a-focused-ci-job-runs-the-gate)
-12. [Release Reports Preserve the Decision](#release-reports-preserve-the-decision)
-13. [Production Failures Grow the Regression Suite](#production-failures-grow-the-regression-suite)
+11. [Run Fast Regression Checks In CI](#run-fast-regression-checks-in-ci)
+12. [Record Why A Release Passed Or Failed](#record-why-a-release-passed-or-failed)
+13. [Add Production Failures To The Regression Suite](#add-production-failures-to-the-regression-suite)
 14. [References](#references)
 
 ## An Agent Regression Is a Lost Behaviour
@@ -60,7 +60,7 @@ A useful agent regression case can examine several kinds of evidence:
 
 The suite does not demand one identical trajectory for every run. It protects the properties that define acceptable behaviour. If two search strategies both use current sources and produce a grounded answer, both paths may pass. If either path performs an unauthorized write, the case fails.
 
-## Regression Evidence Comes From Several Suite Layers
+## Test Regressions At Several Layers
 
 <!-- section-summary: Layered suites place fast deterministic checks close to development and reserve slower live evaluation for broader system evidence. -->
 
@@ -115,19 +115,19 @@ flowchart TD
     F --> G
 ```
 
-### Deterministic checks protect invariants
+### Use Deterministic Checks For Rules That Must Always Hold
 
 An **invariant** is a rule that must hold across every acceptable path. Examples include “the account ID never changes,” “approval precedes the write,” and “a failed tool result cannot be reported as success.” The evaluator reads structured trace fields or authoritative state to prove these rules.
 
 Suppose a scheduling agent may call either `find_slots` or `find_team_slots`. Both choices can be valid. The invariant requires a successful calendar write before the response says that a meeting was booked. A deterministic grader can inspect the tool result and calendar sandbox. One violation is meaningful; averaging it with several successful trials would weaken the contract.
 
-### Stochastic checks describe rates and distributions
+### Use Repeated Stochastic Checks For Rates And Distributions
 
 A semantic answer grader may pass four runs and fail one. That result carries more information than either “passed” or “failed.” The report should retain trial outcomes, grader reasons, and the uncertainty around the observed pass rate. Latency and cost also form distributions, so teams often compare medians and tail values such as p95.
 
 Model-based graders need versioning and calibration. Their prompts, models, rubrics, and output parsing all affect results. Human-reviewed examples should verify that the judge recognizes acceptable variation and catches important failures. A grader change creates a new measurement system, which is why baseline comparison needs special handling.
 
-## Version the Entire Evaluation Bundle
+## Version Cases, Graders, Tools, And Runtime Together
 
 <!-- section-summary: Reproducible regression evidence records the cases, environment, agent, graders, runner, and thresholds as one versioned bundle. -->
 
@@ -158,7 +158,7 @@ gate_policy: policies/release-gate-v9.yaml
 
 The manifest deliberately points to separately versioned artifacts. The CI job should resolve those references, calculate content hashes, and write the resolved values into the report. A Git commit alone cannot identify a hosted dataset, mutable model alias, or remote grader configuration.
 
-### Version changes by ownership
+### Assign An Owner To Every Versioned Component
 
 Different owners review different parts of the bundle. Domain experts approve expected outcomes and severity. Platform engineers own runner and environment reproducibility. Security teams own permission and data-handling rules. Model engineers own prompts, model settings, and semantic graders. The release report should show which bundle fields changed so the right reviewer can focus on the relevant evidence.
 
@@ -184,7 +184,7 @@ flowchart TD
     E --> F["Absolute gates and paired deltas"]
 ```
 
-### Absolute requirements and relative deltas answer different questions
+### Use Absolute Requirements And Relative Comparisons Together
 
 An absolute gate asks whether the candidate is safe and useful enough. Examples include zero unauthorized writes, at least 95% pass rate on a critical policy slice, and p95 latency below the service objective. A relative gate asks whether the candidate regressed compared with the baseline, such as a pass-rate drop greater than two percentage points.
 
@@ -192,7 +192,7 @@ Both are useful. A weak baseline should never authorize another weak release mer
 
 For example, suppose the accepted agent passes 96% of billing-policy trials and the candidate passes 91%. The candidate may remain above a broad 90% floor, yet the five-point drop signals a regression. A separate security slice with one unauthorized action should fail immediately, regardless of the overall average.
 
-### Baseline promotion is a reviewed release action
+### Review Any Change To The Comparison Baseline
 
 Promote a new baseline after the candidate passes and is accepted for release. Store the resolved bundle, raw case results, trace references, summary metrics, and approval record. Updating the baseline to silence a failing pull request erases the evidence. If expected behaviour genuinely changed, update the affected cases and explain the product or policy decision in review.
 
@@ -222,7 +222,7 @@ Paired comparison reduces noise by running baseline and candidate against the sa
 
 A **paired bootstrap** repeatedly resamples the case-level baseline and candidate differences to estimate a confidence interval for the overall delta. A simpler team may report Wilson intervals for pass rates and require a minimum sample size. The statistical method matters less than making uncertainty visible and applying it consistently.
 
-### Critical events keep their blocker semantics
+### Keep Critical Failures As Release Blockers
 
 Repeated trials never turn a safety violation into a small average penalty. If one run sends a write before approval, the case records a blocker occurrence. The report can also show its frequency, such as one violation in ten trials. Release policy can then require zero occurrences and a minimum number of clean trials for critical workflows.
 
@@ -236,7 +236,7 @@ A **release gate** converts eval evidence into an automated pass or fail. Strong
 
 Blockers represent unacceptable events: an unauthorized effect, sensitive-data disclosure, missing required approval, false success claim, incomplete trace for a critical case, or failure of a mandatory tool contract. Budgets cover bounded tradeoffs such as semantic quality, task completion rate, latency, token use, tool-call count, and estimated cost.
 
-### Slice gates protect important groups
+### Set Release Gates For Important User Groups
 
 Overall averages can hide a concentrated regression.
 A support agent might improve on common account questions while losing accuracy on cancellation policy.
@@ -291,13 +291,13 @@ Suppose the baseline path is `search_policy → read_policy → request_approval
 
 Another trace may contain the same tool names with different arguments. The baseline searches `policy_status=current`; the candidate omits the status filter and reads an archived policy. The diff should show the argument change, retrieved document version, and downstream claim. Matching only tool names would miss the regression.
 
-### Alignment must allow valid path variation
+### Compare Traces Without Requiring Identical Paths
 
 Exact sequence comparison is often too strict. One run may perform two independent reads in a different order. Another may retry a transient read once. Normalize equivalent events and use partial-order rules for dependencies such as “approval precedes write.” Reserve exact sequence assertions for protocols that truly require them.
 
 OpenAI trace grading can evaluate end-to-end agent traces. LangSmith and MLflow expose trace records and experiment comparisons that support investigation. Teams often add a small normalization layer so release reports retain a stable diff format across SDK or observability changes.
 
-## Flake Triage Protects Trust in the Gate
+## Investigate Intermittent Test Failures
 
 <!-- section-summary: Flake triage distinguishes expected model variation from unstable infrastructure, incomplete evidence, weak graders, and genuine intermittent defects. -->
 
@@ -354,7 +354,7 @@ The main-branch suite can run a broader dataset after merge. Scheduled evaluatio
 
 Equivalent tiers work in GitHub Actions, GitLab CI, Jenkins, Buildkite, or managed cloud pipelines. The product choice affects workflow syntax. The release logic stays the same: resolve a bundle, run cases, grade evidence, compare a compatible baseline, apply gates, and publish the report.
 
-## A Focused CI Job Runs the Gate
+## Run Fast Regression Checks In CI
 
 <!-- section-summary: A practical CI job installs a locked runner, executes the selected tier, preserves the report, and returns a failing exit code for a blocked release. -->
 
@@ -405,7 +405,7 @@ The runner should return a nonzero exit code after a gate fails. It should still
 
 The same pattern maps to GitLab CI or Jenkins: use a locked environment, narrow credentials, bounded timeout, artifact upload, and the runner's exit code. Cloud-hosted eval jobs can also report status back to the source-control check if they preserve the same release evidence.
 
-## Release Reports Preserve the Decision
+## Record Why A Release Passed Or Failed
 
 <!-- section-summary: A release report records what ran, how it differed from the baseline, why the gate decided, and where reviewers can inspect evidence. -->
 
@@ -430,13 +430,13 @@ The report should be machine-readable for automation and readable through a summ
 }
 ```
 
-### A useful report points to an owner
+### Include The Failed Test, Evidence, And Owner
 
 Every failed gate needs evidence and an owner. Tool contract failures usually go to the tool or platform team. Semantic slice failures go to the domain and model owners. Missing spans go to observability. Grader disagreements go to the eval owner. Cost and latency regressions may involve orchestration, model selection, or provider behavior.
 
 Store raw trial results so aggregate metrics can be recalculated. Preserve the gate policy and bundle digest used at decision time. GitHub workflow artifacts can share reports across jobs and retain them after the run. MLflow or LangSmith experiments can hold detailed case and trace evidence, while a data warehouse supports longer-term trend analysis. Retention and access policies should match the sensitivity of the underlying data.
 
-## Production Failures Grow the Regression Suite
+## Add Production Failures To The Regression Suite
 
 <!-- section-summary: Reviewed production failures should create durable regression cases so a repaired behaviour stays protected in future releases. -->
 
@@ -455,7 +455,7 @@ flowchart TD
     G --> A
 ```
 
-### Promotion requires evidence integrity
+### Check Evaluation Evidence Before Promoting A Release
 
 Before adding a production case, confirm that the trace is complete and the outcome is authoritative. A missing tool result can resemble an agent error. A delayed or incorrect label can create a false regression. Human review should identify the actual failure, expected behavior, relevant slice, and severity.
 

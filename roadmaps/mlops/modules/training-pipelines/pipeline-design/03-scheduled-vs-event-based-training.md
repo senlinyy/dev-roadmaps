@@ -13,17 +13,17 @@ aliases:
 ## Table of Contents
 
 1. [A Trigger Can Arrive Before Training Is Safe](#a-trigger-can-arrive-before-training-is-safe)
-2. [Four Ways A Retraining Proposal Arrives](#four-ways-a-retraining-proposal-arrives)
-3. [A Clock Defines An Interval](#a-clock-defines-an-interval)
-4. [Data Arrival Needs A Completeness Contract](#data-arrival-needs-a-completeness-contract)
-5. [Change Signals Need Rate Control](#change-signals-need-rate-control)
-6. [Eligibility Is One Shared Decision](#eligibility-is-one-shared-decision)
-7. [Run Identity Makes Retries And Replays Safe](#run-identity-makes-retries-and-replays-safe)
-8. [Backfills And Corrections Need Their Own Policy](#backfills-and-corrections-need-their-own-policy)
-9. [Manual Approval Handles Exceptional Work](#manual-approval-handles-exceptional-work)
-10. [Map The Framework To Current Tools](#map-the-framework-to-current-tools)
-11. [Recover Duplicate And Missed Signals](#recover-duplicate-and-missed-signals)
-12. [Operate And Audit The Trigger Layer](#operate-and-audit-the-trigger-layer)
+2. [Four Ways To Start A Retraining Request](#four-ways-to-start-a-retraining-request)
+3. [Define Which Time Period A Scheduled Run Covers](#define-which-time-period-a-scheduled-run-covers)
+4. [Check That All Required Data Has Arrived](#check-that-all-required-data-has-arrived)
+5. [Prevent Duplicate Events From Starting Too Many Runs](#prevent-duplicate-events-from-starting-too-many-runs)
+6. [Use One Readiness Check For Every Trigger](#use-one-readiness-check-for-every-trigger)
+7. [Give Retries And Replays A Stable Run ID](#give-retries-and-replays-a-stable-run-id)
+8. [Define Separate Rules For Retries, Replays, And Backfills](#define-separate-rules-for-retries-replays-and-backfills)
+9. [Use Manual Approval For Exceptional Retraining](#use-manual-approval-for-exceptional-retraining)
+10. [Implement Training Triggers With Current Tools](#implement-training-triggers-with-current-tools)
+11. [Recover From Duplicate And Missing Trigger Events](#recover-from-duplicate-and-missing-trigger-events)
+12. [Monitor And Audit Training Triggers](#monitor-and-audit-training-triggers)
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
@@ -58,38 +58,38 @@ flowchart TD
 
 The trigger record should retain the source signal, observed time, intended data interval, dataset versions, requester, policy version, gate results, logical run key, and orchestrator run ID. This evidence supports a direct answer to “Why did this model train?” months after the run completed.
 
-## Four Ways A Retraining Proposal Arrives
+## Four Ways To Start A Retraining Request
 <!-- section-summary: Scheduled, event-triggered, data-aware, and manually approved requests express different reasons for considering new training work. -->
 
 Teams often use the words “scheduled” and “event-driven” as if they cover every design. Production systems usually need four proposal types.
 
-### Scheduled Runs Express Cadence
+### Start Retraining On A Schedule
 
 A **scheduled run** starts from a clock or business calendar. Daily batch retraining, a weekly candidate for a review meeting, and a monthly regulatory refresh all fit this model.
 
 You can think of the schedule as an alarm. It provides a predictable checkpoint, while the eligibility policy checks the room before work begins. A daily alarm may create a request for the previous day’s interval and then wait for all required partitions.
 
-### Event-Triggered Runs Express A State Change
+### Start Retraining After A Data Or System Event
 
 An **event-triggered run** starts from a discrete occurrence such as a snapshot publication, a labeling batch approval, or a corrected dataset release. The event carries identity and context: which resource changed, which version became available, and which upstream process produced it.
 
 An event is strongest if it describes a completed domain fact. “Training snapshot published” carries more meaning than “new object appeared in storage.” The second message might refer to a temporary file, one shard of a larger batch, or a retry.
 
-### Data-Aware Runs Express Readiness
+### Start Retraining After Data Is Ready
 
 A **data-aware run** starts after the system evaluates the state of one or more data products. The policy may require every partition for an interval, a successful quality suite, a minimum label count, and a compatible feature snapshot.
 
 In other terms, an event reports that something changed; a data-aware policy asks whether the whole training input is ready. Asset-aware orchestrators can express some of this directly. Teams can also publish a manifest or readiness record from the data platform.
 
-### Manually Approved Runs Express Authority
+### Start Retraining After Approval
 
 A **manually approved run** starts from a person or an approval workflow. It fits an emergency retrain, an incident investigation, a historical replay, or a high-cost candidate that needs explicit budget authorization.
 
 Manual runs carry the same governance as automated runs. The request names immutable inputs, code and pipeline versions, purpose, owner, expiry, and release permissions. The approval adds authority to the shared eligibility process.
 
-Most mature systems accept all four proposal types through one normalized request contract. This keeps data checks, deduplication, concurrency, and audit behaviour consistent across automation and operator actions.
+A production trigger layer can accept all four proposal types through one normalized request contract. The shared contract sends automation and operator actions through the same data checks, deduplication rules, concurrency limits, and audit record.
 
-## A Clock Defines An Interval
+## Define Which Time Period A Scheduled Run Covers
 <!-- section-summary: A schedule identifies a processing interval and cadence; data readiness remains a separate decision. -->
 
 A cron entry looks precise, yet its meaning is incomplete until the team defines the interval behind it. A daily training request could mean “use data from the previous calendar day,” “use the latest twenty-four hours,” or “use everything since the last successful run.” Those choices produce different datasets after a delay or outage.
@@ -98,7 +98,7 @@ An explicit `[interval_start, interval_end]` preserves which source records belo
 
 Time zone also belongs in the policy. Daylight-saving transitions create short or long local days. UTC avoids that ambiguity for many technical datasets. A business defined by local trading days may still need a regional time zone and a tested calendar library. Write the choice explicitly.
 
-### Catchup Decides What Happens After Downtime
+### Decide How To Handle Missed Scheduled Runs
 
 Suppose the scheduler is unavailable for three daily intervals. On recovery, it needs one of three policies:
 
@@ -116,7 +116,7 @@ Ordinary cron can launch a command at a chosen time, which is adequate for a sma
 
 The command submits a request. It leaves dataset resolution and pipeline launch to the trigger service. That small boundary prevents a calendar tick from bypassing readiness checks.
 
-## Data Arrival Needs A Completeness Contract
+## Check That All Required Data Has Arrived
 <!-- section-summary: A useful data signal proves that the intended snapshot is complete enough for training and explains how late records will be handled. -->
 
 Data rarely arrives as one atomic object. A daily snapshot may contain hundreds of files, partitions from several regions, a feature table, and labels from another system. The presence of one file proves very little.
@@ -131,32 +131,32 @@ A **completeness contract** states what “ready” means for the training inter
 
 A **watermark** is the latest point in event time that the producer considers complete enough under its published policy. Think of it as a boundary drawn through the incoming stream. Records before the boundary are expected to be substantially complete; later records may still arrive as corrections.
 
-### Complete Partition Arrival
+### Wait For Every Required Data Partition
 
 Consider hourly transactions written into regional partitions. The last file for one region appears at 01:12. A bucket event for the first file would be premature. A better producer writes a manifest only after all expected partitions have passed validation. The manifest includes the interval, partition list, row counts, schema version, and snapshot checksum. Its publication creates the retraining proposal.
 
 The eligibility service reads that manifest and checks it against the active region registry. If a newly opened region is missing from the producer’s list, the mismatch blocks training and alerts the data owner. This protects the model from a “complete” snapshot defined with stale expectations.
 
-### Label Thresholds Need More Than A Count
+### Check Label Count And Coverage
 
 For supervised learning, a raw label count can hide poor coverage. Ten thousand new outcomes might all come from one customer segment. A stronger gate checks total count, join coverage to predictions, segment coverage, and label age.
 
 For example, a fraud model may wait until at least a configured number of chargeback outcomes have matured, the prediction-to-outcome join rate exceeds its service target, and each high-risk region has enough examples for evaluation. An age ceiling can still create an investigation if the count remains below threshold for too long. This avoids a permanent wait during a quiet period.
 
-### Late And Corrected Data Create New Evidence
+### Create A New Dataset Version For Late Or Corrected Data
 
 Late records should never mutate the meaning of a completed training run. Publish a new dataset version, measure the affected population, and choose a response. A tiny correction may roll into the next regular candidate. A material target correction may create a replay request. A severe quality defect may invalidate the existing candidate and pause release activity.
 
 The trigger record retains both the original and corrected snapshot identities. This makes the relationship between candidates visible during review.
 
-## Change Signals Need Rate Control
+## Prevent Duplicate Events From Starting Too Many Runs
 <!-- section-summary: Event systems may deliver duplicates, reorder messages, or emit bursts, so the trigger layer needs identity, deduplication, debounce, and coalescing. -->
 
 Cloud event buses and message systems commonly provide **at-least-once delivery**. The service retries an event after an acknowledgement failure, so the handler may receive the same event again. Some systems can also deliver events out of order.
 
 These delivery properties are normal. Four controls give the handler reliable behaviour:
 
-1. **Deduplication** records the provider event ID and ignores an exact redelivery.
+1. **Deduplication** records the provider event source and event ID, then ignores an exact redelivery of that pair.
 2. **Domain identity** groups different events that refer to the same snapshot or table version.
 3. **Debounce** waits for a quiet period after the latest change, which helps a batch of files settle.
 4. **Coalescing** combines several eligible changes into one training request, often for the newest approved snapshot.
@@ -167,7 +167,7 @@ Rate control should preserve important boundaries. Updates for two different bus
 
 Drift evidence deserves similar care. A drift alert can come from seasonality, an instrumentation change, a failed upstream feature, or a genuine population shift. The alert should create an investigation or retraining proposal. Eligibility then checks monitoring freshness, feature health, label availability, recent releases, and cooldown policy. A candidate run can proceed after the evidence supports retraining; release evaluation remains a separate gate.
 
-## Eligibility Is One Shared Decision
+## Use One Readiness Check For Every Trigger
 <!-- section-summary: Every proposal type passes through a common policy for data, labels, capacity, concurrency, cost, and authority. -->
 
 Eligibility turns many signals into one consistent operational decision. A shared policy gives scheduled, manual, and drift-driven requests the same quality and concurrency checks. It also prevents two proposal paths from starting candidates on the same snapshot.
@@ -200,7 +200,7 @@ manual_request:
 
 The format is application-owned. An adapter can translate parts of it into Airflow assets, Dagster automation conditions, Prefect automations, Databricks job triggers, or a managed pipeline API. Checks that carry model-specific meaning stay in the trigger service or pipeline entry gate.
 
-## Run Identity Makes Retries And Replays Safe
+## Give Retries And Replays A Stable Run ID
 <!-- section-summary: A logical run key identifies the intended work, while attempt identifiers distinguish each execution effort. -->
 
 A training request can reach the orchestrator even if the caller never receives the response. Suppose an event handler submits a run and loses its connection one second later. The event bus redelivers the source event, and the handler sees no orchestrator ID in its local record. Creating a fresh run at this point would train a second candidate from the same snapshot.
@@ -244,7 +244,7 @@ flowchart TD
     G -->|Invalid| R["Rejected Request<br/>(records policy evidence)"]
 ```
 
-## Backfills And Corrections Need Their Own Policy
+## Define Separate Rules For Retries, Replays, And Backfills
 <!-- section-summary: Retry, replay, and backfill describe different operational intentions and need separate identities, limits, and release rules. -->
 
 A **retry** continues work for the same logical input after an execution failure. A **replay** runs the same logical interval again because code, configuration, or evidence changed. A **backfill** creates work for a range of historical partitions.
@@ -257,7 +257,7 @@ Late events should be compared with the watermark and correction policy. An even
 
 Replay also needs a stable input record. Reading “latest” during a historical run can combine old features with current labels. Resolve every asset version before admission and pass those immutable references into the pipeline.
 
-## Manual Approval Handles Exceptional Work
+## Use Manual Approval For Exceptional Retraining
 <!-- section-summary: Emergency and high-risk runs retain human authority through explicit scope, evidence, permissions, and expiry. -->
 
 An incident may require an immediate candidate after a corrupted feature is repaired. The request names the corrected snapshot because the investigation and any replay must refer to the exact data reviewed by the operator. Its purpose explains the permitted outcome, such as “evaluate the feature repair,” and its expiry closes the emergency path after the incident window. These fields stop a temporary exception from turning into a reusable shortcut.
@@ -274,7 +274,7 @@ Manual requests also need an answer to “What may happen after training?” An 
 
 Role-based access control should keep four authorities separate. A requester proposes the work and supplies evidence. An exception approver accepts any temporary policy deviation. The pipeline service identity executes only the admitted configuration. A release approver decides whether the resulting candidate can reach production. This split prevents one urgent action from proposing, approving, executing, and releasing its own model. Short-lived credentials give each role only the permissions required for that stage.
 
-## Map The Framework To Current Tools
+## Implement Training Triggers With Current Tools
 <!-- section-summary: Current orchestrators expose schedules, asset events, sensors, and automations, while application policy still defines model-specific eligibility. -->
 
 Tool selection comes after the trigger contract. Each platform can represent parts of the framework, though names and maturity differ.
@@ -285,21 +285,23 @@ Cron supplies a clock signal. Pair it with a durable request API, explicit inter
 
 ### Apache Airflow
 
-Current Airflow uses **Assets** for logical data dependencies; older material and deployments may still use the former **Dataset** name. Asset-aware schedules can launch a consumer DAG after producer tasks successfully update required assets. Multiple asset expressions support `AND` and `OR`, and `AssetOrTimeSchedule` combines asset changes with a timetable.
+A team already using Airflow for warehouse and feature pipelines can publish the training manifest as an **Asset**. Airflow records the update only after the producer task succeeds, and an asset-aware schedule can then create the consumer DAG run. Requiring both the feature and label Assets with `AND` expresses a basic completeness dependency; using `OR` creates a run after either Asset changes.
 
-Airflow also supports event-driven scheduling through asset watchers. A team can map a published training manifest to an Asset, then let the consumer DAG run after that event. Explicit timetable choice remains important because a cron trigger and a cron data interval carry different time meanings. Keep readiness checks inside the DAG or a policy service if an Asset update alone cannot prove label coverage or quality.
+Current Airflow uses **Assets** for these logical data dependencies; older material and deployments may still use the former **Dataset** name. `AssetOrTimeSchedule` combines asset changes with a timetable, while asset watchers connect supported external event sources. Explicit timetable choice remains important because a cron trigger and a cron data interval carry different time meanings. Keep readiness checks inside the DAG or a policy service if an Asset update alone cannot prove label coverage or quality.
 
 ### Dagster
 
-Dagster asset sensors can create a `RunRequest` after an asset materialization. A stable `run_key` helps suppress duplicate requests. Declarative Automation evaluates asset state and dependencies through `AutomationCondition`. Its built-in conditions cover cron cadence, eager dependency updates, and missing partitions. Blocking asset checks can join the condition before downstream work is requested.
+Suppose a Dagster project already represents feature tables, labels, and training snapshots as assets. The training asset should materialize only after its upstream partitions exist and their blocking checks pass. Declarative Automation evaluates that asset state and its dependencies through `AutomationCondition`; its built-in conditions cover cron cadence, eager dependency updates, and missing partitions.
+
+An asset sensor handles more custom event logic. It can create a `RunRequest` after a selected materialization and use a stable `run_key` to suppress duplicate requests. The normalized training request still carries the snapshot identity and policy evidence because a Dagster run key only protects the scope defined by that sensor.
 
 The core automation conditions are current supported features. Dagster currently marks automation through virtual-asset dependencies as Preview. Keep that extension outside a production contract until its lifecycle status fits the system's risk policy.
 
 ### Prefect
 
-Prefect 3 provides events and automations in the open-source product. A deployment trigger is a concise automation whose action creates a run from a deployment. Event triggers can react to matching events or their absence. They can also require a threshold inside a time window and group observations by resource fields.
+Suppose a labeling service emits `labels.batch-approved` with a snapshot ID after review. A Prefect deployment trigger can match that event, pass the snapshot ID into a deployment, and create the flow run. The trigger is a concise automation whose action is fixed to running that deployment.
 
-This works well for a label threshold event or a snapshot publication event. Keep the event ID and resource identity in the normalized request so application-level deduplication survives redelivery and operator replay.
+Prefect 3 provides events and automations in the open-source product. Event triggers can react to matching events or their absence. They can also require a threshold inside a time window and group observations by resource fields. Those controls fit label thresholds and missing-snapshot alerts, while the normalized request retains the event ID and resource identity so application-level deduplication survives redelivery and operator replay.
 
 ### Databricks Lakeflow Jobs
 
@@ -315,7 +317,7 @@ The shared delivery contract is simple: the handler must tolerate another copy o
 
 Provider details change where failure can occur. Eventarc Standard explicitly uses at-least-once delivery, so duplicate events are expected. Azure Event Grid also provides at-least-once delivery and warns that events may arrive out of order. AWS service events reach EventBridge with a source-specific best-effort or durable delivery level. After EventBridge accepts an event, target delivery follows its configured retries and dead-letter queue. For AWS, reconciliation must cover both a missed source event and a failed target invocation.
 
-## Recover Duplicate And Missed Signals
+## Recover From Duplicate And Missing Trigger Events
 <!-- section-summary: A durable ledger and periodic reconciliation turn duplicate delivery, ambiguous submission, and missed events into routine recovery paths. -->
 
 Consider an event handler that reserves a request and calls the orchestrator. The API accepts the run, yet the response is lost during a network failure. A blind retry can create a second candidate. The recovery path first queries the orchestrator by logical run key. It attaches an existing run ID to the ledger, and submits only after an empty result.
@@ -345,7 +347,7 @@ The resulting recovery design contains five mechanisms:
 
 Test these paths with duplicate events, reordered events, a timeout after run creation, scheduler downtime, and a dead-letter replay. Recovery should produce one logical candidate and a complete audit trail.
 
-## Operate And Audit The Trigger Layer
+## Monitor And Audit Training Triggers
 <!-- section-summary: Trigger operations focus on delayed evidence, duplicate suppression, missed work, queue pressure, manual authority, and safe replay. -->
 
 Pipeline success metrics describe work that started. Trigger metrics also cover work that waited, expired, or was rejected. Track proposal volume by source and the outcome of each gate. Measure waiting time, trigger-to-start delay, queue pressure, and active concurrency. Count duplicate suppressions, coalesced events, missed intervals, reconciled snapshots, dead-lettered signals, expired requests, and manual exceptions.
@@ -376,10 +378,12 @@ Use clocks for predictable intervals, domain events for meaningful state changes
 ## References
 
 - [Apache Airflow asset-aware scheduling](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/asset-scheduling.html)
+- [Apache Airflow asset definitions](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/assets.html)
 - [Apache Airflow event-driven scheduling](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/event-scheduling.html)
 - [Apache Airflow timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
 - [Dagster Declarative Automation](https://docs.dagster.io/guides/automate/declarative-automation)
 - [Dagster asset sensors](https://docs.dagster.io/guides/automate/asset-sensors)
+- [Dagster virtual assets](https://docs.dagster.io/guides/build/assets/virtual-assets)
 - [Prefect automations](https://docs.prefect.io/v3/concepts/automations)
 - [Prefect deployment triggers](https://docs.prefect.io/v3/how-to-guides/automations/creating-deployment-triggers)
 - [Databricks Lakeflow Jobs schedules and triggers](https://docs.databricks.com/aws/en/jobs/triggers)
@@ -391,3 +395,4 @@ Use clocks for predictable intervals, domain events for meaningful state changes
 - [Google Eventarc event retries](https://docs.cloud.google.com/eventarc/docs/retry-events)
 - [Azure Event Grid delivery and retry](https://learn.microsoft.com/en-us/azure/event-grid/delivery-and-retry)
 - [Amazon EventBridge delivery levels](https://docs.aws.amazon.com/eventbridge/latest/ref/event-delivery-level.html)
+- [Amazon EventBridge target retries and dead-letter queues](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-retry-policy.html)

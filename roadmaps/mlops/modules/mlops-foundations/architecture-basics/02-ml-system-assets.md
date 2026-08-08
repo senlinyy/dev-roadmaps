@@ -9,27 +9,27 @@ id: "article-mlops-mlops-foundations-ml-system-assets"
 
 ## Table of Contents
 
-1. [A Model File Cannot Explain a Production Release](#a-model-file-cannot-explain-a-production-release)
-2. [An ML Release Is a Graph of Versioned Assets](#an-ml-release-is-a-graph-of-versioned-assets)
+1. [What An ML System Must Record Beyond The Model File](#what-an-ml-system-must-record-beyond-the-model-file)
+2. [How Versioned Assets Fit Together In A Release](#how-versioned-assets-fit-together-in-a-release)
 3. [Every Asset Needs Identity, Ownership, and a Lifecycle](#every-asset-needs-identity-ownership-and-a-lifecycle)
-4. [Source and Configuration Assets Define the Intended Work](#source-and-configuration-assets-define-the-intended-work)
-5. [Data, Labels, and Features Define What the Model Learned](#data-labels-and-features-define-what-the-model-learned)
-6. [Environment and Run Assets Record What Actually Executed](#environment-and-run-assets-record-what-actually-executed)
-7. [The Model Asset Must Be a Complete Candidate](#the-model-asset-must-be-a-complete-candidate)
-8. [Evaluation and Policy Assets Explain the Decision](#evaluation-and-policy-assets-explain-the-decision)
-9. [A Release Record Binds Approved Assets to Production](#a-release-record-binds-approved-assets-to-production)
-10. [Prediction and Outcome Assets Connect the Release to Reality](#prediction-and-outcome-assets-connect-the-release-to-reality)
-11. [Lineage Connects Assets Across Systems](#lineage-connects-assets-across-systems)
-12. [Current Industrial Systems Divide the Work](#current-industrial-systems-divide-the-work)
+4. [Record The Code And Configuration Used For Training](#record-the-code-and-configuration-used-for-training)
+5. [Record The Data, Labels, And Features Used For Training](#record-the-data-labels-and-features-used-for-training)
+6. [Record The Runtime And Each Training Run](#record-the-runtime-and-each-training-run)
+7. [Package The Trained Model With Everything Needed To Use It](#package-the-trained-model-with-everything-needed-to-use-it)
+8. [Record How The Model Was Evaluated And Approved](#record-how-the-model-was-evaluated-and-approved)
+9. [Record Exactly What Entered Production](#record-exactly-what-entered-production)
+10. [Record Production Predictions And Their Outcomes](#record-production-predictions-and-their-outcomes)
+11. [Trace How Data, Runs, Models, And Releases Are Connected](#trace-how-data-runs-models-and-releases-are-connected)
+12. [Where Industrial MLOps Platforms Store These Records](#where-industrial-mlops-platforms-store-these-records)
 13. [Retention and Recovery Must Preserve a Complete Release](#retention-and-recovery-must-preserve-a-complete-release)
-14. [Verify the Asset Graph in Both Directions](#verify-the-asset-graph-in-both-directions)
+14. [Trace From Predictions To Inputs And From Inputs To Affected Predictions](#trace-from-predictions-to-inputs-and-from-inputs-to-affected-predictions)
 15. [Main Idea](#main-idea)
 16. [References](#references)
 
-## A Model File Cannot Explain a Production Release
+## What An ML System Must Record Beyond The Model File
 <!-- section-summary: A production release depends on many connected assets because the model file alone cannot explain, reproduce, operate, or recover the system. -->
 
-At a high level, **an ML system asset is any durable object or record needed to create, evaluate, release, operate, or explain a model-powered system**. Source code is an asset. So are a training-data snapshot, a feature definition, a container image, a training run, a model package, an evaluation report, a release record, and the production outcomes used to judge the model later.
+A production release depends on far more than one saved model file. At a high level, **an ML system asset is any durable object or record needed to create, evaluate, release, operate, or explain a model-powered system**. Source code is an asset. So are a training-data snapshot, a feature definition, a container image, a training run, a model package, an evaluation report, a release record, and the production outcomes used to judge the model later.
 
 The model file is only one result in this chain. It may contain learned weights or decision trees, yet it usually cannot answer the questions that matter during a release or incident:
 
@@ -45,10 +45,16 @@ Consider a demand forecast that starts producing unusually low quantities for on
 
 That is the practical purpose of asset management in MLOps. It gives the team durable evidence about what changed, which production behaviour may be affected, and which safe state can be restored.
 
+A **candidate model** is a trained model that the team is considering for
+approval and release. The **candidate model package** adds the supporting pieces
+needed to evaluate and run that model, such as its input and output contract,
+preprocessing logic, dependencies, runtime reference, and link to the training
+run.
+
 ```mermaid
 flowchart TD
     A["Source code, configuration,<br/>data, labels, features"] --> B["Environment and training run"]
-    B --> C["Candidate model package"]
+    B --> C["Candidate Model Package<br/>(trained model and supporting pieces)"]
     C --> D["Evaluation, policy checks,<br/>and approval"]
     D --> E["Production release record"]
     E --> F["Predictions and operating evidence"]
@@ -56,11 +62,6 @@ flowchart TD
     G --> H["New data or product change"]
     H --> A
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef execution fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef release fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef evidence fill:#C4B5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class A,H source
     class B execution
     class C,D decision
@@ -68,12 +69,16 @@ flowchart TD
     class F,G evidence
 ```
 
-Each arrow represents a relationship that the system should record. A candidate points to its training run. The run points to its inputs. An approval points to the evaluated candidate and policy version. A release points to exact deployable assets. A prediction points to the release that produced it. An outcome points back to the original prediction.
+Each arrow represents a relationship that the system should record. A candidate
+model package points to its training run and supporting pieces. The run points
+to its inputs. An approval points to the evaluated candidate and policy version.
+A release points to exact deployable assets. A prediction points to the release
+that produced it. An outcome points back to the original prediction.
 
-## An ML Release Is a Graph of Versioned Assets
+## How Versioned Assets Fit Together In A Release
 <!-- section-summary: The asset graph groups source, execution, decision, release, and production evidence while preserving the relationships between them. -->
 
-A folder or spreadsheet can list assets, although a list alone cannot explain how they produced one release. MLOps needs an **asset graph**: stable asset identities connected by recorded relationships.
+A production release connects exact versions of many assets. A folder or spreadsheet can list them, although a list alone cannot explain how they produced one release. MLOps records those relationships in an **asset graph**: stable asset identities connected by recorded relationships.
 
 The graph has five broad parts.
 
@@ -160,10 +165,10 @@ mindmap
       Retirement
 ```
 
-## Source and Configuration Assets Define the Intended Work
+## Record The Code And Configuration Used For Training
 <!-- section-summary: Source assets preserve the reviewed logic and fully resolved choices that tell a training or inference job what to do. -->
 
-The source layer describes the work the team intended to run. It usually includes training code, feature logic, evaluation code, inference code, pipeline definitions, infrastructure definitions, tests, and configuration.
+Reproducing training starts with the exact code and configuration that the team intended to run. These records usually include training code, feature logic, evaluation code, inference code, pipeline definitions, infrastructure definitions, tests, and configuration.
 
 Git provides the common identity for reviewed source. A training record should capture the repository and commit, while the build process should preserve the link from that commit to the package or image it produced. Branch names are useful for collaboration and unsuitable as final release identities because their pointers move.
 
@@ -193,10 +198,10 @@ The digest identifies the resolved configuration content without exposing sensit
 
 GitHub, GitLab, and enterprise source platforms commonly provide repository history and review. GitHub Actions, GitLab CI, Jenkins, or managed CI services connect source identities to tests and build outputs. The CI system owns build evidence; the experiment tracker owns the training-run record. Linking them prevents the training system from claiming a source version that the build process never produced.
 
-## Data, Labels, and Features Define What the Model Learned
+## Record The Data, Labels, And Features Used For Training
 <!-- section-summary: Versioned data and feature assets preserve the examples, meanings, and historical time boundaries that shaped model behaviour. -->
 
-Data assets carry meaning and historical time alongside their rows. Those properties explain what one example represents, which outcome counts as its label, and which information was valid at the prediction moment.
+The training record must identify the data, labels, and features that shaped the model. These assets carry meaning and historical time alongside their rows. Those properties explain what one example represents, which outcome counts as its label, and which information was valid at the prediction moment.
 
 A **training example** combines the information available at a historical prediction moment with a later outcome. The inputs are features. The outcome is the label. Their definitions determine which problem the model learns.
 
@@ -204,17 +209,17 @@ Suppose a churn model changes its label from “subscription cancelled within 30
 
 Feature definitions also need identities. For a field called `transactions_7d`, the event source and entity key determine which transactions belong to one account. The aggregation and event-time window define the calculation. Late-arrival and missing-value rules explain how the pipeline handles incomplete history, while the data type protects the interface. The field name alone cannot guarantee that training and production calculate the same value.
 
-### The dataset identity must name a recoverable state
+### Record An Exact, Recoverable Dataset Version
 
-Object-storage paths can change as new files arrive. Table names can point to newer commits. A training run should record the snapshot, table version, partition manifest, or content digest that identifies the state it read.
+A dataset version must point to a state the team can recover. Object-storage paths can change as new files arrive, and table names can point to newer commits. A training run should record the snapshot, table version, partition manifest, or content digest that identifies the state it read.
 
 Delta Lake and Apache Iceberg provide table history through versioned snapshots. Warehouses and managed data platforms may expose snapshots, clones, or time-travel features. A small file-based workflow may use a manifest containing object paths, sizes, and checksums.
 
 The snapshot identity still needs a retention plan. A saved version number cannot recover data files that the platform has already removed. Long investigation or audit windows may require durable snapshots beyond the table's normal history.
 
-### Historical time belongs in the feature asset
+### Use Only Feature Values Available At Prediction Time
 
-Training data is assembled after outcomes are known, so it can accidentally include future information. **Point-in-time correctness** means that each historical example uses only values available by its prediction timestamp.
+Each historical training row should use only feature values available at its prediction timestamp. Training data is assembled after outcomes are known, so it can accidentally include future information. This rule is called **point-in-time correctness**.
 
 Imagine a payment scored at 10:00. A risk flag written at 11:30 cannot appear in the 10:00 training row. A time-aware feature join uses the entity key and timestamp to select the latest permitted value. The feature definition should preserve that time rule so another pipeline can reproduce it.
 
@@ -225,10 +230,6 @@ flowchart TD
     F["Risk flag written<br/>at 11:30"] --> X["Excluded from<br/>the training row"]
     J --> T["Point-in-time-correct<br/>training example"]
 
-    classDef time fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef allowed fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef blocked fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class P time
     class A,J allowed
     class F,X blocked
@@ -237,16 +238,16 @@ flowchart TD
 
 Feature stores such as Feast and managed feature platforms can store shared definitions and support historical or online retrieval. They are useful after several models reuse features or online serving needs consistent low-latency values. A batch model with a few stable warehouse fields may only need governed transformations and versioned tables.
 
-### Catalogs govern the data around its storage
+### Record Ownership, Permissions, And Discovery For Stored Data
 
-Table formats provide reliable table states and history. Catalogs and platform controls supply governed names, ownership, permissions, discovery, audit, and cross-asset lineage.
+A **data catalog** records how stored data may be found, owned, accessed, and traced. Table formats provide reliable table states and history, while catalogs and platform controls supply governed names, permissions, discovery, audit, and cross-asset lineage.
 
 Databricks Unity Catalog is one implementation. Native cloud catalogs, warehouse catalogs, and data-governance platforms provide similar responsibilities in other stacks. The catalog points to the governed asset, while the immutable snapshot identifies the exact data state used by the run.
 
-## Environment and Run Assets Record What Actually Executed
+## Record The Runtime And Each Training Run
 <!-- section-summary: Environment and run records capture the runtime, inputs, parameters, outputs, status, and resource context of one execution. -->
 
-Source and data assets describe intended inputs. The **run asset** records one actual execution and ties those inputs to the outputs, status, and operating evidence produced during that attempt.
+Code and data records describe what the team intended to run. The runtime and **run asset** record what actually executed, then connect those inputs to the outputs, status, and operating evidence produced during that attempt.
 
 A run might be one `python train.py` process, a managed training job, or a multi-stage pipeline execution. Its unique ID and lifecycle state distinguish this attempt from every other execution.
 
@@ -263,9 +264,9 @@ resolved identity:   registry.example.org/fraud-train@sha256:9f05c2...
 
 Hardware also matters for some workloads. Accelerator type, distributed strategy, precision mode, and framework settings can influence performance or numerical results. The run record should preserve material execution details and define acceptable reproducibility tolerances.
 
-### Runs connect inputs to outputs
+### Connect Each Run To Its Inputs And Outputs
 
-The run is the central event in the asset graph:
+Each run should point to the exact inputs it used and outputs it produced. The run is the central event in the asset graph:
 
 ```mermaid
 flowchart TD
@@ -276,9 +277,6 @@ flowchart TD
     R --> Q["Metrics, reports, and logs"]
     R --> X["Intermediate datasets<br/>and pipeline outputs"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef run fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef output fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class C,D,E input
     class R run
     class M,Q,X output
@@ -292,10 +290,10 @@ Azure Machine Learning versions reusable assets for data, environments, models, 
 
 A failed run remains valuable evidence. It should keep its error class, last completed stage, relevant logs, and partial outputs that are safe to retain. Overwriting failed attempts removes information about instability and makes comparison unreliable.
 
-## The Model Asset Must Be a Complete Candidate
+## Package The Trained Model With Everything Needed To Use It
 <!-- section-summary: A model candidate includes learned parameters plus the interface, preprocessing, dependencies, and integrity records required to evaluate and load it consistently. -->
 
-The **model artifact** is the saved result of training. Depending on the framework, it may be a set of weights, a decision-tree file, a serialized estimator, or a directory containing several files.
+The trained model needs enough surrounding information for another runtime to load and use it safely. The **model artifact** is the saved result of training. Depending on the framework, it may be a set of weights, a decision-tree file, a serialized estimator, or a directory containing several files.
 
 Production usually needs more than the learned parameters. The complete candidate may include:
 
@@ -318,10 +316,10 @@ Registration establishes that the asset exists and can be governed. Evaluation a
 
 For large language models, the candidate boundary may include adapter weights, tokenizer versions, chat templates, generation defaults, and safety configuration. A prompt or retrieval index can be an independently versioned dependency because changing either can alter application behaviour without changing the base model.
 
-## Evaluation and Policy Assets Explain the Decision
+## Record How The Model Was Evaluated And Approved
 <!-- section-summary: Evaluation evidence records observed behaviour, while versioned policies convert that evidence into an approval, rejection, or limited release. -->
 
-A candidate model gains production meaning through evaluation against the product contract. That evidence explains how the model behaved, which risks were examined, and why a release decision followed.
+Production approval needs a record of how the model behaved, which risks were examined, and who accepted the result. The team creates that record by evaluating the candidate against the product contract and applying the relevant release policy.
 
 The evaluation asset anchors every result to the candidate, baseline, and evaluation dataset. It records overall metrics and the important slices that expose uneven behaviour.
 
@@ -345,10 +343,6 @@ flowchart TD
     D -->|"Pause"| H["Human review with evidence"]
     D -->|"Fail"| F["Rejected candidate and reason"]
 
-    classDef input fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef decision fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef result fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
     class C,B input
     class E,P work
     class D decision
@@ -359,10 +353,10 @@ Approval can be automated, manual, or combined. Automation handles repeatable ch
 
 MLflow can preserve metrics and artifacts around a model. Registries and managed platforms can hold tags, aliases, approval status, model cards, and lineage. CI/CD or governance workflows often own the final release decision because they can combine model evidence with security, infrastructure, and organizational policy.
 
-## A Release Record Binds Approved Assets to Production
+## Record Exactly What Entered Production
 <!-- section-summary: The release record freezes the exact model, runtime, contracts, policy decision, target, rollout, and recovery state used in production. -->
 
-A registered and approved model identifies the candidate. The release record adds the production state, including its serving image, feature configuration, post-processing policy, endpoint settings, or batch-output target.
+A release record identifies the exact model and supporting assets that entered production. It adds the serving image, feature configuration, post-processing policy, endpoint settings, or batch-output target to the registered and approved candidate.
 
 The **release record** binds those pieces into one production identity. It should point to immutable values and preserve the environment, target, rollout state, and recovery plan.
 
@@ -396,10 +390,10 @@ For a batch model, the release record binds a scheduled job to one model version
 
 For an online service, the record binds an endpoint revision to its model and current traffic allocation. Those delivery details differ, while the need for one immutable release identity stays constant.
 
-## Prediction and Outcome Assets Connect the Release to Reality
+## Record Production Predictions And Their Outcomes
 <!-- section-summary: Production records link each prediction or output batch to its release, product action, and later outcome without copying unrestricted sensitive data into telemetry. -->
 
-Production creates evidence that training cannot supply. The system sees live inputs, executes a release, produces predictions, triggers product actions, and eventually receives outcomes.
+Production records show what the released system predicted and what happened afterward. The system sees live inputs, executes a release, produces predictions, triggers product actions, and eventually receives outcomes that training cannot supply.
 
 A useful prediction record identifies the release, request or batch run, prediction time, governed entity or join key, output summary, policy action, and operational correlation ID. It may also reference the input snapshot or online feature state.
 
@@ -425,17 +419,17 @@ Raw requests and full feature vectors should stay out of general logs and traces
 
 Approved references connect the restricted source to operational evidence without creating another uncontrolled copy.
 
-### Prediction records and telemetry serve different jobs
+### Use Prediction History And Service Monitoring For Different Questions
 
-Prediction records support ML and product analysis. They answer which release produced an output and how that output influenced an action.
+Teams use prediction history and service monitoring for different questions. **Prediction records** support ML and product analysis by showing which release produced an output and how that output influenced an action. **Telemetry** records how the production service executed that work.
 
 Operational telemetry supports service diagnosis. OpenTelemetry traces can connect API, feature lookup, queue, and inference spans. Metrics show latency, errors, traffic, and resource use. Logs record bounded operational events.
 
 A trace ID can connect the two records. The trace should avoid becoming a second copy of the governed prediction dataset.
 
-### Outcomes need maturity and join rules
+### Decide When Outcomes Are Ready And How To Match Them To Predictions
 
-An outcome can arrive seconds, days, or months later. A clear event definition states what counts as the final result. The maturity window says how long the team waits before evaluating it.
+The team must decide when an outcome is mature enough to evaluate and how it matches the earlier prediction. An outcome can arrive seconds, days, or months later. A clear event definition states what counts as the final result, while the maturity window says how long the team waits.
 
 A governed join key connects the outcome to its prediction. Revision rules handle corrected labels, and the missing-label policy explains how incomplete joins affect the reported metrics.
 
@@ -443,10 +437,10 @@ Suppose chargebacks mature after several weeks. An early “no chargeback” rec
 
 Actions and interventions belong in the record too. Manual review, recommendation exposure, treatment assignment, and product fallback can change the outcome. Future training data needs those fields to distinguish natural behaviour from behaviour influenced by the model.
 
-## Lineage Connects Assets Across Systems
+## Trace How Data, Runs, Models, And Releases Are Connected
 <!-- section-summary: Lineage records how jobs and decisions consume and produce assets so teams can investigate upstream causes and downstream impact. -->
 
-**Lineage** records how assets derive from and affect one another. You can think of it as a map of production cause and consequence.
+To trace a production result, the team needs recorded links among data, runs, models, and releases. **Lineage** is the name for those derivation and impact relationships. You can think of it as a map of production cause and consequence.
 
 Backward lineage starts from an output and follows its history. A disputed prediction leads to a release, model version, evaluation, run, environment, source commit, data snapshot, and feature definitions.
 
@@ -462,10 +456,6 @@ flowchart TD
     R --> P["Predictions or batch outputs"]
     P --> O["Product actions and outcomes"]
 
-    classDef source fill:#FFE04F,stroke:#536A9A,stroke-width:3px,color:#111827
-    classDef work fill:#2DD4BF,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef model fill:#93C5FD,stroke:#536A9A,stroke-width:3px,color:#0F172A
-    classDef production fill:#FB7185,stroke:#536A9A,stroke-width:3px,color:#111827
     class S,D source
     class J,T work
     class M model
@@ -480,10 +470,10 @@ Teams therefore combine captured lineage with explicit identifiers in run, relea
 
 Lineage views must respect the same access rules as the underlying data. Catalog and metadata systems should mask protected nodes and enforce the surrounding governance model.
 
-## Current Industrial Systems Divide the Work
+## Where Industrial MLOps Platforms Store These Records
 <!-- section-summary: Industrial stacks distribute bytes, metadata, governance, lineage, release state, and telemetry across systems with clear boundaries. -->
 
-ML asset management combines storage, identity, metadata, governance, lineage, release state, and operational evidence. Industrial stacks distribute those responsibilities across several connected systems.
+No single system usually stores every ML record. Industrial stacks distribute storage, identity, metadata, governance, lineage, release state, and operational evidence across several connected platforms.
 
 GitHub or GitLab usually owns source history and review. CI systems connect commits to tests, packages, OCI images, infrastructure plans, and build attestations. The OCI registry stores container images and exposes immutable digests.
 
@@ -514,9 +504,9 @@ Production and fallback releases often need longer retention than exploratory ru
 
 The retention plan should follow dependency edges. The removal check starts with active releases and their fallbacks. It then covers evidence reserved for audits or open investigations. A catalog or lineage system can assist, while the release manifest remains the clearest statement of what recovery needs.
 
-### Recovery proves more than storage
+### Test Whether A Historical Release Can Be Restored
 
-A recovery exercise starts from a historical release ID and resolves the model package, image digest, contracts, configuration, policy, and fallback. An isolated job verifies checksums, loads the package in the recorded runtime, and scores fixed test fixtures.
+A recovery test shows whether the team can restore a historical release, rather than merely find its files. The exercise starts from a release ID and resolves the model package, image digest, contracts, configuration, policy, and fallback. An isolated job verifies checksums, loads the package in the recorded runtime, and scores fixed test fixtures.
 
 The exercise then follows lineage backward to the run and data references. Permissions must still allow the recovery identity to retrieve approved assets. Encryption keys, network paths, registry credentials, and catalog references must still work.
 
@@ -524,10 +514,10 @@ Finally, the team proves the recovered release can enter the intended safe state
 
 If policy requires deleting sensitive source rows before the full audit period ends, the team can retain approved non-sensitive evidence and the lineage needed to interpret it. A hash can support an identity check for evidence still available to an authorized investigation; it cannot recreate deleted data.
 
-## Verify the Asset Graph in Both Directions
+## Trace From Predictions To Inputs And From Inputs To Affected Predictions
 <!-- section-summary: Two-direction drills prove that teams can explain a production output and identify every downstream use of a faulty input. -->
 
-An asset graph earns trust through investigation drills that exercise real identities, permissions, and recovery paths. The drills should prove both directions: explaining one production result and finding every affected result from one faulty input.
+Verification should work in both directions: from one production prediction back to its inputs, and from one faulty input forward to every affected result. Investigation drills exercise the real identities, permissions, and recovery paths needed for both traces.
 
 Start with one production prediction or batch row. Retrieve its release ID, deployment revision, model version, runtime digest, input contract, evaluation, policy decision, training run, source commit, configuration, environment, dataset snapshot, labels, and feature definitions. Follow the record forward to the product action and mature outcome.
 
