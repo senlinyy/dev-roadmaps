@@ -1,0 +1,149 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"project_name\" {\n  type    = string\n  default = \"devpolaris\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals { bucket_name = \"${var.project_name}-training-site\" }\n",
+      "readOnly": true
+    },
+    {
+      "filename": "providers.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 6.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = \"eu-west-2\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "main.tf",
+      "initialValue": "# Complete the website infrastructure.\n"
+    },
+    {
+      "filename": "site/index.html",
+      "initialValue": "<h1>DevPolaris Terraform Lab</h1>\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "website"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "expressionEquals": "local.bucket_name"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_website_configuration",
+                "website"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "aws_s3_bucket.website.id"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_website_configuration",
+                "website"
+              ]
+            },
+            {
+              "type": "index_document"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "suffix"
+            ],
+            "valueEquals": "index.html"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_object",
+                "index"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "aws_s3_bucket.website.id"
+            ]
+          },
+          {
+            "path": [
+              "key"
+            ],
+            "valueEquals": "index.html"
+          },
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "site/index.html"
+          },
+          {
+            "path": [
+              "content_type"
+            ],
+            "valueEquals": "text/html"
+          }
+        ]
+      }
+    ]
+  }
+}

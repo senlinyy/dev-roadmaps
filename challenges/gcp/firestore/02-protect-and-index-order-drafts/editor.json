@@ -1,0 +1,25 @@
+{
+  "language": "javascript",
+  "activeFile": "firestore.rules",
+  "completionProfile": "node-standard",
+  "files": [
+    {
+      "filename": "firestore.rules",
+      "initialValue": "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}\n"
+    },
+    {
+      "filename": "firestore.indexes.json",
+      "initialValue": "{\n  \"indexes\": [],\n  \"fieldOverrides\": []\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      { "file": "firestore.rules", "pattern": "match\\s+/users/\\{userId\\}/drafts/\\{draftId\\}", "label": "user-owned draft path" },
+      { "file": "firestore.rules", "pattern": "allow\\s+read\\s*,\\s*write\\s*:\\s*if\\s+request\\.auth\\s*!=\\s*null\\s*&&\\s*request\\.auth\\.uid\\s*==\\s*userId", "label": "authenticated owner rule" },
+      { "file": "firestore.rules", "pattern": "allow\\s+read\\s*,\\s*write\\s*:\\s*if\\s+true", "negate": true, "label": "no public wildcard access" },
+      { "file": "firestore.indexes.json", "pattern": "\"collectionGroup\"\\s*:\\s*\"drafts\"", "label": "drafts collection-group index" },
+      { "file": "firestore.indexes.json", "pattern": "\"fieldPath\"\\s*:\\s*\"status\"[\\s\\S]*?\"order\"\\s*:\\s*\"ASCENDING\"[\\s\\S]*?\"fieldPath\"\\s*:\\s*\"updatedAt\"[\\s\\S]*?\"order\"\\s*:\\s*\"DESCENDING\"", "label": "status and update-time composite fields" }
+    ]
+  }
+}

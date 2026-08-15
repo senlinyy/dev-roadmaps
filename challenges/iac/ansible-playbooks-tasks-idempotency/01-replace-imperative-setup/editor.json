@@ -1,0 +1,94 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Prepare orders hosts\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Create account\n      ansible.builtin.shell: useradd orders || true\n\n    - name: Create directory\n      ansible.builtin.shell: mkdir -p /srv/orders\n\n    - name: Install curl\n      ansible.builtin.shell: apt-get install -y curl\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "user"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.user",
+              "name"
+            ],
+            "equals": "orders"
+          },
+          {
+            "path": [
+              "ansible.builtin.user",
+              "system"
+            ],
+            "equals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "file"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.file",
+              "path"
+            ],
+            "equals": "/srv/orders"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "state"
+            ],
+            "equals": "directory"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "mode"
+            ],
+            "equals": "0750"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "equals": "curl"
+          },
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "state"
+            ],
+            "equals": "present"
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "shell",
+      "command",
+      "raw"
+    ]
+  }
+}

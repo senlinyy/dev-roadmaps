@@ -27,11 +27,15 @@ id: "article-mlops-llmops-model-routing"
 16. [Build Routing In A Practical Order](#build-routing-in-a-practical-order)
 17. [References](#references)
 
-At a high level, **model routing** is the process of choosing an approved execution path for each LLM task.
+One model may be fast enough for extraction while another is needed for a difficult planning task. **Model routing** chooses an approved execution path for each request according to its needs, risks, and operating constraints.
 
 Imagine an assistant that receives two requests. One asks it to classify a short message into a known category. The other asks it to compare a long contract, use several tools, and prepare a recommendation for human approval. A single powerful model may complete both, although the classification wastes time and money. A small, fast model may handle the classification well and fail badly on the contract.
 
 A router lets the system make a different choice for each task. The choice must protect quality, safety, data rules, and user experience before it considers savings. That is why production routing is broader than picking a model name from a list.
+
+![A request-routing example that applies trusted context, hard eligibility, and selection criteria before choosing either a fast extraction bundle or a reviewed contract-analysis bundle](/content-assets/articles/article-mlops-llmops-model-routing/task-to-route-decision.png)
+
+*Eligibility removes routes that cannot satisfy the request; selection then compares only the complete route bundles that remain.*
 
 ## What Model Routing Means
 <!-- section-summary: A model router selects a complete execution route that can satisfy the product contract for the current task. -->
@@ -264,6 +268,10 @@ flowchart TD
 
 Every cascade needs a stopping rule. It names eligible rejection reasons and the next route. It also defines maximum attempts, a total elapsed-time limit, and the terminal outcome. Without a stopping rule, a difficult task can consume every route and still return the final answer by accident.
 
+![A routing recovery decision tree that maps transient errors, validation rejection, missing information, risk, exhausted budget, and uncertain writes to distinct safe responses](/content-assets/articles/article-mlops-llmops-model-routing/failure-specific-routing-recovery.png)
+
+*Retries, deployment failover, quality escalation, clarification, review, and graceful degradation solve different failures; an uncertain write is reconciled before any further model action.*
+
 ## Put Budgets Inside The Routing Policy
 <!-- section-summary: Routing budgets limit total workflow work and compare cost against accepted outcomes rather than isolated calls. -->
 
@@ -318,7 +326,7 @@ Amazon Bedrock Intelligent Prompt Routing is generally available. It chooses bet
 
 Microsoft Foundry Model Router also has a generally available version. It offers quality, cost, and balanced modes plus configurable model subsets. Foundry honours eligible deployment and data-zone boundaries. The smallest context window in the chosen pool limits the effective router context, so route eligibility still needs a context check. Individual underlying models can have separate preview status.
 
-Google Vertex AI documents automatic and manual model routing preferences. Its REST routing documentation still labels the relevant surface Preview, while client references expose several API versions and lifecycle transitions. Treat that integration as version-specific: pin the exact API and SDK, verify the selected region and models, and recheck maturity before production approval.
+Google Cloud's Gemini Enterprise Agent Platform documents automatic and manual model routing preferences. Its REST routing documentation still labels the relevant surface Preview, while client references expose several API versions and lifecycle transitions. Treat that integration as version-specific: pin the exact API and SDK, verify the selected region and models, and recheck maturity before production approval.
 
 ### Use Gateways For Credentials, Capacity, And Backend Recovery
 
@@ -440,7 +448,11 @@ Add a learned selector after labelled routing cases and task diversity justify i
 
 The complete operating loop defines routes, protects hard constraints, selects among eligible candidates, validates the result, applies declared recovery, connects the decision to its outcome, and updates policy from reviewed evidence.
 
-In essence, model routing is a governed decision system. Its success is measured by acceptable user outcomes, safe policy compliance, predictable latency, and complete task cost. A clever classifier alone cannot provide those guarantees.
+Model routing is a governed decision system. Its success is measured by acceptable user outcomes, safe policy compliance, predictable latency, and complete task cost. A clever classifier alone cannot provide those guarantees.
+
+![A seven-stage production routing system that defines complete routes, protects hard requirements, selects eligible paths, separates execution-layer owners, validates outcomes, records evidence, and releases policies safely](/content-assets/articles/article-mlops-llmops-model-routing/governed-routing-system-summary.png)
+
+*A production router joins application policy, semantic selection, compatible gateway failover, product validation, outcome evidence, and staged policy release without transferring product authority to infrastructure.*
 
 ## References
 
@@ -453,7 +465,7 @@ In essence, model routing is a governed decision system. Its success is measured
 - [Microsoft Foundry Model Router concepts](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-router)
 - [Microsoft Foundry Model Router updates and maturity](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/whats-new-model-router)
 - [Govern Model Router with Azure Policy](https://learn.microsoft.com/en-us/azure/foundry/how-to/model-router-policy)
-- [Vertex AI GenerationConfig routing reference](https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/GenerationConfig)
+- [Gemini Enterprise Agent Platform model-routing preference reference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/Shared.Types/ModelRoutingPreference)
 - [Open Policy Agent documentation](https://www.openpolicyagent.org/docs)
 - [Open Policy Agent integration guidance](https://www.openpolicyagent.org/docs/integration)
 - [LiteLLM routing and load balancing](https://docs.litellm.ai/docs/routing)

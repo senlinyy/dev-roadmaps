@@ -1,0 +1,76 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "main.tf",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"archive\" {\n  bucket = \"dp-orders-logs-prod\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenBlocks": [
+      {
+        "file": "main.tf",
+        "path": [
+          {
+            "type": "resource",
+            "labels": [
+              "aws_s3_bucket",
+              "logs"
+            ]
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "moved"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "from"
+            ],
+            "expressionEquals": "aws_s3_bucket.logs"
+          },
+          {
+            "path": [
+              "to"
+            ],
+            "expressionEquals": "aws_s3_bucket.archive"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "valueEquals": "dp-orders-logs-prod"
+          }
+        ]
+      }
+    ]
+  }
+}

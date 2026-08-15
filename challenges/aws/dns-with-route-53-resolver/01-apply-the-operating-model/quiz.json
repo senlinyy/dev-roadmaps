@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "vpc-resolver",
+      "type": "single",
+      "scenario": "An EC2 instance uses the default VPC resolver. Which address is available for DNS queries in a VPC whose CIDR starts at 10.20.0.0?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The VPC base address plus two, and the link-local resolver address."
+        },
+        {
+          "id": "a",
+          "text": "Only 8.8.8.8."
+        },
+        {
+          "id": "c",
+          "text": "The NAT gateway private IP only."
+        },
+        {
+          "id": "d",
+          "text": "The internet gateway ID."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Route 53 Resolver is available through the VPC-provided resolver endpoints, including the VPC base plus two. Learn more in [Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html)."
+    },
+    {
+      "id": "private-zone",
+      "type": "single",
+      "scenario": "orders.internal resolves in the tooling VPC but returns NXDOMAIN in the production VPC. The same private hosted zone should serve both. What should be checked first?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Whether the production VPC has a NAT gateway."
+        },
+        {
+          "id": "a",
+          "text": "Whether the private hosted zone is associated with the production VPC."
+        },
+        {
+          "id": "c",
+          "text": "Whether the record is also in a public hosted zone."
+        },
+        {
+          "id": "d",
+          "text": "Whether the database has a public IP."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Private hosted zone answers are visible only to associated VPCs and connected resolver designs. Learn more in [Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html)."
+    },
+    {
+      "id": "privatelink-dns",
+      "type": "single",
+      "scenario": "A Secrets Manager interface endpoint exists, but applications still resolve the public service hostname to public addresses. Which endpoint setting is the likely missing link?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Source destination check."
+        },
+        {
+          "id": "c",
+          "text": "S3 transfer acceleration."
+        },
+        {
+          "id": "b",
+          "text": "Private DNS for the interface endpoint."
+        },
+        {
+          "id": "d",
+          "text": "An internet gateway attachment."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Private DNS maps the standard regional service hostname to private endpoint addresses inside the VPC. Learn more in [Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html)."
+    },
+    {
+      "id": "hybrid-direction",
+      "type": "single",
+      "scenario": "On-premises clients must resolve names in an AWS private hosted zone. Which Resolver endpoint direction receives those DNS queries into the VPC?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Outbound endpoint."
+        },
+        {
+          "id": "c",
+          "text": "Gateway endpoint."
+        },
+        {
+          "id": "d",
+          "text": "NAT gateway."
+        },
+        {
+          "id": "b",
+          "text": "Inbound endpoint."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Inbound Resolver endpoints accept DNS queries from connected networks into the VPC resolver. Learn more in [Hybrid DNS with Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-outbound-queries.html)."
+    },
+    {
+      "id": "dns-evidence",
+      "type": "multiple",
+      "scenario": "A hybrid name times out from on-premises but resolves inside the VPC. Which evidence should the team collect?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Resolver endpoint IP reachability over UDP and TCP 53."
+        },
+        {
+          "id": "d",
+          "text": "An S3 object version listing."
+        },
+        {
+          "id": "b",
+          "text": "Resolver rules and VPC associations."
+        },
+        {
+          "id": "e",
+          "text": "Increase an unrelated S3 lifecycle retention period."
+        },
+        {
+          "id": "c",
+          "text": "Resolver query logs for the request."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Endpoint reachability, forwarding rules, associations, and query logs cover the hybrid DNS path. Learn more in [Hybrid DNS with Route 53 Resolver](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-outbound-queries.html)."
+    }
+  ]
+}

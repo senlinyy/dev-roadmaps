@@ -21,11 +21,13 @@ aliases:
 8. [Follow The Complete SageMaker AI Lifecycle](#follow-the-complete-sagemaker-ai-lifecycle)
 9. [References](#references)
 
-**Amazon SageMaker AI** is AWS's managed platform for training, registering, deploying, and monitoring machine-learning models. It supplies AWS resources for the ML lifecycle so a team does not have to build every job runner, registry service, and inference control plane itself.
+A training script finishes on a laptop and leaves a `model.tar.gz` file behind. That file may contain useful weights, yet it answers none of the production questions. The team still needs the source data and runnable container, the approval, the serving path, and an earlier release that can take traffic during an incident.
 
-That description can sound like “one service that does MLOps.” The useful view is more precise. SageMaker AI is a collection of managed resources. A training job, pipeline, model package, endpoint, and monitoring job each have a different lifecycle. Amazon operates the underlying control plane. Your team still decides what data is valid, what model is good enough, who may approve it, how traffic moves, and what customer outcome proves the release is healthy.
+AWS provides managed resources for each part of that journey. A training job runs code on temporary compute. A pipeline connects preparation, training, evaluation, and registration. Model Registry gives a reviewed model a versioned identity. An endpoint or batch job delivers predictions. CloudWatch and application-owned prediction records show how the released system behaves.
 
-AWS renamed the former Amazon SageMaker service to **Amazon SageMaker AI** in December 2024. The broader Amazon SageMaker product name now covers a wider data, analytics, and AI platform. Existing service APIs and the AWS CLI namespace continue to use `sagemaker`. The sections below focus on SageMaker AI resources used for predictive-ML training and deployment.
+**Amazon SageMaker AI is AWS's managed platform for this predictive-ML lifecycle.** It operates the job, registry, and inference control planes. A team can use that machinery without building each control plane itself. SageMaker AI remains a collection of resources rather than one automatic MLOps switch. The team still defines valid data, meaningful evaluation, release authority, traffic policy, product outcomes, and recovery.
+
+AWS now uses the name **Amazon SageMaker AI** for the ML service inside the broader Amazon SageMaker product. Existing APIs and the AWS CLI namespace continue to use `sagemaker`. This article follows the predictive-ML path through the current service boundaries.
 
 ## Follow The SageMaker AI Model Lifecycle
 <!-- section-summary: SageMaker AI uses a chain of managed resources to carry a model from versioned data to an operated prediction workload. -->
@@ -52,6 +54,10 @@ The arrows matter as much as the boxes. A pipeline moves references and evidence
 
 This lifecycle also shows why adopting SageMaker AI does not require adopting every SageMaker feature. A team may use managed training jobs and Model Registry while serving on EKS. Another may train on an existing Kubernetes platform and use SageMaker endpoints for online inference. The architecture should follow the responsibilities the platform improves.
 
+![A SageMaker AI model moves from versioned S3 data through managed training, evaluation, registration, online or batch inference, and production monitoring](/content-assets/articles/article-mlops-mlops-infrastructure-aws-sagemaker-overview/sagemaker-model-lifecycle.png)
+
+*Approval sends the evaluated candidate to Model Registry, while rejection preserves the run as evidence. Online and batch predictions both return operational and quality evidence to the next training decision.*
+
 ## Decide What AWS Manages And What The ML Team Owns
 <!-- section-summary: AWS runs the managed control plane, while the customer owns model meaning, access boundaries, release policy, and product outcomes. -->
 
@@ -72,6 +78,12 @@ The team plane supplies the decisions that AWS cannot infer:
 
 This boundary prevents a common mistake: treating a green AWS resource status as proof that the model is good. An endpoint can be `InService` while the model produces harmful predictions. A training job can complete successfully after reading the wrong dataset. Resource health and model quality are separate kinds of evidence.
 
+### Read Managed Status And Model Evidence Separately
+
+Suppose a training job reaches `Completed`. SageMaker AI has proved that the container ran and that the declared output was uploaded. The status does not prove that the input snapshot was the intended one or that the model outperformed the accepted baseline. The pipeline should therefore keep the job status beside a separate evaluation result and release decision.
+
+The same split applies in production. `InService` means the endpoint control plane has healthy capacity. A product-quality view must still join prediction records to later outcomes. An operator investigating a release needs both views: CloudWatch for service behaviour and a governed evaluation path for model usefulness.
+
 ## Understand The Main SageMaker AI Resources
 <!-- section-summary: Training jobs, Pipelines, Model Registry, and inference resources solve different lifecycle problems and should have explicit handoff contracts. -->
 
@@ -85,27 +97,48 @@ The durable unit is the job specification plus its inputs and outputs. For repro
 
 The execution role is part of the experiment boundary. A training role usually needs read access to approved input prefixes and write access to a run-specific output prefix. It should not also have permission to change production endpoints. Separating training and deployment roles limits what compromised code can do.
 
+For example, a weekly demand model may read `s3://ml-curated/demand/snapshot=1842/` and write only to `s3://ml-runs/demand/run=8fb4c32/`. The job record should preserve those concrete paths, the ECR image digest, and the source revision. A rerun against snapshot `1843` is a new experiment even if the Python code is unchanged.
+
 ### Coordinate ML Workflows With SageMaker Pipelines
 
 **SageMaker Pipelines** represents an ML workflow as steps and dependencies. Typical steps prepare data, train, evaluate, apply a condition, and register an accepted candidate. Pipelines can cache eligible steps and retry some failures, but the author still has to decide whether an operation is safe to repeat.
 
 A pipeline is most valuable when its step contracts are explicit. The training step should emit a model artifact URI and run identity. The evaluation step should consume that exact artifact and emit a versioned report. The registration step should receive both. Passing “latest model” between steps creates a race that orchestration cannot repair.
 
+```mermaid
+flowchart TD
+    P["Prepare Data<br/>(publish one validated snapshot)"] --> T["Train Model<br/>(write to a run-specific path)"]
+    T --> V["Evaluate Candidate<br/>(compare with fixed rules and data)"]
+    V --> G{"Release Rules Pass?"}
+    G -->|No| K["Keep Evidence<br/>(candidate remains rejected)"]
+    G -->|Yes| R["Register Version<br/>(preserve artifact and evidence)"]
+
+    class P,T work
+    class V,G evidence
+    class K,R outcome
+```
+
+Retries expose the value of these identities. If a worker loses the response after submitting a training job, the pipeline should look up the existing operation before starting another one. Registration and endpoint updates change shared state, so they need a stable candidate or release ID and a current-state check before retry.
+
 ### Register And Review Models In SageMaker Model Registry
 
 **SageMaker Model Registry** groups model versions into a model package group. A model package can carry artifact and inference-image references, supported content types, metrics, metadata, and an approval status. It is the handoff between model creation and release.
 
-Treat the registry as a release boundary. The useful question is not “Was a file uploaded?” It is “Does this version contain enough evidence for a deployment workflow to make a safe decision?” At minimum, a release candidate needs immutable artifact and image references, a model signature or request contract, evaluation results, data and code lineage, ownership, and a rollback target.
+Treat the registry as a release boundary. The useful question is whether the version contains enough evidence for a deployment workflow to make a safe decision. The artifact and inference image identify what would run. A model signature describes the request and response shape. Evaluation results explain expected behaviour, while data and code lineage explain where the candidate came from. Ownership identifies who can answer for the version, and a rollback target records the known release that can replace it.
 
 Approval status should reflect a real authority decision. Automation may verify thresholds and assemble evidence. A policy owner may still need to approve high-impact models. For lower-risk models, a policy engine can approve automatically when every required check is machine-verifiable.
+
+Imagine that model-package version `42` passed the overall accuracy gate and failed recall for one important region. The registry should keep the version and its report as rejected evidence. Replacing the report in place would hide why version `42` was never released. A corrected training run should create a new package version with its own evaluation.
 
 ### Choose A SageMaker AI Inference Option
 
 SageMaker AI supports several inference patterns. **Real-time endpoints** serve interactive requests. **Asynchronous inference** accepts requests that can wait and may have larger payloads or longer processing times. **Batch Transform** processes bounded datasets without keeping an endpoint running. Serverless and multi-model options fit narrower traffic and cost shapes.
 
-Choose from workload requirements first: response deadline, arrival pattern, payload size, model-loading time, isolation needs, accelerator use, scale-to-zero tolerance, and cost. “Use a real-time endpoint because it is the default tutorial” is weak architecture.
+Choose from the product deadline and arrival pattern first. Interactive requests need ready capacity, while scheduled files can wait for batch compute. Payload size and model-loading time narrow the supported modes. Isolation, accelerators, scale-to-zero behaviour, and total cost then decide among the eligible choices.
 
 For real-time endpoints, a model resource combines a model artifact with an inference container. An endpoint configuration declares production variants and capacity. The endpoint points to that configuration. This indirection supports controlled updates and a clear previous configuration for rollback.
+
+A low-volume overnight scoring job usually fits Batch Transform better than a continuously running endpoint. A document service with large requests that can wait may fit asynchronous inference. An interactive fraud decision with a strict deadline needs a real-time endpoint and capacity evidence. Serverless or multi-model endpoints can reduce idle cost for suitable traffic, although cold starts, model-loading behaviour, isolation, and Model Monitor compatibility need explicit tests.
 
 ## Follow One Trained Model From Training To Release
 <!-- section-summary: A small release manifest shows how identities connect across data, training, evaluation, registry, and serving without turning the example into the article structure. -->
@@ -135,7 +168,7 @@ This separation is deliberate. Training code cannot quietly approve and deploy i
 ## Monitor Service Health And Model Outcomes Together
 <!-- section-summary: Endpoint health and prediction quality use different signals, different clocks, and often different owners. -->
 
-CloudWatch exposes service signals such as invocation errors, latency, instance health, and resource utilization. SageMaker Model Monitor can run checks against captured inference data and configured baselines. These mechanisms cover different questions.
+CloudWatch exposes service signals such as invocation errors, latency, instance health, and resource utilization. Those measurements show whether the endpoint can accept and finish work. They cannot establish whether the predictions remain useful.
 
 **Service monitoring** asks whether the endpoint can respond within its reliability target. **ML monitoring** asks whether inputs, outputs, and later outcomes still support the model's purpose. The second view may wait hours or weeks for labels. It also needs cohort analysis; an overall average can hide failure for one region or customer group.
 
@@ -152,32 +185,85 @@ flowchart TD
     I -->|Unsafe| R["Stop, route away, or roll back"]
 ```
 
-Monitoring design should name the join key, label delay, baseline window, minimum sample size, and owner for each alert. Model Monitor cannot invent a meaningful business outcome from unlabeled requests. It can identify changes worth investigating; the product-quality loop still has to connect predictions with what happened later.
+Monitoring design should name the join key, label delay, baseline window, minimum sample size, and owner for each alert. One safe prediction record might keep only governed identifiers and summaries:
+
+```json
+{
+  "prediction_id": "pred_7f2",
+  "release_id": "demand-forecast-r42",
+  "predicted_at": "2026-07-15T09:00:00Z",
+  "segment": "north-region",
+  "prediction": 184.2,
+  "latency_ms": 47
+}
+```
+
+A later pipeline joins `prediction_id` to the observed demand. It computes error by region and time window, then publishes CloudWatch metrics or another governed monitoring result. A release alarm can name a concrete response: stop traffic expansion, restore the previous endpoint configuration, or investigate the feature pipeline.
+
+SageMaker Model Monitor is now a legacy choice for existing customers. AWS has closed it to new customers and plans no new features. Existing users can continue scheduled data and model-quality checks, subject to its supported endpoint and data shapes.
+
+New designs should keep monitoring logic portable. Capture approved prediction evidence and run scheduled checks through a processing or data workflow. Export actionable metrics, then retain the exact baseline and code version. This design also covers labels and product outcomes that Model Monitor never owns.
+
+![AWS resource health and model outcome evidence form two complementary views of a SageMaker AI prediction service](/content-assets/articles/article-mlops-mlops-infrastructure-aws-sagemaker-overview/service-and-model-evidence.png)
+
+*CloudWatch and endpoint status show whether the service can respond. Joined outcomes, data health, and release identity show whether the returned predictions remain useful and traceable.*
 
 ## Design Security And Recovery Into The SageMaker AI Workflow
 <!-- section-summary: IAM, immutable references, network paths, and rollback state determine what a SageMaker workflow can safely do. -->
 
-Use separate roles for training, registration, and deployment. CI systems should obtain short-lived AWS credentials through workload identity such as GitHub Actions OIDC, with trust policies scoped to the repository and environment. Encrypt data and artifacts, keep secrets in an approved secrets service, and use private network paths where the data classification requires them.
+Use separate roles for training, registration, and deployment because each task needs different authority. CI systems can obtain short-lived AWS credentials through workload identity such as GitHub Actions OIDC. Its trust policy should restrict the repository and deployment environment.
+
+Data classification determines the remaining controls. Encrypt data and artifacts with the approved key policy. Keep secrets in a managed secrets service, and use private network paths for workloads that must stay off public routes.
 
 Pin container images by digest and give datasets immutable identities. Mutable tags and moving S3 prefixes weaken both audit and rollback. Tag resources with model family, candidate or release ID, source commit, dataset identity, owner, environment, and cost centre so operational evidence can be joined later.
 
-Recovery needs more than “deploy the old model.” Record the previous model-package version, inference image, endpoint configuration, request schema, feature contract, and traffic state. If a service loads a registry reference only at startup, moving an alias or approval status will not change already-running containers. The runbook must match the actual loading path.
+Recovery needs a complete previous release. Record its model-package version and inference image because those identify the executable model. Preserve the endpoint configuration and traffic state because those identify how the service ran. Keep the request schema and feature contract because an old model may be incompatible with current callers.
+
+If a service loads a registry reference only at startup, moving an alias or approval status will not change already-running containers. The runbook must update the resource that actually controls traffic and model loading.
+
+### Test The Access Path Before Training Or Serving
+
+An execution role may have permission to call SageMaker AI and still be unable to read the S3 input or pull the ECR image. A private subnet may reach S3 and fail to reach CloudWatch Logs. Test the whole path under the real workload identity: KMS decrypt, S3 read or write, ECR pull, logging, and required control-plane calls. A small fixture job can detect this boundary before an expensive training run begins.
+
+### Restore The Previous Endpoint Configuration
+
+Keep the previous endpoint configuration available during the rollback window. If the candidate creates errors or violates a product guardrail, route the endpoint back to that known configuration:
+
+```bash
+aws sagemaker update-endpoint \
+  --endpoint-name demand-forecast-prod \
+  --endpoint-config-name demand-forecast-r41
+
+aws sagemaker describe-endpoint \
+  --endpoint-name demand-forecast-prod \
+  --query '{status:EndpointStatus,config:EndpointConfigName}'
+```
+
+The first command requests the state change. The second checks the control-plane result. Recovery is complete only after a fixture prediction succeeds, the runtime reports the expected release, and live traffic and product signals return to their accepted range. If the old artifact, image, or KMS key has already expired, the configuration name alone cannot recover the service; retention policy must protect the complete rollback unit.
 
 ## Decide Whether SageMaker AI Fits The Team And Workloads
 <!-- section-summary: SageMaker AI is justified when its managed lifecycle resources remove recurring work without hiding ownership or creating disproportionate coupling. -->
 
-SageMaker AI is a strong fit when workloads and governed data already live on AWS, many teams need repeatable training and release paths, IAM and private networking are important, or the platform team wants managed job, registry, and endpoint control planes.
+SageMaker AI is a strong fit for teams whose governed data and production systems already live on AWS. Its managed control planes have more value as several teams repeat the same training, release, and endpoint work. IAM integration and private networking can also remove difficult custom integration from regulated workloads.
 
-A lighter stack may fit a small number of scheduled models, teams that already operate a capable batch and container platform, or workloads whose serving architecture does not align with SageMaker hosting. AWS Batch, ECS, EKS, Step Functions, MLflow, and S3 can form a valid MLOps stack. The trade-off is that the team owns more integration and operational behaviour.
+A lighter stack may fit a small number of scheduled models. It can also fit a team that already operates a capable batch and container platform, or a workload that does not align with SageMaker hosting. AWS Batch, ECS, EKS, Step Functions, MLflow, and S3 can form a valid MLOps stack. The trade-off is that the team owns more integration and operational behaviour.
 
-Evaluate the platform with one real path. Measure how it handles data identity, job isolation, evaluation evidence, promotion, endpoint performance, rollback, private access, observability, quota, cost attribution, and operator effort. The result should show which responsibilities SageMaker AI improves and which responsibilities remain elsewhere.
+Evaluate the platform with one real path. Begin with data identity and job isolation, then follow the evaluation and promotion record into an endpoint. Test performance, private access, quota, observability, cost attribution, and rollback on that same path. Operator effort shows whether SageMaker AI reduced recurring work or simply moved it into unfamiliar resources.
+
+Run that pilot under realistic constraints. Use the production identity pattern, private network path, representative model size, and one failure drill. Stop artifact access during registration, request an unavailable instance type, or fail a canary fixture. The useful result is evidence that the team can identify the failed boundary and recover, rather than a console screenshot of a successful happy path.
 
 ## Follow The Complete SageMaker AI Lifecycle
 <!-- section-summary: SageMaker AI is a managed resource layer inside a wider MLOps system whose evidence and decisions remain team-owned. -->
 
-S3, training jobs, Pipelines, Model Registry, endpoints, and monitoring resources can form a coherent AWS-native lifecycle. The coherence comes from the identities and policies that connect them: an immutable dataset, a pinned image, a specific training run, a complete evaluation packet, an approved model package, a measured traffic change, and a known recovery state.
+S3 preserves identified data and artifacts. Training and processing jobs run bounded work. Pipelines connect those jobs through explicit inputs and outputs. Model Registry records a reviewed model version. An endpoint or batch job delivers predictions. CloudWatch and application-owned quality evidence reveal different kinds of production health.
 
-That is the beginner's big picture. SageMaker AI operates useful infrastructure around the model. The team operates the meaning of the system.
+The identities and policies between those resources make the lifecycle dependable. An immutable dataset and pinned image explain the training run. A complete evaluation explains the release decision. An approved package and measured traffic change explain the production transition. A tested recovery unit protects the service after that transition.
+
+SageMaker AI operates the managed machinery. The team defines what the model is allowed to learn, when it may ship, and what evidence proves that it remains safe and useful.
+
+![The SageMaker AI production contract connects immutable data, managed training, evaluation, registration, release, monitoring, and team-owned decisions](/content-assets/articles/article-mlops-mlops-infrastructure-aws-sagemaker-overview/sagemaker-production-contract.png)
+
+*AWS operates the managed resources in the lifecycle. The team remains responsible for data meaning, release policy, traffic and fallback behaviour, and the response to production outcomes.*
 
 ## References
 

@@ -1,9 +1,8 @@
 ---
 title: "Handlers and Restarts"
-description: "Practice handler notifications, reloads, restarts, and restart timing decisions."
+description: "Connect configuration changes to one deduplicated, validated service restart."
 articleId: "article-infrastructure-as-code-ansible-handlers-service-restarts"
 difficulty: "medium"
-order: 18
-tags: ["ansible", "handlers", "services", "restarts"]
+order: 16
+tags: ["ansible", "handlers", "notify"]
 ---
-

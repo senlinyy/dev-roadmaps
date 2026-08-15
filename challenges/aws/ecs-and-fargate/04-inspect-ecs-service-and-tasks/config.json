@@ -143,6 +143,11 @@
       "us-east-1b",
       "10.40.11.31"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ecs\\\\s+describe-services\\\\b",
+      "^aws\\\\s+ecs\\\\s+list-tasks\\\\b",
+      "^aws\\\\s+ecs\\\\s+describe-tasks\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

@@ -1,0 +1,73 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Validate orders configuration\n  hosts: orders_web\n  tasks:\n    - name: Run vendor validator\n      ansible.builtin.command:\n        cmd: /usr/local/bin/orders --check-config /etc/orders/orders.conf\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "command"
+        },
+        "paths": [
+          {
+            "path": [
+              "register"
+            ],
+            "equals": "orders_validation"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          },
+          {
+            "path": [
+              "failed_when"
+            ],
+            "contains": "orders_validation.rc"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "assert"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.assert",
+              "that"
+            ],
+            "minItems": 1
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "register-used",
+        "producer": {
+          "file": "site.yml",
+          "module": "command"
+        },
+        "consumer": {
+          "file": "site.yml",
+          "module": "assert"
+        },
+        "fields": [
+          "stdout"
+        ]
+      }
+    ]
+  }
+}

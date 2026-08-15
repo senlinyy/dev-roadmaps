@@ -1,0 +1,20 @@
+{
+  "language": "json",
+  "filename": "lifecycle-policy.json",
+  "completionProfile": "azure-storage-lifecycle",
+  "initialValue": "{\n  \"rules\": [\n    {\n      \"enabled\": false,\n      \"name\": \"orders-export-retention\",\n      \"type\": \"Lifecycle\",\n      \"definition\": {\n        \"actions\": { \"baseBlob\": {} },\n        \"filters\": { \"blobTypes\": [], \"prefixMatch\": [] }\n      }\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["rules"], "minItems": 1, "maxItems": 1 },
+      { "path": ["rules", 0, "enabled"], "equals": true },
+      { "path": ["rules", 0, "name"], "equals": "orders-export-retention" },
+      { "path": ["rules", 0, "type"], "equals": "Lifecycle" },
+      { "path": ["rules", 0, "definition", "filters", "blobTypes"], "includes": "blockBlob", "minItems": 1, "maxItems": 1 },
+      { "path": ["rules", 0, "definition", "filters", "prefixMatch"], "includes": "exports/daily/", "minItems": 1, "maxItems": 1 },
+      { "path": ["rules", 0, "definition", "actions", "baseBlob", "tierToCool", "daysAfterModificationGreaterThan"], "equals": 30 },
+      { "path": ["rules", 0, "definition", "actions", "baseBlob", "tierToArchive", "daysAfterModificationGreaterThan"], "equals": 90 },
+      { "path": ["rules", 0, "definition", "actions", "baseBlob", "delete", "daysAfterModificationGreaterThan"], "equals": 365 }
+    ]
+  }
+}

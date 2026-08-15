@@ -1,0 +1,112 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "tests/bucket.tftest.hcl",
+  "files": [
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"this\" { bucket = \"dp-${var.service_name}-${var.environment}\" }\n",
+      "readOnly": true
+    },
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"service_name\" { type = string }\nvariable \"environment\" { type = string }\n",
+      "readOnly": true
+    },
+    {
+      "filename": "tests/bucket.tftest.hcl",
+      "initialValue": "# Add the module contract test.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "tests/bucket.tftest.hcl",
+          "path": [
+            {
+              "type": "run",
+              "labels": [
+                "production_bucket_name"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "command"
+            ],
+            "expressionEquals": "plan"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "tests/bucket.tftest.hcl",
+          "path": [
+            {
+              "type": "run",
+              "labels": [
+                "production_bucket_name"
+              ]
+            },
+            {
+              "type": "variables"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "service_name"
+            ],
+            "valueEquals": "billing"
+          },
+          {
+            "path": [
+              "environment"
+            ],
+            "valueEquals": "prod"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "tests/bucket.tftest.hcl",
+          "path": [
+            {
+              "type": "run",
+              "labels": [
+                "production_bucket_name"
+              ]
+            },
+            {
+              "type": "assert"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "condition"
+            ],
+            "references": [
+              "aws_s3_bucket.this.bucket"
+            ],
+            "expressionContains": [
+              "==\"dp-billing-prod\""
+            ]
+          },
+          {
+            "path": [
+              "error_message"
+            ],
+            "valueEquals": "Production bucket names must include service and environment."
+          }
+        ]
+      }
+    ]
+  }
+}

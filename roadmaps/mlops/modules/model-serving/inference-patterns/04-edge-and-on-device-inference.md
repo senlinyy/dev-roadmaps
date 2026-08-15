@@ -89,6 +89,10 @@ Safety-critical systems usually combine a model with deterministic limits, hardw
 
 Many products use a **hybrid architecture**. A small local model provides the immediate result. A server model handles uncertain cases, performs deeper analysis, or applies central policy after connectivity returns. Both paths need aligned class meanings and thresholds so the product does not give contradictory answers.
 
+![Five product constraints—offline operation, response time, privacy, bandwidth, and local autonomy—guide the choice between cloud, local, and hybrid inference](/content-assets/articles/article-mlops-model-serving-edge-on-device-inference/edge-execution-constraints.png)
+
+*Local execution is justified by a product constraint, not by the model type. The constraint also defines the offline, latency, privacy, bandwidth, or autonomy test the fleet must pass.*
+
 ## Package Everything The Device Needs
 <!-- section-summary: On-device behaviour comes from a versioned bundle of model, data transforms, runtime, application code, compatibility policy, and update metadata. -->
 
@@ -220,6 +224,10 @@ flowchart TD
 **Thermal throttling** is a device protecting itself from heat. It lowers CPU, GPU, or NPU frequency after sustained work, which increases inference time. A camera model may deliver 18 ms predictions for the first minute and 45 ms predictions after ten minutes. Cold benchmarks miss that change, so qualification graphs latency and temperature across a realistic session.
 
 Qualification produces a separate eligibility decision for each cohort. A low-memory cohort may receive a smaller model. A device with poor accelerator coverage may use CPU. An old operating-system cohort may remain on a previous bundle until product support ends. Those decisions belong in release metadata and support records.
+
+![Complete edge system bundle combines model, input, output, runtime, application, and release responsibilities before quality, latency, memory, thermal, energy, and backend tests run across representative device cohorts](/content-assets/articles/article-mlops-model-serving-edge-on-device-inference/edge-bundle-cohort-qualification.png)
+
+*The immutable bundle is promotable only for cohorts where the complete application path passes every required device gate. A benchmark on the newest phone is not fleet evidence.*
 
 ## Treat An Optimized Model As A New Release Candidate
 <!-- section-summary: Quantization and other edge optimizations trade numerical representation or model capacity for size, speed, memory, and energy improvements. -->
@@ -438,6 +446,10 @@ Edge and on-device inference move prediction close to its input or action. Offli
 The release unit combines model weights with preprocessing, postprocessing, runtime, backend, application contract, compatibility policy, and trust metadata. Export turns the model into an operator contract. LiteRT, Core ML, ONNX Runtime Mobile, and ExecuTorch implement that contract through different platform and framework paths. Representative devices prove quality, resources, acceleration, and sustained thermal behaviour.
 
 Secure distribution authenticates the release and installs it atomically. Compatibility rules manage mixed versions. Durable local queues and idempotent uploads protect offline work. Privacy-aware telemetry reports both system health and the portion of the fleet that remains unseen. Staged rollout limits exposure, and forward-moving recovery selects a trusted compatible bundle without weakening update freshness.
+
+![Seven-stage edge fleet release system builds and qualifies a complete bundle, signs and installs it atomically, stages rollout, measures actual fleet exposure, and uses a forward fix with trusted higher-sequence metadata](/content-assets/articles/article-mlops-model-serving-edge-on-device-inference/edge-fleet-release-summary.png)
+
+*Healthy evidence expands the next cohort. Unsafe evidence selects a compatible known-good bundle through a newer trusted control decision, while repaired, still-affected, and offline devices remain visible as separate populations.*
 
 ## References
 

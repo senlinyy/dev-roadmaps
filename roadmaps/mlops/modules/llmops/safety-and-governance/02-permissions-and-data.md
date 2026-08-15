@@ -29,7 +29,7 @@ id: "article-mlops-llmops-permissions-and-data"
 
 <!-- section-summary: Safe agent systems identify who is acting, which exact actions and resources are allowed, and which data may cross each boundary. -->
 
-At a high level, permissions and data controls answer three questions before an agent reads a record or changes the outside world. **Who is acting? What exact action may that identity perform on this resource? Which information may flow into the model, tools, memory, and logs?** These questions turn a vague instruction such as “help with this account” into a decision that software can verify.
+Before an agent reads an account or changes an external record, the application needs three answers. **Who is acting? What exact action may that identity perform on this resource? Which information may flow into the model, tools, memory, and logs?** Permissions and data controls turn a vague instruction such as “help with this account” into a decision that software can verify.
 
 The distinction matters because an agent combines two very different abilities. The model interprets language and proposes useful steps. The surrounding application holds user sessions, database connections, cloud identities, and business APIs. A convincing prompt can influence the first ability. It must never grant the second one.
 
@@ -57,6 +57,10 @@ flowchart TD
 
 This layout creates defense in depth. The gateway establishes identity, the policy layer evaluates permission, the executor holds credentials, the domain service enforces its own rules, and the data layer filters records. One faulty prompt or missing check then faces another independent boundary.
 
+![A support-engineer payment-log request moving from verified person and trusted request context through a model proposal, policy decision, scoped executor, independently authorizing log service, and bounded result, with a cross-tenant claim denied before data access.](/content-assets/articles/article-mlops-llmops-permissions-and-data/continuous-authority-path.png)
+
+*Model-supplied details describe the requested query. The authoritative tenant, role, case, and environment come from verified services and are checked again at the protected operation.*
+
 ## Track Which Identity Acts At Every Step
 
 <!-- section-summary: A principal is the verified person or workload whose authority travels with a request and remains separate from model-generated arguments. -->
@@ -69,30 +73,13 @@ Consider a support request asking for recent payment errors. The model may extra
 
 This separation prevents a **confused deputy** problem. A confused deputy is a privileged service that can reach protected data and gets tricked into using that privilege for the wrong caller. For example, a model could produce a tool argument containing another tenant’s ID. A safe executor discards that claimed tenant and derives the scope from the authenticated session. Google’s workload identity guidance also recommends audience checks and attribute conditions because a valid external token may still target the wrong service or tenant.
 
-```mermaid
-sequenceDiagram
-    participant U as Signed-in user
-    participant G as Agent gateway
-    participant M as Model
-    participant P as Policy service
-    participant T as Tool executor
-
-    U->>G: Ask for payment errors
-    G->>M: Goal plus permitted context
-    M-->>G: Propose log query
-    G->>P: Verified principal + proposed action
-    P-->>G: Allow exact tenant and resource
-    G->>T: Bounded query + trusted scope
-    T-->>G: Sanitized result + effect reference
-```
-
 Long-running runs need one more safeguard. Authorization can change while a worker is paused. A user may leave the organization, lose a role, or close the relevant case. Resumed work should verify the session and policy again before each protected action. A checkpoint preserves progress; it never freezes permission forever.
 
 ## Authorize Each Action From Identity, Resource, And Context
 
 <!-- section-summary: Production authorization evaluates a verified principal, one requested action, an exact resource, and relevant runtime conditions on every protected call. -->
 
-Authorization is easiest to reason about as a four-part decision: **principal, action, resource, and context**. In plain language, the system asks, “May this identity do this specific thing to this specific object under these conditions?” A role such as `support_engineer` supplies only one part of the answer.
+An authorization decision has four parts: **principal, action, resource, and context**. In plain language, the system asks, “May this identity do this specific thing to this specific object under these conditions?” A role such as `support_engineer` supplies only one part of the answer.
 
 The action should be precise. `invoice:read`, `invoice:propose_refund`, and `invoice:execute_refund` carry very different risk. The resource should also be exact: tenant, account, environment, record, or object path. Context can add an active case assignment, approved purpose, network boundary, authentication strength, time window, or prior human approval.
 
@@ -201,6 +188,10 @@ Classification metadata needs its own governance. A model may suggest that text 
 
 Teams also need an explicit policy for third-party tools and hosted models. Data use and retention may differ by endpoint or feature. Regional processing, subprocessors, and zero-data-retention eligibility also deserve separate checks. Verify the exact service configuration before routing confidential data, then capture that decision in policy rather than relying on a general vendor statement.
 
+![A tenant-scoped data path from authenticated session through retrieval pre-filter, index or database policy, cache identity, minimized model context, governed memory and traces, and bounded response, with a cross-tenant cache failure, deletion propagation, and a secrets boundary.](/content-assets/articles/article-mlops-llmops-permissions-and-data/tenant-data-boundaries.png)
+
+*Tenant and classification rules must be enforced before ranking and preserved in cache, context, memory, traces, and deletion workflows. A query hash alone cannot safely identify protected cached results.*
+
 ## Keep Secrets And Credentials In The Tool Executor
 
 <!-- section-summary: Tool executors obtain narrow, short-lived credentials while the model receives only the result fields needed for its next decision. -->
@@ -208,20 +199,6 @@ Teams also need an explicit policy for third-party tools and hosted models. Data
 A secret proves access to something valuable. API keys, database passwords, signing keys, certificates, and OAuth refresh tokens are common examples. A model has no operational reason to read most secrets. The tool executor can use a credential and return a bounded result without placing the credential in a prompt, trace, error message, or memory.
 
 The preferred industrial pattern is workload identity with temporary credentials. AWS recommends IAM roles and temporary credentials for workloads. Google Workload Identity Federation exchanges an external workload identity for short-lived Google credentials. Azure managed identities and workload identity federation serve the same general purpose. Kubernetes service accounts identify cluster workloads and can connect to cloud identity mechanisms.
-
-```mermaid
-sequenceDiagram
-    participant W as Tool workload
-    participant I as Identity provider
-    participant S as Protected service
-    participant M as Model
-
-    W->>I: Present workload identity
-    I-->>W: Short-lived scoped token
-    W->>S: Call allowed action
-    S-->>W: Bounded result
-    W-->>M: Required fields only
-```
 
 Static secrets still exist for legacy databases and third-party APIs. Store them in a managed service such as AWS Secrets Manager, Azure Key Vault, Google Secret Manager, or HashiCorp Vault. Grant the executor access only to the required secret, rotate versions, audit reads, and revoke quickly during an incident. Separate production, staging, and development identities so a development compromise cannot reach live data.
 
@@ -371,9 +348,13 @@ Residual risk remains even in a layered design. Policies can contain bugs, ident
 
 Permissions and data controls give an agent a safe operating boundary. The application verifies the person and workload, evaluates every protected action against an exact resource, exposes a task-sized tool set, and keeps credentials inside trusted executors. Retrieval, storage, caches, memory, and traces carry the same tenant and classification rules.
 
-In essence, the model proposes. Identity, policy, domain services, and data systems decide and enforce. That separation lets teams improve model capability without quietly expanding who can read sensitive information or change the real world.
+The model proposes an action. Identity, policy, domain services, and data systems decide and enforce it. That separation lets teams improve model capability without quietly expanding who can read sensitive information or change the real world.
 
 The strongest design has a continuous authority story. Every protected read or effect can be traced from the authenticated principal through policy, scoped execution, governed data, and authoritative evidence.
+
+![A high-impact action moving from model proposal through policy, durable human review, proposal-hash binding, fresh authorization, tool execution, independently authorizing domain service, authoritative effect, and correlated audit evidence, with stale approval and revoked-role terminal paths.](/content-assets/articles/article-mlops-llmops-permissions-and-data/approval-effect-audit-summary.png)
+
+*Approval binds a reviewer to one exact proposal and never replaces execution-time authorization. Trusted enforcement points record the evidence, while the model’s summary remains non-authoritative.*
 
 ## References
 

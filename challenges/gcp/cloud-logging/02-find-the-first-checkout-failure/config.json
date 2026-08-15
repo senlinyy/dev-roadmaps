@@ -1,0 +1,44 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "logEntries": [
+        {
+          "timestamp": "2026-08-11T09:42:17Z",
+          "severity": "ERROR",
+          "resourceType": "cloud_run_revision",
+          "resourceName": "orders-api-00042-p9x",
+          "trace": "projects/devpolaris-prod/traces/4bf92f3577b34da6a3ce929d0e0e4736",
+          "jsonPayload": {
+            "service": "orders-api",
+            "revision": "orders-api-00042-p9x",
+            "orderId": "ord-84721",
+            "errorCode": "PAYMENTS_TIMEOUT",
+            "dependency": "payments-api"
+          }
+        },
+        {
+          "timestamp": "2026-08-11T09:42:18Z",
+          "severity": "INFO",
+          "resourceType": "cloud_run_revision",
+          "resourceName": "catalog-api-00019-k2m",
+          "textPayload": "catalog refresh complete"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-api-00042-p9x", "4bf92f3577b34da6a3ce929d0e0e4736", "ord-84721", "PAYMENTS_TIMEOUT", "payments-api"],
+    "requireCommandPatterns": ["^gcloud\\s+logging\\s+read\\b"],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "language": "yaml",
+  "completionProfile": "github-actions",
+  "activeFile": ".github/workflows/terraform-plan.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/terraform-plan.yml",
+      "initialValue": "name: Terraform plan\non:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  plan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Terraform init\n        run: terraform init\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "permissions",
+          "contents"
+        ],
+        "equals": "read"
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "permissions",
+          "id-token"
+        ],
+        "equals": "write"
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "uses": "aws-actions/configure-aws-credentials@v5",
+          "with": {
+            "role-to-assume": "arn:aws:iam::123456789012:role/devpolaris-terraform-plan",
+            "aws-region": "eu-west-2"
+          }
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform init"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform plan -input=false"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "excludesObject": {
+          "with": {
+            "aws-access-key-id": "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          }
+        }
+      }
+    ]
+  }
+}

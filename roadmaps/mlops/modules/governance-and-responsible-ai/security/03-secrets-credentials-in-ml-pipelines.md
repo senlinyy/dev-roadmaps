@@ -41,9 +41,10 @@ aliases:
 
 <!-- section-summary: A secure access path names the actor, defines allowed actions, issues bounded proof, and protects any reusable sensitive material. -->
 
-At a high level, pipeline security answers four questions: who is acting, what
-may they do, how do they prove who they are, and how long does that proof remain
-usable?
+A training job that reads protected data needs more than a stored API key. The
+platform must know who is acting, what that identity may do, how it proves its
+identity, and how long the proof remains usable. Pipeline security starts with
+those four questions.
 
 A **human identity** represents a person through an identity provider. A
 developer signs in with multi-factor authentication and receives access
@@ -131,6 +132,10 @@ flowchart TD
     class A,G secret;
     class B,C,D,E,F surface;
 ```
+
+![A reusable cloud key spreads into notebooks, CI logs, image caches, runtime processes, and telemetry, while federated workload access exchanges a signed OIDC assertion for a scoped credential that expires.](/content-assets/articles/article-mlops-governance-and-responsible-ai-secrets-credentials-in-ml-pipelines/static-key-vs-federation.png)
+
+*Static credentials can outlive the job in many copied surfaces; federation avoids storing the reusable cloud key and narrows access through trust claims, scope, and expiry.*
 
 The strongest reduction is to avoid issuing the reusable credential. Federation
 and managed workload identity make that possible for many cloud access paths.
@@ -348,6 +353,10 @@ flowchart TD
     class A,B,C,E stage;
     class D release;
 ```
+
+![Training, evaluation, release, and serving identities have distinct allowed and denied actions and pass immutable candidate, evidence, and release references between stages.](/content-assets/articles/article-mlops-governance-and-responsible-ai-secrets-credentials-in-ml-pipelines/pipeline-stage-identities.png)
+
+*Separate stage identities prevent a compromised training or evaluation workload from granting production trust to its own output.*
 
 The orchestrator launches each stage with the stage identity and passes
 immutable artifact references. It does not need all downstream permissions.
@@ -683,6 +692,10 @@ Acceptance evidence shows the expected temporary identity in audit logs, a
 successful permitted action, a rejected forbidden action, policy denial for
 long-lived workload-key creation, a tested rotation and revocation path, and a
 recovery exercise that restores trusted pipeline operation.
+
+![Six credential-path evidence gates verify fallback removal, federation claims, static-key prevention, allowed and denied authorization, audit evidence, and rotation, revocation, and recovery before release, with a separate incident-response path.](/content-assets/articles/article-mlops-governance-and-responsible-ai-secrets-credentials-in-ml-pipelines/credential-path-release-summary.png)
+
+*A credential path is ready only when live federation works, forbidden access fails, static fallbacks are closed, audit evidence is present, and the team has rehearsed rotation, revocation, and recovery.*
 
 ## References
 

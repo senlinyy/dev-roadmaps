@@ -30,8 +30,7 @@ aliases:
 ## One Offline Score Is An Estimate
 <!-- section-summary: An offline metric estimates behaviour in a target population from a finite evaluation sample, so another valid sample can produce a different value. -->
 
-At a high level, **statistical uncertainty describes how much an evaluation result can vary
-because the team observed a sample instead of every future case**.
+A holdout score such as 0.842 looks exact, although another valid sample may produce 0.835 for the same model. **Statistical uncertainty describes how much an evaluation result can vary because the team observed a sample instead of every future case.**
 A model may have an accuracy of 0.842 on one valid holdout and 0.835 on another.
 The model did not necessarily change.
 The two samples contained different cases.
@@ -497,6 +496,10 @@ Ten thousand rows from six sites still provide only six site-level units.
 More resamples repeat those six sites in different combinations.
 Additional sites, longer time coverage, or a narrower release claim supplies stronger evidence.
 
+![Paired bootstrap resamples the same request indices for baseline and candidate and lifts related rows into whole clusters](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/paired-resampling.png)
+
+*Pairing preserves the replacement comparison, while the resampling unit preserves the users, sessions, sites, or time blocks that share variation.*
+
 ## Sample Important Rare Groups Deliberately
 <!-- section-summary: Stratified evaluation preserves important population groups, while weighting and segment-specific reports keep oversampling from distorting the overall effect. -->
 
@@ -590,6 +593,10 @@ That wider result leaves the amount of benefit unresolved.
 Only an interval whose lower bound exceeds `+0.5` supports the benefit gate.
 For example, `[+0.7, +1.4]` shows that even the lower endpoint exceeds the minimum useful
 improvement.
+
+![Four confidence intervals lead to fail, inconclusive, safe-but-too-small, and pass decisions against declared product boundaries](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/interval-product-boundaries.png)
+
+*The interval supports a decision only after the safety boundary and minimum useful benefit are declared on the effect scale.*
 
 ```mermaid
 flowchart TD
@@ -842,6 +849,10 @@ It connects immutable evidence to a staged release, investigation path, and comp
 identity.
 That structure lets a team say what the evaluation supports, what it cannot yet support, and
 what evidence should come next.
+
+![Uncertainty-aware comparison connects valid evidence, a precise estimand, pairing, resampling, product boundaries, and three release outcomes](/content-assets/articles/article-mlops-model-evaluation-statistical-uncertainty-paired-comparisons/uncertainty-release-evidence.png)
+
+*An uncertainty-aware gate can pass, fail, or remain inconclusive, and every outcome keeps the evidence and rollback identity reproducible.*
 
 ## References
 

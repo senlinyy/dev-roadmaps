@@ -29,7 +29,7 @@ aliases:
 ## What Artifact Promotion Means
 <!-- section-summary: Artifact promotion authorizes one immutable, tested release candidate for use in a more controlled environment. -->
 
-At a high level, **artifact promotion is the process of allowing one tested release candidate to move into a more controlled environment without changing what was tested**. The candidate might move from a development registry into staging, or from a staging-approved state into production. Its model bytes, serving image, preprocessing assets, contracts, and content digests remain fixed throughout that journey.
+A team may approve a release in staging and then need the identical model, image, preprocessing assets, and contracts in production. **Artifact promotion allows that tested release candidate to enter a more controlled environment without changing what was tested.** The candidate might move from a development registry into staging or from a staging-approved state into production, while its content digests remain fixed.
 
 Suppose a classification model passes evaluation in staging. The team knows that model version `18`, container image digest `sha256:4c19...`, and request contract `v6` work together. Rebuilding the image for production could select a newer base image or dependency. Retraining could read newer data or produce different weights. Either action creates a different candidate, even if the file names and source commit look familiar.
 
@@ -52,6 +52,10 @@ flowchart TD
 ```
 
 This is the **build-once promotion model**. Some organisations deliberately run training inside each environment because data residency, account isolation, or platform policy demands it. That production training run produces a new artifact with a new digest and provenance record. It starts another candidate lifecycle and belongs to the retraining path.
+
+![The same tested model version, image digest, request contract, preprocessing, and policy passing through staging and scoped production approval while production supplies only environment settings](/content-assets/articles/article-mlops-mlops-infrastructure-organizing-artifacts-across-environments/build-once-promotion-boundary.png)
+
+*Promotion keeps the candidate identity fixed; rebuilding or retraining creates a new candidate that must restart the evidence path.*
 
 ## Give Every Release Candidate An Immutable Identity
 <!-- section-summary: A release manifest binds every deployable artifact and contract under one content-addressed candidate identity. -->
@@ -156,6 +160,10 @@ flowchart TD
 ```
 
 Each gate keeps its own meaning. A signature supports authenticity and integrity. It offers no claim about fairness or recall. A model evaluation supports the reviewed use case. It offers no inventory of operating-system packages. Promotion combines these records while preserving their separate owners and failure reasons.
+
+![An immutable release candidate fanning out to provenance, signature and SBOM, model evaluation, compatibility, and vulnerability checks before a scoped approval decision](/content-assets/articles/article-mlops-mlops-infrastructure-organizing-artifacts-across-environments/promotion-evidence-gates.png)
+
+*Each evidence type answers a different release question, so promotion reports the specific failed gate instead of collapsing them into one generic score.*
 
 ## Use Registry Versions And Aliases To Show Release Status
 <!-- section-summary: Registries store governed versions and useful movable labels, while release records pin the concrete version selected for an environment. -->
@@ -389,6 +397,10 @@ Artifact promotion carries one immutable release candidate across an environment
 The destination supplies its own identities, secrets, infrastructure values, and access policy. A scoped approval authorizes the exact manifest. GitOps, infrastructure-as-code, or a managed deployment control plane commits the desired state. Deployment records and runtime telemetry then prove which release the environment actually received.
 
 Build once, identify every part, authorize a precise scope, and verify observed state. Retraining or rebuilding produces another candidate and starts the evidence path again.
+
+![The complete artifact-promotion path from a pinned candidate through evidence, scoped authorization, atomic desired state, runtime verification, and verified promotion or controlled recovery](/content-assets/articles/article-mlops-mlops-infrastructure-organizing-artifacts-across-environments/artifact-promotion-summary.png)
+
+*Promotion closes only when desired state and observed runtime agree; a mismatch freezes expansion and uses the retained release or repairs the target path.*
 
 ## References
 

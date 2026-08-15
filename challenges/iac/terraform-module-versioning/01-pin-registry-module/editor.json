@@ -1,0 +1,55 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "network.tf",
+  "files": [
+    {
+      "filename": "network.tf",
+      "initialValue": "module \"vpc\" {\n  source = \"terraform-aws-modules/vpc/aws\"\n  name   = \"orders-prod\"\n  cidr   = \"10.42.0.0/16\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "network.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "vpc"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "terraform-aws-modules/vpc/aws"
+          },
+          {
+            "path": [
+              "version"
+            ],
+            "valueEquals": "~> 5.8"
+          },
+          {
+            "path": [
+              "name"
+            ],
+            "valueEquals": "orders-prod"
+          },
+          {
+            "path": [
+              "cidr"
+            ],
+            "valueEquals": "10.42.0.0/16"
+          }
+        ]
+      }
+    ]
+  }
+}

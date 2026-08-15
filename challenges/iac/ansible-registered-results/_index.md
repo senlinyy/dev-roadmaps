@@ -1,8 +1,8 @@
 ---
-title: "Registered Ansible Results"
-description: "Capture validation evidence and gate a service restart on the result returned for each host."
-articleId: article-infrastructure-as-code-ansible-registered-results
-difficulty: medium
-order: 25
-tags: ["ansible", "register", "conditionals", "validation"]
+title: "Registered Results"
+description: "Capture module results and use their fields for explicit validation and change semantics."
+articleId: "article-infrastructure-as-code-ansible-registered-results"
+difficulty: "medium"
+order: 13
+tags: ["ansible", "register", "validation"]
 ---

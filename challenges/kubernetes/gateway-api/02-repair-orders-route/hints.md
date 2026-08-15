@@ -1,4 +1,4 @@
-Start the route contract by creating a parent reference that identifies the shared Gateway, its namespace, and its intended listener.
+Read `gateway.yaml` for the exact Gateway identity, namespace, and listener name. `parentRefs` belongs directly under the HTTPRoute spec.
 
 ---
 
@@ -6,4 +6,4 @@ Hostnames and routing rules are separate parts of `spec`. Inside a rule, a path 
 
 ---
 
-Place the backend reference in the same rule as the request match. It targets the stable Service port exposed to callers, not the container's target port.
+Place the backend reference in the same rule as the request match. Read `service.yaml` and target the stable Service port exposed to callers, not a container port.

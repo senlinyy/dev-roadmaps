@@ -83,6 +83,10 @@ flowchart TD
 
 The boundaries prevent ambiguous statements such as “Ray runs the pipeline” or “Triton deploys the service.” Ray can execute distributed work inside a lifecycle step. Triton can serve a model inside an endpoint. The outer workflow and endpoint control still need an owner.
 
+![One ML production journey divided among workflow control, distributed execution, release approval, prediction application, inference runtime, and serving control](/content-assets/articles/article-mlops-mlops-infrastructure-kubeflow-ray-bentoml-triton-torchserve/platform-ownership-boundaries.png)
+
+*Each numbered handoff has one state owner: Kubeflow Pipelines for workflow state, Trainer or Ray for distributed workers, an external system for release approval, BentoML for application logic, Triton for model execution, and KServe for endpoint operation. Maintenance responsibility spans every selected layer.*
+
 ## Separate Workflow Orchestration From Distributed Training
 <!-- section-summary: Kubeflow Pipelines coordinates lifecycle steps, while Kubeflow Trainer coordinates the workers inside a distributed training step. -->
 
@@ -311,6 +315,10 @@ flowchart TD
 
 Tool count is not a sign of platform maturity. A small stack with clear status and recovery can serve users better than a feature-rich stack with overlapping controllers.
 
+![Five workload shapes mapped to the smallest coherent managed, Kubeflow, Ray, or optimized serving stack](/content-assets/articles/article-mlops-mlops-infrastructure-kubeflow-ray-bentoml-triton-torchserve/smallest-coherent-stack.png)
+
+*The workload determines the stack. A specialist product belongs only where it fills a measured capability gap and where the team can operate its API, upgrade path, failure boundary, and on-call ownership.*
+
 ## Test Each Tool Against Real Workloads And Failures
 <!-- section-summary: Tool evaluation proves the missing capability, handoff recovery, operating ownership, maintenance path, and workload economics. -->
 
@@ -345,6 +353,10 @@ Kubeflow Pipelines, Kubeflow Trainer, Ray, BentoML, Triton, and KServe belong to
 Choose the smallest combination that covers the real workload. Then trace one model release through the design. You should be able to identify the workflow run, the distributed job, the immutable model artifact, the prediction-service package, the inference-runtime configuration, and the endpoint revision that received traffic. That chain lets an operator answer what ran, what was deployed, and where a failure occurred.
 
 Connect those layers through small handoff contracts. Test crash recovery and rollback as separate operating procedures, then rehearse version upgrades against the same contracts. TorchServe's Limited Maintenance status offers a practical lesson: production architecture includes the years after installation. Give every selected tool a patch owner and an upgrade path. Record the conditions that would trigger its replacement before support disappears.
+
+![Five proofs for selecting an MLOps platform tool from missing capability through ownership, handoff, failure testing, lifecycle planning, and operating evidence](/content-assets/articles/article-mlops-mlops-infrastructure-kubeflow-ray-bentoml-triton-torchserve/mlops-tool-selection-five-proofs.png)
+
+*A tool decision is credible after the team names the missing capability, assigns one source of truth, defines the handoff, tests a boundary failure, and funds the maintenance lifecycle. Matched workload and recovery evidence support the final choice.*
 
 ## References
 

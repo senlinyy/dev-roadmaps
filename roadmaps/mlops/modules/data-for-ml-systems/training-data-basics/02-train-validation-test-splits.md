@@ -30,7 +30,7 @@ A team trains a classifier, measures it on held-back data, and gets a promising 
 
 Production performance can still disappoint them. The model never directly fitted those held-back labels, yet the development process did. Every decision moved toward what worked on that particular sample. The score now describes both the model and the team’s repeated exposure to the data.
 
-Dataset splitting controls that exposure. At a high level, the model needs three genuinely different questions answered:
+Dataset splitting controls that exposure. The model-development process needs three genuinely different questions answered:
 
 1. **Can the algorithm learn useful patterns from the available history?**
 2. **Which candidate and operating policy should the team choose?**
@@ -63,7 +63,7 @@ The right boundary follows the **generalization claim**. A support model may nee
 ## Train, Validation, And Test Have Different Roles
 <!-- section-summary: The three partitions differ by how the development process may use them, rather than by a universal percentage allocation. -->
 
-The familiar three-way split is easiest to understand as a separation of responsibilities. The percentages can vary. The roles should remain clear.
+The familiar three-way split separates three responsibilities. The percentages can vary with dataset size, event rarity, and the claim the test must evaluate. The role of each partition remains fixed.
 
 ### Use The Training Split To Fit Model Parameters
 
@@ -98,23 +98,9 @@ Imagine testing one hundred feature and hyperparameter combinations on one valid
 
 Validation remains valuable because development needs feedback. The response is to measure uncertainty, limit unprincipled search, use cross-validation where appropriate, and keep final evidence outside the loop. A tuning log should record which dataset influenced each decision.
 
-```mermaid
-sequenceDiagram
-    participant Dev as Development process
-    participant Val as Validation evidence
-    participant Test as Protected test
-    participant Gate as Release gate
+![The different jobs of training, validation, and test data, with the final test set kept protected](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/split-roles.png)
 
-    Dev->>Val: Compare candidate A
-    Val-->>Dev: Metrics and segment results
-    Dev->>Val: Compare revised candidate B
-    Val-->>Dev: Metrics and segment results
-    Dev->>Val: Choose threshold and scope
-    Val-->>Dev: Operating-point evidence
-    Dev->>Gate: Freeze candidate and policy
-    Gate->>Test: Run one governed evaluation
-    Test-->>Gate: Final release evidence
-```
+*Training fits the model, validation guides development choices, and the protected test set supplies one final estimate after those choices are frozen.*
 
 ### Do Not Use Test Results To Tune The Model
 
@@ -223,6 +209,10 @@ A model may need to score future events for both established and new customers. 
 The overall score answers the mixed production workload. Separate cohort metrics reveal whether cold-start behavior is weaker. Another design may reserve entire sites across every time period and perform rolling evaluation inside the remaining sites.
 
 There is no universal library call for every combination. Large platforms often build assignments in SQL, Spark, or a dataset pipeline from explicit entity, site, and time rules. The resulting manifest is then consumed by training libraries instead of recreating the split inside each experiment.
+
+![A group split keeping each entity together and a time split keeping future observations out of development data](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/group-and-time-splits.png)
+
+*The split boundary should match the way production must generalize, preventing both entity overlap and future information from entering development.*
 
 ## Keep Enough Positive, Rare, And Segment Examples In Every Split
 <!-- section-summary: A structurally correct boundary still needs enough outcomes and product segments to support the metrics used in a release decision. -->
@@ -449,6 +439,10 @@ Train, validation, and test describe how evidence may influence development. The
 Random stratification can suit independent rows from a stable population. Time blocks rehearse future deployment. Group holdouts test unseen entities or sites. Rolling and nested cross-validation strengthen development evidence under limited data. A final protected test judges the frozen procedure and product scope.
 
 The practical standard is clear: state the deployment claim, protect the unit that can repeat, respect prediction time and label maturity, verify rare outcomes and segments, record exact membership, and preserve the data and code versions behind the result. A model score deserves trust only if the team can explain what question its split actually answered.
+
+![Six parts of a data split contract producing trustworthy train, validation, and test evaluation](/content-assets/articles/article-mlops-data-for-ml-systems-train-validation-test-splits/data-split-contract-summary.png)
+
+*A durable split contract records the unit, time and group rules, seed, exact row membership, and integrity checks behind the evaluation.*
 
 ## References
 

@@ -38,7 +38,7 @@ Consider three ordinary failures:
 
 The first failure changes the dataset's structure. The second collapses different kinds of missing information into one representation. The third gives the model an unreliable target. Each failure can survive a generic “job succeeded” check.
 
-At a high level, **data quality checks provide evidence that a dataset is fit for its declared ML use**. The word “declared” matters. A null may be acceptable for an optional profile field and unacceptable for a training key. A provisional outcome may be useful for an operations dashboard and unsafe as a final training label.
+A null may be acceptable for an optional profile field and unacceptable for a training key. A provisional outcome may support an operations dashboard and remain unsafe as a final training label. **Data quality checks provide evidence that a dataset is fit for this declared ML use.** The word “declared” matters because the same value can be acceptable for one job and block another.
 
 Good evidence connects five things: the dataset and version, the rule being protected, the observed result, the affected rows or segments, and the action allowed after the check. That connection turns a test result into an operational decision.
 
@@ -70,6 +70,10 @@ flowchart TD
 ```
 
 The order gives an investigation a stable starting point. Label analysis has little value if a schema change shifted values into the wrong fields. Missingness analysis needs structural evidence so the team knows whether a value was truly null or lost during parsing. A reliable label needs both layers because a broken join can remove labels for one population.
+
+![Three data quality families asking whether systems can read the data, why values are absent, and whether outcomes tell the truth](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/three-quality-questions.png)
+
+*Structure, missingness, and labels need separate evidence because each family exposes a different way that training data can become unsafe.*
 
 ## First Check Columns, Types, And File Structure
 <!-- section-summary: Structural checks prove that rows, fields, types, keys, and meanings still match the contract expected by downstream systems. -->
@@ -264,7 +268,11 @@ The report should compare the candidate with a recent healthy reference and with
 
 Industrial repair follows the cause. A channel-specific join failure routes to the integration owner and triggers a bounded backfill. A legitimate increase in withheld values may require model evaluation and policy review. A new region with limited historical data may need an explicit minimum-coverage gate before release.
 
-SodaCL can operationalize warehouse-level missingness, validity, schema, and freshness checks in readable configuration. GX Core can validate Python or SQL-backed batches through Expectation Suites, Validation Definitions, and production Checkpoints. Both tools should emit dataset version, segment, observed metric, and failing-row references so the release system can act on their results.
+Soda 4 Data Contracts can operationalize warehouse-level missingness, validity, schema, and freshness checks in readable configuration. A contract can run locally through Soda Core inside the pipeline or remotely through a Soda Agent. GX Core can validate Python or SQL-backed batches through Expectation Suites, Validation Definitions, and production Checkpoints. Both approaches should emit the dataset version, segment, observed metric, and failing-row references so the release system can act on their results.
+
+![Three meanings of a missing delivery-time value and their different rates across mobile, web, and partner segments](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/missingness-causes-and-segments.png)
+
+*The same null can mean a failed observation, an inapplicable field, or a delayed outcome, and segment-level rates help distinguish those causes.*
 
 ## Finally Check Whether Labels Are Correct
 <!-- section-summary: Label integrity proves that each target has a definition, source, maturity state, revision history, and leakage-safe relationship to features. -->
@@ -465,7 +473,7 @@ Several quality products can evaluate similar-looking rules, which makes the sta
 
 **GX Core (Great Expectations)** is the current Python library for programmatic validation workflows. Expectations describe individual conditions, Expectation Suites group them, Validation Definitions associate suites with batches, and Checkpoints run production validations and actions. GX Core fits Python dataframes and SQL-backed batches that need reusable results and pipeline integration.
 
-**SodaCL and Soda scans** provide human-readable checks for schema, missingness, validity, duplicates, freshness, and reconciliation across supported data sources. Soda works well for teams that want check configuration close to data operations and shared monitoring around scan results.
+**Soda 4 Data Contracts** provide human-readable checks for schema, missingness, validity, duplicates, freshness, and reconciliation across supported data sources. A contract describes what one dataset promises to its consumers. Soda Core verifies that contract inside a custom pipeline, while hosted or self-hosted Soda Agents run managed verifications connected to Soda Cloud. This fits teams that want a versioned contract close to data operations plus a shared workflow for publishing changes, scheduling checks, and investigating results.
 
 **Deequ** runs quality verification on Apache Spark. Its `VerificationSuite`, constraints, analyzers, and DQDL support large distributed datasets. AWS Glue Data Quality offers a managed, serverless path built on Deequ and uses DQDL rules. This family fits teams already processing data through Spark or AWS Glue.
 
@@ -473,7 +481,7 @@ Several quality products can evaluate similar-looking rules, which makes the sta
 
 The validation library evaluates the rule. The orchestrator decides when the rule runs and whether publication can continue. The storage and catalog layer preserve candidate and approved dataset identities. Source owners repair producer defects. Data and model owners define missingness policies, label definitions, segments, and acceptance thresholds.
 
-One platform rarely needs every tool. A warehouse team may use dbt contracts and data tests plus Soda monitoring. A Python training pipeline may use dbt upstream and GX Core at the training boundary. A Spark lakehouse may use Deequ or managed Lakeflow expectations. Duplicating the same rule across tools without a shared check ID and owner creates conflicting evidence.
+One platform rarely needs every tool. A warehouse team may use dbt contracts and data tests, adding Soda contracts only if cross-team publication and managed verification solve a real coordination problem. A Python training pipeline may use dbt upstream and GX Core at the training boundary. A Spark lakehouse may use Deequ or managed Lakeflow expectations. Duplicating the same rule across tools without a shared check ID and owner creates conflicting evidence.
 
 ## Test Detection, Repair, And Republish Together
 <!-- section-summary: Verification proves that checks detect known defects, gates contain them, repairs rebuild safely, and downstream consumers receive corrected data. -->
@@ -495,14 +503,19 @@ Schema checks, missing-value checks, and label checks protect different assumpti
 
 Industrial tools can execute the checks. Reliable operation also needs contract ownership and segment-aware investigation. Quarantine preserves evidence, deterministic repair fixes the owning boundary, and bounded backfill rebuilds affected data. Downstream model verification confirms that the repair restored the intended behaviour.
 
+![A data quality recovery loop connecting detection, quarantine, diagnosis, repair, backfill, verification, and republication](/content-assets/articles/article-mlops-data-for-ml-systems-schema-checks-missing-values-bad-labels/data-quality-recovery-loop.png)
+
+*Quality controls protect training data through a complete recovery loop rather than stopping after the first failed check.*
+
 ## References
 
 - [dbt documentation: Model contracts](https://docs.getdbt.com/docs/mesh/govern/model-contracts)
 - [dbt documentation: Data tests](https://docs.getdbt.com/docs/build/data-tests)
 - [Great Expectations documentation: GX Core overview](https://docs.greatexpectations.io/docs/core/introduction/gx_overview/)
 - [Great Expectations documentation: Run a Checkpoint](https://docs.greatexpectations.io/docs/core/trigger_actions_based_on_results/run_a_checkpoint/)
-- [Soda documentation: Write SodaCL checks](https://docs.soda.io/soda-documentation/soda-v3/soda-cl-overview)
-- [Soda documentation: Schema checks](https://docs.soda.io/sodacl-reference/schema)
+- [Soda documentation: Contract language reference](https://docs.soda.io/reference/contract-language-reference)
+- [Soda documentation: Verify a data contract](https://docs.soda.io/data-testing/git-managed-data-contracts/verify-a-contract)
+- [Soda documentation: Core and Agent deployment options](https://docs.soda.io/deployment-options)
 - [Deequ repository and documentation](https://github.com/awslabs/deequ)
 - [AWS documentation: AWS Glue Data Quality](https://docs.aws.amazon.com/glue/latest/dg/glue-data-quality.html)
 - [Databricks documentation: Lakeflow pipeline expectations](https://docs.databricks.com/aws/en/ldp/expectations)

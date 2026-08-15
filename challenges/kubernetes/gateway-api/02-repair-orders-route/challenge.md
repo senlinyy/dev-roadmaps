@@ -1,10 +1,10 @@
 ---
-title: "Repair the Orders HTTPRoute"
+title: "Attach the Orders Route to a Shared Gateway"
 sectionSlug: httproute-for-the-application-team
 order: 2
 ---
 
-The orders team has an approved HTTPRoute identity, but the application-owned routing contract is missing. Build the attachment, request match, and backend relationship without changing the shared Gateway.
+The platform team owns a shared HTTPS Gateway and the orders team owns its Service. Inspect both supplied resources, then author the application-owned HTTPRoute that joins those contracts without editing either dependency.
 
 Your job:
 
@@ -13,4 +13,4 @@ Your job:
 3. **Build the request contract** for hostname `api.devpolaris.local` and the `/orders` path family with type `PathPrefix`.
 4. **Build the backend contract** that forwards matching requests to Service `orders-api` on Service port `80`.
 
-The grader checks the parsed HTTPRoute identity, parent attachment, hostname, path match, and backend Service reference.
+The grader parses all three resources, checks the route contract, and proves that both the parent Gateway and backend Service references resolve to supplied objects in the correct namespaces.

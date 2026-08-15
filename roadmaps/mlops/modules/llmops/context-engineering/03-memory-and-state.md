@@ -33,7 +33,7 @@ aliases:
 ## Separate the Five Information Layers
 <!-- section-summary: Working context, session state, durable memory, retrieved knowledge, and system-of-record data serve different purposes and carry different authority. -->
 
-At a high level, **agent memory is the part of an application that preserves selected information so a later model call can continue useful work**.
+A later model call does not automatically know what an earlier call learned or promised. **Agent memory is the application layer that preserves selected information so later calls can continue the work.**
 The difficult part is deciding what “selected” and “later” mean.
 
 Teams often place a transcript, tool results, user preferences, workflow progress, and business records into one object called memory.
@@ -112,6 +112,10 @@ A task resuming at the wrong step is a session-state problem.
 A stale preference is a durable-memory problem.
 An obsolete policy passage is a retrieval problem.
 An incorrect payment status is a domain-data problem.
+
+![Five information layers supply selected inputs to one working context while the system of record remains authoritative for the current shipment status.](/content-assets/articles/article-mlops-llmops-memory-and-state/five-information-layers.png)
+
+*Session state, durable memory, retrieved knowledge, and system-of-record data can all inform one model call, but they retain different owners and lifetimes.*
 
 ## Understand Why Agent Memory Exists
 <!-- section-summary: Memory provides continuity, personalization, and accumulated experience where repeated model calls would otherwise start with too little useful history. -->
@@ -370,6 +374,10 @@ Idempotency protects retries.
 Derive or store a proposal ID from the source interaction and memory type.
 Repeating the background job should update the same proposal and suppress duplicates.
 Use optimistic concurrency or a transaction while superseding an existing record so two corrections cannot both become active.
+
+![A project-output preference passes through a governed write policy before persistence, while a later read policy filters permissions and validity before selecting memory for working context.](/content-assets/articles/article-mlops-llmops-memory-and-state/governed-memory-read-write.png)
+
+*The model may propose a record; application policy controls whether it is written and whether a later task may read it.*
 
 ## Consolidate Memory Without Losing Evidence
 <!-- section-summary: Consolidation turns repeated events into smaller, reusable records while retaining lineage to the source claims and corrections. -->
@@ -837,6 +845,10 @@ Conflict, staleness, privacy, and deletion stay visible throughout the lifecycle
 Frameworks and managed services can provide sessions, checkpoints, stores, extraction, and semantic retrieval.
 The application still owns authority, product purpose, and safe behaviour.
 A useful memory system helps people repeat themselves less while giving them clear ways to inspect, correct, and remove what the system retained.
+
+![Production memory summary separating the authenticated context path, application policy, domain effects and checkpoint recovery, durable-memory writes, and lifecycle evidence.](/content-assets/articles/article-mlops-llmops-memory-and-state/production-memory-summary.png)
+
+*Session checkpoints resume work, governed memory supports later tasks, and domain services remain authoritative for current facts and committed effects.*
 
 ## References
 

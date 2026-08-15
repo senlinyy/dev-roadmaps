@@ -31,7 +31,7 @@ aliases:
 ## What An ML Environment Controls
 <!-- section-summary: An ML environment combines infrastructure, data, identity, dependencies, policy, and authority around a model workload. -->
 
-At a high level, an **environment** is the controlled world in which an ML workload runs. Compute is one part of that world. The environment also determines which data the workload can read, which identity it uses, which feature source it calls, where secrets come from, which network paths are open, which policy values apply, and whether its outputs can affect real users.
+The same training or serving code can behave very differently with production data, credentials, network routes, and policies. An **environment** is the controlled world that supplies those conditions to an ML workload. Compute is one part of that world; data access, identity, features, secrets, network paths, policy values, and authority over real users complete it.
 
 This wider meaning matters because the same model code can behave differently across environments. A prediction service might run correctly on a developer laptop with a local CSV, then fail in staging because its workload identity cannot read the model registry. It might pass staging and still make poor production decisions because the live feature source measures account age in a different unit. The process stays alive in all three places, while the meaning and authority of its work change.
 
@@ -90,6 +90,10 @@ flowchart TB
     P -->|"stop condition reached"| R["Restore known-safe release"]
 ```
 
+![Development, staging, and production compared by their questions, evidence, decision authority, and execution, data, trust, and decision boundaries](/content-assets/articles/article-mlops-deployment-and-release-management-dev-staging-production-for-ml/environment-purposes.png)
+
+*Development creates a reproducible candidate, staging tests its complete boundaries, and production grants governed authority over real decisions.*
+
 ## Which Parts Must Match Across Environments
 <!-- section-summary: Environment parity keeps behaviourally important interfaces equivalent while allowing intentional differences in scale, data, and cost. -->
 
@@ -114,6 +118,10 @@ Scale can stay smaller while preserving the shape of the test. A two-replica sta
 Every environment will have legitimate differences. Development may use short retention and low quotas. Staging may use masked data and a disabled notification sink. Production may use private networking, multi-zone capacity, longer evidence retention, and stricter policy approval.
 
 Documenting these differences prevents accidental drift from hiding among approved variation. A practical classification gives each setting one of three meanings: shared release behaviour, environment-specific value, or forbidden override. Contract versions belong to shared behaviour. Replica counts are usually environment-specific. Mutable image tags and plaintext credentials should be forbidden everywhere.
+
+![A three-column environment-parity table separating shared release behaviour, intentional environment-specific values, and forbidden overrides](/content-assets/articles/article-mlops-deployment-and-release-management-dev-staging-production-for-ml/environment-parity-classification.png)
+
+*Parity preserves the meanings that earlier evidence depends on while allowing reviewed differences in capacity, addresses, regions, and secret references.*
 
 ## Promote One Release And Add Environment-Specific Configuration
 <!-- section-summary: Build-once promotion preserves the tested artifact while controlled configuration connects it to each environment. -->
@@ -387,6 +395,10 @@ An ML environment is the complete controlled world around a workload. It include
 Development optimises learning and produces a reproducible candidate. Staging proves the exact release across production-shaped boundaries and exercises recovery. Production introduces real authority in controlled stages and measures live outcomes. Parity preserves the semantics that make earlier evidence relevant, while scale, cost, and sensitive data can differ deliberately.
 
 Strong environment design lets one immutable release gain authority as its evidence grows. Clear boundaries protect production from experiments. Explicit differences control cost and privacy. Drift checks and rollback drills confirm that the system users reach still matches the release the team approved.
+
+![One immutable release progressing through development, staging evidence, and controlled production authority, with runtime verification and a retained recovery path](/content-assets/articles/article-mlops-deployment-and-release-management-dev-staging-production-for-ml/ml-environments-summary.png)
+
+*The same release gains authority only after stronger evidence; runtime drift or a stop condition activates the retained known-safe release.*
 
 ## References
 

@@ -30,7 +30,7 @@ aliases:
 ## Deployment And Production Exposure Are Separate Steps
 <!-- section-summary: Release strategies separate the presence of a candidate in production from the authority of its output over real decisions. -->
 
-At a high level, a **release strategy** controls how a candidate—the proposed new release—moves from “running in production” to “trusted with production decisions.” Those are two different states. A model service can be fully deployed, healthy, and receiving copied requests while every user still receives the current release's answer.
+A model service can be fully deployed, healthy, and receiving copied requests while every user still receives the current release's answer. A **release strategy** controls how a candidate—the proposed new release—moves from “running in production” to “trusted with production decisions.” Those are two different states.
 
 This distinction gives a team room to gather evidence before granting wider authority. The candidate can prove that it loads on production hardware, accepts live request shapes, reaches the feature source, meets its latency budget, and produces plausible outputs. Real user exposure can then grow in reviewed steps.
 
@@ -44,6 +44,10 @@ Four common strategies control different risks:
 - **Rolling deployment** replaces serving instances in bounded batches to preserve capacity.
 
 These strategies can overlap. SageMaker AI, for example, implements canary traffic shifting as a mode of blue-green endpoint deployment. Kubernetes teams may use a blue-green or canary controller around workloads whose Pods still update in controlled ReplicaSets. The important question concerns which risk each mechanism controls.
+
+![A side-by-side comparison of blue-green, canary, shadow, and rolling model releases showing traffic flow, candidate authority, recovery, and capacity tradeoffs.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/four-model-release-strategies.png)
+
+*The four strategies can deploy the same candidate while controlling different risks: stack switching, live decision exposure, live-input evidence, or replacement capacity.*
 
 ```mermaid
 flowchart TB
@@ -291,6 +295,10 @@ A global sample count can hide empty or tiny subgroups. The gate should name imp
 
 Immediate product signals come from events close to the decision. A manual override can reveal operator disagreement, while a failed workflow or downstream rejection can reveal an unusable output. Empty results and support events provide other early warnings. Ground-truth quality can arrive hours, days, or months later. Fast signals can stop obvious harm. Delayed labels may require a longer limited release. Teams can also use retrospective evaluation or require another approval before full authority.
 
+![A canary rollout increasing candidate decision traffic from 1 to 5 to 25 to 100 percent through pass, hold, and stop gates based on release-labelled service, feature, prediction, segment, and product evidence.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/canary-authority-gates.png)
+
+*A canary earns more decision authority only after candidate-specific evidence is sufficient; a hold preserves the current scope, while a stop returns candidate traffic to zero.*
+
 ```mermaid
 stateDiagram-v2
     [*] --> Limited
@@ -370,6 +378,10 @@ A deployed candidate can remain harmless until routing grants its output authori
 Every strategy depends on immutable current and candidate releases behind a stable route. Release-labelled telemetry feeds predefined gates. Compatible mixed-version boundaries keep both paths usable, and a retained recovery release provides the stop path. Percentage exposure also needs stable assignment where users, sessions, and retries require consistent behaviour.
 
 Strong release decisions combine service, feature, prediction, segment, and product evidence. Automatic rollback contains fast measurable failures after candidate-specific alarms fire. Complete recovery restores the whole decision path and follows up on actions already taken.
+
+![A complete model release summary connecting release prerequisites, strategy selection, evidence-based pass hold or stop decisions, and recovery of the retained decision path.](/content-assets/articles/article-mlops-deployment-and-release-management-blue-green-canary-shadow-deployments/model-release-strategy-summary.png)
+
+*Deployment presence is separate from production authority: prepare a recoverable boundary, choose the risk control, gate each increase, and repair decisions already made after a rollback.*
 
 ## References
 

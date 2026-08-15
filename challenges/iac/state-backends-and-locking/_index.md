@@ -1,8 +1,8 @@
 ---
-title: "Remote Backends, Locking, and Isolation"
-description: "Practice shaping S3 backend config and judging local state, lock conflicts, and sensitive state handling."
+title: "Remote Backends and State Migration"
+description: "Configure an isolated S3 state path and practice the explicit initialization workflow that migrates existing local state."
 articleId: article-iac-terraform-state-remote-backends
 difficulty: medium
-order: 7
-tags: ["terraform", "state", "backends", "locking"]
+order: 14
+tags: ["terraform","backends","migration","locking"]
 ---

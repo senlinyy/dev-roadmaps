@@ -4,6 +4,6 @@ description: "Practice recognizing when Kubernetes is the requirement, then revi
 articleId: article-cloud-providers-gcp-compute-application-hosting-gke
 articleSlug: gke
 difficulty: medium
-order: 17
+order: 18
 tags: ["gcp", "gke", "kubernetes", "pods"]
 ---

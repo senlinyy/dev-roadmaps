@@ -29,11 +29,15 @@ id: "article-mlops-llmops-eval-datasets"
 
 <!-- section-summary: Agent evaluation needs tasks, state, tools, decisions, and outcomes because a prompt-and-answer holdout sees only a small part of the system. -->
 
-At a high level, an **agent eval dataset** is a collection of controlled work situations used to measure an agent. Each situation tells the evaluator what the user wants, what the agent can see, which tools it can use, how those tools behave, and what a successful result looks like. You can think of it as a test track that recreates the important parts of production without allowing the run to change real customer data.
+Testing an agent directly on customer systems risks real data and produces results that are difficult to repeat. An **agent eval dataset** solves this by collecting controlled work situations. Each situation states what the user wants, what the agent can see, which tools it may use, how those tools behave, and what a successful result looks like. It recreates the important parts of production without allowing the run to change real customer data.
 
 A normal model holdout usually contains an input and a target. For example, a classifier receives an email and the target says `billing`. That structure works well if the model’s only responsibility is choosing a label. An agent has a larger job. It may read account state, call a billing tool, ask for approval, retry a failed request, and explain the final result. The final sentence can look correct even though the agent used the wrong account, skipped approval, or merely claimed that a tool succeeded.
 
 Consider a calendar agent asked to move a meeting. A useful eval case establishes the meeting and available times first. It also fixes the caller’s permissions and the behaviour of the calendar API. Success may require a conflict check and confirmation before the agent updates exactly one event. The final response must then report the new time. A reference answer alone cannot prove that those actions happened.
+
+![A calendar-agent evaluation case combining the requested task, controlled starting state, deterministic tools, the run trajectory, the environment ledger, and independent graders](/content-assets/articles/article-mlops-llmops-eval-datasets/calendar-agent-eval-case-anatomy.png)
+
+*The case recreates the world around the request. A correct sentence passes only when the intended event changed once, confirmation was respected, and the response matches the environment.*
 
 ```mermaid
 flowchart TD
@@ -142,7 +146,7 @@ A research agent may need source type and citation difficulty. A coding agent ma
 
 Traffic frequency should influence the mix because common work shapes everyday quality. Risk adds another axis. A rare case deserves strong coverage if failure can expose data, execute an irreversible action, or violate a legal obligation. Boundary cases deserve repeated attention too: a refund just below and just above an approval threshold can reveal a policy-routing defect that random samples rarely hit.
 
-A **failure taxonomy** gives names to the ways an agent can fail. In essence, it is a shared classification system used by dataset authors, graders, incident responders, and release reviewers. The labels should point toward causes and owners. A label such as `bad_answer` is too broad to guide a repair.
+A **failure taxonomy** gives names to the ways an agent can fail. Dataset authors, graders, incident responders, and release reviewers use this shared classification system to connect failures to likely causes and owners. A label such as `bad_answer` is too broad to guide a repair.
 
 ```mermaid
 flowchart TD
@@ -157,6 +161,10 @@ flowchart TD
 These categories should appear in case metadata and grader results. Suppose the overall pass rate stays flat after a release. Slice-level reporting may still reveal that `tool.invalid_arguments` improved while `control.missing_approval` regressed. Those changes have different severity and need different owners.
 
 Coverage review combines three views: the production distribution, the product’s supported capability map, and the risk register. Gaps between those views create **coverage debt**. A newly released tool creates debt until the suite includes normal use, permission boundaries, failure responses, and recovery. Teams can limit the feature, add the missing cases, or record an explicit risk acceptance. Folding uncovered behaviour into a single overall score hides the decision.
+
+![Four evaluation-case evidence sources flowing through review into deliberate coverage slices, a six-part agent failure taxonomy, and a coverage-debt decision](/content-assets/articles/article-mlops-llmops-eval-datasets/eval-coverage-sources-and-slices.png)
+
+*Coverage comes from real evidence, product scope, and risk. Large case counts do not compensate for repeated easy paths or missing high-impact boundaries.*
 
 ## Deterministic Environments Make Runs Comparable
 
@@ -461,6 +469,10 @@ Dataset health has its own operational signals. Track the share of cases with cu
 Production evidence closes the loop. New intents, tool changes, policy revisions, drift, incidents, and reviewer disagreement all create candidates. Stable success patterns deserve sampling too, because a dataset made only of failures can misrepresent normal work. Retire cases whose product contract has ended, while preserving the snapshot used for past release decisions.
 
 The central idea is simple: an agent eval dataset is a maintained model of important work. It gives the agent a controlled world, records the path and result, and applies explicit judgement. That foundation makes later trajectory analysis, regression testing, and release decisions meaningful.
+
+![A summary of the six independently versioned parts of an evaluation run, controlled case execution, frozen and rolling suites, leakage partitions, privacy controls, comparison rules, and a release gate](/content-assets/articles/article-mlops-llmops-eval-datasets/versioned-eval-system-summary.png)
+
+*A score is interpretable only with the agent, dataset snapshot, environment, grader bundle, simulator, and runner identities. Critical control failures remain release blockers even when aggregate quality rises.*
 
 ## References
 

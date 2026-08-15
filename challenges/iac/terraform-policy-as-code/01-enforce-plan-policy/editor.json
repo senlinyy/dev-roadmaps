@@ -1,0 +1,42 @@
+{
+  "language": "rego",
+  "completionProfile": "rego",
+  "activeFile": "policy/terraform.rego",
+  "files": [
+    {
+      "filename": "policy/terraform.rego",
+      "initialValue": "package terraform.policy\n\n# Add plan policy rules.\n"
+    },
+    {
+      "filename": "policy/terraform_test.rego",
+      "initialValue": "package terraform.policy_test\n\nimport data.terraform.policy\n",
+      "readOnly": true
+    }
+  ],
+  "grader": {
+    "strategy": "rego-policy",
+    "packageName": "terraform.policy",
+    "rules": [
+      {
+        "name": "deny",
+        "bodyContains": [
+          "some resource in input.resource_changes",
+          "startswith(resource.type, \"aws_\")",
+          "object.get(resource.change.after, \"tags\", {})",
+          "{\"Owner\", \"Environment\"}",
+          "count(missing) > 0",
+          "message := sprintf("
+        ]
+      },
+      {
+        "name": "deny_delete",
+        "bodyContains": [
+          "some resource in input.resource_changes",
+          "resource.change.actions == [\"delete\"]",
+          "object.get(resource.change.before.tags, \"Environment\", \"\") == \"prod\"",
+          "message := sprintf("
+        ]
+      }
+    ]
+  }
+}

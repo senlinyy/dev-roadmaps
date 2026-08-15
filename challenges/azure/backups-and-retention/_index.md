@@ -4,6 +4,6 @@ description: "Practice separating backup from restore, choosing retention window
 articleId: article-cloud-providers-azure-storage-databases-backups-retention-safe-deletion
 articleSlug: backups-and-retention
 difficulty: medium
-order: 29
+order: 22
 tags: ["azure", "backups", "retention", "restore", "soft-delete"]
 ---

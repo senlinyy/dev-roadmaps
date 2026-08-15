@@ -1,0 +1,62 @@
+{
+  "language": "json",
+  "filename": "filter-policy.json",
+  "completionProfile": "aws-json",
+  "initialValue": "{\n  \"eventType\": [],\n  \"tier\": [],\n  \"retryCount\": []\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "eventType"
+        ],
+        "includes": "LessonPublished",
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "event type filter"
+      },
+      {
+        "path": [
+          "tier"
+        ],
+        "includes": "standard",
+        "label": "standard tier"
+      },
+      {
+        "path": [
+          "tier"
+        ],
+        "includes": "priority",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "accepted tiers"
+      },
+      {
+        "path": [
+          "retryCount",
+          0
+        ],
+        "includes": "numeric",
+        "label": "numeric operator"
+      },
+      {
+        "path": [
+          "retryCount",
+          0
+        ],
+        "includes": "<",
+        "label": "less-than comparison"
+      },
+      {
+        "path": [
+          "retryCount",
+          0
+        ],
+        "includes": 3,
+        "minItems": 3,
+        "maxItems": 3,
+        "label": "retry threshold"
+      }
+    ]
+  }
+}

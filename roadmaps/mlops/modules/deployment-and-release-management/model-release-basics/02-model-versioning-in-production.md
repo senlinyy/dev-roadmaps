@@ -32,13 +32,17 @@ id: "article-mlops-deployment-and-release-management-model-versioning-in-product
 ## What Model Versioning Means In Production
 <!-- section-summary: Production model versioning gives every deployed decision system a precise and restorable identity. -->
 
-At a high level, **model versioning is the practice of giving every releasable model system a precise identity**. That identity answers four important questions. What is running? How was it created? What evidence approved it? Which complete release can replace it during an incident?
+An incident responder must identify exactly what is running before choosing a safe replacement. **Model versioning gives every releasable model system a precise identity.** That identity answers four questions: What is running? How was it created? What evidence approved it? Which complete release can replace it?
 
 The word *model* can make this subject sound smaller than it is. During training, a model may look like one file containing learned weights. In production, the prediction also depends on code that prepares the input and on governed feature definitions. Python libraries, the serving image, thresholds, fallback rules, and configuration also affect the result. Change any of those parts and users may receive a different decision from the same weights.
 
 Consider a credit-risk score. Version 14 of the weights produces a probability of `0.78`. One service approves applications at `0.75`; another uses `0.80`. Both services loaded version 14, yet they make different decisions. The weights identify the mathematical scorer. They do not identify the complete production behaviour.
 
-A useful production version therefore represents a **release bundle**. In essence, the bundle is a recipe for reconstructing the same prediction path:
+![The same credit-risk model output of 0.78 producing different approval decisions under thresholds of 0.75 and 0.80](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/same-weights-different-decisions.png)
+
+*The model version identifies the scorer; the release must also identify the policy and every other component that changes production behaviour.*
+
+A production version therefore represents a **release bundle**: a recipe for reconstructing the same prediction path.
 
 ```mermaid
 flowchart TD
@@ -308,6 +312,10 @@ flowchart TD
 
 MLflow's old model stages are deprecated. Current workflows use aliases and tags, often with separate registered models or governance boundaries for development, staging, and production. The crucial production rule stays the same across products: aliases help locate a candidate; deployment records pin concrete versions and digests.
 
+![A release controller resolving the candidate alias to model version 27, verifying exact bytes, and creating immutable release r42 before workers load it](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/alias-to-pinned-release.png)
+
+*Resolve a movable alias once at the release boundary, then make workers load the pinned version and digests recorded by the immutable release.*
+
 ## Promote The Same Release Through Each Environment
 <!-- section-summary: Environment promotion reuses the tested immutable assets and changes only approved environment-specific desired state. -->
 
@@ -467,6 +475,10 @@ A model file captures learned parameters. A production release captures the syst
 Strong model versioning gives that system one durable release identity. The release links to the exact artifact, signature, preprocessing, features, code, runtime, dependencies, policy, data, evidence, and approval. Concrete versions and digests preserve history. Aliases communicate current intent. Lineage explains origin. Runtime records show what users actually received. Retained complete releases make rollback dependable.
 
 The final standard is practical: another operator should be able to identify, explain, deploy, observe, and restore the release from its recorded identities.
+
+![Five release identities feeding an immutable manifest, followed by a clean-environment restore test that either proves restorability or blocks promotion](/content-assets/articles/article-mlops-deployment-and-release-management-model-versioning-in-production/model-versioning-summary.png)
+
+*A versioning system earns trust when a clean environment can reconstruct both the approved release and its retained rollback target.*
 
 ## References
 

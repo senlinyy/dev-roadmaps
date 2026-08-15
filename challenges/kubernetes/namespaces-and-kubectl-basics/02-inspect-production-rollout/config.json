@@ -1,0 +1,87 @@
+{
+  "cwd": "/workspace",
+  "fs": {
+    "/workspace": { "type": "dir" }
+  },
+  "commandModules": ["kubernetes"],
+  "kubernetes": {
+    "currentContext": "notifications-staging",
+    "contexts": [
+      { "name": "notifications-staging", "cluster": "staging-eu", "user": "platform-staging", "namespace": "notifications-staging" },
+      { "name": "notifications-prod", "cluster": "production-eu", "user": "incident-reader", "namespace": "default" }
+    ],
+    "resources": [
+      {
+        "context": "notifications-prod",
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+          "name": "notification-api",
+          "namespace": "notifications-prod",
+          "labels": { "app": "notification-api" }
+        },
+        "spec": { "replicas": 3 },
+        "status": { "readyReplicas": 2, "updatedReplicas": 3, "availableReplicas": 2, "age": "18m" }
+      },
+      {
+        "context": "notifications-prod",
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "notification-api-76fd8c795b-4qj9x",
+          "namespace": "notifications-prod",
+          "labels": { "app": "notification-api", "pod-template-hash": "76fd8c795b" }
+        },
+        "spec": { "containers": [{ "name": "api", "image": "ghcr.io/devpolaris/notification-api:2026.08.1" }] },
+        "status": { "phase": "Running", "age": "7m", "containerStatuses": [{ "name": "api", "ready": true, "restartCount": 0 }] }
+      },
+      {
+        "context": "notifications-prod",
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "notification-api-76fd8c795b-kz2mw",
+          "namespace": "notifications-prod",
+          "labels": { "app": "notification-api", "pod-template-hash": "76fd8c795b" }
+        },
+        "spec": { "containers": [{ "name": "api", "image": "ghcr.io/devpolaris/notification-api:2026.08.1" }] },
+        "status": { "phase": "Running", "age": "7m", "containerStatuses": [{ "name": "api", "ready": false, "restartCount": 4 }] }
+      },
+      {
+        "context": "notifications-prod",
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "notification-api-76fd8c795b-x7vkt",
+          "namespace": "notifications-prod",
+          "labels": { "app": "notification-api", "pod-template-hash": "76fd8c795b" }
+        },
+        "spec": { "containers": [{ "name": "api", "image": "ghcr.io/devpolaris/notification-api:2026.08.1" }] },
+        "status": { "phase": "Running", "age": "7m", "containerStatuses": [{ "name": "api", "ready": true, "restartCount": 0 }] }
+      }
+    ],
+    "events": [],
+    "logs": [
+      {
+        "context": "notifications-prod",
+        "namespace": "notifications-prod",
+        "pod": "notification-api-76fd8c795b-kz2mw",
+        "container": "api",
+        "current": "2026-08-09T09:42:11Z request_id=51 route=/notify status=503\n2026-08-09T09:42:12Z dependency=mail-provider latency_ms=5000\n2026-08-09T09:42:12Z dependency=mail-provider status=timeout\n"
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "last-stdout",
+    "expected": ["dependency=mail-provider status=timeout"],
+    "requireCommands": ["kubectl"],
+    "minCommandCount": 4,
+    "requireCommandPatterns": [
+      "^kubectl\\s+config\\s+current-context\\s*$",
+      "^kubectl\\s+get\\s+(?:deployment|deploy)\\s+notification-api(?=.*(?:--context(?:=|\\s+)notifications-prod))(?=.*(?:-n|--namespace)(?:=|\\s+)notifications-prod)",
+      "^kubectl\\s+get\\s+(?:pods|pod|po)(?=.*(?:-l|--selector)(?:=|\\s+)app=notification-api)(?=.*(?:--context(?:=|\\s+)notifications-prod))(?=.*(?:-n|--namespace)(?:=|\\s+)notifications-prod)",
+      "^kubectl\\s+logs\\s+notification-api-76fd8c795b-kz2mw(?=.*(?:-c|--container)(?:=|\\s+)api)(?=.*--tail(?:=|\\s+)3)(?=.*(?:--context(?:=|\\s+)notifications-prod))(?=.*(?:-n|--namespace)(?:=|\\s+)notifications-prod)"
+    ]
+  }
+}

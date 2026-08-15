@@ -1,3 +1,18 @@
+`configmap.yaml`
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-api-config
+  namespace: notifications
+data:
+  LOG_LEVEL: info
+  DELIVERY_MODE: async
+```
+
+`deployment.yaml`
+
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -22,7 +37,10 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: notification-api-config
 ```
 
 - Matching selector and template labels let the Deployment own the Pods created from its template.
-- The ReplicaSet created by the Deployment maintains the requested three replicas.
+- The named ConfigMap reference keeps runtime settings outside the image while preserving a reviewable dependency.

@@ -31,7 +31,7 @@ aliases:
 ## What Environment Isolation Means
 <!-- section-summary: Environment isolation limits which systems a workload can reach, which resources it can consume, and which production state it can change. -->
 
-At a high level, **environment isolation** limits how far a workload can reach and what it can change. A data scientist still needs room to explore. A production service still needs live features and a released model. The boundary ensures that exploratory code cannot silently acquire production authority and that a serving failure cannot corrupt the training system.
+A data scientist needs room to explore, while a production service needs live features and authority to serve a released model. Those workloads should not inherit the same reach. **Environment isolation limits how far each workload can reach and what it can change**, preventing exploratory code from acquiring production authority or a serving failure from corrupting training.
 
 Consider a notebook that installs a new image-processing library. The package contains malicious code. If the notebook shares the production service account, network, storage path, and model registry permissions, that code can read live data or replace the artifact served to users. A separate notebook namespace changes very little if all of those other paths remain open.
 
@@ -162,6 +162,10 @@ mindmap
 
 The seven boundaries should tell the same story. A serving identity belongs to serving compute, reaches approved production dependencies, reads a released artifact, and receives no training or control-plane secret. One contradictory boundary can reopen the full path.
 
+![One ML workload is surrounded by seven simultaneous isolation boundaries for identity, control-plane authority, network reach, compute sharing, storage access, secret delivery, and artifact promotion.](/content-assets/articles/article-mlops-governance-and-responsible-ai-environment-isolation-for-ml-workloads/seven-isolation-boundaries.png)
+
+*Environment isolation is the combined effect of seven controls; a shared or contradictory boundary can reopen a path that the other six appear to close.*
+
 ## Choose A Tenant Isolation Level
 <!-- section-summary: Tenant trust, data sensitivity, workload control, blast radius, and operating cost determine whether tenants share namespaces, nodes, clusters, or cloud accounts. -->
 
@@ -259,6 +263,10 @@ NVIDIA **Multi-Instance GPU (MIG)** divides supported GPUs into predefined hardw
 GPU isolation includes the surrounding node. Device plugins, drivers, monitoring agents, caches, host memory, and local checkpoint paths run outside the model process. Keep production and untrusted workloads on separate node pools, restrict privileged device-management components, and record which physical GPU or MIG instance served each workload.
 
 Test the claim under contention. Run one workload that consumes memory or crashes a CUDA process while another performs a known inference benchmark. The result should match the chosen boundary: predictable performance for exclusive or planned MIG capacity, and explicitly accepted interference for time-sliced internal work.
+
+![Exclusive GPU allocation, Multi-Instance GPU partitions, and time-slicing are compared by what they separate, where they are appropriate, and which isolation limitations remain.](/content-assets/articles/article-mlops-governance-and-responsible-ai-environment-isolation-for-ml-workloads/gpu-isolation-options.png)
+
+*GPU allocation follows the threat model: time-slicing improves utilisation for trusted workloads but does not provide memory or fault isolation between hostile tenants.*
 
 ## Control Ingress Egress And Private Access
 <!-- section-summary: Network isolation defines approved callers and destinations, then verifies that public, cross-environment, and unintended outbound paths fail. -->
@@ -434,6 +442,10 @@ ML environment isolation controls reach and consequence. Development explores wi
 Seven boundaries make that separation enforceable: identity, control plane, network, compute, storage, secrets, and artifacts. Kubernetes namespaces supply policy scope. Dedicated nodes, sandbox runtimes, GPU allocation, private routes, admission policy, and separate storage authorities strengthen the boundary according to tenant trust and workload impact.
 
 The production proof comes from the running system. Allowed paths succeed, forbidden paths fail, workload placement matches policy, network traffic follows approved routes, storage and registry events identify the correct actor, and recovery rebuilds the environment from trusted inputs. Those results show that environment names correspond to real isolation.
+
+![Development, training, evaluation, release control, and serving exchange reviewed references across seven enforced boundaries, then an isolation matrix routes passing evidence to a canary and boundary signals through containment, rebuild, and retesting.](/content-assets/articles/article-mlops-governance-and-responsible-ai-environment-isolation-for-ml-workloads/environment-isolation-summary.png)
+
+*The lifecycle is isolated only when every stage has bounded authority and live tests prove allowed routes, denied routes, placement, actors, and immutable digests before release or recovery.*
 
 ## References
 

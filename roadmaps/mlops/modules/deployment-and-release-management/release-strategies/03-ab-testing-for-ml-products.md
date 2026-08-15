@@ -33,7 +33,7 @@ aliases:
 ## What A/B Testing Can Tell You About Product Impact
 <!-- section-summary: An ML A/B test estimates whether a model-driven product change caused a meaningful change in user or business outcomes. -->
 
-At a high level, an **A/B test** is a fair comparison between two product experiences. Eligible users, accounts, devices, or other units are randomly placed into groups. One group receives the current experience and another receives the candidate. The team then compares outcomes such as purchases, successful searches, resolved support cases, or harmful actions.
+Suppose a team wants to know whether a new ranking model improves successful searches rather than merely changing an offline score. An **A/B test** makes a fair comparison between the current and candidate product experiences. Eligible users, accounts, devices, or other units are randomly placed into groups, and the team compares real outcomes.
 
 The word **causal** matters here. A causal question asks whether the candidate experience produced the observed change. A dashboard may show that users served by a new ranking model purchased more items. That pattern alone leaves several other explanations open: those users may come from a higher-spending region, the comparison may span different days, or a marketing campaign may have reached one group first. Random assignment gives every eligible unit the same chance of entering either group, so these background differences tend to balance.
 
@@ -67,6 +67,10 @@ An A/B test adds the missing experimental controls: a declared population, rando
 
 Cloud endpoints from SageMaker AI, Gemini Enterprise Agent Platform Endpoints, Azure Machine Learning, and Databricks Model Serving can distribute requests across deployments. Their traffic weights are valuable delivery controls. Stable user cohorts, exposure-to-outcome joins, and statistical analysis still require an experiment layer or equivalent application logic.
 
+![A comparison of a rollout and a controlled experiment showing that weighted delivery traffic answers operational safety questions while random stable assignment and mature outcomes answer causal product questions.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/rollout-versus-controlled-experiment.png)
+
+*Rollout controls limit operational risk; experiment controls create comparable product populations and measure whether the candidate caused a meaningful outcome.*
+
 ## The Terms Used In A Controlled Experiment
 <!-- section-summary: A small set of terms describes who enters the experiment, what changes, what is measured, and how a decision is made. -->
 
@@ -99,7 +103,7 @@ An **analysis population** defines whose outcomes enter the estimate. This choic
 ## Choose What Gets Randomly Assigned
 <!-- section-summary: The randomization unit should match the boundary across which the treatment can remain consistent and outcomes can remain reasonably independent. -->
 
-The best randomization unit follows the product interaction. In essence, ask two questions: “Which entity needs a consistent experience?” and “Can one assigned entity affect another entity’s outcome?”
+The best randomization unit follows the product interaction. Choose it by asking two questions: “Which entity needs a consistent experience?” and “Can one assigned entity affect another entity’s outcome?”
 
 ### Request, user, and device units
 
@@ -168,6 +172,10 @@ flowchart TD
     O --> I
     X --> V["Delivery and triggered-analysis checks"]
 ```
+
+![A search-ranking experiment connecting stable user assignment to control or treatment, actual rendered exposure, mature outcomes, governed joins, integrity gates, and decision evidence.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/assignment-exposure-outcome.png)
+
+*Assignment records preserve the randomized population, exposure records prove delivery, and outcome records become decision evidence only after join and integrity checks pass.*
 
 ## Choose Metrics That Can Decide The Experiment
 <!-- section-summary: A primary metric expresses the intended benefit, while guardrails and counter-metrics reveal unacceptable costs. -->
@@ -400,6 +408,10 @@ ML A/B testing estimates whether a model-driven product change caused a meaningf
 Release controls and experiments work together. Canary, blue-green, shadow, and weighted routing protect delivery. Randomized assignment, exposure logs, outcome contracts, and statistical rules establish product impact. The final result should support one clear action: ship carefully, keep control, iterate, or rerun with repaired evidence.
 
 The practical lesson is to treat the experiment record as part of the release evidence. A model registry can identify the candidate artifact, yet the decision also needs its assignment rule, policy version, exposure coverage, outcome window, data-quality results, uncertainty estimate, and approved follow-up action.
+
+![The ML A/B test decision path from a prewritten plan through stable comparison, evidence validation, effect estimation, and distinct win loss inconclusive or invalid actions.](/content-assets/articles/article-mlops-deployment-and-release-management-ab-testing-for-ml-products/ml-ab-test-summary.png)
+
+*A trustworthy decision follows the plan written before results: validate the evidence, estimate practical value and uncertainty, then take the action assigned to that outcome.*
 
 ## References
 

@@ -82,6 +82,9 @@
       "\"BillingMode\": \"PAY_PER_REQUEST\"",
       "\"IndexName\": \"status-index\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+dynamodb\\\\s+describe-table\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

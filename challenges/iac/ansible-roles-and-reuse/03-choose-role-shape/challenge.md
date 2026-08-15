@@ -1,6 +1,7 @@
 ---
-title: "Structuring Roles"
+title: "Choose a Role Shape"
 order: 3
+revision: 2
 ---
 
-Use module boundaries, defaults, validation, and side effects to decide whether an Ansible role is safe to reuse.
+Decide what belongs in role defaults, tasks, handlers, templates, and metadata.

@@ -28,7 +28,7 @@ A **regression model** predicts a number. The output might be delivery time in m
 
 The prediction and the observed outcome live on a numeric scale. A forecast of 42 minutes can miss an actual delivery time of 45 minutes by three minutes. A demand forecast of 42 units can miss the actual demand of 45 units by three units. The arithmetic looks the same, yet the operational consequences differ.
 
-At a high level, **regression evaluation measures the distance between predictions and observed outcomes, then decides how different distances should count**. The first decision is the target and its unit. The second is the direction and cost of error. The third is the aggregation rule that combines thousands of individual misses into release evidence.
+A delivery estimate that misses by two minutes and one that misses by two hours are both wrong, yet the product experiences them very differently. **Regression evaluation measures the distance between predictions and observed outcomes, then decides how different distances should count.** The team defines the target and its unit, the direction and cost of error, and the aggregation rule that combines thousands of individual misses into release evidence.
 
 You can think of the metric choice through five questions:
 
@@ -170,6 +170,10 @@ Squared error targets the conditional mean. This makes MSE or RMSE aligned with 
 
 The report should explain that target choice. Selecting RMSE solely because it punishes outliers can distort a product that cares linearly about every unit. Selecting MAE solely because its unit is familiar can understate catastrophic tails. Product cost determines the loss shape.
 
+![Five absolute errors produce very different median absolute error, MAE, and RMSE summaries](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/error-metric-tail-comparison.png)
+
+*The middle error stays at three minutes, while one 38-minute miss pulls MAE to ten and RMSE to about 17.2 minutes.*
+
 ## R-Squared and Explained Variance Need Context
 <!-- section-summary: R-squared and explained variance compare error with target variation, producing scale-free scores that still need unit-based errors, baselines, and bias checks. -->
 
@@ -306,6 +310,10 @@ Aggregation changes conclusions. Suppose 90,000 common cases improve from MAE `5
 
 Every segment row should include support, candidate and production values, coverage, target range, and uncertainty. Sparse rows narrow the claim. Missing predictions or labels create a coverage failure; dropping them from the denominator can make the metric look better.
 
+![A smaller high-impact segment gets worse even though overall regression MAE improves](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/residual-segment-gates.png)
+
+*The 90,000 common cases improve enough to lower overall MAE, but the 10,000 high-impact cases fail their required segment check.*
+
 Segment searches also need discipline. Predefine important slices from product boundaries, domain risk, and incident history. Exploratory slices can reveal hypotheses. Confirm a newly discovered problem with appropriate fresh evidence before granting or denying broad authority.
 
 ## Set Release Limits That Match The Cost Of Regression Errors
@@ -383,6 +391,10 @@ Regression predicts a number. Each prediction creates a residual whose sign show
 MAE expresses average distance in the target unit. Median absolute error describes the middle miss and resists extreme rows. MSE and RMSE give large errors more influence. R² and explained variance compare error with target variation, while unit-based metrics and bias preserve product meaning. MAPE introduces a relative scale and needs an explicit policy for zero and small targets. Pinball loss represents asymmetric costs through a chosen quantile.
 
 A production decision uses the full distribution. It compares candidate and production on the same rows, examines bias and tails, repeats the metrics across target bands and product segments, and encodes practical limits with coverage and uncertainty. The result explains who benefits, where error grows, and which traffic the evidence supports.
+
+![Regression release evidence flows from pinned rows through error views, segment checks, uncertainty, and a scoped decision](/content-assets/articles/article-mlops-model-evaluation-regression-metrics/regression-release-packet.png)
+
+*A regression release packet preserves the inputs, residual meaning, metric family, location of error, paired comparison, and exact population the decision supports.*
 
 ## References
 

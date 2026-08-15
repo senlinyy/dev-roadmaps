@@ -1,0 +1,22 @@
+{
+  "language": "yaml",
+  "filename": "orders-api.containerapp.yaml",
+  "completionProfile": "azure-container-app",
+  "initialValue": "name: orders-api\nresourceGroup: rg-orders-prod\nlocation: uksouth\nidentity:\n  type: SystemAssigned\nproperties:\n  managedEnvironmentId: /subscriptions/sub-prod/resourceGroups/rg-orders-prod/providers/Microsoft.App/managedEnvironments/orders-prod\n  configuration:\n    activeRevisionsMode: Single\n    ingress: {}\n    secrets: []\n  template:\n    containers:\n      - name: orders-api\n        image: \n        env: []\n        resources:\n          cpu: 0.5\n          memory: 1Gi\n    scale: {}\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["name"], "equals": "orders-api" },
+      { "path": ["resourceGroup"], "equals": "rg-orders-prod" },
+      { "path": ["identity", "type"], "equals": "SystemAssigned" },
+      { "path": ["properties", "configuration", "activeRevisionsMode"], "equals": "Multiple" },
+      { "path": ["properties", "configuration", "ingress", "external"], "equals": true },
+      { "path": ["properties", "configuration", "ingress", "targetPort"], "equals": 3000 },
+      { "path": ["properties", "configuration", "secrets"], "containsObject": { "name": "payments-token", "keyVaultUrl": "https://kv-orders-prod.vault.azure.net/secrets/payments-token", "identity": "system" } },
+      { "path": ["properties", "template", "containers", 0, "image"], "equals": "ghcr.io/devpolaris/orders-api:2026.08.1" },
+      { "path": ["properties", "template", "containers", 0, "env"], "containsObject": { "name": "PAYMENTS_API_TOKEN", "secretRef": "payments-token" } },
+      { "path": ["properties", "template", "scale", "minReplicas"], "equals": 2 },
+      { "path": ["properties", "template", "scale", "maxReplicas"], "equals": 10 }
+    ]
+  }
+}

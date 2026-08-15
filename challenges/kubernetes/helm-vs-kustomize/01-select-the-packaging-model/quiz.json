@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "shared-platform-contract",
+      "type": "single",
+      "scenario": "A platform team supports one versioned HTTP API package for twenty services. The package is distributed through an OCI registry, exposes a documented values contract, and needs named release history for support. Which starting point fits those requirements best?",
+      "options": [
+        { "id": "a", "text": "Helm, because it provides a versioned chart contract, distribution model, values inputs, and release revisions." },
+        { "id": "b", "text": "Kustomize, because every service should copy the complete shared base into its own repository before each release." },
+        { "id": "c", "text": "Raw manifests patched directly in the cluster, because a package owner would add unnecessary responsibility." },
+        { "id": "d", "text": "Either tool without rendered review, because package distribution proves the final objects are correct." }
+      ],
+      "correct": ["a"],
+      "explanation": "Helm aligns with a platform-owned reusable package, registry distribution, explicit values interface, and built-in release history. The team still needs to render and review each consuming release."
+    },
+    {
+      "id": "app-owned-overlays",
+      "type": "single",
+      "scenario": "One application team owns a unique Deployment and Service. Staging and production differ only in image tag, replica count, and one hostname, and the team wants pull requests to remain close to native Kubernetes YAML. Which starting point is the clearer fit?",
+      "options": [
+        { "id": "a", "text": "Kustomize with an application-owned base and small staging and production overlays." },
+        { "id": "b", "text": "A shared Helm chart with dozens of unused toggles, even though no other service consumes it." },
+        { "id": "c", "text": "Two unrelated full manifest copies with no shared source." },
+        { "id": "d", "text": "Live edits in each namespace, because Git review would make the YAML less native." }
+      ],
+      "correct": ["a"],
+      "explanation": "Kustomize keeps the base as Kubernetes YAML and expresses the small environment differences as overlays. This fits app ownership and avoids introducing a reusable package interface before there is a reuse need."
+    },
+    {
+      "id": "common-review-language",
+      "type": "multiple",
+      "scenario": "One team uses Helm and another uses Kustomize under the same GitOps platform. Reviewers need consistent evidence that selectors, image tags, ports, and namespaces are correct before reconciliation. Which two practices apply to both teams?",
+      "options": [
+        { "id": "a", "text": "Render the final manifests for the exact environment and attach or diff them in review." },
+        { "id": "c", "text": "Review only template or overlay source because the controller will resolve mistakes after merge." },
+        { "id": "b", "text": "Validate the rendered objects and record the rollback source before approval." },
+        { "id": "d", "text": "Use Helm release history as the Kustomize rollback store even when Helm is not part of that release." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Both tools ultimately produce Kubernetes objects. Rendered diffs and validation provide a common review language, while the runbook must identify whether rollback comes from Helm revisions, Git history, GitOps state, or saved artifacts."
+    },
+    {
+      "id": "kustomize-rollback-source",
+      "type": "single",
+      "scenario": "A Kustomize production overlay changed the orders image and the rollout failed. The team does not use Helm for this application, but a GitOps controller reconciles the overlay repository. Which recovery source should the runbook name?",
+      "options": [
+        { "id": "a", "text": "A Helm revision that was never created for the application." },
+        { "id": "b", "text": "The Pod's writable filesystem, because it contains the authoritative overlay." },
+        { "id": "c", "text": "The previous known-good Git state or saved rendered artifact, followed by GitOps reconciliation and workload verification." },
+        { "id": "d", "text": "A manual live patch with no corresponding source change." }
+      ],
+      "correct": ["c"],
+      "explanation": "Kustomize does not create a Helm-style release store. In a GitOps workflow, the previous desired state lives in versioned Git or a saved artifact, and recovery still needs reconciliation plus Kubernetes and application checks."
+    },
+    {
+      "id": "selection-checklist",
+      "type": "multiple",
+      "scenario": "A team is choosing a package shape before its first production release. Tool familiarity is evenly split. Which two questions most directly clarify whether Helm or Kustomize is the better fit?",
+      "options": [
+        { "id": "b", "text": "Which tool has the shorter product name?" },
+        { "id": "a", "text": "Who owns and supports the package contract during releases and incidents?" },
+        { "id": "d", "text": "Can reviewers avoid looking at rendered Kubernetes output?" },
+        { "id": "c", "text": "How much cross-service reuse, distribution, and built-in release history does the workflow require?" }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Ownership and reuse determine whether the team is maintaining a shared package interface or app-owned overlays. Release-history needs also matter, while both choices still require rendered Kubernetes review."
+    }
+  ]
+}

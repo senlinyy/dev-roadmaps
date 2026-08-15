@@ -1,19 +1,45 @@
 {
   "language": "yaml",
-  "filename": "service.yaml",
   "completionProfile": "kubernetes",
-  "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: orders-api\n  namespace: orders\n  labels:\n    app.kubernetes.io/part-of: checkout\n    app.kubernetes.io/managed-by: platform-team\n  annotations:\n    devpolaris.io/owner: orders-team\nspec:\n  sessionAffinity: None\n",
+  "activeFile": "service.yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "readOnly": true,
+      "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n  namespace: orders\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: orders-api\n      app.kubernetes.io/component: api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: orders-api\n        app.kubernetes.io/component: api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/devpolaris/orders-api:2026.08.1\n          ports:\n            - name: http\n              containerPort: 8080\n"
+    },
+    {
+      "filename": "service.yaml",
+      "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: orders-api\n  namespace: orders\nspec:\n"
+    }
+  ],
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
-      { "path": ["apiVersion"], "equals": "v1", "label": "Service API version" },
-      { "path": ["kind"], "equals": "Service", "label": "Service kind" },
-      { "path": ["metadata", "name"], "equals": "orders-api", "label": "Service name" },
-      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
-      { "path": ["spec", "type"], "equals": "ClusterIP", "label": "internal Service type" },
-      { "path": ["spec", "selector", "app.kubernetes.io/name"], "equals": "orders-api", "label": "application selector" },
-      { "path": ["spec", "selector", "app.kubernetes.io/component"], "equals": "api", "label": "component selector" },
-      { "path": ["spec", "ports"], "containsObject": { "name": "http", "protocol": "TCP", "port": 80, "targetPort": "http" }, "label": "caller and backend port contract" }
+    "strategy": "kubernetes-manifests",
+    "minResources": 2,
+    "maxResources": 2,
+    "allowedResources": [
+      { "apiVersion": "apps/v1", "kind": "Deployment" },
+      { "apiVersion": "v1", "kind": "Service" }
+    ],
+    "resources": [
+      {
+        "select": { "file": "service.yaml", "apiVersion": "v1", "kind": "Service", "name": "orders-api", "namespace": "orders" },
+        "paths": [
+          { "path": ["spec", "type"], "equals": "ClusterIP", "label": "internal Service type" },
+          { "path": ["spec", "selector", "app.kubernetes.io/name"], "equals": "orders-api", "label": "application selector" },
+          { "path": ["spec", "selector", "app.kubernetes.io/component"], "equals": "api", "label": "component selector" },
+          { "path": ["spec", "ports"], "minItems": 1, "maxItems": 1, "label": "single Service port" },
+          { "path": ["spec", "ports"], "containsObject": { "name": "http", "protocol": "TCP", "port": 80, "targetPort": "http" }, "label": "caller and backend port contract" }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "service-targets-workload",
+        "service": { "kind": "Service", "name": "orders-api", "namespace": "orders" },
+        "workload": { "kind": "Deployment", "name": "orders-api", "namespace": "orders" },
+        "label": "orders API Service backend contract"
+      }
     ]
   }
 }

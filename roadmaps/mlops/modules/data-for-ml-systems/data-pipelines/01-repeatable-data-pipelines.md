@@ -35,7 +35,7 @@ The first run fails after writing half of the output. An operator retries it. Du
 
 Every command worked as written. The production failure came from missing rules around the commands.
 
-A **repeatable data pipeline** can rebuild a trustworthy dataset from a declared set of source versions, transformation code, configuration, and time boundaries. In essence, the team should be able to answer:
+A **repeatable data pipeline** can rebuild a trustworthy dataset from a declared set of source versions, transformation code, configuration, and time boundaries. The team should be able to answer:
 
 - What exact data did this run read?
 - Which logic and parameters transformed it?
@@ -119,9 +119,9 @@ These responsibilities stay useful across technology choices. One team may use a
 ## 1. Declare The Inputs And Their Time
 <!-- section-summary: A repeatable run identifies source data through snapshots, versions, watermarks, and logical time boundaries. -->
 
-At a high level, input declaration answers, “Which facts were available to this build?” A source path gives an incomplete answer because production data keeps changing.
-
 Consider a feature called `spend_last_30_days`. The pipeline may run after midnight, yet the feature belongs to the data interval that just closed. Transactions arriving after the interval must stay outside that run. Corrections arriving later need an explicit late-data or backfill policy. Reading every row currently visible would allow execution time to change the feature value.
+
+An input declaration answers, “Which facts were available to this build?” A source path gives an incomplete answer because production data keeps changing. The declaration therefore records the data interval, cutoff, source version, and late-data policy used for this run.
 
 Three kinds of time commonly appear:
 
@@ -275,6 +275,10 @@ flowchart TD
 
 Restartability also applies inside the run. Expensive extraction or feature stages may checkpoint intermediate results under the run ID. Those checkpoints are execution aids. The published dataset identity still comes from the final commit and run record.
 
+![A failed pipeline attempt writing to isolated staging, followed by a safe retry, validation, and one atomic published version](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/safe-retry-and-publish.png)
+
+*Staging and atomic publication let an operator retry a failed run without exposing duplicate or partial data to readers.*
+
 ## 4. Validate The Output Before Publishing It
 <!-- section-summary: Validation checks decide whether a candidate dataset is safe for downstream training or inference. -->
 
@@ -304,8 +308,6 @@ dbt treats each data test as a query for failing rows. Zero returned rows means 
 **GX Core (Great Expectations)** is the current Python validation library for defining expectations, validating dataframe or SQL-backed data, and producing machine-readable results. Soda and dataframe-native checks provide similar coverage where SQL-model tests are a poor fit. The team should select the smallest set that integrates with its execution path. Running several overlapping frameworks often creates inconsistent ownership.
 
 Threshold checks need an explicit response. A small change in row count may pass. A missing key column should block publication. A distribution shift may require review because it could reflect a genuine business event or a broken join.
-
-![Validation gate checking schema, freshness, unique keys, label delay, and row count before training](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-validation-gate.png)
 
 *A candidate dataset reaches training only after the checks covering its structure, timing, keys, and important values have passed.*
 
@@ -381,8 +383,6 @@ flowchart TD
 
 A useful run record identifies the pipeline, run, logical interval, code commit, and configuration version. It also records input and output snapshot IDs, engine version, row counts, test results, timing, retries, and owner. Secrets and sensitive record values stay out of the metadata.
 
-![Run record tying dataset version, Git commit, validation report, and owner to a published dataset](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-run-record.png)
-
 *The run record acts as a receipt for the published dataset, while lineage connects that receipt to upstream and downstream systems.*
 
 ## 7. Schedule Work For A Defined Time Window
@@ -400,23 +400,9 @@ Managed services reduce platform operation for provider-centered workloads. Comm
 
 The scheduler coordinates work. The transformation engine still owns the SQL or dataframe calculation, and the table format still owns atomic storage commits. Keeping those roles separate prevents workflow code from accumulating transformation logic.
 
-```mermaid
-sequenceDiagram
-    participant Scheduler
-    participant Sources
-    participant Transform
-    participant Quality
-    participant Catalog
+![The source snapshot, time window, code version, parameters, and data contract joined into one published dataset identity](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/pipeline-run-identity.png)
 
-    Scheduler->>Sources: Confirm logical window is ready
-    Sources-->>Scheduler: Source snapshot identities
-    Scheduler->>Transform: Build candidate for that window
-    Transform-->>Scheduler: Candidate output and statistics
-    Scheduler->>Quality: Run required checks
-    Quality-->>Scheduler: Pass or fail with evidence
-    Scheduler->>Catalog: Publish approved dataset identity
-    Catalog-->>Scheduler: Committed version
-```
+*A scheduler can coordinate the work, while the run record preserves the exact evidence that gives the published dataset its identity.*
 
 Freshness expectations should account for upstream availability, normal runtime, validation time, and publication. An alert such as “dataset has missed its expected publication time” gives the owner more context than a generic task-failed notification.
 
@@ -555,6 +541,10 @@ A repeatable data pipeline gives every dataset build a fixed starting point and 
 The most important design question is broader than “Can the transformation run?” Ask whether the team can rerun the same logical work after a failure and explain any changed result. The design should also protect consumers from partial output, support safe historical rebuilds, and identify the owner during an incident.
 
 With those guarantees explicit, dbt, Polars, Spark, Databricks, Airflow, Dagster, Delta Lake, Iceberg, object storage, and OpenLineage fit into understandable roles. The tools implement the system; the repeatability framework defines what the system must guarantee.
+
+![Nine controls surrounding a trusted dataset, covering pinned inputs, time, deterministic logic, retries, validation, publication, lineage, backfills, and recovery](/content-assets/articles/article-mlops-data-for-ml-systems-repeatable-data-pipelines/repeatable-pipeline-summary.png)
+
+*A repeatable pipeline combines deterministic computation with safe publication, traceable evidence, controlled historical repair, and tested recovery.*
 
 ## References
 

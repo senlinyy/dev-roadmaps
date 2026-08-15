@@ -1,0 +1,132 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "variables.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"db_password\" {\n  type = string\n}\n\nvariable \"db_password_version\" {\n  type = number\n}\n"
+    },
+    {
+      "filename": "database.tf",
+      "initialValue": "resource \"aws_db_instance\" \"orders\" {\n  identifier = \"orders-prod\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenBlocks": [
+      {
+        "file": "variables.tf",
+        "path": [
+          {
+            "type": "output",
+            "labels": [
+              "db_password"
+            ]
+          }
+        ]
+      },
+      {
+        "file": "database.tf",
+        "path": [
+          {
+            "type": "output",
+            "labels": [
+              "db_password"
+            ]
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "db_password"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "string"
+          },
+          {
+            "path": [
+              "sensitive"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "ephemeral"
+            ],
+            "valueEquals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "db_password_version"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "number"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "database.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_db_instance",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "password"
+            ],
+            "exists": false
+          },
+          {
+            "path": [
+              "password_wo"
+            ],
+            "expressionEquals": "var.db_password"
+          },
+          {
+            "path": [
+              "password_wo_version"
+            ],
+            "expressionEquals": "var.db_password_version"
+          }
+        ]
+      }
+    ]
+  }
+}

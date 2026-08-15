@@ -1,0 +1,75 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "providers.tf",
+  "files": [
+    {
+      "filename": "providers.tf",
+      "initialValue": "provider \"aws\" {\n  region     = \"eu-west-2\"\n  access_key = \"AKIAEXAMPLE\"\n  secret_key = \"training-secret\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenAttributeNames": [
+      "access_key",
+      "secret_key",
+      "token",
+      "profile"
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "providers.tf",
+          "path": [
+            {
+              "type": "provider",
+              "labels": [
+                "aws"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "region"
+            ],
+            "valueEquals": "eu-west-2"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "providers.tf",
+          "path": [
+            {
+              "type": "provider",
+              "labels": [
+                "aws"
+              ]
+            },
+            {
+              "type": "default_tags"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "tags",
+              "Service"
+            ],
+            "valueEquals": "orders"
+          },
+          {
+            "path": [
+              "tags",
+              "ManagedBy"
+            ],
+            "valueEquals": "terraform"
+          }
+        ]
+      }
+    ]
+  }
+}

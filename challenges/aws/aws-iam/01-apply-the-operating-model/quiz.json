@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "root-user",
+      "type": "single",
+      "scenario": "An engineer proposes using the account root user for daily deployments because it always has enough permissions. What is the correct response?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use root only for tasks that require it and protect it with MFA."
+        },
+        {
+          "id": "b",
+          "text": "Create an access key for root and store it in CI."
+        },
+        {
+          "id": "c",
+          "text": "Share the root password with the platform team."
+        },
+        {
+          "id": "d",
+          "text": "Use root for deployments but rotate it weekly."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The root user is reserved for exceptional account-level tasks. Daily work should use federated identities and roles. Learn more in [IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)."
+    },
+    {
+      "id": "human-access",
+      "type": "single",
+      "scenario": "Employees need browser and CLI access to several AWS accounts using the company identity provider. Which starting point avoids separate long-lived IAM users?",
+      "options": [
+        {
+          "id": "b",
+          "text": "One IAM user copied into every account."
+        },
+        {
+          "id": "a",
+          "text": "IAM Identity Center with federated workforce access."
+        },
+        {
+          "id": "c",
+          "text": "An EC2 instance profile for each employee."
+        },
+        {
+          "id": "d",
+          "text": "A public S3 bucket containing credentials."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "IAM Identity Center is the recommended path for centralized workforce access across accounts. Learn more in [IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)."
+    },
+    {
+      "id": "workload-role",
+      "type": "single",
+      "scenario": "An ECS task running in private subnets must read one production secret from Secrets Manager. The platform team will rotate the secret and refuses to distribute long-lived IAM user keys through images, task definitions, or environment variables. How should the task receive AWS credentials?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Bake an access key into the container image."
+        },
+        {
+          "id": "b",
+          "text": "Pass a shared user key through an environment variable."
+        },
+        {
+          "id": "c",
+          "text": "Assign a task role with the required permission."
+        },
+        {
+          "id": "d",
+          "text": "Use the account root access key."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "AWS compute services deliver temporary role credentials to workloads. The task role should contain only the needed permission. Learn more in [IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)."
+    },
+    {
+      "id": "policy-effect",
+      "type": "single",
+      "scenario": "An identity policy allows s3:GetObject, but an applicable SCP explicitly denies it. What is the result?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Allow wins because it is closer to the user."
+        },
+        {
+          "id": "c",
+          "text": "The policies cancel and AWS asks for MFA."
+        },
+        {
+          "id": "d",
+          "text": "The bucket becomes public."
+        },
+        {
+          "id": "b",
+          "text": "The request is denied because explicit deny overrides allow."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "AWS authorization requires an applicable allow and no applicable explicit deny. Learn more in [IAM policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html)."
+    },
+    {
+      "id": "iam-baseline",
+      "type": "multiple",
+      "scenario": "A new AWS organization is defining the identity controls every workload account must adopt. Which controls belong in a sound IAM baseline?",
+      "options": [
+        {
+          "id": "a",
+          "text": "MFA for privileged human access."
+        },
+        {
+          "id": "d",
+          "text": "One administrator policy for every application to reduce complexity."
+        },
+        {
+          "id": "b",
+          "text": "Temporary role credentials for workloads."
+        },
+        {
+          "id": "e",
+          "text": "Grant AdministratorAccess to every workload to avoid authorization failures."
+        },
+        {
+          "id": "c",
+          "text": "Regular removal of unused permissions and credentials."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "MFA, temporary credentials, and continuous least-privilege review reduce credential and authorization risk. Learn more in [IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)."
+    }
+  ]
+}

@@ -148,12 +148,16 @@ flowchart TD
 
 The example assumes equal local batch sizes and a mean loss on each worker. If rank 0 averages two examples while rank 1 averages six, averaging the two local gradients gives each worker equal influence instead of each example equal influence. Fixed local batch sizes avoid this issue for most runs. Uneven batches require deliberate loss weighting or framework support.
 
+![Two DDP workers process different batches with full model replicas, calculate local gradients, average those gradients through all-reduce, and apply the same synchronized optimizer update so the replicas remain aligned.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/one-ddp-training-step.png)
+
+*DDP divides the data rather than the model. Gradient synchronization gives every replica the same update after each worker processes a different local batch.*
+
 Collectives also create a strict dependency. If one rank calls all-reduce for tensor A while another rank calls it for tensor B, or if one rank skips the operation after an exception, the group may hang or fail. Distributed debugging therefore compares rank-specific logs around the last completed collective, tensor shapes, and the training branch followed by each worker.
 
 ## Choose What To Divide Across Devices
 <!-- section-summary: Each parallelism strategy divides a different object, so the measured memory or throughput constraint determines the useful choice. -->
 
-At a high level, a parallelism strategy decides which object will be divided across devices. That object might be the batch, the persistent training state, the calculation inside a layer, or the model's sequence of layers. Dividing the correct object relieves the measured constraint. Dividing a different object adds communication while leaving the original limit in place.
+A training job may need more devices because one model no longer fits in memory, or because one device cannot finish the required work before the deadline. A **parallelism strategy** decides which object to divide across those devices: the batch, persistent training state, calculation inside a layer, or sequence of model layers. Dividing the object that causes the measured constraint relieves it. Dividing something else adds communication while leaving the original limit in place.
 
 ### Four Ways To Divide The Work
 
@@ -168,6 +172,10 @@ At a high level, a parallelism strategy decides which object will be divided acr
 Many large-model systems use a hybrid. For example, eight GPUs inside a host might form a tensor-parallel group, while several hosts form data-parallel groups. This can solve a genuine scale constraint, though it also creates multiple communication paths, several notions of rank, and a more demanding checkpoint format.
 
 Choose the smallest combination that solves the measured problem. DDP is usually the first experiment for throughput. State sharding follows if training state memory is the limit. Tensor or pipeline parallelism enters after a layer, activation set, or full model still cannot fit efficiently.
+
+![Four parallelism strategies map completion time to data parallelism, training-state memory to state sharding, an oversized layer to tensor parallelism, and depth or activation pressure to pipeline parallelism.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/four-ways-to-split-training.png)
+
+*Each strategy divides a different object. The measured single-device limit determines whether the team should split examples, persistent state, calculations inside a layer, or groups of layers.*
 
 ## Start By Splitting Data Across GPUs
 <!-- section-summary: DDP runs one model replica per worker, gives each replica different data, and synchronizes gradients during backpropagation. -->
@@ -224,7 +232,7 @@ DDP does not split input data automatically. It also does not reduce model memor
 ## Give Each Worker A Different Part Of The Data
 <!-- section-summary: Data-parallel workers need disjoint, deterministic data partitions so the cluster processes the intended global batch. -->
 
-The dataset still represents one training corpus, even though several workers read it. A **distributed sampler** maps records to ranks so each worker receives a different portion. In essence, it turns one logical stream of examples into coordinated local streams.
+The dataset still represents one training corpus, even though several workers read it. A **distributed sampler** maps records to ranks so each worker receives a different portion. It turns one logical stream of examples into coordinated local streams.
 
 Suppose a dataset contains 10,000 examples and four workers train for one epoch. Each worker should process roughly one quarter of the records. If every worker reads all 10,000, the job repeats each example four times. GPU utilization may look excellent, yet the data semantics are wrong.
 
@@ -337,7 +345,7 @@ The global batch still depends on micro-batch size, data-parallel world size, an
 
 Ray is useful if training already runs on a Ray cluster, data arrives through Ray Data, or the team wants Ray's scheduling and retry model around several training frameworks. Pin the Ray release and API generation because current documentation distinguishes the established API from the newer Ray Train V2 path.
 
-In essence, DDP, FSDP2, and ZeRO describe how training state and communication behave. Ray Train, Kubernetes operators, and managed training services describe how worker processes receive resources, start together, report progress, and restart.
+DDP, FSDP2, and ZeRO describe how training state and communication behave. Ray Train, Kubernetes operators, and managed training services describe how worker processes receive resources, start together, report progress, and restart.
 
 ## Save Everything Needed To Resume Distributed Training
 <!-- section-summary: A resumable distributed checkpoint stores every state that influences the next optimizer update and publishes only complete shard sets. -->
@@ -417,13 +425,13 @@ The best cluster size is the smallest allocation that satisfies the completion o
 ## How Managed Platforms Run Distributed Training
 <!-- section-summary: Managed training services provision workers, networks, images, logs, and storage around the same parallelism and recovery decisions. -->
 
-At a high level, a managed training platform turns a job request into a running worker group. It finds the requested accelerator capacity and starts the selected image on each node. The service gives the workers enough connection information to form their process group. Logs and artifacts then return through the platform's storage and monitoring paths, while the job policy controls retries after a host failure.
+Submitting a distributed job describes the desired worker group; it does not create that group by itself. A managed training platform finds the requested accelerator capacity, starts the selected image on each node, and gives the workers enough connection information to form their process group. Logs and artifacts return through the platform's storage and monitoring paths, while the job policy controls retries after a host failure.
 
 Those services leave the learning contract in the team's hands. The training code still needs a correct data partition and global batch calculation. The team also chooses the parallelism strategy, defines the checkpoint, and compares model quality.
 
 Amazon SageMaker AI supports framework-native distribution and its own data- and model-parallel libraries. Its current guidance recommends `ModelTrainer` for launching PyTorch and TensorFlow jobs. The AWS-optimized SMDDP collectives target SageMaker network topology, while SageMaker Model Parallel v2 adds sharded data parallelism, tensor parallelism, activation checkpointing, and offload for large-model workloads.
 
-Vertex AI Custom Training describes the cluster through worker pools and replica counts. PyTorch code still initializes its distributed runtime from the environment created for those replicas. Vertex also offers Reduction Server for supported multi-worker all-reduce workloads.
+Gemini Enterprise Agent Platform serverless training describes the cluster through worker pools and replica counts. PyTorch code still initializes its distributed runtime from the environment created for those replicas. Agent Platform also offers Reduction Server for supported multi-worker all-reduce workloads.
 
 Azure Machine Learning SDK v2 exposes distribution settings for PyTorch and DeepSpeed jobs and provisions the requested GPU cluster. Its distributed GPU guidance recommends DDP for the common data-parallel case and includes InfiniBand-aware setup for supported compute.
 
@@ -439,6 +447,10 @@ Distributed training starts with a measured single-device limit. Throughput pres
 The worker runtime gives every process a rank, device, and process-group membership. Collectives move gradients, parameters, and partial results between those workers. Data sharding and global-batch design preserve the learning problem. Distributed checkpoints and rendezvous make recovery possible. Scaling benchmarks show whether the additional devices improve completion time and cost while maintaining model quality.
 
 The production standard is one trustworthy run: its data is accounted for, its optimizer semantics are explicit, its state can be restored, its failures are visible, and its scaling decision is supported by measurements.
+
+![A trustworthy distributed run follows six steps from diagnosing the one-device limit through strategy selection, coordinated worker launch, preserved training semantics, checkpoint recovery, and measured scaling value.](/content-assets/articles/article-mlops-training-pipelines-distributed-training-basics/trustworthy-distributed-run.png)
+
+*The distributed design is complete after the team can account for the data, explain the optimizer semantics, restore a complete checkpoint, preserve model quality, and show that the extra devices improved the operating result.*
 
 ## References
 
@@ -458,6 +470,6 @@ The production standard is one trustworthy run: its data is accounted for, its o
 - [NVIDIA NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/)
 - [Amazon SageMaker AI distributed training](https://docs.aws.amazon.com/sagemaker/latest/dg/distributed-training-get-started.html)
 - [Amazon SageMaker AI model parallelism v2](https://docs.aws.amazon.com/sagemaker/latest/dg/model-parallel-v2.html)
-- [Vertex AI distributed training](https://cloud.google.com/vertex-ai/docs/training/distributed-training)
+- [Gemini Enterprise Agent Platform distributed training](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/distributed-training)
 - [Azure Machine Learning distributed GPU training](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-train-distributed-gpu)
 - [Databricks TorchDistributor](https://docs.databricks.com/aws/en/machine-learning/train-model/distributed-training/spark-pytorch-distributor)

@@ -26,7 +26,7 @@ aliases:
 ## How To Coordinate A Multi-Step Training Workflow
 <!-- section-summary: A training orchestrator coordinates dependencies, workers, run state, and recovery across work that may continue after the original process exits. -->
 
-At a high level, a **training orchestrator** is the control system for a multi-step ML run. It decides which step may start, asks the appropriate compute system to perform the work, records progress, and chooses the next action after success or failure. You can think of it as a dispatcher that remembers the whole journey even though different workers drive each part of it.
+A training workflow may validate data in a warehouse, launch a GPU job elsewhere, and publish artifacts only after evaluation passes. No single worker sees the whole journey. A **training orchestrator** is the control system that decides which step may start, asks the appropriate compute system to perform the work, records progress, and chooses the next action after success or failure.
 
 That role is broader than scheduling. A scheduler can start a script every night. An orchestrator follows the run after it starts. It blocks training until validation succeeds and then submits work to the appropriate compute service. Evaluation receives the exact model produced by that job. A failure leads to a retry, repair, or human review according to policy.
 
@@ -110,7 +110,7 @@ Event triggers need equivalent care. An object-created event should carry a stab
 
 The **scheduler** examines run state and dependencies, then decides which task instances are ready. The wider **control plane** also includes APIs, workflow-definition processing, metadata persistence, authentication, and the operator interface.
 
-This layer coordinates work; it should avoid performing heavy training inside the scheduler process. A long GPU job can be submitted to SageMaker, Vertex AI, Azure Machine Learning, Databricks, Kubernetes, or another compute service. The control plane records the external operation and watches its progress.
+This layer coordinates work; it should avoid performing heavy training inside the scheduler process. A long GPU job can be submitted to SageMaker AI, Gemini Enterprise Agent Platform, Azure Machine Learning, Databricks, Kubernetes, or another compute service. The control plane records the external operation and watches its progress.
 
 Separating coordination from computation protects the scheduler from memory-heavy code and long network calls. It also lets platform teams scale orchestration and training capacity independently.
 
@@ -201,7 +201,7 @@ Airflow exposes backfill runs with reprocessing and concurrency controls. Dagste
 
 The state database is one of the most important parts of an orchestrator. It contains the scheduler’s view of runs, attempts, queues, parameters, and external references. Losing it can make active work invisible even though cloud jobs continue and artifacts remain intact.
 
-In essence, state-store recovery is a reconciliation problem. Restoring a database backup recovers the control plane’s last durable view. The outside world may have advanced after that backup. Some jobs may have completed, some outputs may exist, and some manual actions may have occurred.
+State-store recovery requires reconciliation. Restoring a database backup recovers the control plane’s last durable view, while the outside world may have advanced after that backup. Some jobs may have completed, some outputs may exist, and some manual actions may have occurred.
 
 ```mermaid
 flowchart TD
@@ -214,6 +214,10 @@ flowchart TD
 ```
 
 A practical recovery first pauses new scheduling. Operators restore the metadata database to an isolated control plane, then compare its records with external compute systems using stable operation identifiers. They verify durable outputs through manifests, checksums, and expected metadata. Ambiguous tasks stay paused until the team can adopt the existing result, cancel the external job, or approve a fresh attempt.
+
+![Orchestrator state, workload state, and artifact state exchange status and committed outputs while recovery reconciliation queries the external systems](/content-assets/articles/article-mlops-training-pipelines-airflow-prefect-kubeflow-orchestration/three-sources-of-state.png)
+
+*The control-plane database remembers decisions and job identities. Recovery checks the workload system and artifact system before repairing that orchestration record.*
 
 This process explains why model files should remain outside the orchestration database. Object storage, a lakehouse, or a registry can preserve the expensive result even if the scheduler loses recent state. The restored control plane then rebuilds trustworthy references through reconciliation.
 
@@ -244,6 +248,10 @@ flowchart TD
     B -->|Kubernetes ML platform| F["Kubeflow Pipelines v2<br/>(typed component oriented)"]
     B -->|Single provider ecosystem| G["Managed ML Pipeline<br/>(integrated control plane)"]
 ```
+
+![Airflow, Dagster, Prefect, Kubeflow Pipelines, and managed ML pipelines compared by workflow object, compute location, and control-plane ownership](/content-assets/articles/article-mlops-training-pipelines-airflow-prefect-kubeflow-orchestration/orchestrator-workflow-fit.png)
+
+*The selection starts with the workflow's primary object, the execution environment, and the team that will operate the control plane; no option is universally preferred.*
 
 ### Use Airflow 3 For Scheduled Work Across Many Systems
 
@@ -283,7 +291,7 @@ Kubeflow Pipelines uses **components** with declared parameters and typed input 
 
 This model suits teams that already operate Kubernetes as an ML platform and want container isolation, accelerator scheduling, component reuse, conditions, loops, retries, caching, and lineage around typed ML artifacts. The pipeline root points to durable artifact storage, while runtime metadata connects components and their outputs.
 
-Open-source Kubeflow Pipelines brings a substantial platform boundary: Kubernetes clusters, the pipeline API and UI, metadata persistence, object storage, workload identity, multi-tenancy, networking, upgrades, and observability. Vertex AI Pipelines can run KFP graphs as a managed service and removes much of that control-plane operation. Platform-specific extensions can still reduce portability between backends.
+Open-source Kubeflow Pipelines brings a substantial platform boundary: Kubernetes clusters, the pipeline API and UI, metadata persistence, object storage, workload identity, multi-tenancy, networking, upgrades, and observability. Gemini Enterprise Agent Platform Pipelines can run KFP graphs as a managed service and removes much of that control-plane operation. Platform-specific extensions can still reduce portability between backends.
 
 New Kubeflow pipeline work should use the v2 SDK and intermediate representation. The v1 SDK reached its final release and no longer receives new releases.
 
@@ -291,7 +299,7 @@ New Kubeflow pipeline work should use the v2 SDK and intermediate representation
 
 Managed ML services provide the orchestration control plane beside managed training, identity, metadata, registries, and deployment. This can reduce integration and operations work if most of the ML lifecycle already lives in that provider.
 
-SageMaker Pipelines offers a step graph with retry policies, step caching, parallelism controls, and selective execution of connected steps. Vertex AI Pipelines runs KFP-compatible graphs with managed execution and ML Metadata. Azure Machine Learning pipelines use reusable v2 components and pipeline jobs, with component reuse driven by deterministic definitions and unchanged inputs. Databricks Lakeflow Jobs coordinates notebook, Python, SQL, and Spark tasks close to lakehouse data; Declarative Automation Bundles keep job definitions in source control for CI/CD.
+SageMaker Pipelines offers a step graph with retry policies, step caching, parallelism controls, and selective execution of connected steps. Gemini Enterprise Agent Platform Pipelines runs KFP-compatible graphs with managed execution and ML Metadata. Azure Machine Learning pipelines use reusable v2 components and pipeline jobs, with component reuse driven by deterministic definitions and unchanged inputs. Databricks Lakeflow Jobs coordinates notebook, Python, SQL, and Spark tasks close to lakehouse data; Declarative Automation Bundles keep job definitions in source control for CI/CD.
 
 A managed option is especially attractive for a team already using the provider’s data, compute, IAM, and model lifecycle. Cross-cloud workflows or extensive on-premises dependencies may still use an enterprise orchestrator above provider jobs. In that design, the upper orchestrator owns the cross-system graph and each managed service owns execution inside its boundary.
 
@@ -354,6 +362,10 @@ Training orchestration gives a multi-step ML workflow a durable memory and a con
 
 Start with ordinary Python or a managed job if the workflow has one recovery boundary. Add a dedicated orchestrator after the workflow gains independent stages and long waits. Historical reprocessing, shared capacity, and cross-system coordination strengthen the case. Choose a product from the team’s selected semantics and operating boundary; Airflow, Dagster, Prefect, Kubeflow Pipelines, and managed services provide different versions of that contract.
 
+![A complete training orchestrator creates a run, loads a versioned graph, coordinates state, submits work, verifies outputs, and records the next decision](/content-assets/articles/article-mlops-training-pipelines-airflow-prefect-kubeflow-orchestration/complete-training-orchestrator.png)
+
+*The main control loop sits inside a wider operating boundary with safe repetition, least-privilege identity, capacity controls, restore drills, and named ownership.*
+
 The orchestrator coordinates work. Durable artifacts, domain correctness, and release authority remain in their own governed systems.
 
 ## References
@@ -382,7 +394,7 @@ The orchestrator coordinates work. Durable artifacts, domain correctness, and re
 - [Kubeflow Pipelines: Migrating from v1 to v2](https://www.kubeflow.org/docs/components/pipelines/user-guides/migration/)
 - [Amazon SageMaker Pipelines: Selective execution](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-selective-ex.html)
 - [Amazon SageMaker Pipelines: Retry policies](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-retry-policy.html)
-- [Google Cloud: Vertex AI Pipelines](https://cloud.google.com/vertex-ai/docs/pipelines/introduction)
+- [Google Cloud: Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
 - [Azure Machine Learning: Pipeline components](https://learn.microsoft.com/en-us/azure/machine-learning/concept-component?view=azureml-api-2)
 - [Azure Machine Learning: Pipeline reuse](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-debug-pipeline-reuse-issues?view=azureml-api-2)
 - [Databricks: Lakeflow Jobs configuration](https://docs.databricks.com/aws/en/jobs/configure-job)

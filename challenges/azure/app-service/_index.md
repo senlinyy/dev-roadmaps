@@ -4,6 +4,6 @@ description: "Practice reading the App Service plan, web app settings, identity,
 articleId: article-cloud-providers-azure-compute-application-hosting-app-service-web-backends
 articleSlug: app-service
 difficulty: medium
-order: 19
+order: 13
 tags: ["azure","app-service","webapp","slots"]
 ---

@@ -1,0 +1,126 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Deploy orders web\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Write configuration\n      ansible.builtin.copy:\n        content: \"listen=8080\"\n        dest: /etc/orders/orders.conf\n"
+    },
+    {
+      "filename": "roles/orders_web/defaults/main.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "---\n[]\n"
+    },
+    {
+      "filename": "roles/orders_web/handlers/main.yml",
+      "initialValue": "---\n[]\n"
+    },
+    {
+      "filename": "roles/orders_web/templates/orders.conf.j2",
+      "initialValue": "listen=8080\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "roles/orders_web/defaults/main.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_port"
+            ],
+            "equals": 8080
+          },
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 2
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "role": "orders_web",
+          "section": "task",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.template",
+              "dest"
+            ],
+            "equals": "/etc/orders/orders.conf"
+          },
+          {
+            "path": [
+              "ansible.builtin.template",
+              "validate"
+            ],
+            "contains": "%s"
+          }
+        ]
+      },
+      {
+        "select": {
+          "role": "orders_web",
+          "section": "handler",
+          "name": "Restart orders",
+          "module": "service"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "state"
+            ],
+            "equals": "restarted"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "role-exists",
+        "role": "orders_web",
+        "play": {
+          "file": "site.yml",
+          "hosts": "orders_web"
+        }
+      },
+      {
+        "type": "notify-handler",
+        "source": {
+          "role": "orders_web",
+          "module": "template"
+        },
+        "handler": {
+          "role": "orders_web",
+          "name": "Restart orders"
+        },
+        "topic": "Restart orders"
+      },
+      {
+        "type": "file-reference",
+        "source": {
+          "role": "orders_web",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "roles/orders_web/templates/orders.conf.j2"
+      }
+    ]
+  }
+}

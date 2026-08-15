@@ -4,6 +4,6 @@ description: "Practice using Azure names, resource IDs, resource types, tags, lo
 articleId: article-cloud-providers-azure-foundations-resource-groups-and-ids
 articleSlug: resources-ids-and-tags
 difficulty: medium
-order: 3
+order: 2
 tags: ["azure", "resources", "resource-ids", "tags", "locks", "az-cli"]
 ---

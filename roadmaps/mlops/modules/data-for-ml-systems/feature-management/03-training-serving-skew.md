@@ -37,7 +37,7 @@ A purchase model was trained with `order_total` measured in dollars. A historica
 
 The request has the expected field. Its type is numeric. The endpoint returns `200 OK`, latency stays normal, and the model produces a well-formed score. Every ordinary service check can stay green while the model reads an amount one hundred times larger than the values it learned from.
 
-This is **training-serving skew**. At a high level, it means the feature path used for production prediction disagrees with the path that created the model's training inputs. The disagreement can change a value, its meaning, its timestamp, or the policy used to fill a missing value.
+This is **training-serving skew**: the feature path used for production prediction disagrees with the path that created the model's training inputs. The disagreement can change a value, its meaning, its timestamp, or the policy used to fill a missing value.
 
 Skew needs to be separated from **data drift** during investigation. If holiday shoppers genuinely spend more and both training and serving calculations represent those purchases in dollars, the population has changed. That is data drift. If the offline path uses dollars and the online path uses cents for the same purchase, the engineering paths disagree. That is a direct parity failure.
 
@@ -73,6 +73,10 @@ flowchart TD
 The order starts with the closest explanation and moves outward. If the formula differs, a database investigation adds little value. If the formulas match, the team compares source records and materialization. Time rules follow because the same source may expose several historically valid values. Versions and runtime come later because they often explain a path that appears identical in code review.
 
 Several layers can fail together. A new feature package may change a category vocabulary and introduce a new default. The taxonomy still helps because each mismatch receives its own evidence and recovery check.
+
+![Training and production feature paths compared across transformation, source, time, default, version, and runtime mismatches](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/six-skew-causes.png)
+
+*Both jobs may be healthy while their inputs disagree. The six mismatch layers help the team collect the right evidence and route the repair to the responsible boundary.*
 
 ## Define One Meaning For Every Feature
 <!-- section-summary: A feature contract defines the value, entity, source, time, fallback, version, and tolerance that both paths must preserve. -->
@@ -280,6 +284,10 @@ Distribution comparison is cheaper than recomputing every row. Managed platforms
 
 That signal cannot prove the cause. A real customer shift and a unit conversion bug can both change a distribution. Paired values distinguish engineering parity from population drift, while delayed outcome monitoring shows whether either change harms prediction quality.
 
+![Offline recomputation and online records compared for the same entity, prediction time, release, value, fallback, and version](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/paired-path-comparison.png)
+
+*A paired comparison holds the case identity, time, and release constant. Any remaining difference points to transformation, source, fallback, version, or runtime parity.*
+
 ## Test Training And Production Paths Before Release
 <!-- section-summary: Golden fixtures, staging replay, shadow comparison, and explicit gates expose skew before a candidate serves user-facing decisions. -->
 
@@ -371,6 +379,10 @@ Prediction distributions should also stabilize relative to an appropriate refere
 Labels arrive later. Outcome metrics eventually confirm that the repaired system restored product quality. Containment and direct parity verification proceed earlier because a severe mismatch can cause harm long before ground truth is available.
 
 Long-term prevention comes from converting the incident into a gate. Add the failed boundary value to the golden fixture suite, add the responsible version combination to compatibility checks, and keep a small governed sample of production pairs flowing through recomputation. This turns training-serving parity into a continuously tested property of the system.
+
+![Prevention, testing, detection, containment, and repair organized around one shared feature contract](/content-assets/articles/article-mlops-data-for-ml-systems-training-serving-skew/skew-prevention-recovery-summary.png)
+
+*The feature contract defines acceptable parity. Tests and paired evidence keep that contract active before release, during operation, and through recovery.*
 
 ## References
 

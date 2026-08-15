@@ -1,7 +1,7 @@
 ---
 title: "Segments and Edge Cases"
 description: "Find the populations, operating conditions, and boundary cases that an overall model score can hide."
-overview: "Segment evaluation asks where a model works, where it struggles, and whether the evidence supports the intended release. This article explains segments, slices, cohorts, intersections, uncertainty, edge cases, release actions, and the industrial tools used to make the review repeatable."
+overview: "Segment evaluation asks where a model works, where it struggles, and whether the evidence supports the intended release through segments, slices, cohorts, intersections, uncertainty, edge cases, release actions, and repeatable industrial tooling."
 tags: ["MLOps", "production", "readiness"]
 order: 1
 id: "article-mlops-model-evaluation-segment-evaluation-edge-cases"
@@ -29,7 +29,7 @@ id: "article-mlops-model-evaluation-segment-evaluation-edge-cases"
 ## Why One Average Can Hide a Production Failure
 <!-- section-summary: An overall score combines easy, hard, common, and rare cases, so important failures can disappear inside a strong average. -->
 
-At a high level, **segment evaluation asks where a model works and where it fails**.
+A model can perform well across the full evaluation set while failing repeatedly for one region, device type, or rare operating condition. **Segment evaluation asks where a model works and where it fails.**
 An overall metric describes the evaluation population as one group.
 A segment metric repeats the same measurement for a smaller, meaningful part of that population.
 
@@ -71,6 +71,10 @@ Segment evaluation adds detail to the overall result and keeps that broad result
 The full-population metric still describes broad performance.
 The segment report reveals concentrated failures, and an edge-case suite checks specific situations that deserve an explicit guarantee.
 
+![An overall accuracy of 92.25 percent hides a less familiar five-percent segment with only 40 percent accuracy](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/overall-score-hidden-segment.png)
+
+*The common group dominates the weighted average, while the smaller group receives wrong predictions six times out of ten.*
+
 A production-readiness review therefore asks three connected questions:
 
 1. Does the candidate improve the intended population overall?
@@ -93,7 +97,7 @@ It has a reason to exist beyond the evaluation table.
 Examples include new users, mortgage applications submitted through a broker, searches written in a supported language, or images produced by a particular scanner model.
 
 A **slice** is the subset of evaluation rows used to calculate a metric.
-In another term, it is the technical expression of a group.
+Put more concretely, it is the rule that turns a meaningful group into rows the evaluation code can select.
 The segment may be “short voice queries,” while the slice rule is `channel = voice AND token_count < 5`.
 Evaluation tools usually work with slices because a rule can be applied consistently to a dataset.
 
@@ -191,7 +195,7 @@ flowchart TD
     class D,H,I action
 ```
 
-In essence, release scope is a contract between evaluation and deployment.
+Release scope is a contract between evaluation and deployment.
 The evaluation says where the evidence applies.
 The router, policy engine, or batch selection query keeps production traffic inside that boundary.
 
@@ -338,6 +342,10 @@ A practical taxonomy usually carries many single dimensions and a focused group 
 The exact number depends on the product and evidence volume.
 Every retained intersection should have a traceable purpose.
 
+![Spanish and voice segments can each look acceptable while their short-query intersection needs separate evidence](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/justified-segment-intersection.png)
+
+*A named intersection earns a release consequence only when a real mechanism justifies it and counts, coverage, pairing, and uncertainty support the claim.*
+
 ## Interpret Every Segment Metric With Counts And Uncertainty
 <!-- section-summary: A segment score needs counts, coverage, uncertainty, and a comparison point before it can support a release decision. -->
 
@@ -361,7 +369,7 @@ For each segment, preserve:
 - the segment-definition version and evaluation-population identifier.
 
 These fields form an **evidence bundle**.
-In essence, the metric says what happened in the sample, while the surrounding evidence says how much trust that result deserves.
+The metric says what happened in the sample, while the surrounding evidence says how much trust that result deserves.
 
 ```mermaid
 flowchart TD
@@ -933,6 +941,10 @@ The product meaning, evidence policy, and release consequence still come from th
 A complete review produces more than a dashboard.
 It states where the candidate may serve, which routes need fallback or human review, and what remains uncertain.
 It also tells production monitoring which definitions to continue measuring.
+
+![Segment readiness links the release population and taxonomy to comparable evidence, edge cases, an enforceable decision, and production monitoring](/content-assets/articles/article-mlops-model-evaluation-segment-evaluation-edge-cases/segment-readiness-summary.png)
+
+*The evaluation report, routing configuration, and production telemetry share the same versioned population and segment definitions.*
 
 ## References
 

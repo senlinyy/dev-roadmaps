@@ -4,6 +4,6 @@ description: "Practice watch windows, health checks, real-traffic evidence, roll
 articleId: article-cloud-providers-azure-deployment-runtime-operations-release-verification-rollback-decisions
 articleSlug: verification-and-rollback
 difficulty: medium
-order: 38
+order: 29
 tags: ["azure", "verification", "rollback", "health-checks", "alerts"]
 ---

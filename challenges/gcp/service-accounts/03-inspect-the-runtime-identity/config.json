@@ -1,0 +1,56 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "serviceAccounts": [
+        {
+          "email": "orders-runtime@devpolaris-prod.iam.gserviceaccount.com",
+          "projectId": "devpolaris-prod",
+          "displayName": "Orders API production runtime",
+          "uniqueId": "104812345678901234567",
+          "disabled": false
+        }
+      ],
+      "iamPolicies": [
+        {
+          "resource": "projects/devpolaris-prod",
+          "version": 3,
+          "bindings": [
+            {
+              "role": "roles/secretmanager.secretAccessor",
+              "members": ["serviceAccount:billing-runtime@devpolaris-prod.iam.gserviceaccount.com"]
+            },
+            {
+              "role": "roles/run.invoker",
+              "members": ["serviceAccount:orders-runtime@devpolaris-prod.iam.gserviceaccount.com"]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "orders-runtime@devpolaris-prod.iam.gserviceaccount.com",
+      "Orders API production runtime",
+      "104812345678901234567",
+      "roles/secretmanager.secretAccessor",
+      "billing-runtime@devpolaris-prod.iam.gserviceaccount.com",
+      "roles/run.invoker"
+    ],
+    "requireCommandPatterns": [
+      "^gcloud\\s+iam\\s+service-accounts\\s+describe\\b",
+      "^gcloud\\s+projects\\s+get-iam-policy\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

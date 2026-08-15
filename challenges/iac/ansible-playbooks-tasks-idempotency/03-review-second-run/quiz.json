@@ -162,7 +162,7 @@
         "c",
         "d"
       ],
-      "explanation": "An unconditional restart creates a side effect on every run, and an unguarded raw command lacks evidence that the desired state already exists. A `state: present` package task with the package installed and a state-aware directory task whose metadata already matches should both settle to `ok`, so neither explains this repeat-run noise."
+      "explanation": "An unconditional restart creates a side effect on every run, and an unguarded raw command lacks evidence that the desired state already exists. A `state: present` package task with the package installed and a state-aware directory task whose metadata already matches should both settle to `ok`, so neither explains this repeat-run noise. See [Ansible playbook introduction](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html)."
     },
     {
       "id": "q7",

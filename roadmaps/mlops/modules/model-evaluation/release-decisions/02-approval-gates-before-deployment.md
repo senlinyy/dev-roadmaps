@@ -30,7 +30,7 @@ The release process checks that every piece of evidence refers to the same candi
 
 That is a small, complete approval gate: it receives an identified proposal and evidence, applies automated and human decisions, produces a scoped authority, and controls what the delivery system may do.
 
-At a high level, **an approval gate is the control that turns model evidence into permission for a particular production use**. It answers four plain questions:
+An evaluation report can show that a model performed well without authorizing it to serve every user or make every decision. **An approval gate is the control that turns model evidence into permission for a particular production use.** It answers four plain questions:
 
 1. Which exact release is being considered?
 2. Which evidence must support this use?
@@ -61,10 +61,6 @@ flowchart TD
 
 Automation and human judgement have different jobs. Software can compare the request schema with the model contract. It can also verify identities and calculate declared metrics. People judge the consequence of a segment regression or an uncertain workflow effect. A reliable gate needs both.
 
-![Seven-stage approval control path from release identity through live monitoring](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-control-path.png)
-
-*Approval connects exact identity and evidence to a decision that the deployment system can enforce and production monitoring can revisit.*
-
 ## Identify the Exact Proposal Before Review
 <!-- section-summary: The proposal pins every release component that can change predictions, runtime behaviour, or the population receiving the result. -->
 
@@ -92,6 +88,10 @@ Keeping these states separate prevents several common mistakes. A rejected model
 Modern MLflow Model Registry workflows use immutable model versions plus tags and aliases; fixed model stages are deprecated. Tags can describe review state, and aliases can help people find a candidate or current model. An alias remains a movable reference. The approval subject and deployment input should use the exact version or digest.
 
 Managed registries expose similar concepts with different names. A SageMaker AI model package starts in `PendingManualApproval`. Review can move it to `Approved` or `Rejected`, and configured projects can react to that change through CI/CD. The status remains one part of the control. The surrounding decision still defines the scope and evidence, while named owners accept the operating conditions.
+
+![Complete release proposal combines pinned model, runtime, data, policy, and evidence identities while a candidate alias is used only for discovery](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-complete-release.png)
+
+*Reviewers approve one complete, immutable proposal. Changing any component creates a new subject that needs its own evidence and decision.*
 
 ## Require Evidence That Matches The Intended Use
 <!-- section-summary: Evidence requirements follow the proposed decision, population, harm, and operating environment instead of using one universal model checklist. -->
@@ -205,9 +205,9 @@ The release response should state which work remains allowed. A candidate with c
 
 Some progressive-delivery tools represent uncertainty explicitly. Argo Rollouts analysis runs can succeed, fail, or remain inconclusive. An inconclusive analysis can pause the rollout for human judgement. The ML gate should preserve the same distinction for delayed labels, missing segments, or a monitoring query that returned no trustworthy data.
 
-![Release gate treats failed, unknown, mismatched, expired, and over-broad evidence as denial conditions](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/unknown-is-not-passed.png)
+![Passed, failed, unknown, and deferred states lead to different release work while only a valid pass can support the requested scope](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-evidence-states.png)
 
-*A production request proceeds only if the evidence state, subject identity, scope, and time window all support it.*
+*A failed check needs repair, an unknown needs trustworthy evidence, and a deferred decision grants no production authority.*
 
 ## Make Exceptions Narrow and Temporary
 <!-- section-summary: An exception accepts one identified residual risk for a limited scope, period, and owner while adding compensating controls and a clear exit. -->
@@ -284,10 +284,6 @@ OPA separates policy decision from policy enforcement. It does not deploy a mode
 
 Provider-native status can participate in the same path. A SageMaker AI model package can remain `PendingManualApproval` until review and move to `Approved` before configured CI/CD deploys it. MLflow tags can expose review state to automation. Those flags are useful discovery and trigger mechanisms. A full gate still verifies the exact subject, scope, expiry, and live deployment.
 
-![Approval lifecycle from proposal and checks through active authority, expiry, revocation, and reassessment](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-lifecycle.png)
-
-*Registration records an artifact, approval grants scoped authority, deployment applies it, and verification keeps that authority tied to the running release.*
-
 ## Verify The Deployed Release And Expire Stale Approvals
 <!-- section-summary: Active approval remains valid only while deployment identity, traffic scope, evidence assumptions, monitoring, and accountable ownership continue to hold. -->
 
@@ -329,6 +325,10 @@ An approval gate gives evidence operational force. It identifies the complete re
 Passed, failed, and unknown evidence remain distinct. A defer outcome creates time or work for missing proof. Exceptions stay narrow and temporary. The deployment boundary enforces the granted scope, and production verification confirms that the approved system is the one receiving traffic.
 
 Approval remains a living control. It can expand after new evidence, expire as assumptions age, or be revoked after a stop condition. The audit trail connects every state to the people, evidence, policy, and production action that created it.
+
+![Seven-stage approval lifecycle moves from an exact proposal through evidence, accountable review, enforcement, live verification, and reassessment before expansion, expiry, or revocation](/content-assets/articles/article-mlops-model-evaluation-approval-gates-before-deployment/approval-lifecycle-summary.png)
+
+*Approval remains a production control after deployment: reassessment creates a new proposal or recovery path instead of silently widening stale authority.*
 
 ## References
 

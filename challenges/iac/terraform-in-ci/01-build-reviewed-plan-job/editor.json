@@ -1,0 +1,103 @@
+{
+  "language": "yaml",
+  "completionProfile": "github-actions",
+  "activeFile": ".github/workflows/terraform-plan.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/terraform-plan.yml",
+      "initialValue": "name: Terraform plan\non:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  plan:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+    }
+  ],
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "permissions",
+          "contents"
+        ],
+        "equals": "read"
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "permissions",
+          "id-token"
+        ],
+        "equals": "write"
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform fmt -check -recursive"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform init -input=false"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform validate"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "run": "terraform plan -input=false -out=release.tfplan"
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "containsObject": {
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "terraform-plan",
+            "path": "release.tfplan",
+            "retention-days": 2
+          }
+        }
+      },
+      {
+        "file": ".github/workflows/terraform-plan.yml",
+        "path": [
+          "jobs",
+          "plan",
+          "steps"
+        ],
+        "excludesObject": {
+          "run": "terraform apply release.tfplan"
+        }
+      }
+    ]
+  }
+}

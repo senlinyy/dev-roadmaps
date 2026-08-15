@@ -1,0 +1,23 @@
+{
+  "language": "json",
+  "filename": "orders-5xx-alert.json",
+  "completionProfile": "gcp-monitoring",
+  "initialValue": "{\n  \"displayName\": \"orders-api sustained 5xx\",\n  \"enabled\": false,\n  \"combiner\": \"OR\",\n  \"conditions\": [],\n  \"notificationChannels\": []\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["displayName"], "equals": "orders-api sustained 5xx" },
+      { "path": ["enabled"], "equals": true },
+      { "path": ["combiner"], "equals": "OR" },
+      { "path": ["notificationChannels"], "includes": "projects/devpolaris-prod/notificationChannels/oncall-primary", "minItems": 1 },
+      { "path": ["conditions", 0, "conditionThreshold", "filter"], "matches": "run.googleapis.com/request_count" },
+      { "path": ["conditions", 0, "conditionThreshold", "filter"], "matches": "orders-api" },
+      { "path": ["conditions", 0, "conditionThreshold", "filter"], "matches": "devpolaris-prod" },
+      { "path": ["conditions", 0, "conditionThreshold", "comparison"], "equals": "COMPARISON_GT" },
+      { "path": ["conditions", 0, "conditionThreshold", "thresholdValue"], "equals": 25 },
+      { "path": ["conditions", 0, "conditionThreshold", "duration"], "equals": "300s" },
+      { "path": ["conditions", 0, "conditionThreshold", "aggregations", 0, "alignmentPeriod"], "equals": "300s" },
+      { "path": ["conditions", 0, "conditionThreshold", "aggregations", 0, "perSeriesAligner"], "equals": "ALIGN_SUM" }
+    ]
+  }
+}

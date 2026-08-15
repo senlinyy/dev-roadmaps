@@ -26,7 +26,7 @@ id: "article-mlops-deployment-and-release-management-what-changes-when-deploying
 ## What A Trained Model Still Needs Before Production
 <!-- section-summary: Deployment surrounds a trained artifact with every component required to produce reliable decisions for real callers. -->
 
-At a high level, **model deployment** connects a trained model to a real product or business process. The result might be an API that answers in milliseconds, a nightly batch job that scores millions of rows, a stream processor that reacts to events, or a model packaged inside a device. In every form, deployment gives callers a reliable way to use the model under production conditions.
+A trained model has no product effect while it remains an artifact in storage. **Model deployment** connects that model to a real product or business process. The result might be an API, nightly batch job, stream processor, or model packaged inside a device. In every form, deployment gives callers a reliable way to use the model under production conditions.
 
 A trained artifact is usually a file or directory containing learned parameters. It can calculate an output after the correct library loads it and supplies inputs in the expected shape. Production asks for much more. A caller needs a stable contract. Feature values must have the same meaning they had during training. The runtime needs enough compute and memory for the workload. Authentication protects the service, while monitoring explains its behaviour. Traffic control limits exposure, and clear ownership connects an incident to recovery.
 
@@ -50,6 +50,10 @@ flowchart TB
 ```
 
 The model sits near the centre of this system. Each surrounding component can change the final behaviour, so each one belongs in release design and validation.
+
+![A trained model artifact entering the prediction core, execution boundary, and operating boundary of a complete production release](/content-assets/articles/article-mlops-deployment-and-release-management-what-changes-when-deploying-model/complete-release-boundary.png)
+
+*A production release joins the trained artifact to the code, contracts, controls, evidence, and recovery path required for real decisions.*
 
 ## What Belongs In A Complete Model Release
 <!-- section-summary: A production release binds the predictive core, execution boundary, and operating boundary into one reviewed and recoverable unit. -->
@@ -117,6 +121,10 @@ The authentication step verifies the caller and its permissions. Contract valida
 The model output may still require a product decision. A risk score of `0.73` has no operational meaning by itself. A versioned policy might send scores above `0.70` for manual review, allow lower-value transactions under a separate rule, and use a conservative action whenever a critical feature is stale. Changing the threshold from `0.70` to `0.80` can change the user outcome while the model bytes remain identical.
 
 This is why the production path records both the model version and the policy version. The final decision depends on both. The same record also needs an outcome join key so delayed ground truth can later connect back to the release that made the decision.
+
+![A payment request passing through feature checks, a model score, and a versioned policy before manual review, with separate safe failure paths](/content-assets/articles/article-mlops-deployment-and-release-management-what-changes-when-deploying-model/score-to-product-decision.png)
+
+*The model calculates a score; a versioned policy turns that score into a product action, while each failed boundary follows an explicit fallback.*
 
 Batch and streaming systems follow the same logic with different transport. A batch scorer validates a versioned input partition, creates versioned output, and publishes it only after quality checks pass. A stream processor validates event versions, handles late or repeated events, and writes predictions with a release identity. The surrounding release responsibilities stay consistent.
 
@@ -324,7 +332,7 @@ Promotion should combine service health, input integrity, prediction behaviour, 
 ## How To Monitor And Operate The Deployed Model
 <!-- section-summary: Telemetry connects each request and outcome to the release that produced it, giving owners evidence for promotion and incident response. -->
 
-At a high level, **observability** gives the team enough evidence to understand what the deployed system is doing. OpenTelemetry is a vendor-neutral standard for generating, collecting, and exporting traces, metrics, and logs. Traces follow individual requests across components. Metrics summarise behaviour over time. Logs preserve discrete events and diagnostic detail.
+During an incident, the team needs to know which requests failed, which release served them, and where time or errors accumulated. **Observability** provides that evidence. OpenTelemetry is a vendor-neutral standard for generating, collecting, and exporting traces, metrics, and logs. Traces follow requests across components, metrics summarise behaviour over time, and logs preserve discrete events and diagnostic detail.
 
 ### Monitor Service, Input, Prediction, And Product Health
 
@@ -357,7 +365,7 @@ Automation handles measurable gates. For example, it can stop a canary after a l
 ## How To Restore The Previous Working Decision Path
 <!-- section-summary: Effective recovery restores a compatible model, runtime, feature path, policy, contract, and traffic route that the product can use immediately. -->
 
-**Rollback** routes work back to a known-safe release. In essence, recovery restores the previous decision path instead of changing only the model file. That path includes the image and its model, plus compatible preprocessing and feature definitions. It also restores the contract, policy, permissions, deployment configuration, and capacity that were proven together.
+**Rollback** routes work back to a known-safe release. Recovery restores the previous decision path instead of changing only the model file. That path includes the image and its model, plus compatible preprocessing and feature definitions. It also restores the contract, policy, permissions, deployment configuration, and capacity that were proven together.
 
 Suppose a new model release also introduces a renamed feature and a stricter decision threshold. Repointing the registry alias to the old artifact may leave the new service adapter and policy active. A reliable rollback instead moves traffic to the complete previous deployment whose components were tested together.
 
@@ -380,6 +388,10 @@ Keeping the previous deployment warm improves recovery speed for high-criticalit
 A trained model knows how to calculate an output from a specific input representation. Deployment gives that calculation a safe place in a real system. The release unit binds the model to preprocessing, features, contracts, runtime, configuration, policy, deployment target, traffic, observability, security, evidence, ownership, and recovery.
 
 The team proves this unit in layers: reproduce the prediction inside the packaged environment, validate service and feature boundaries, exercise performance and failure behaviour, expose controlled production traffic, and compare the candidate with a known baseline. A release is ready for wider use after its evidence supports both predictive quality and operational safety.
+
+![The path from packaging and proof through controlled exposure and operations, with wider use or recovery chosen from production evidence](/content-assets/articles/article-mlops-deployment-and-release-management-what-changes-when-deploying-model/deployment-readiness-summary.png)
+
+*Predictive quality and operational safety support promotion; uncertain or harmful evidence sends the complete decision path to recovery.*
 
 ## References
 

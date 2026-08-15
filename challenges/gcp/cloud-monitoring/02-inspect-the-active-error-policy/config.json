@@ -1,0 +1,39 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "alertPolicies": [
+        {
+          "name": "orders-api-sustained-5xx",
+          "displayName": "Orders API sustained 5xx",
+          "enabled": true,
+          "conditionSummary": "Cloud Run 5xx count greater than 25 for 300 seconds",
+          "notificationChannels": ["projects/devpolaris-prod/notificationChannels/oncall-primary"]
+        },
+        {
+          "name": "catalog-latency",
+          "displayName": "Catalog latency",
+          "enabled": false,
+          "conditionSummary": "p95 latency greater than 1 second"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-api-sustained-5xx", "Orders API sustained 5xx", "enabled", "true", "greater than 25 for 300 seconds", "projects/devpolaris-prod/notificationChannels/oncall-primary"],
+    "requireCommandPatterns": [
+      "^gcloud\\s+monitoring\\s+policies\\s+list\\b",
+      "^gcloud\\s+monitoring\\s+policies\\s+describe\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

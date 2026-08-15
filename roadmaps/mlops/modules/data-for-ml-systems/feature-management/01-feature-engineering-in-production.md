@@ -34,11 +34,15 @@ The same feature can behave very differently after deployment.
 
 The notebook may read a corrected warehouse table in which duplicate events have already been removed. A live pipeline may receive the same payment event twice after a retry. The notebook may calculate the window relative to each old authorization time. A serving job may calculate it relative to the current clock. The historical dataset may treat a missing account as zero failures, while the online lookup may return zero during a store outage. All four systems can produce a valid integer. Only some of those integers express the intended fact.
 
-This is why production feature engineering reaches beyond writing a transformation. In essence, the team is turning a statistical idea into a maintained data product for a model. Its meaning must survive historical training, batch recomputation, live delivery, late events, source changes, and operational failures.
+Production feature engineering therefore reaches beyond writing a transformation. The team is turning a statistical idea into a maintained data product for a model. Its meaning must survive historical training, batch recomputation, live delivery, late events, source changes, and operational failures.
 
 ### Production Needs A Repeatable Definition And Owner
 
-Production needs the feature to mean the same thing across historical training, live delivery, source changes, and incident recovery. A repeatable lifecycle assigns an owner and preserves the definition, computation, data history, tests, and release evidence through each stage.
+Production needs the feature to mean the same thing across historical training, live delivery, source changes, and incident recovery. That promise requires a repeatable lifecycle and a named owner.
+
+Suppose the payment-events source begins delivering duplicates after a retry-policy change. The source owner can explain the new delivery behaviour, but the feature owner must decide how `failed_payments_24h` removes duplicates, backfill the corrected history, verify the online value, and tell model owners which feature version changed. Without that ownership chain, a source repair may leave training tables, online values, and deployed models describing different facts.
+
+The lifecycle below preserves the feature definition, computation, historical values, delivery policy, tests, and release evidence. Each artifact gives the owner something concrete to review, reproduce, and repair.
 
 ```mermaid
 flowchart TD
@@ -66,7 +70,7 @@ The lifecycle stays the same across those implementations. A team still has to s
 ## Separate The Feature Recipe From Each Calculated Value
 <!-- section-summary: A feature definition is the recipe, a feature value is one result, and a feature store is an optional system that manages feature metadata and retrieval. -->
 
-People often use the word **feature** for the calculation, the resulting number, the table that stores it, and the platform that retrieves it. Those objects work together, although each solves a different problem. Separating them gives beginners a much clearer picture of what a team is building and what can fail.
+People often use the word **feature** for the calculation, the resulting number, the table that stores it, and the platform that retrieves it. Those objects work together, although each solves a different problem. A wrong recipe, corrupted stored values, and a failed online lookup have different causes, owners, and repairs.
 
 ### A Feature Definition Is The Recipe For Calculating Values
 
@@ -115,6 +119,10 @@ Consider three ordinary situations:
 - Multiple groups independently calculate “active customer” with different rules. A registry and shared definitions can reduce semantic duplication even if no online store is required.
 
 Feature-store adoption carries operating cost. Teams maintain registry changes, storage, materialization jobs, access control, SDK compatibility, and incident procedures. It pays for itself through genuine reuse, recurring point-in-time retrieval, or low-latency delivery. A feature store added only because the project uses machine learning creates another platform without resolving a demonstrated problem.
+
+![One versioned feature recipe producing different values for the same entity at three historical cutoffs](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/feature-recipe-and-values.png)
+
+*The recipe stays stable while the calculated value changes with the entity and the information available at each cutoff.*
 
 ## Start With The Product Decision And Its Deadline
 <!-- section-summary: A feature contract starts from the product decision, the entity being scored, and the exact instant that separates permitted history from unavailable future information. -->
@@ -196,19 +204,9 @@ Event time controls the business window. Observed time helps the team reason abo
 
 Corrections add another layer. A source system can mark an event as reversed several hours later. The team has to decide whether a backtest should use the record as originally observed or the latest corrected truth. Both views are useful for different questions. An operational replay asks what the model could know then. An analytical report may ask what ultimately happened. Mixing them silently creates optimistic training data.
 
-```mermaid
-sequenceDiagram
-    participant S as Source system
-    participant P as Feature pipeline
-    participant M as Model decision
-    participant C as Later correction
+![A shared source and feature definition feeding historical training data and fresh online predictions through separate delivery paths](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/two-feature-delivery-paths.png)
 
-    S->>P: Event occurred at 10:00<br/>arrives at 10:04
-    P->>M: Feature value available for 10:05 decision
-    S-->>P: Older event arrives late at 10:20
-    C-->>P: Status correction arrives at 11:00
-    Note over P,M: Historical replay records<br/>what was visible at each decision
-```
+*Historical and live delivery can use different storage and compute paths while preserving the same feature meaning and logic.*
 
 ### Assign An Owner For Source Changes And Repairs
 
@@ -307,7 +305,7 @@ flowchart TD
     class R purple;
 ```
 
-This operation is called a **point-in-time join**. In another phrasing, it is an as-of lookup: for each observation, select the newest eligible feature state from that observation’s past, optionally within a maximum lookback.
+This operation is called a **point-in-time join**. Database users may know the same pattern as an **as-of lookup**: for each observation, select the newest eligible feature state from that observation’s past, optionally within a maximum lookback.
 
 Raw-event aggregation can express the rule directly:
 
@@ -580,6 +578,10 @@ A feature starts as a hypothesis about information that may help a decision. Pro
 The implementation can use dbt and SQL, Spark and Databricks, Polars, or a shared library. Delta Lake and Iceberg can preserve historical table state. Feast or a managed feature store can add registry, point-in-time retrieval, and online materialization after reuse or latency requirements justify the platform. MLflow and OpenLineage can connect training and pipeline evidence to the resulting models.
 
 The tools vary. The core test stays practical: given an entity and a past decision time, can the team explain the value the model received, reproduce it from governed inputs, detect if it is late or wrong, and move consumers safely to a repaired version?
+
+![Six controls for a safe production feature, followed by monitoring, backfill, and retirement responsibilities](/content-assets/articles/article-mlops-data-for-ml-systems-feature-engineering-in-production/production-feature-summary.png)
+
+*A production feature needs clear meaning, known availability, historical correctness, serving parity, freshness control, and traceable versions throughout its lifecycle.*
 
 ## References
 

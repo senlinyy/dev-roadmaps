@@ -1,7 +1,7 @@
 ---
 title: "Caching Predictions"
 description: "Reuse selected inference results safely with complete cache identities, explicit freshness budgets, isolation, stampede control, and release tests."
-overview: "Prediction caching can remove repeated inference work, yet every cache hit makes a strong claim: this stored result is still equivalent, fresh, and safe for the current request. This article develops that claim into a production design for Redis or Valkey."
+overview: "Prediction caching can remove repeated inference work, yet every cache hit makes a strong claim that the stored result remains equivalent, fresh, and safe for the current request. Production Redis or Valkey designs must preserve that claim."
 tags: ["MLOps", "advanced", "performance"]
 order: 2
 id: "article-mlops-model-serving-caching-predictions"
@@ -30,7 +30,7 @@ id: "article-mlops-model-serving-caching-predictions"
 ## What Prediction Caching Changes
 <!-- section-summary: Prediction caching reuses a previous model result only inside a declared equivalence and freshness boundary. -->
 
-At a high level, **prediction caching** stores the result of an expensive inference. A later request can reuse it if the service considers the two requests equivalent. A successful cache hit avoids another model call. The user receives a faster answer, and the serving platform spends less CPU, GPU time, or external-model budget.
+Two requests may ask for the same prediction over unchanged inputs. Running the model twice adds delay and compute without changing the answer. **Prediction caching** stores the earlier result so a later equivalent request can reuse it. A valid cache hit avoids another model call, gives the user a faster answer, and spends less CPU, GPU time, or external-model budget.
 
 This sounds similar to ordinary web caching, although an ML result carries more hidden dependencies. A web cache may identify a response from its URL, selected headers, and expiry policy. A prediction can depend on the model artifact and preprocessing code. Feature values, retrieval state, prompts, safety policy, tenant, and decision time can also affect it. Two HTTP bodies can look identical while those hidden inputs differ.
 
@@ -73,6 +73,10 @@ Fraud authorization and medical triage usually require fresh evaluation. A previ
 A language model with sampling can produce different answers from identical messages. Caching freezes the first answer and changes the product behaviour from “generate” to “replay.” That may be acceptable for a reviewed public FAQ response. It is unsuitable where users expect a fresh answer, citations change frequently, or access-controlled retrieval differs by user.
 
 An eligibility review should record four facts in prose. State the exact cached value and the conditions that make two requests equivalent. Add the maximum acceptable age and the consequence of a wrong reuse. The review should also estimate whether equivalent requests occur often enough to justify the operational complexity. A cache with almost no hits adds another dependency without removing meaningful inference work.
+
+![Three prediction-cache eligibility examples showing reuse of an immutable image embedding, brief reuse of ranking base scores followed by live price and availability checks, and live recomputation of a fraud decision.](/content-assets/articles/article-mlops-model-serving-caching-predictions/cache-eligibility-examples.png)
+
+*Choose the narrowest reusable object: immutable computation can be shared, time-sensitive ranking needs live commercial facts, and consequential decisions must incorporate current evidence.*
 
 ## Define What Counts As The Same Prediction Before Caching
 <!-- section-summary: Canonicalization removes irrelevant representation differences while preserving every difference that can change the prediction. -->
@@ -189,6 +193,10 @@ Reject an oversized or malformed value. Unknown schema versions and unauthorised
 **Read-through** moves miss loading behind a cache abstraction. It can reduce repeated application code, though the loader must still receive model, feature, policy, and tenant context. A generic loader that knows only a request ID is too weak for prediction correctness.
 
 **Write-through** writes the cache at the same time as the authoritative producer creates a value. It can fit precomputed embeddings, batch forecasts, or recommendation lists. The producer publishes a versioned object, and online serving reads it. This resembles materialized prediction storage more than opportunistic online caching, so ownership and rebuild procedures should be explicit.
+
+![Cache-aside request flow from field-specific canonicalization through a complete prediction identity and versioned key, branching to validated hits or single-flight fresh inference and an expiring write.](/content-assets/articles/article-mlops-model-serving-caching-predictions/complete-prediction-identity.png)
+
+*A governed hit requires more than a matching request hash: the complete dependency identity, value envelope, age, and caller scope must all still match before reuse.*
 
 ```mermaid
 flowchart TD
@@ -343,6 +351,10 @@ flowchart TD
 Prediction caching can remove substantial inference work, especially for immutable embeddings, repeated public ranking computations, and carefully versioned FAQ responses. The infrastructure is the smaller part of the design. The central work is defining which result may be reused, which dependencies make two requests equivalent, how long that claim remains valid, and who may receive the stored value.
 
 Use immutable version identities, narrow cached objects, explicit TTLs, versioned namespaces, tenant isolation, typed value envelopes, single-flight fill control, and a tested bypass path. Observe wrong reuse and freshness alongside latency and hit rate. These controls turn a fast key-value lookup into a defensible production feature.
+
+![Six controls for safely releasing and operating a prediction cache, followed by an incident path that bypasses unsafe reuse, protects inference, restores a compatible namespace, and proves recovery.](/content-assets/articles/article-mlops-model-serving-caching-predictions/cache-release-summary.png)
+
+*Cache safety is a release property: eligibility, keys, freshness, failure behaviour, canary isolation, and operating evidence must pass together, with bypass and complete recovery ready when evidence points to unsafe reuse.*
 
 ## References
 

@@ -1,0 +1,14 @@
+{
+  "language": "yaml",
+  "filename": "disable-service-account-keys.yaml",
+  "completionProfile": "gcp-org-policy",
+  "initialValue": "name: projects/devpolaris-prod/policies/iam.disableServiceAccountKeyCreation\nspec:\n  inheritFromParent: true\n  rules: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["name"], "equals": "projects/devpolaris-prod/policies/iam.disableServiceAccountKeyCreation" },
+      { "path": ["spec", "inheritFromParent"], "equals": false },
+      { "path": ["spec", "rules"], "containsObject": { "enforce": true }, "minItems": 1, "maxItems": 1 }
+    ]
+  }
+}

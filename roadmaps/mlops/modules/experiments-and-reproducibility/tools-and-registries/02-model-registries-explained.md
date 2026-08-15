@@ -32,7 +32,7 @@ Imagine an on-call engineer responding to a prediction-quality alert after a new
 
 The engineer needs to decide whether to roll back before the payment-review queue grows. That decision requires precise answers. Which bytes are running? Which data and code produced them? Which input schema does the model expect? Which tests passed? Who approved the release? Which previous version can still run with the current feature pipeline?
 
-A folder of files cannot answer those questions consistently. A **model registry** can. At a high level, a model registry is a controlled catalog that gives each reviewed model version a durable identity and connects that identity to the evidence needed for release, audit, and recovery.
+A folder of files cannot answer those questions consistently. A **model registry** is the controlled catalog that gives each reviewed model version a durable identity and connects it to the evidence needed for release, audit, and recovery.
 
 You can think of the registry as the model system's control desk. It rarely stores every large model byte in its own database. It records which artifact is version 34, where that artifact lives, how it was produced, what interface it exposes, which checks it passed, and what the organization currently intends to do with it.
 
@@ -61,7 +61,7 @@ This boundary keeps each system honest. A registry entry may say that version 34
 ## Give the Model, Version, and Artifact Separate Identities
 <!-- section-summary: A registered model names the product capability, a version identifies one governed candidate, and an artifact points to the exact deployable bytes. -->
 
-At a high level, the registry separates the identity of a model capability from one candidate and from the files that implement it. This prevents a storage path, release label, and product name from being treated as the same thing. Three terms form that foundation.
+A product capability can outlive many trained candidates and many storage locations. The registry separates that lasting identity from one candidate and from the files implementing it. This prevents a storage path, release label, and product name from being treated as the same thing.
 
 A **registered model** is the stable logical name for one prediction capability, such as `fraud-risk`, `delivery-time-forecast`, or `support-ticket-router`. It groups candidates that solve the same operational task and share an ownership boundary.
 
@@ -97,7 +97,7 @@ Azure Machine Learning enforces this idea for model assets by allowing updates t
 ## Trace Every Model Version Back To Its Training Inputs
 <!-- section-summary: Lineage connects a registry version to the run, logged model, data, code, configuration, and environment that produced it. -->
 
-**Lineage** is the evidence chain that explains where a model version came from. In essence, it lets a reviewer walk backward from a production identity to the exact training process and inputs that created it.
+**Lineage** is the evidence chain that explains where a model version came from. It lets a reviewer walk backward from a production identity to the exact training process and inputs that created it.
 
 Useful lineage includes the source run or job, the selected logged model or checkpoint, the training-data snapshot, feature definitions, label policy, code revision, resolved training configuration, dependency lock, container image, and evaluation artifacts. A registry can store some fields directly and link to the rest. The important property is navigability: a reviewer should move from version to evidence without guessing across unrelated systems.
 
@@ -159,6 +159,10 @@ flowchart TD
 MLflow's fixed model stages are deprecated. Current MLflow workflows use model-version tags for status and aliases for named references. Unity Catalog models also use aliases and tags; fixed stages are unsupported there. This shift matters because real release workflows need more than a universal `Staging` or `Production` label. One version may be a batch champion, a regional canary, and a rollback target at the same time.
 
 Mutable aliases require care. A batch job that loads `models:/fraud-risk@champion` at the start of every run will follow the newest alias assignment. An online deployment controller should usually resolve that alias to version 34, update the endpoint with the exact version, and record version 34 in the release. If the alias moves again during a rollout, the running endpoint remains attributable to the version it actually loaded.
+
+![Four independent registry identity cards distinguish a registered model, model version, model artifact, and movable alias](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/registry-identities.png)
+
+*The registered model, immutable version, deployable artifact, and movable alias answer different questions and should remain separate in release records.*
 
 ## Make Ownership, Permissions, and Approval Explicit
 <!-- section-summary: Registry governance defines who owns a model, who may create versions, who may approve release intent, and which evidence supported that decision. -->
@@ -229,7 +233,7 @@ The audit trail should capture version creation, metadata changes, approval deci
 
 The registry is a control-plane catalog. The deployment system owns runtime changes. For an online endpoint, deployment creates model servers, configures CPU or GPU resources, attaches secrets and networking, runs health checks, and shifts traffic. For batch inference, orchestration schedules jobs, resolves input data, retries failures, and writes outputs.
 
-Moving an alias changes registry intent. Traffic changes only after a deployment system updates the endpoint or a workload deliberately resolves that alias on its next run. This distinction prevents dashboards from claiming that version 34 is live solely because `champion` points to it.
+Moving an alias changes registry intent. A deployment-system endpoint update or a workload resolving that alias on its next run changes traffic. This distinction prevents dashboards from claiming that version 34 is live solely because `champion` points to it.
 
 ```mermaid
 flowchart TD
@@ -242,6 +246,10 @@ flowchart TD
 ```
 
 The same separation applies to rollback. The registry identifies the approved recovery version and its evidence. The deployment controller restores it, verifies runtime health, and records the outcome. Airflow, Dagster, Argo Workflows, GitHub Actions, cloud pipelines, or a managed deployment service may perform that work. The registry remains the source of governed model identity across those execution choices.
+
+![A model version dossier groups origin, data lineage, model contract, evaluation, authority, and recovery evidence beside a separate deployment-system panel](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/model-version-dossier.png)
+
+*The registry preserves approved identity and evidence, while the deployment system owns runtime configuration, traffic, and proof of the loaded model.*
 
 ## Implement A Model Registry With MLflow 3
 <!-- section-summary: MLflow 3 tracks models as first-class objects and registers selected logged models as governed versions with signatures, aliases, and tags. -->
@@ -367,6 +375,10 @@ A model registry gives production meaning to model artifacts. The registered-mod
 Aliases and tags express current intent and status without changing version identity. Permissions define who may create, review, promote, archive, or delete. Approval evidence explains why a version may enter a release phase. Retention keeps the artifact, environment, policy, and rollback path available for the required operational and audit window.
 
 The registry records identity and intent. Deployment automation changes endpoints, jobs, devices, and traffic. Keeping that boundary explicit gives release teams, incident responders, auditors, and platform automation one dependable answer to the same question: which exact model version are we talking about, and why is it allowed to run?
+
+![Two-lane lifecycle from many training runs through selection, immutable registration, evidence review, and a pinned release to deployment, runtime verification, monitoring, or rollback](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-registries-explained/registry-to-runtime-summary.png)
+
+*A registry connects training evidence to production through an exact reviewed version, while runtime verification confirms what the serving system actually loaded.*
 
 ## References
 

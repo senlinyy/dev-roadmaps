@@ -1,1 +1,0 @@
-Use the same production root module path for every Terraform command. The pull request job should produce review evidence only: initialize, check formatting, validate, and create a non-interactive plan.

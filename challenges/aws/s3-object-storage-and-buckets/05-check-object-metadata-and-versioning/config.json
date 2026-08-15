@@ -50,6 +50,10 @@
       "\"ServerSideEncryption\": \"aws:kms\"",
       "\"Status\": \"Enabled\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+s3api\\\\s+head-object\\\\b",
+      "^aws\\\\s+s3api\\\\s+get-bucket-versioning\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

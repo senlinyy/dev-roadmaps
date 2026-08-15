@@ -1,0 +1,78 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Deploy orders\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Render configuration\n      ansible.builtin.template:\n        src: orders.conf.j2\n        dest: /etc/orders/orders.conf\n\n    - name: Verify external route\n      ansible.builtin.command: /usr/local/bin/check-orders-route\n"
+    },
+    {
+      "filename": "templates/orders.conf.j2",
+      "initialValue": "workers={{ orders_workers }}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "diff"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "ansible.builtin.template",
+              "validate"
+            ],
+            "contains": "%s"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "command"
+        },
+        "paths": [
+          {
+            "path": [
+              "when"
+            ],
+            "equals": "not ansible_check_mode"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "deploy.yml",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "templates/orders.conf.j2"
+      }
+    ],
+    "forbiddenModules": [
+      "shell"
+    ]
+  }
+}

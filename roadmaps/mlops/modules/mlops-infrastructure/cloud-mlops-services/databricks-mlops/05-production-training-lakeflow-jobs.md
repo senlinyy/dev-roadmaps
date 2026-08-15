@@ -26,7 +26,7 @@ id: "article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-
 ## What Production Training Means
 <!-- section-summary: Production training is a controlled process that turns approved code and data into a model candidate with reproducible evidence and a safe recovery path. -->
 
-At a high level, **production training is the controlled process that creates a model candidate from approved code and approved data**. The training algorithm still matters, although the production system has a wider responsibility. It must start at the right time, use the intended inputs, run under the correct identity, preserve evidence, and recover safely if something fails halfway through.
+A training script can fit a model successfully and still use stale data, the wrong code revision, or an identity with excessive access. **Production training is the controlled process that creates a model candidate from approved code and approved data.** The algorithm still matters, while the surrounding system ensures the run starts at the right time, uses the intended inputs, preserves evidence, and recovers safely from a partial failure.
 
 Consider a weekly risk model. The model needs labels that mature several weeks after the original event. A person can open a notebook, choose a recent table, and click **Run all**. That may create a technically valid model. It does not prove that the label window was complete, that the same code ran in every task, or that another engineer could reproduce the result after the notebook changed.
 
@@ -61,9 +61,9 @@ flowchart TD
 
 The run finishes with a **candidate**, meaning a trained model plus the evidence needed for review. Registration, approval, promotion, and deployment add their own controls later in the lifecycle. Keeping that boundary clear prevents a successful training task from silently becoming permission to release.
 
-![Production training surrounds model code with a run contract, governed execution, evidence, and recovery controls](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/production-training-control-system.png)
+![Production training combines model code with a fixed run contract, governed execution, evidence capture, and recovery controls](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/production-training-system.png)
 
-*Model code sits in the middle. The surrounding controls make its result repeatable, reviewable, and safe to operate.*
+*The run contract and execution controls govern the training work. The run then produces evidence, while retries, repair runs, and idempotency support recovery.*
 
 ## Why A Successful Notebook Is Still Only A Starting Point
 <!-- section-summary: A notebook can prove that an approach works, while production training must prove that the same process can run unattended and leave trustworthy evidence. -->
@@ -303,14 +303,28 @@ For a large result, write the result to its proper durable system and pass a ref
 
 This pattern keeps the graph readable. The orchestrator moves addresses between tasks, while the storage and evidence systems move the actual data.
 
-![Lakeflow parameters and task values pass small identifiers while Delta Lake and MLflow hold large durable outputs](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/lakeflow-context-handoffs.png)
+![Lakeflow tasks pass a data version and model ID while Delta Lake and MLflow preserve durable data, model, metric, and evaluation outputs](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/lakeflow-context-and-storage.png)
 
-*Parameters enter at the top. Tasks discover versions and IDs. Large data and model artifacts remain in governed systems.*
+*Task values carry small identifiers between preparation, training, and evaluation. Delta Lake and MLflow remain the durable stores for large outputs and evidence.*
 
 ## Control The Code, Compute, And Identity Used By Training
 <!-- section-summary: Reproducible training needs a fixed source revision, pinned dependencies, appropriate job compute, and a stable service identity. -->
 
 The same training function can behave differently under another source revision, library set, compute shape, or identity. Production training therefore controls these four parts together.
+
+At run start, the workflow resolves one code revision and one dependency environment. It assigns compute that matches each task and executes through a stable service identity with narrow permissions. The run record preserves those resolved values. A later investigator can then distinguish a changed dataset from a changed library, runtime, accelerator profile, or identity. Reproducibility depends on this combined record rather than the training function alone.
+
+```mermaid
+flowchart TD
+    Run["Production training run<br/>(one declared attempt)"] --> Code["Code identity<br/>(commit or built wheel)"]
+    Run --> Dependencies["Dependencies<br/>(pinned libraries and runtime)"]
+    Run --> Compute["Compute<br/>(serverless or jobs compute sized per task)"]
+    Run --> Identity["Run as identity<br/>(stable service principal and least privilege)"]
+    Code --> Evidence["Run evidence<br/>(record every resolved identity)"]
+    Dependencies --> Evidence
+    Compute --> Evidence
+    Identity --> Evidence
+```
 
 ### Use One Code Revision Throughout The Run
 
@@ -452,10 +466,6 @@ Retry policies should follow failure classes:
 - permission errors need configuration repair;
 - out-of-memory failures may need another compute profile or a data/algorithm change;
 - quality-gate failures are valid model results and should preserve evidence without retrying.
-
-![A production recovery decision separates transient retries, repairable task failures, invalid inputs, and valid model rejections](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/training-recovery-decisions.png)
-
-*The failure class determines the response. Repeating every failure hides useful information and can create duplicate outputs.*
 
 ## Recover A Failed Workflow With Repair Runs
 <!-- section-summary: A repair run re-executes failed and dependent tasks while preserving the successful work and history of the original multi-task run. -->
@@ -606,9 +616,9 @@ The final task assembles the evidence and marks one of two outcomes:
 - a reviewable candidate with complete, cross-linked evidence;
 - a preserved rejection explaining which acceptance rule failed.
 
-![The complete Lakeflow production training path moves from readiness through a fixed run contract, governed execution, model evidence, recovery, and candidate review](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/complete-production-training-path.png)
+![The Lakeflow production training path separates successful candidate evidence, quality-gate rejection, and repair of failed tasks](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-production-training-lakeflow-jobs/production-training-path.png)
 
-*A production run earns a candidate outcome through evidence. Failure and rejection remain visible results rather than disappearing into a notebook session.*
+*The main path ends with a candidate for release review. Quality failures remain explicit rejections, while operational failures enter a repair run that retries only failed tasks.*
 
 Lakeflow Jobs supplies the coordination, run history, and recovery machinery. The production design still comes from the team: explicit inputs, meaningful task boundaries, safe output semantics, least-privilege identity, and acceptance rules connected to the decision the model will support.
 

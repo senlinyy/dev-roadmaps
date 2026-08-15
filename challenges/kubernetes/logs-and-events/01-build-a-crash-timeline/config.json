@@ -1,0 +1,73 @@
+{
+  "cwd": "/workspace",
+  "fs": {
+    "/workspace": { "type": "dir" }
+  },
+  "commandModules": ["kubernetes"],
+  "kubernetes": {
+    "currentContext": "orders-prod",
+    "contexts": [
+      { "name": "orders-prod", "cluster": "production-eu", "user": "incident-reader", "namespace": "orders" }
+    ],
+    "resources": [
+      {
+        "context": "orders-prod",
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "orders-api-5d89b7f8cd-6q2wx",
+          "namespace": "orders",
+          "labels": { "app": "orders-api" }
+        },
+        "spec": { "containers": [{ "name": "api", "image": "ghcr.io/devpolaris/orders-api:2026.08.1" }] },
+        "status": { "phase": "Running", "age": "11m", "containerStatuses": [{ "name": "api", "ready": true, "restartCount": 0 }] }
+      },
+      {
+        "context": "orders-prod",
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "orders-api-5d89b7f8cd-b9t4n",
+          "namespace": "orders",
+          "labels": { "app": "orders-api" }
+        },
+        "spec": { "containers": [{ "name": "api", "image": "ghcr.io/devpolaris/orders-api:2026.08.1" }] },
+        "status": { "phase": "Running", "age": "11m", "containerStatuses": [{ "name": "api", "ready": false, "restartCount": 6 }] }
+      }
+    ],
+    "events": [
+      {
+        "context": "orders-prod",
+        "namespace": "orders",
+        "type": "Warning",
+        "reason": "BackOff",
+        "age": "38s",
+        "from": "kubelet/worker-b",
+        "involvedObject": { "kind": "Pod", "name": "orders-api-5d89b7f8cd-b9t4n" },
+        "message": "Back-off restarting failed container api in pod orders-api-5d89b7f8cd-b9t4n_orders"
+      }
+    ],
+    "logs": [
+      {
+        "context": "orders-prod",
+        "namespace": "orders",
+        "pod": "orders-api-5d89b7f8cd-b9t4n",
+        "container": "api",
+        "current": "starting orders API\nwaiting for database configuration\n",
+        "previous": "starting orders API\nconfig validation failed\npanic: DB_URL is empty\n"
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "last-stdout",
+    "expected": ["panic: DB_URL is empty"],
+    "requireCommands": ["kubectl"],
+    "minCommandCount": 3,
+    "requireCommandPatterns": [
+      "^kubectl\\s+get\\s+(?:pods|pod|po)(?=.*(?:-l|--selector)(?:=|\\s+)app=orders-api)(?=.*(?:-n|--namespace)(?:=|\\s+)orders)",
+      "^kubectl\\s+describe\\s+(?:pod|po)\\s+orders-api-5d89b7f8cd-b9t4n(?=.*(?:-n|--namespace)(?:=|\\s+)orders)",
+      "^kubectl\\s+logs\\s+orders-api-5d89b7f8cd-b9t4n(?=.*(?:-c|--container)(?:=|\\s+)api)(?=.*(?:-p|--previous))(?=.*(?:-n|--namespace)(?:=|\\s+)orders)"
+    ]
+  }
+}

@@ -65,9 +65,9 @@ You can think about the whole subject through five questions:
 
 Five core signals help answer those questions. **Traffic** measures incoming work. **Latency** measures time. **Errors** measure failed or unusable work. **Saturation** measures how close the system is to its limit. **Availability** measures whether valid users can actually use the service.
 
-![The service-health framework from user objective through signals, instrumentation, bounded dimensions, alerts, and recovery](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/service-health-signal-framework.png)
+![Complete ML service request path from incoming traffic through validation, feature retrieval, queueing, inference, response policy, and returned decision, with five service-health signals](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/service-health-request-path.png)
 
-*The promise made to users sits at the top. The five service signals show whether that promise is being met. Component and resource metrics help explain any failure.*
+*Traffic, latency, errors, saturation, and availability describe the whole caller path. Stage-specific evidence explains where a delivery failure entered without confusing service health with model quality.*
 
 ## Service Health And Model Health Are Different
 <!-- section-summary: Service health measures reliable delivery, while model health measures whether predictions remain accurate and useful. -->
@@ -103,7 +103,7 @@ Production systems therefore record fallbacks, stale-data paths, and invalid pre
 ## How A Metric Represents Service Behaviour
 <!-- section-summary: A metric records repeated numerical observations as counters, gauges, or distributions that can be compared over time. -->
 
-At a high level, a **metric** is a numerical measurement recorded repeatedly. One value might say that the service has completed 24,810 requests, has 37 requests in progress, or took 0.18 seconds to answer one request. Recording those values over time reveals whether demand, speed, failures, or capacity are changing.
+One response time says how a single request behaved. Thousands of response times recorded over an hour reveal whether the whole service is slowing down. A **metric** is a numerical measurement recorded repeatedly, such as completed requests, requests in progress, or seconds per response. Its history shows whether demand, speed, failures, or capacity are changing.
 
 Prometheus represents each stream of measurements as a **time series**. A time series has a metric name and a set of labels. For example, `ml_inference_requests_total{model_route="candidate", result="success"}` is one series.
 
@@ -200,9 +200,9 @@ Suppose a request takes 420 milliseconds. Feature lookup uses 260 milliseconds, 
 
 The model uses less than ten percent of the total time. A faster model would save very little. The feature lookup and queue are the useful places to investigate.
 
-![One slow request decomposed into edge, queue, feature retrieval, and model-inference time, with historical Prometheus distributions guiding the response](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/request-latency-breakdown.png)
+![A 420-millisecond request decomposed into 260 milliseconds of feature lookup, 90 of queueing, 40 of inference, 20 of preprocessing, and 10 of post-processing](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/request-latency-breakdown.png)
 
-*End-to-end latency shows what the caller experienced. The smaller measurements show where the request spent its time.*
+*Feature lookup and queueing consume 350 of the 420 milliseconds. Model inference is under ten percent, so model optimisation cannot address most of the caller’s wait.*
 
 This leads to two complementary measurements:
 
@@ -681,10 +681,6 @@ Prometheus evaluates the rule. Alertmanager groups related alerts, removes dupli
 
 Production services often use SLO burn-rate alerts because one static ratio captures neither fast budget loss nor a slow sustained problem. Batch services use deadline risk, remaining work, and catch-up capacity because a five-minute request ratio cannot describe a scheduled job.
 
-![Metrics and resource evidence flowing through SLO rules, Alertmanager, and a first-response runbook](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/metric-alert-response-path.png)
-
-*The alert identifies user harm. Release, dependency, queue, and resource evidence then helps the responder choose a safe action.*
-
 ## 11. How These Metrics Reach A Dashboard
 <!-- section-summary: Applications and runtimes create measurements, a collection layer moves them, and a time-series backend powers dashboards and alerts. -->
 
@@ -720,7 +716,7 @@ If this collection path breaks, the model service may continue serving requests 
 
 Managed serving platforms collect much of this evidence inside the service boundary they own. SageMaker AI publishes endpoint and resource metrics through CloudWatch, AWS's managed monitoring service. Its detailed inference observability uses an OpenTelemetry Collector to scrape node, DCGM, and inference-runtime endpoints and sends OTel metrics to CloudWatch over OTLP. CloudWatch accepts Prometheus Query Language (PromQL) queries for that data, although no Prometheus server sits in this managed path.
 
-Azure Machine Learning connects online endpoints to Azure Monitor, Microsoft's managed monitoring service. A responder can split request latency and response status by deployment, then drill into per-instance CPU, GPU, and memory evidence. Vertex AI sends endpoint and deployed-model measurements to Google Cloud Monitoring, where response counts and latency distributions can be compared with replica and accelerator pressure. The current Google metric catalog marks several online-prediction metrics, including latency and response counts, as Beta, so deployment tests should catch descriptor or label changes before alert rules reach production.
+Azure Machine Learning connects online endpoints to Azure Monitor, Microsoft's managed monitoring service. A responder can split request latency and response status by deployment, then drill into per-instance CPU, GPU, and memory evidence. Gemini Enterprise Agent Platform sends endpoint and deployed-model measurements to Google Cloud Monitoring, where response counts and latency distributions can be compared with replica and accelerator pressure. The Google metric catalog marks several online-inference metrics, including latency and response counts, as Beta, so deployment tests should catch descriptor or label changes before alert rules reach production.
 
 These provider metrics describe the managed endpoint. The application still owns the meaning of the result. A platform can observe HTTP `200`; only application logic can classify `prediction=null` as unusable or record that a fallback violates product policy. Custom metrics supply result class, fallback use, and model route where the managed platform cannot infer them.
 
@@ -736,7 +732,7 @@ User IDs and request IDs can appear in sanitised, access-controlled logs or trac
 
 Raw URLs, prompts, feature values, and exception text may contain sensitive data. General telemetry excludes them by default. A policy-approved raw-evidence path uses a restricted store and applies redaction before storage. Access controls, retention policy, and audit records then govern who can inspect that evidence and how long it remains available.
 
-In essence, each observability signal has a different job. Metrics reveal patterns across many requests. Logs explain individual events. Traces show the path of one request. Prediction records preserve model decisions for later quality analysis.
+Each observability signal has a different job. Metrics reveal patterns across many requests. Logs explain individual events. Traces show the path of one request. Prediction records preserve model decisions for later quality analysis.
 
 ## 12. Build A Dashboard That Supports Investigation
 <!-- section-summary: A production dashboard moves from user impact to queues, dependencies, releases, and infrastructure. -->
@@ -800,10 +796,6 @@ Several focused tests cover different parts of the path.
 
 The final check returns to the original user symptom. A rollback is successful after candidate errors and latency recover. A scaling repair is successful after the queue drains and spare capacity returns. A dependency fallback is successful after the product confirms that the degraded result is safe.
 
-![The complete service-health loop from objective and instrumentation through diagnosis, containment, verification, and restoration](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/service-health-operating-loop.png)
-
-*A service has recovered after the same user-facing measurements that exposed the incident return to an acceptable state.*
-
 ## The Main Idea
 <!-- section-summary: Service health metrics show whether work can enter, move through, and leave an ML system reliably under real demand. -->
 
@@ -814,6 +806,10 @@ Traffic shows how much work arrives. Latency shows how long it takes. Errors sho
 ML services add their own important details: model loading, feature retrieval, queueing, GPU and KV-cache pressure, batch completeness, and candidate releases. End-to-end metrics describe the user's experience. Stage and resource metrics explain why that experience changed.
 
 A useful production setup connects these measurements to an SLO, a clear dashboard, an alert with an owner, and a tested recovery path. That is what turns a collection of graphs into something a team can use during a real incident.
+
+![Capacity incident summary showing traffic rising from 200 to 500 requests per second, ready replicas falling short, queue and p99 growth, errors, containment, and recovery checks](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-latency-errors-resources/capacity-incident-summary.png)
+
+*A traffic jump saturates the ready replicas, builds a queue, and raises tail latency and errors while model runtime stays normal. Recovery restores capacity, drains the queue, and verifies the original user-visible symptoms.*
 
 ## References
 
@@ -840,5 +836,5 @@ A useful production setup connects these measurements to an SLO, a clear dashboa
 - [vLLM production metrics](https://docs.vllm.ai/en/latest/usage/metrics/)
 - [SageMaker AI metrics in CloudWatch](https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch.html)
 - [SageMaker AI detailed observability for inference endpoints](https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch-detailed-observability.html)
-- [Vertex AI metrics in Cloud Monitoring](https://docs.cloud.google.com/monitoring/api/metrics_gcp_a_b#aiplatform)
+- [Cloud Monitoring metrics for Gemini Enterprise Agent Platform](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/general/monitoring-metrics)
 - [Azure Machine Learning online endpoint monitoring](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-monitor-online-endpoints?view=azureml-api-2)

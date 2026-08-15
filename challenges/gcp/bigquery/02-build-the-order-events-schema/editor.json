@@ -1,0 +1,18 @@
+{
+  "language": "json",
+  "filename": "order-events.schema.json",
+  "completionProfile": "gcp-bigquery-schema",
+  "initialValue": "[\n  { \"name\": \"event_id\", \"type\": \"STRING\", \"mode\": \"NULLABLE\" }\n]\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": [], "minItems": 6, "maxItems": 6 },
+      { "path": [], "containsObject": { "name": "event_id", "type": "STRING", "mode": "REQUIRED" } },
+      { "path": [], "containsObject": { "name": "order_id", "type": "STRING", "mode": "REQUIRED" } },
+      { "path": [], "containsObject": { "name": "event_type", "type": "STRING", "mode": "REQUIRED" } },
+      { "path": [], "containsObject": { "name": "occurred_at", "type": "TIMESTAMP", "mode": "REQUIRED" } },
+      { "path": [], "containsObject": { "name": "amount", "type": "NUMERIC", "mode": "NULLABLE" } },
+      { "path": [], "containsObject": { "name": "attributes", "type": "JSON", "mode": "NULLABLE" } }
+    ]
+  }
+}

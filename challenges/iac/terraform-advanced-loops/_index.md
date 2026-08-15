@@ -1,8 +1,8 @@
 ---
-title: "Stable Terraform Loops"
-description: "Replace index-based subnet repetition with stable for_each keys and preserve resource identity through collection changes."
+title: "Terraform for_each Resource Sets"
+description: "Create stable named queue instances from a set and use each key consistently for addresses, names, and tags."
 articleId: article-iac-terraform-advanced-loops
-difficulty: hard
-order: 22
-tags: ["terraform", "for-each", "loops", "resource-identity"]
+difficulty: medium
+order: 25
+tags: ["terraform","for-each","collections","addresses"]
 ---

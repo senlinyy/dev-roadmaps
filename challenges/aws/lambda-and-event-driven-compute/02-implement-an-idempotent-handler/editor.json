@@ -1,0 +1,34 @@
+{
+  "language": "javascript",
+  "completionProfile": "node-standard",
+  "activeFile": "handler.js",
+  "files": [
+    {
+      "filename": "handler.js",
+      "initialValue": "export function createHandler({ store, publisher }) {\n  return async function handler(event) {\n    return { processed: false, duplicate: false };\n  };\n}\n"
+    },
+    {
+      "filename": "handler.test.js",
+      "readOnly": true,
+      "initialValue": "import assert from \"node:assert/strict\";\nimport { createHandler } from \"./handler.js\";\n\nfunction fixtures() {\n  const claimed = new Set();\n  const published = [];\n  let failNext = false;\n  return {\n    claimed,\n    published,\n    store: {\n      async claim(id) {\n        if (claimed.has(id)) return false;\n        claimed.add(id);\n        return true;\n      },\n      async release(id) {\n        claimed.delete(id);\n      },\n    },\n    publisher: {\n      async publish(event) {\n        if (failNext) {\n          failNext = false;\n          throw new Error(\"downstream unavailable\");\n        }\n        published.push(event.eventId);\n      },\n    },\n    failOnce() {\n      failNext = true;\n    },\n  };\n}\n\nconst first = fixtures();\nconst firstHandler = createHandler(first);\nassert.deepEqual(await firstHandler({ eventId: \"evt-1\" }), { processed: true, duplicate: false, eventId: \"evt-1\" });\nassert.deepEqual(await firstHandler({ eventId: \"evt-1\" }), { processed: false, duplicate: true, eventId: \"evt-1\" });\nassert.deepEqual(first.published, [\"evt-1\"]);\n\nconst concurrent = fixtures();\nconst concurrentHandler = createHandler(concurrent);\nconst results = await Promise.all([\n  concurrentHandler({ eventId: \"evt-2\" }),\n  concurrentHandler({ eventId: \"evt-2\" }),\n]);\nassert.equal(results.filter((result) => result.processed).length, 1);\nassert.equal(concurrent.published.length, 1);\n\nconst retry = fixtures();\nconst retryHandler = createHandler(retry);\nretry.failOnce();\nawait assert.rejects(() => retryHandler({ eventId: \"evt-3\" }), /downstream unavailable/);\nassert.equal(retry.claimed.has(\"evt-3\"), false);\nassert.equal((await retryHandler({ eventId: \"evt-3\" })).processed, true);\n\nawait assert.rejects(() => retryHandler({}), /eventId/);\nconsole.log(\"lambda idempotency contract passed\");\n"
+    }
+  ],
+  "executor": {
+    "runtime": "node-22",
+    "entrypoint": "handler.test.js",
+    "mode": "run",
+    "runLabel": "Test Lambda handler"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "allowStderr": false,
+    "stdout": [
+      {
+        "match": "contains",
+        "value": "lambda idempotency contract passed",
+        "label": "idempotency test suite"
+      }
+    ]
+  }
+}

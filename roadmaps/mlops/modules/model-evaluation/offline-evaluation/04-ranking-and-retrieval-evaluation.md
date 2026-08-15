@@ -29,7 +29,7 @@ aliases:
 ## Ranking Evaluation Measures An Ordered Experience
 <!-- section-summary: Ranking evaluation asks whether useful items appear early enough in an ordered list for a person or downstream system to use them. -->
 
-At a high level, **ranking evaluation measures the quality of an ordered list**.
+A search result can contain the correct document and still fail the user if that document appears on page five. **Ranking evaluation measures the quality of an ordered list.**
 Search engines rank documents.
 Recommendation systems rank products, videos, or articles.
 Retrieval systems rank passages before another model reads them.
@@ -142,6 +142,10 @@ Teams usually run two complementary comparisons:
 - An **end-to-end comparison** lets each complete pipeline generate and rank its own candidates. This measures the release users would actually receive.
 
 Both results belong in a release report. The first helps locate a change. The second supports the production decision.
+
+![Ranking evaluation separates candidate retrieval, controlled ordering, and the final visible list](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/retrieval-ranking-boundaries.png)
+
+*Retrieval determines which relevant items are available, ranking orders those candidates, and the final-list check adds eligibility, diversity, and latency.*
 
 ## Decide What Counts As A Relevant Result
 <!-- section-summary: Relevance labels approximate user usefulness, and every label source brings coverage limits, bias, or delay. -->
@@ -563,21 +567,9 @@ Shadow traffic is the next operational check. The candidate processes copied req
 
 A controlled online experiment assigns eligible users or requests to production and candidate policies. It measures outcomes such as successful sessions, task completion, reformulation, abandonment, conversion, retained use, complaints, or downstream answer quality. Stable assignment, sample-size planning, mature outcome windows, and predeclared guardrails protect the interpretation.
 
-```mermaid
-sequenceDiagram
-    participant O as Offline evaluation
-    participant S as Shadow traffic
-    participant E as Controlled experiment
-    participant R as Release review
+![Ranking evidence progresses from offline evaluation through shadow traffic and a controlled experiment to release review](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/progressive-ranking-evidence.png)
 
-    O->>O: Validate labels, metrics, segments, and coverage
-    O-->>S: Candidate passes offline gates
-    S->>S: Check runtime, features, indexes, and rank changes
-    S-->>E: Candidate passes operational gates
-    E->>E: Measure user outcomes and product guardrails
-    E-->>R: Paired evidence and approved scope
-    R->>R: Promote, restrict, investigate, or reject
-```
+*Each stage answers a different question: offline evidence screens quality, shadow traffic verifies operation, and a controlled experiment measures outcomes under the new policy.*
 
 Offline and online metrics should tell a coherent story without being identical. NDCG@10 can justify testing a candidate. The experiment may use successful-search rate or task completion as its primary outcome. A disagreement triggers investigation into label meaning, exposure bias, presentation, latency, novelty, or experiment implementation.
 
@@ -719,6 +711,10 @@ The team first separates candidate retrieval from final ranking. It defines rele
 Per-request aggregation keeps weighting and uncertainty honest. Segment, coverage, diversity, policy, latency, and cost guardrails protect responsibilities outside the primary relevance metric. Offline results screen the candidate, shadow traffic validates operation, and controlled experiments measure behaviour under the new policy.
 
 The final release gate grants only the scope supported by that evidence. It identifies the exact ranker and index, names stop conditions, and retains a tested rollback pair. That chain turns ranking metrics into a production decision people can understand, inspect, and reverse.
+
+![Ranking release evidence joins the experience definition, valid labels, per-request metrics, product guardrails, and a reversible scope](/content-assets/articles/article-mlops-model-evaluation-ranking-retrieval-evaluation/ranking-release-evidence.png)
+
+*A ranking score supports a release only when it travels with the exact request set, relevance policy, guardrails, uncertainty, and compatible rollback pair.*
 
 ## References
 

@@ -21,5 +21,5 @@ spec:
           port: 80
 ```
 
-- `sectionName: https` attaches the Route to the precise listener owned by the platform team.
-- The backend uses the Service port, while the Service remains responsible for forwarding to ready Pods.
+- `sectionName: https` attaches the Route to the precise listener in the supplied platform-owned Gateway.
+- The backend resolves to the supplied Service and uses its caller-facing port, while the Service remains responsible for forwarding to ready Pods.

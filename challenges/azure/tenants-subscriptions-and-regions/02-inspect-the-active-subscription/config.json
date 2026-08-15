@@ -29,6 +29,9 @@
       "tenant-devpolaris",
       "DevPolaris Training"
     ],
+    "requireCommandPatterns": [
+      "^az\\s+account\\s+show\\b"
+    ],
     "requireCommands": [
       "az"
     ],

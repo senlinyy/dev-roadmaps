@@ -1,6 +1,6 @@
 ---
 title: "AWS"
-description: "Practice AWS service selection, account boundaries, resource identity, operations, cost, and recovery judgment through scenario-based quizzes."
+description: "Build native AWS service contracts, inspect operational evidence with the AWS CLI, and make architecture decisions through realistic scenarios."
 kind: aws
 icon: Globe
 color: "#FFB454"

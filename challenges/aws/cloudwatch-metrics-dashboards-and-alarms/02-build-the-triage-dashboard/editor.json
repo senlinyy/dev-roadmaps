@@ -1,0 +1,159 @@
+{
+  "language": "json",
+  "filename": "orders-dashboard.json",
+  "completionProfile": "aws-cloudwatch",
+  "initialValue": "{\n  \"widgets\": [\n    {\n      \"type\": \"metric\",\n      \"x\": 0,\n      \"y\": 0,\n      \"width\": 12,\n      \"height\": 6,\n      \"properties\": {\n        \"title\": \"\",\n        \"region\": \"eu-west-2\",\n        \"period\": 300,\n        \"metrics\": []\n      }\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "widgets"
+        ],
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "single triage widget"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "type"
+        ],
+        "equals": "metric",
+        "label": "metric widget"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "width"
+        ],
+        "equals": 12,
+        "label": "widget width"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "height"
+        ],
+        "equals": 6,
+        "label": "widget height"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "title"
+        ],
+        "equals": "Orders API traffic, errors, and latency",
+        "label": "operator-facing title"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "region"
+        ],
+        "equals": "eu-west-2",
+        "label": "metric Region"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "period"
+        ],
+        "equals": 60,
+        "label": "one-minute period"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics"
+        ],
+        "minItems": 3,
+        "maxItems": 3,
+        "label": "three service signals"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          0
+        ],
+        "includes": "RequestCount",
+        "label": "request traffic"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          0
+        ],
+        "containsObject": {
+          "stat": "Sum"
+        },
+        "label": "request statistic"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          1
+        ],
+        "includes": "HTTPCode_Target_5XX_Count",
+        "label": "target errors"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          1
+        ],
+        "containsObject": {
+          "stat": "Sum"
+        },
+        "label": "error statistic"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          2
+        ],
+        "includes": "TargetResponseTime",
+        "label": "target latency"
+      },
+      {
+        "path": [
+          "widgets",
+          0,
+          "properties",
+          "metrics",
+          2
+        ],
+        "containsObject": {
+          "stat": "p95"
+        },
+        "label": "latency percentile"
+      }
+    ]
+  }
+}

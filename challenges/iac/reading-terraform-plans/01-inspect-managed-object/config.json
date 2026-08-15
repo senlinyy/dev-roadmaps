@@ -1,0 +1,47 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/main.tf": {
+      "type": "file",
+      "content": "resource \"aws_s3_bucket\" \"orders_archive\" {}\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "initialized": true,
+    "resources": [
+      {
+        "address": "aws_s3_bucket.orders_archive",
+        "id": "dp-orders-archive-prod",
+        "attributes": {
+          "region": "eu-west-2"
+        }
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "aws_s3_bucket.orders_archive",
+      "dp-orders-archive-prod",
+      "eu-west-2"
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+state\\s+list$",
+      "^terraform\\s+state\\s+show\\s+aws_s3_bucket\\.orders_archive$"
+    ],
+    "forbidCommandPatterns": [
+      "(?:cat|head|tail|grep)\\s+.*terraform\\.tfstate"
+    ]
+  }
+}

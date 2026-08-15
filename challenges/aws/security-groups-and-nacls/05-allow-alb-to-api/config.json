@@ -50,6 +50,10 @@
       "sg-orders-alb",
       "3000"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ec2\\\\s+describe-security-groups\\\\b",
+      "^aws\\\\s+ec2\\\\s+authorize-security-group-ingress\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

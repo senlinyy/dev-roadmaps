@@ -27,7 +27,7 @@ id: "article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores"
 ## What ML Storage Actually Has To Preserve
 <!-- section-summary: An ML release depends on several kinds of durable content and records whose identities must remain connected. -->
 
-At a high level, **ML storage systems preserve the model, the evidence that explains it, and the production records that show how it was used.** The model file is only one part of that history.
+Finding a model file is insufficient during an approval review or production incident. The team needs to know which data and code produced it, which environment ran the training, how it was evaluated, and whether it was released. **ML storage systems preserve that complete history, with the model file as one part of the record.**
 
 Imagine one training job that reads a customer-risk table and produces a classifier. By the end of the release, the team may have all of these records:
 
@@ -54,6 +54,10 @@ flowchart TD
 ```
 
 The storage architecture succeeds if an operator can move backward and forward through this chain. A production prediction should resolve to the release that served it. That release should resolve to the model, evaluation, run, code, runtime, and dataset state. A damaged dataset should also reveal every model and release that depended on it.
+
+![One ML release distributed across dataset snapshots, an OCI image, experiment tracking, object storage, a model registry, a release system, and production evidence stores](/content-assets/articles/article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores/ml-storage-homes.png)
+
+*The dataset and runtime image feed one tracked training run. The run writes a model artifact; the registry assigns a governed model version, and the release system records the production decision. Stable IDs connect those records to later production evidence.*
 
 ## Understand The Five Storage Jobs In An ML System
 <!-- section-summary: Five storage responsibilities cover durable bytes, dataset states, development evidence, release identity, and production records. -->
@@ -131,6 +135,10 @@ evaluation:
 
 The addresses show which systems hold the records. The immutable IDs select exact states. The surrounding fields provide meaning. The nested references preserve lineage. A release system can validate these references before traffic changes.
 
+![Four coordinates of a stored model artifact: address, immutable identity, descriptive metadata, and lifecycle lineage](/content-assets/articles/article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores/four-coordinates-of-ml-asset.png)
+
+*An address lets a client find `model.onnx`; a digest or object generation selects the exact bytes. Metadata explains the artifact, and lineage connects its dataset, run, model version, and release.*
+
 ## Keep Model Files And Runtime Images Immutable
 <!-- section-summary: Model outputs and runtime images use immutable identities so evaluation, deployment, and recovery all refer to the same bytes. -->
 
@@ -200,11 +208,11 @@ This separation creates a real recovery requirement. A database backup without t
 
 ### Use A Model Registry For Governed Model Versions
 
-A **model registry** groups versions of a model used for the same task. Each version points to an exact trained artifact and can carry a description, signature, tags, aliases, and links to its source evidence. MLflow Model Registry, Models in Unity Catalog, SageMaker AI Model Registry, Vertex AI Model Registry, and Azure Machine Learning registries provide managed forms of this responsibility.
+A **model registry** groups versions of a model used for the same task. Each version points to an exact trained artifact and can carry a description, signature, tags, aliases, and links to its source evidence. MLflow Model Registry, Models in Unity Catalog, SageMaker AI Model Registry, Gemini Enterprise Agent Platform Model Registry, and Azure Machine Learning registries provide managed forms of this responsibility.
 
 MLflow's fixed model stages are deprecated. Current designs use immutable versions with aliases and tags. An alias such as `champion` or `candidate` is a mutable pointer used for discovery or automation. A deployment or incident record should still store the resolved version because an alias can move later.
 
-Managed catalogs add organizational controls around the model identity. Models in Unity Catalog use governed three-level names and permissions. SageMaker Model Registry organizes versioned model packages into model groups. Vertex AI Model Registry groups model versions under a model resource and supports mutable aliases. Azure Machine Learning registries can share models and other assets across workspaces. The provider object changes, while the responsibility stays the same: identify and govern a model version without pretending that the registry itself proves what served traffic.
+Managed catalogs add organizational controls around the model identity. Models in Unity Catalog use governed three-level names and permissions. SageMaker Model Registry organizes versioned model packages into model groups. Agent Platform Model Registry, formerly Vertex AI Model Registry, groups model versions under a model resource and supports mutable aliases. Azure Machine Learning registries can share models and other assets across workspaces. The provider object changes, while the responsibility stays the same: identify and govern a model version without pretending that the registry itself proves what served traffic.
 
 ### Use A Release Record For The Production Decision
 
@@ -290,6 +298,20 @@ Atomic publication does not guarantee every search index updates immediately. Th
 
 Storage contains both valuable software assets and sensitive data, so a single broad “ML platform” role creates unnecessary risk. The dataset publisher, training job, registry automation, deployment controller, and serving runtime perform different actions. Their credentials should express those differences. This design also improves incident evidence: an object-store audit event identifies the workload responsible for a write instead of reporting one shared service account used by the entire lifecycle.
 
+Access and retention solve connected but separate problems. Access policy prevents one workload from changing records owned by another stage. Retention keeps the complete set of files and metadata needed to explain or restore an approved release. A narrowly scoped serving identity cannot help if lifecycle policy deleted its tokenizer, and long retention cannot protect a model package from an over-privileged training job. The lifecycle needs both controls around the same immutable asset identities.
+
+```mermaid
+flowchart TD
+    Dataset["Dataset publisher<br/>(write governed data snapshots)"] --> Training["Training identity<br/>(read approved data; write run artifacts)"]
+    Training --> Registry["Registry automation<br/>(register verified model versions)"]
+    Registry --> Deploy["Deployment controller<br/>(promote approved release)"]
+    Deploy --> Serving["Serving identity<br/>(read exact production artifacts)"]
+    Dataset -.->|cannot alter models| Deny["Policy boundary<br/>(deny unrelated writes and reads)"]
+    Training -.->|cannot update traffic| Deny
+    Serving -.->|cannot overwrite releases| Deny
+    Deploy --> Retain["Release retention closure<br/>(model, runtime, evaluation, approval, and history)"]
+```
+
 ### Give Writers Access Only To Their Required Destinations
 
 A dataset pipeline writes new governed snapshots but cannot alter registered models. A training identity reads approved datasets and writes only to its run-specific artifact prefix. Registry automation can create model versions from verified artifacts. Deployment automation can read approved releases and update endpoints. Serving identities receive read access to the exact model location and no permission to overwrite it.
@@ -349,7 +371,7 @@ flowchart TD
 
 A small team can cover the framework without building a metadata platform. Object storage holds run artifacts. An OCI registry holds training and serving images. A warehouse or Delta or Iceberg table provides addressable dataset states. MLflow records runs and registered model versions. The deployment workflow writes a small immutable release record, while prediction evidence lands in a governed analytics table.
 
-A provider-centered team can use the same framework through managed services. SageMaker AI, Vertex AI, Azure Machine Learning, and Databricks each combine parts of tracking, registry, catalog, data, and deployment. Their internal integration reduces plumbing. Git identity, OCI image identity, data retention, production telemetry, and the observed release still cross product boundaries.
+A provider-centered team can use the same framework through managed services. SageMaker AI, Gemini Enterprise Agent Platform, Azure Machine Learning, and Databricks each combine parts of tracking, registry, catalog, data, and deployment. Their internal integration reduces plumbing. Git identity, OCI image identity, data retention, production telemetry, and the observed release still cross product boundaries.
 
 Larger organizations add a catalog or lineage service after cross-system questions recur across teams. Those questions include asset discovery, downstream impact, ownership, and policy. OpenLineage provides portable run and dataset events across supported tools. Unity Catalog provides a managed governed catalog inside the Databricks platform. Evaluate connector coverage and permission filtering before adoption. Also prove that lost events can be recovered and links can be rebuilt from authoritative records.
 
@@ -363,6 +385,10 @@ ML systems create several forms of durable evidence because data, model artifact
 Addresses help clients find records. Immutable identities select the exact state. Metadata explains its meaning. Lineage connects it to the rest of the lifecycle. Those four ideas let specialized stores cooperate without copying every fact into one database.
 
 The practical test starts from either end of the evidence graph. A production prediction should lead back to the exact release, model, run, runtime, code, and dataset. A faulty dataset or image should reveal every downstream release at risk. Atomic publication, narrow permissions, aligned retention, and regular restore and rebuild drills keep those paths trustworthy.
+
+![Two evidence paths connecting a production prediction backward to its release, model, run, dataset, and runtime and an upstream defect forward to affected endpoints](/content-assets/articles/article-mlops-mlops-infrastructure-artifact-model-dataset-metadata-stores/release-evidence-two-directions.png)
+
+*Production investigation moves from a prediction toward its exact inputs. Impact analysis moves from a faulty dataset or image toward every affected run, model, release, endpoint, and decision. Publication, access, retention, and restore controls keep both paths usable.*
 
 ## References
 
@@ -381,5 +407,5 @@ The practical test starts from either end of the evidence graph. A production pr
 - [Models in Unity Catalog](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)
 - [Unity Catalog lineage](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-lineage)
 - [SageMaker AI Model Registry concepts](https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-models.html)
-- [Vertex AI model aliases](https://docs.cloud.google.com/vertex-ai/docs/model-registry/model-alias)
+- [Gemini Enterprise Agent Platform model aliases](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/model-alias)
 - [Azure Machine Learning registries](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-registries?view=azureml-api-2)

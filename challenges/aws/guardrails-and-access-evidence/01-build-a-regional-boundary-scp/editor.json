@@ -1,0 +1,106 @@
+{
+  "language": "json",
+  "filename": "regional-boundary-scp.json",
+  "completionProfile": "aws-iam-policy",
+  "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"DenyOutsideApprovedRegions\",\n      \"Effect\": \"\",\n      \"NotAction\": [],\n      \"Resource\": \"*\",\n      \"Condition\": {}\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "Statement"
+        ],
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "single regional guardrail"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Effect"
+        ],
+        "equals": "Deny",
+        "label": "explicit deny"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Action"
+        ],
+        "exists": false,
+        "label": "NotAction rather than Action"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "NotAction"
+        ],
+        "includes": "iam:*",
+        "label": "IAM global service exemption"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "NotAction"
+        ],
+        "includes": "organizations:*",
+        "label": "Organizations global service exemption"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "NotAction"
+        ],
+        "includes": "route53:*",
+        "label": "Route 53 global service exemption"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "NotAction"
+        ],
+        "includes": "support:*",
+        "label": "Support global service exemption"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Resource"
+        ],
+        "equals": "*",
+        "label": "all resources within denied regional calls"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Condition",
+          "StringNotEquals",
+          "aws:RequestedRegion"
+        ],
+        "includes": "eu-west-1",
+        "label": "Ireland allowed Region"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Condition",
+          "StringNotEquals",
+          "aws:RequestedRegion"
+        ],
+        "includes": "eu-west-2",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "London allowed Region"
+      }
+    ]
+  }
+}

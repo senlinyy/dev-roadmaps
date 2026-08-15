@@ -1,0 +1,139 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "live/prod/main.tf",
+  "files": [
+    {
+      "filename": "modules/service/variables.tf",
+      "initialValue": "variable \"environment\" { type = string }\nvariable \"replica_count\" { type = number }\n",
+      "readOnly": true
+    },
+    {
+      "filename": "modules/service/main.tf",
+      "initialValue": "resource \"aws_ecs_service\" \"this\" {\n  name          = \"orders-${var.environment}\"\n  desired_count = var.replica_count\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "live/prod/backend.tf",
+      "initialValue": "terraform {\n}\n"
+    },
+    {
+      "filename": "live/prod/providers.tf",
+      "initialValue": "provider \"aws\" {\n}\n"
+    },
+    {
+      "filename": "live/prod/main.tf",
+      "initialValue": "module \"service\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenBlocks": [
+      {
+        "file": "modules/service/main.tf",
+        "path": [
+          {
+            "type": "terraform"
+          }
+        ]
+      },
+      {
+        "file": "modules/service/main.tf",
+        "path": [
+          {
+            "type": "provider",
+            "labels": [
+              "aws"
+            ]
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "live/prod/backend.tf",
+          "path": [
+            {
+              "type": "terraform"
+            },
+            {
+              "type": "backend",
+              "labels": [
+                "s3"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "key"
+            ],
+            "valueEquals": "orders/prod/terraform.tfstate"
+          },
+          {
+            "path": [
+              "use_lockfile"
+            ],
+            "valueEquals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/providers.tf",
+          "path": [
+            {
+              "type": "provider",
+              "labels": [
+                "aws"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "region"
+            ],
+            "valueEquals": "eu-west-2"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "service"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/service"
+          },
+          {
+            "path": [
+              "environment"
+            ],
+            "valueEquals": "prod"
+          },
+          {
+            "path": [
+              "replica_count"
+            ],
+            "valueEquals": 3
+          }
+        ]
+      }
+    ]
+  }
+}

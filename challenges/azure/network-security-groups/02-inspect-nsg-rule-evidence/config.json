@@ -287,6 +287,9 @@
       "Internet"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+network\\s+nsg\\s+rule\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

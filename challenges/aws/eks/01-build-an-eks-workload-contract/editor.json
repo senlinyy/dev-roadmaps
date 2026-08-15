@@ -1,0 +1,294 @@
+{
+  "language": "yaml",
+  "completionProfile": "kubernetes",
+  "activeFile": "deployment.yaml",
+  "files": [
+    {
+      "filename": "service-account.yaml",
+      "initialValue": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: orders-api\n  namespace: orders\n  annotations: {}\n"
+    },
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-api\n  namespace: orders\nspec:\n  replicas: 1\n  selector:\n    matchLabels: {}\n  template:\n    metadata:\n      labels: {}\n    spec:\n      containers:\n        - name: api\n          image: 123456789012.dkr.ecr.eu-west-2.amazonaws.com/orders-api:2026.08.1\n"
+    },
+    {
+      "filename": "service.yaml",
+      "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: orders-api\n  namespace: orders\nspec:\n  type: ClusterIP\n  selector: {}\n  ports: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "kubernetes-manifests",
+    "minResources": 3,
+    "maxResources": 3,
+    "resources": [
+      {
+        "select": {
+          "kind": "ServiceAccount",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "paths": [
+          {
+            "path": [
+              "metadata",
+              "annotations",
+              "eks.amazonaws.com/role-arn"
+            ],
+            "equals": "arn:aws:iam::123456789012:role/orders-api-prod",
+            "label": "IRSA role annotation"
+          }
+        ]
+      },
+      {
+        "select": {
+          "kind": "Deployment",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "paths": [
+          {
+            "path": [
+              "spec",
+              "replicas"
+            ],
+            "equals": 3,
+            "label": "three replicas"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "serviceAccountName"
+            ],
+            "equals": "orders-api",
+            "label": "workload service account"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "securityContext",
+              "runAsNonRoot"
+            ],
+            "equals": true,
+            "label": "non-root Pod"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "ports"
+            ],
+            "containsObject": {
+              "name": "http",
+              "containerPort": 8080
+            },
+            "label": "named HTTP port"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "securityContext",
+              "allowPrivilegeEscalation"
+            ],
+            "equals": false,
+            "label": "no privilege escalation"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "securityContext",
+              "readOnlyRootFilesystem"
+            ],
+            "equals": true,
+            "label": "read-only root filesystem"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "readinessProbe",
+              "httpGet",
+              "path"
+            ],
+            "equals": "/readyz",
+            "label": "readiness endpoint"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "readinessProbe",
+              "httpGet",
+              "port"
+            ],
+            "equals": "http",
+            "label": "readiness named port"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "livenessProbe",
+              "httpGet",
+              "path"
+            ],
+            "equals": "/livez",
+            "label": "liveness endpoint"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "resources",
+              "requests",
+              "cpu"
+            ],
+            "equals": "100m",
+            "label": "CPU request"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "resources",
+              "requests",
+              "memory"
+            ],
+            "equals": "128Mi",
+            "label": "memory request"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "resources",
+              "limits",
+              "cpu"
+            ],
+            "equals": "500m",
+            "label": "CPU limit"
+          },
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers",
+              0,
+              "resources",
+              "limits",
+              "memory"
+            ],
+            "equals": "512Mi",
+            "label": "memory limit"
+          }
+        ]
+      },
+      {
+        "select": {
+          "kind": "Service",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "paths": [
+          {
+            "path": [
+              "spec",
+              "type"
+            ],
+            "equals": "ClusterIP",
+            "label": "internal service type"
+          },
+          {
+            "path": [
+              "spec",
+              "ports"
+            ],
+            "containsObject": {
+              "name": "http",
+              "port": 80,
+              "targetPort": "http"
+            },
+            "label": "service port mapping"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "workload-selector",
+        "workload": {
+          "kind": "Deployment",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "label": "Deployment selector matches Pod labels"
+      },
+      {
+        "type": "service-targets-workload",
+        "service": {
+          "kind": "Service",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "workload": {
+          "kind": "Deployment",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "label": "Service targets the orders Deployment"
+      },
+      {
+        "type": "reference-exists",
+        "source": {
+          "kind": "Deployment",
+          "name": "orders-api",
+          "namespace": "orders"
+        },
+        "path": [
+          "spec",
+          "template",
+          "spec",
+          "serviceAccountName"
+        ],
+        "target": {
+          "kind": "ServiceAccount"
+        },
+        "namespace": "same",
+        "label": "workload service account exists"
+      }
+    ]
+  }
+}

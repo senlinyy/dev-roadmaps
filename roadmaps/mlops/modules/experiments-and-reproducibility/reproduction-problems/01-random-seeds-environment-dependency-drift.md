@@ -29,7 +29,7 @@ id: "article-mlops-experiments-and-reproducibility-random-seeds-environment-depe
 
 An ML engineer runs the same checkout-fraud training command twice from the same Git commit. The first run reaches 82 percent recall while staying under the product's false-positive limit. The second reaches 77 percent recall and fails the release gate. Both logs print the same seed. A release review is due that afternoon, so the engineer must decide whether the candidate is trustworthy or whether the difference exposes a broken experiment. Approving the weaker result could miss fraudulent payments; rejecting a healthy candidate delays a useful protection.
 
-At a high level, **training reproducibility is the ability to repeat a declared computation and explain any remaining difference.** The word *declared* matters. A training command names the program, while the result also depends on the data rows, split membership, random-number streams, algorithm implementations, installed libraries, native runtime, hardware, process history, parallel execution, and evaluation policy.
+Running the same training command twice does not guarantee the same model. The result also depends on data rows, split membership, random-number streams, libraries, native runtime, hardware, parallel execution, and evaluation policy. **Training reproducibility is the ability to repeat that declared computation and explain any remaining difference.**
 
 Training is stateful because each optimization step depends on the steps before it. A changed first batch creates a changed gradient. That gradient creates changed weights, which alter the next gradient. A tiny numerical difference can therefore grow across thousands of updates. Comparing only the final metric reveals that the runs differ; it gives no clue where the paths separated.
 
@@ -51,6 +51,10 @@ flowchart TD
     R --> G["Evaluation policy<br/>(labels, metrics, slices, thresholds)"]
     G --> H["Reproduction decision<br/>(exact, tolerant, or conclusion-stable)"]
 ```
+
+![Two training runs compared at six checkpoints, with the first different batch IDs identifying the earliest divergence](/content-assets/articles/article-mlops-experiments-and-reproducibility-random-seeds-environment-dependency-drift/first-divergence-checkpoints.png)
+
+*The final metric confirms that two runs differ. Comparing checkpoints from the data onward reveals where the paths first separated and gives the investigation a concrete starting point.*
 
 Some layers have immutable identities that the run can **pin**. Dataset snapshots, split manifests, code commits, lockfiles, and container digests belong in this group.
 
@@ -116,6 +120,8 @@ def seed_worker(worker_id: int) -> None:
     random.seed(worker_seed)
     np.random.seed(worker_seed)
 
+random.seed(SEED)
+np.random.seed(SEED)
 torch.manual_seed(SEED)
 torch.use_deterministic_algorithms(True)
 torch.backends.cudnn.benchmark = False
@@ -132,6 +138,10 @@ loader = DataLoader(
 `torch.manual_seed` seeds PyTorch's generator across CPU and CUDA devices. The data loader derives a PyTorch seed for each worker; `worker_init_fn` carries that seed into Python and NumPy code running inside the worker. A separately created NumPy `Generator`, such as `np.random.default_rng()`, still needs an explicit seed or `SeedSequence` because `np.random.seed` controls only the legacy global generator.
 
 The proof should come from observed state. Record the root seed and derivation policy, then compare initialized-weight hashes, the first shuffled sample IDs, and the first augmented batch. Equal final seeds with different first-batch hashes point toward a missing generator or a changed call sequence.
+
+![One root seed feeding several controlled random streams, with an unseeded generator causing replay drift](/content-assets/articles/article-mlops-experiments-and-reproducibility-random-seeds-environment-dependency-drift/random-streams-and-evidence.png)
+
+*Python, NumPy, PyTorch, and data-loader workers can consume separate random streams. Early evidence such as weight hashes and batch IDs proves whether those streams reproduced the original path.*
 
 ## Use Deterministic Algorithms Where Exact Replays Matter
 <!-- section-summary: Framework determinism selects repeatable implementations where available and reports operations that cannot satisfy the requested policy. -->
@@ -160,16 +170,18 @@ Source code can stay unchanged while its imported behaviour changes. A broad req
 
 ### Lock Python Dependencies And Verify The Lockfile
 
-A dependency lock records the resolved package graph. With uv, `uv.lock` contains exact resolved versions and belongs in version control. The `--locked` option rejects a stale or missing lock and leaves it unchanged. The `--frozen` option trusts the existing lock without checking whether project metadata still agrees with it. That distinction matters in CI: freshness validation protects a reviewed build, while frozen behaviour is useful only when the caller intentionally trusts the recorded lock.
+A dependency lock records the resolved package graph. With uv, `uv.lock` contains exact resolved versions and belongs in version control. The `--locked` option rejects a stale or missing lock and leaves it unchanged. The `--frozen` option trusts the existing lock without checking whether project metadata still agrees with it. That distinction matters in CI: freshness validation protects a reviewed build. Frozen behaviour fits a caller that deliberately trusts the recorded lock.
 
 ```bash
 uv lock --check
 uv sync --locked
 uv run --locked python -m training.run
-uv export --frozen --format cyclonedx1.5 > dependencies.cdx.json
+uv export --frozen --format requirements-txt > dependencies.locked.txt
 ```
 
 `uv sync` performs an exact synchronization by default, so undeclared packages are removed from the project environment. Running `uv run` alone uses an inexact sync by default and can leave unrelated packages present. A clean build job should synchronize first, save the lock digest and resolved inventory, then launch training from that environment.
+
+The requirements export supplies a stable, reviewable inventory from the frozen lock. Teams that require a CycloneDX software bill of materials can run an approved SBOM generator against that environment. uv also offers `cyclonedx1.5` export, although its documentation marks that format as preview. A production pipeline that adopts it should pin the uv release and validate the generated schema before treating the file as release evidence.
 
 Python packages are only one layer. The operating system, C runtime, BLAS implementation, compiler-built framework options, CUDA user-space libraries, and environment variables can change numerical behaviour. For PyTorch, `torch.__config__.show()` records useful build configuration.
 
@@ -246,7 +258,7 @@ Long-lived Python processes have similar risks. Module globals, singleton client
 
 Production training should launch in a fresh process from an explicit entrypoint. The job checks out a recorded commit, loads a resolved configuration, synchronizes a locked environment, reads immutable data references, and receives an explicit checkpoint argument. Caches use content-based keys and a clean job workspace. The pipeline records an allowlist of non-secret environment settings; credentials remain in the secret system and never enter the run evidence.
 
-Notebook work still has a useful verification step: restart the kernel and run all cells from top to bottom. The production proof is stronger. Export the discovered logic into importable modules, call it through the same job entrypoint used by automation, and compare the input and early-state fingerprints with the notebook run.
+Notebook work still needs a verification step: restart the kernel and run all cells from top to bottom. The production proof is stronger. Export the discovered logic into importable modules, call it through the same job entrypoint used by automation, and compare the input and early-state fingerprints with the notebook run.
 
 For example, a data scientist tests an image model after several interactive preprocessing experiments. The current notebook kernel contains an old normalization object, so a later training cell uses different statistics from a clean job. The engineer responsible for packaging sees different first-batch hashes before the candidate review. Without that check, reviewers would compare candidates trained on different inputs. Moving normalization into versioned code and starting a fresh process produces matching batch hashes and removes the hidden dependency.
 
@@ -268,7 +280,7 @@ Evaluation drift has a distinctive signature: prediction hashes match, while met
 
 Preserve both runs before investigating. Overwriting a failed run removes the evidence needed to compare it. Then confirm the reproduction target: exact execution in one fixed environment, numerical agreement across an allowed boundary, or the same product conclusion.
 
-A useful investigation works backward from the visible mismatch while comparing evidence from the earliest possible checkpoints. Matching final metrics can hide different run paths, while different final metrics reveal only the symptom. The sequence must test one boundary at a time.
+The investigation works backward from the visible mismatch while comparing evidence from the earliest possible checkpoints. Matching final metrics can hide different run paths, while different final metrics reveal only the symptom. Test one boundary at a time.
 
 First decide whether the difference came from interpretation or computation. Matching prediction hashes with different metrics point to evaluation. Different data or split identities show that training received another population. If those identities match, initialized weights, transformed batches, and early outputs reveal whether the path separated in randomness, hidden state, the numerical runtime, or later distributed execution.
 
@@ -347,6 +359,10 @@ Strong reproducibility work finds the first divergence and repairs that layer. I
 
 The operating habit matters as much as any individual flag. Preserve both runs, compare immutable identities, inspect early state, and change one control at a time. The result is a clear explanation of why two runs matched, why they differed, and whether the difference changes the decision the model supports.
 
+![A reproducible training contract organized around pinned inputs, configured runtime behavior, recorded execution conditions, and declared comparison outcomes](/content-assets/articles/article-mlops-experiments-and-reproducibility-random-seeds-environment-dependency-drift/reproducible-run-contract.png)
+
+*A useful reproduction claim connects the run contract to observable evidence and a declared tolerance. Exact replay, numerical tolerance, and conclusion stability answer different engineering questions.*
+
 ## References
 
 - [PyTorch: Reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html)
@@ -359,4 +375,5 @@ The operating habit matters as much as any individual flag. Preserve both runs, 
 - [NumPy: Random sampling](https://numpy.org/doc/stable/reference/random/)
 - [uv: Locking and syncing](https://docs.astral.sh/uv/concepts/projects/sync/)
 - [uv: Project structure and lockfiles](https://docs.astral.sh/uv/concepts/projects/layout/)
+- [uv: Exporting project dependencies](https://docs.astral.sh/uv/concepts/projects/export/)
 - [Docker: Image digests](https://docs.docker.com/dhi/core-concepts/digests/)

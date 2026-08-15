@@ -4,6 +4,6 @@ description: "Practice RTO, RPO, backup versus recovery, data protection, redund
 articleId: article-cloud-providers-azure-cost-resilience-recovery-planning-redundancy-backups
 articleSlug: recovery-planning
 difficulty: medium
-order: 41
+order: 32
 tags: ["azure", "recovery", "backups", "rto", "rpo"]
 ---

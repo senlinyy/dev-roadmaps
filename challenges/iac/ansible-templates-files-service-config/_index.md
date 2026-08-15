@@ -1,9 +1,8 @@
 ---
 title: "Files and Templates"
-description: "Practice Ansible file modules for templates, directories, static files, and single-line service settings."
+description: "Manage directories and render validated service configuration from a real template."
 articleId: "article-infrastructure-as-code-ansible-templates-files-service-config"
 difficulty: "medium"
-order: 17
-tags: ["ansible", "templates", "files", "nginx"]
+order: 14
+tags: ["ansible", "file", "template"]
 ---
-

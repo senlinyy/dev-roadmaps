@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "flow-reject",
+      "type": "single",
+      "scenario": "A VPC Flow Logs record for the app ENI shows destination port 5432 and action REJECT. What does that evidence establish?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The observed network flow was rejected by an evaluated network control."
+        },
+        {
+          "id": "a",
+          "text": "The application parsed the database response incorrectly."
+        },
+        {
+          "id": "c",
+          "text": "The database password is wrong."
+        },
+        {
+          "id": "d",
+          "text": "Reachability Analyzer changed the route."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Flow logs record IP traffic metadata and acceptance or rejection. They do not prove application or database authentication behavior. Learn more in [VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)."
+    },
+    {
+      "id": "reachability-role",
+      "type": "single",
+      "scenario": "Before a production change, a team wants to know whether current AWS routing and network controls allow a path from an ALB ENI to an ECS task ENI. Which tool statically analyzes that configuration?",
+      "options": [
+        {
+          "id": "b",
+          "text": "AWS Budgets."
+        },
+        {
+          "id": "a",
+          "text": "VPC Reachability Analyzer."
+        },
+        {
+          "id": "c",
+          "text": "CloudWatch RUM."
+        },
+        {
+          "id": "d",
+          "text": "S3 Inventory."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Reachability Analyzer models the configured path and identifies blocking components without sending packets. Learn more in [Reachability Analyzer](https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html)."
+    },
+    {
+      "id": "timeout-sequence",
+      "type": "single",
+      "scenario": "Only orders tasks in one Availability Zone time out when connecting to a private database, while the same task revision stays healthy in the other Zone. The deployment and application configuration are identical. Which first comparison is most useful?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Delete every security group and retry."
+        },
+        {
+          "id": "c",
+          "text": "Move the database to a public subnet."
+        },
+        {
+          "id": "a",
+          "text": "Compare the affected and healthy task ENIs, subnets, route tables, NACLs, and flow-log records."
+        },
+        {
+          "id": "d",
+          "text": "Change the Route 53 TTL."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Comparing the healthy and unhealthy path isolates the AZ-specific difference while preserving evidence. Learn more in [VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)."
+    },
+    {
+      "id": "stateful-stateless",
+      "type": "single",
+      "scenario": "A security group allows the request, but a custom NACL blocks return traffic on ephemeral ports. Which distinction explains the failure?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Both controls are stateful."
+        },
+        {
+          "id": "c",
+          "text": "NACLs apply only to IAM calls."
+        },
+        {
+          "id": "d",
+          "text": "Security groups route packets between VPCs."
+        },
+        {
+          "id": "b",
+          "text": "Security groups are stateful, while NACLs are stateless and need compatible rules in both directions."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "NACLs are stateless subnet controls, so return traffic must be allowed explicitly. Learn more in [VPC network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)."
+    },
+    {
+      "id": "network-evidence",
+      "type": "multiple",
+      "scenario": "An internal API call times out intermittently and several teams own parts of the path. Which evidence belongs in a repeatable AWS timeout investigation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The exact source, destination, protocol, and port."
+        },
+        {
+          "id": "d",
+          "text": "A guessed fix applied before collecting the failing path."
+        },
+        {
+          "id": "b",
+          "text": "Route-table associations and longest-prefix route targets."
+        },
+        {
+          "id": "e",
+          "text": "Change the IAM password policy for human users."
+        },
+        {
+          "id": "c",
+          "text": "Security group, NACL, and flow-log evidence."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A concrete flow definition plus route and policy evidence makes the investigation reproducible and keeps guesses from destroying useful state. Learn more in [Reachability Analyzer](https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html) and [VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)."
+    }
+  ]
+}

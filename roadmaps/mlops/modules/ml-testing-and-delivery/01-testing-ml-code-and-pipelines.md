@@ -33,7 +33,7 @@ aliases:
 ## Why ML Pipelines Need Layered Tests
 <!-- section-summary: ML pipeline testing checks the assumptions connecting code, data, training, orchestration, external systems, model behavior, and release evidence. -->
 
-At a high level, **testing an ML pipeline** means checking every important assumption that turns raw data into a candidate model. An ML pipeline is the repeatable chain that collects data, creates features, trains a model, evaluates it, and publishes the resulting artifacts. The chain may contain Python, SQL, an orchestrator, cloud storage, managed training jobs, and a model registry.
+A training job can exit successfully while using the wrong feature column, leaking future data, or publishing an incomplete model bundle. **Testing an ML pipeline** means checking the important assumptions that turn raw data into a candidate model. The pipeline is the repeatable chain that collects data, creates features, trains a model, evaluates it, and publishes the resulting artifacts. That chain may contain Python, SQL, an orchestrator, cloud storage, managed training jobs, and a model registry.
 
 The difficult part is that a pipeline can complete without producing trustworthy results. A warehouse query can duplicate each customer three times. Training still returns exit code zero. The model file still loads. An evaluation job may even report a higher score if the duplicate rows caused leakage between the training and validation sets. The system looks healthy from the outside while its evidence has become unreliable.
 
@@ -61,6 +61,10 @@ flowchart TD
 The order also guides investigation. A data-contract failure deserves attention before anyone debates a drop in model recall. The candidate was evaluated on evidence that already violated its input assumptions. If every earlier layer passes and a segment regression remains, the investigation can concentrate on training data, model behavior, or the release policy.
 
 Each layer needs positive and negative cases. A positive case proves that an accepted input follows the expected path. A **negative test** deliberately supplies an invalid condition and confirms that the system rejects it with a useful error. Without negative tests, a validator may appear healthy because every fixture already satisfies its rules.
+
+![Eight ML pipeline test layers arranged from fast precise checks to representative expensive checks](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/test-layer-ladder.png)
+
+*The same pipeline needs several kinds of tests. The earliest failed layer narrows the investigation before later model evidence is trusted.*
 
 ## Test Small Data Transformations First
 <!-- section-summary: Deterministic transformation tests protect feature calculations, filtering, joins, and time logic with exact, local examples. -->
@@ -122,6 +126,10 @@ A **data contract** is a versioned agreement about data crossing a boundary. It 
 Contracts have several kinds of rules. Schema rules describe column names, types, and nullability. Semantic rules describe meaning, such as one row per `customer_id` and `snapshot_date`, or `feature_time <= prediction_time`. Statistical rules describe a batch as a population, such as an expected category domain, missing-value limit, or row-count range.
 
 These rules catch different failures. Suppose a feature join produces three rows for customers with three active addresses. Every column can have the correct type, so the schema passes. The unique customer-snapshot rule fails and shows the duplicated keys. A separate time rule can expose a feature computed after the prediction. The contract needs all three dimensions because valid-looking values can still represent the wrong training examples.
+
+![A six-row training batch passes through structure meaning and batch-health checks before acceptance or quarantine](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/data-contract-checkpoints.png)
+
+*A valid data type is only one part of the boundary. Duplicate keys, future feature timestamps, and impossible labels should identify the failed rule and route the batch to its owners.*
 
 ### Choose A Data Testing Tool That Fits The Pipeline
 
@@ -232,7 +240,7 @@ An import error identifies missing scheduler dependencies or invalid DAG code. A
 
 ### Compile And Inspect Managed Pipeline Definitions
 
-Compiled pipeline systems apply the same principle. Kubeflow Pipelines compiles a Python pipeline into an intermediate-representation YAML file and performs static type checks on connected component inputs and outputs. Vertex AI Pipelines can execute KFP templates, and SageMaker Pipelines produces a JSON DAG definition. A test can compile the definition, parse the resulting document, and assert required components, parameter defaults, artifact types, condition branches, and resource limits. Dagster projects can load definitions and exercise small asset selections with test resources before running the deployed job.
+Compiled pipeline systems apply the same principle. Kubeflow Pipelines compiles a Python pipeline into an intermediate-representation YAML file and performs static type checks on connected component inputs and outputs. Gemini Enterprise Agent Platform Pipelines can execute KFP templates, and SageMaker Pipelines produces a JSON DAG definition. A test can compile the definition, parse the resulting document, and assert required components, parameter defaults, artifact types, condition branches, and resource limits. Dagster projects can load definitions and exercise small asset selections with test resources before running the deployed job.
 
 Compiled output should be treated as generated evidence. Human-readable source remains the reviewed definition; the test proves that its executable form preserves the intended graph. Provider submission and permissions belong to the boundary layer because compilation alone cannot prove that a managed service will accept or run the job.
 
@@ -431,6 +439,10 @@ The value comes from diagnosis as much as prevention. A failed layer identifies 
 
 The final result is a test system that explains its decisions. It can show which inputs were used, which rule ran, which artifact was produced, why a candidate stopped, and how the same claim can be checked again.
 
+![The complete ML pipeline testing loop connects each change to focused checks evidence and production replay](/content-assets/articles/article-mlops-mlops-infrastructure-testing-ml-code-and-pipelines/pipeline-test-summary.png)
+
+*Trust comes from a repeatable loop: test the smallest boundary, run representative checks, preserve evidence, and turn production failures into regression fixtures.*
+
 ## References
 
 - [pytest documentation](https://docs.pytest.org/en/stable/)
@@ -442,6 +454,7 @@ The final result is a test system that explains its decisions. It can show which
 - [TensorFlow Data Validation](https://www.tensorflow.org/tfx/data_validation/get_started)
 - [Airflow testing best practices](https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html#testing-a-dag)
 - [Kubeflow Pipelines compilation](https://www.kubeflow.org/docs/components/pipelines/user-guides/core-functions/compile-a-pipeline/)
+- [Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
 - [SageMaker AI pipeline definitions](https://docs.aws.amazon.com/sagemaker/latest/dg/define-pipeline.html)
 - [Prefect workflow testing](https://docs.prefect.io/v3/how-to-guides/workflows/test-workflows)
 - [MLflow model evaluation](https://mlflow.org/docs/latest/ml/evaluation/)

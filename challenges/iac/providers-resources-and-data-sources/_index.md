@@ -1,8 +1,8 @@
 ---
-title: "Resources"
-description: "Practice provider setup, managed resources, read-only data sources, and ownership decisions."
+title: "Terraform Resources"
+description: "Author a managed bucket and a separate versioning resource connected by the bucket identity."
 articleId: article-iac-terraform-config-resources
 difficulty: easy
 order: 5
-tags: ["terraform", "providers", "resources", "data-sources"]
+tags: ["terraform","resources","references","s3"]
 ---

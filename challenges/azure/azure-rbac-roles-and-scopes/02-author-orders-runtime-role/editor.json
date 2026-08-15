@@ -1,0 +1,21 @@
+{
+  "language": "json",
+  "filename": "orders-runtime-reader.json",
+  "completionProfile": "azure-rbac-role",
+  "initialValue": "{\n  \"Name\": \"Orders Runtime Reader\",\n  \"IsCustom\": true,\n  \"Description\": \"Inspect the orders runtime without changing it\",\n  \"Actions\": [],\n  \"NotActions\": [],\n  \"DataActions\": [],\n  \"NotDataActions\": [],\n  \"AssignableScopes\": []\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["Name"], "equals": "Orders Runtime Reader" },
+      { "path": ["IsCustom"], "equals": true },
+      { "path": ["Actions"], "includes": "Microsoft.Web/sites/read", "minItems": 3, "maxItems": 3 },
+      { "path": ["Actions"], "includes": "Microsoft.Web/sites/config/list/action" },
+      { "path": ["Actions"], "includes": "Microsoft.OperationalInsights/workspaces/query/read" },
+      { "path": ["Actions"], "excludes": "*" },
+      { "path": ["Actions"], "excludes": "Microsoft.Authorization/roleAssignments/write" },
+      { "path": ["NotActions"], "minItems": 0, "maxItems": 0 },
+      { "path": ["DataActions"], "minItems": 0, "maxItems": 0 },
+      { "path": ["AssignableScopes"], "includes": "/subscriptions/sub-prod/resourceGroups/rg-orders-prod", "minItems": 1, "maxItems": 1 }
+    ]
+  }
+}

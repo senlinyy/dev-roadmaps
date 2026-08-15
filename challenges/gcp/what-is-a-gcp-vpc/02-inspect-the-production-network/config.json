@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "networks": [
+        { "name": "orders-prod", "projectId": "devpolaris-prod", "routingMode": "GLOBAL", "autoCreateSubnetworks": false }
+      ],
+      "subnets": [
+        {
+          "name": "orders-apps-europe-west2",
+          "projectId": "devpolaris-prod",
+          "network": "orders-prod",
+          "region": "europe-west2",
+          "ipCidrRange": "10.42.16.0/20",
+          "privateIpGoogleAccess": true
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-prod", "GLOBAL", "false", "orders-apps-europe-west2", "europe-west2", "10.42.16.0/20", "true"],
+    "requireCommandPatterns": [
+      "^gcloud\\s+compute\\s+networks\\s+describe\\b",
+      "^gcloud\\s+compute\\s+networks\\s+subnets\\s+describe\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

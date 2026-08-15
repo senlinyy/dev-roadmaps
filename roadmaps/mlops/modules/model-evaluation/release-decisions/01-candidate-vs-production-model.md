@@ -1,7 +1,7 @@
 ---
 title: "Candidate vs Production Models"
 description: "Compare a candidate with the current production decision through fair evidence, paired effects, operational proof, and a release scope."
-overview: "A candidate earns production authority by improving the decision users receive today under a fair comparison. This article develops the release question, comparison protocol, uncertainty, segment risk, operating evidence, staged rollout, and verification."
+overview: "A candidate earns production authority by improving the decision users receive today under a fair comparison supported by a release question, comparison protocol, uncertainty, segment risk, operating evidence, staged rollout, and verification."
 tags: ["MLOps", "production", "approval"]
 order: 1
 id: "article-mlops-model-evaluation-candidate-vs-production-model"
@@ -28,7 +28,7 @@ Suppose a delivery service already gives customers an estimated arrival time. Th
 
 That result gives the team a promising **candidate model**, which is a model proposed for release. It has not yet shown that customers would receive a better service. The current **production model** operates inside a larger path that includes feature retrieval, preprocessing, thresholds, policy rules, fallbacks, infrastructure, and human workflows. Releasing the candidate changes that whole path.
 
-At a high level, **candidate-versus-production evaluation asks what will change if the candidate replaces the decision system running today**. The answer needs more than two headline scores. First, the team establishes a fair comparison. It then measures the size and uncertainty of the change and looks for uneven effects. Operating tests and a scoped release decision complete the evidence.
+A candidate can beat the current model on one headline metric while increasing latency or harming an important segment. It may also change how many cases reach human review. **Candidate-versus-production evaluation asks what will change if the candidate replaces the decision system running today.** The team establishes a fair comparison, measures the uncertainty and uneven effects, then adds operating tests and a scoped release decision.
 
 You can think of the review as five connected responsibilities:
 
@@ -58,10 +58,6 @@ flowchart TD
 
 The diagram shows why one improved metric cannot carry the decision. Each stage adds a different kind of confidence, and a failure sends the candidate back to the boundary that needs repair.
 
-![Five questions that connect a candidate model to an authorized release scope](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-review-five-questions.png)
-
-*Purpose, comparison validity, measured effect, operability, and release authority form one evidence path.*
-
 ## Start With the Current System and a Release Question
 <!-- section-summary: A release question defines the current decision path, intended improvement, protected outcomes, population, and smallest useful scope before results are examined. -->
 
@@ -69,7 +65,7 @@ The first task is to describe the **status quo**: the decision users receive tod
 
 Return to the arrival-time example. The running path clips estimates to a sensible range and falls back to a route estimate if weather features are unavailable. The candidate adds weather data. Comparing the two raw model outputs would remove the clipping and fallback that shape the customer experience. The fair subject is the complete production path against the complete proposed path.
 
-Once the baseline is clear, the team writes a **release question**. This is a short, testable statement of the improvement the candidate is expected to deliver. It should name:
+The baseline gives the team the context for a **release question**. This short, testable statement describes the improvement the candidate is expected to deliver. It should name:
 
 - the population and decision that may change;
 - the primary outcome and a practically useful margin;
@@ -199,9 +195,9 @@ The last outcome is common. It may lead to more data or a smaller release, depen
 
 Statistical precision covers only sampling variation. **Evidence uncertainty** includes stale traffic, incomplete labels, measurement error, unobserved segments, and a policy change that happened after the evaluation window. A narrow interval cannot correct those problems. Reviewers should record them as limitations and decide which production claims remain defensible.
 
-![Paired production and candidate paths combine into effect size, uncertainty, and segment risk](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/paired-replacement-effect.png)
+![Production and candidate paths are compared on the same eligible cases, prediction time, policy, and labels before their paired effect is measured](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-paired-comparison.png)
 
-*Paired effects measure the proposed replacement on the same units. Group-aware uncertainty and segment analysis then limit how broadly the result can be claimed.*
+*A fair replacement test holds the question constant, then measures which decisions would actually change and how certain that effect is.*
 
 ## Find Who Benefits and Who Carries the Errors
 <!-- section-summary: Segment and trade-off analysis shows whether an average improvement hides harm, unstable evidence, or unaffordable work for a particular population or condition. -->
@@ -323,9 +319,9 @@ The decision record should identify:
 
 Modern MLflow Registry workflows use model versions, tags, and aliases; fixed model stages are deprecated. A tag can help people find a reviewed candidate, and an alias can provide a convenient reference such as `candidate` or `champion`. Aliases are movable. Deployment automation should resolve and pin the approved version or digest, then verify the identity serving traffic.
 
-![Offline, shadow, and canary evidence lead to scoped release decisions with persistent guardrails](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/evidence-to-release-scope.png)
+![Offline evaluation, shadow traffic, and a limited canary answer different release questions and grant progressively narrower forms of production authority](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-evidence-stages.png)
 
-*Different evidence supports different authority. Identity, routing, stop signals, and recovery preserve that boundary after release.*
+*Offline evidence tests historical quality, shadow traffic tests the current runtime without changing decisions, and a canary tests a small amount of real product impact.*
 
 The scope must be technically enforceable. A written city-only approval has little value if the router cannot keep other traffic out. The release record, deployment policy, and traffic controller should describe the same boundary.
 
@@ -360,6 +356,10 @@ A candidate deserves release because the complete decision path creates a useful
 Offline, shadow, and canary stages add different evidence. The final outcome grants the smallest scope that evidence can support and the platform can enforce. Production verification then checks the serving identity, traffic boundary, operating signals, and mature outcomes before the scope grows.
 
 This approach protects useful change and the known production baseline at the same time. A candidate can move forward without asking one attractive score to carry more authority than it has earned.
+
+![Five-step release decision starts with a pinned candidate and evidence, then grants defer, shadow, canary, or release authority while only live scopes enter production verification](/content-assets/articles/article-mlops-model-evaluation-candidate-vs-production-model/candidate-release-authority-summary.png)
+
+*A deferred candidate returns for new evidence. Shadow, canary, and released scopes are verified only against the traffic and outcomes each decision actually authorizes.*
 
 ## References
 

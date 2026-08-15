@@ -1,0 +1,101 @@
+{
+  "cwd": "/workspace/ansible",
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/ansible": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "ansible"
+  ],
+  "ansible": {
+    "hosts": [
+      {
+        "name": "web-canary-01",
+        "address": "192.0.2.10",
+        "reachable": true
+      },
+      {
+        "name": "web-02",
+        "address": "192.0.2.11",
+        "reachable": true
+      },
+      {
+        "name": "web-03",
+        "address": "192.0.2.12",
+        "reachable": true
+      },
+      {
+        "name": "db-01",
+        "address": "192.0.2.20",
+        "reachable": true
+      }
+    ],
+    "groups": [
+      {
+        "name": "web",
+        "hosts": [
+          "web-canary-01",
+          "web-02",
+          "web-03"
+        ]
+      },
+      {
+        "name": "db",
+        "hosts": [
+          "db-01"
+        ]
+      },
+      {
+        "name": "production",
+        "children": [
+          "web",
+          "db"
+        ]
+      },
+      {
+        "name": "canary",
+        "hosts": [
+          "web-canary-01"
+        ]
+      }
+    ],
+    "playbooks": [
+      {
+        "path": "deploy.yml",
+        "name": "Deploy orders",
+        "hosts": "web",
+        "tasks": [
+          {
+            "name": "Deploy release",
+            "status": "changed"
+          },
+          {
+            "name": "Check health",
+            "status": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "ansible-state",
+    "requireCommands": [
+      "ansible",
+      "ansible-playbook"
+    ],
+    "expectedAnsible": {
+      "includesActions": [
+        "ad-hoc-list-hosts",
+        "playbook-check"
+      ],
+      "targetHosts": [
+        "web-canary-01"
+      ],
+      "lastPlaybook": "deploy.yml"
+    }
+  }
+}

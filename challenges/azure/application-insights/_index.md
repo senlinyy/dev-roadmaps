@@ -4,6 +4,6 @@ description: "Practice following requests, dependencies, exceptions, traces, and
 articleId: article-cloud-providers-azure-observability-azure-application-insights-backend-apis
 articleSlug: application-insights
 difficulty: medium
-order: 33
+order: 26
 tags: ["azure", "application-insights", "requests", "dependencies", "traces"]
 ---

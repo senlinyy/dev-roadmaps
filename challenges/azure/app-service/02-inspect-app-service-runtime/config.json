@@ -367,6 +367,12 @@
       "trafficPercent"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+webapp\\s+show\\b",
+      "^az\\s+webapp\\s+config\\s+appsettings\\s+list\\b",
+      "^az\\s+webapp\\s+identity\\s+show\\b",
+      "^az\\s+webapp\\s+deployment\\s+slot\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

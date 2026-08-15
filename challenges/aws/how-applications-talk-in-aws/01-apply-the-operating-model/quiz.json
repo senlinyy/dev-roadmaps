@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "sync-request",
+      "type": "single",
+      "scenario": "Checkout needs an immediate tax quote before it can show the customer a total. The tax service normally answers in 80 ms, and checkout must display a clear error if it is unavailable. Which starting pattern fits this interaction?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Call a synchronous API with a bounded timeout and explicit failure handling."
+        },
+        {
+          "id": "a",
+          "text": "Publish to SNS and wait for every subscriber."
+        },
+        {
+          "id": "c",
+          "text": "Write a Step Functions execution and poll it from the browser."
+        },
+        {
+          "id": "d",
+          "text": "Place the request on SQS and keep the HTTP connection open until a worker replies."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The caller needs an immediate answer, so a synchronous API is the clearest starting point. Timeouts and failure behavior must be part of the contract. Learn more in the [AWS application integration decision guide](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)."
+    },
+    {
+      "id": "queued-work",
+      "type": "single",
+      "scenario": "A video upload returns quickly, while transcoding can take 20 minutes and should survive worker restarts. Producers can outpace consumers during a launch. Which service shape best decouples the work?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A direct synchronous Lambda invocation from the upload request."
+        },
+        {
+          "id": "a",
+          "text": "A durable SQS queue consumed by independently scaled workers."
+        },
+        {
+          "id": "c",
+          "text": "A Route 53 weighted record."
+        },
+        {
+          "id": "d",
+          "text": "An SNS email subscription."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "SQS buffers durable work and lets consumers scale and retry independently from producers. Learn more in the [AWS application integration decision guide](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)."
+    },
+    {
+      "id": "fanout",
+      "type": "single",
+      "scenario": "One OrderPlaced notification must reach billing, email, and analytics. Each consumer owns its own queue and retry policy, and the publisher should not know each consumer endpoint. Which pattern is the simplest fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "One shared SQS queue read by all three consumers."
+        },
+        {
+          "id": "b",
+          "text": "A Step Functions Map state for every order."
+        },
+        {
+          "id": "c",
+          "text": "An SNS topic with one SQS subscription per consumer."
+        },
+        {
+          "id": "d",
+          "text": "Three synchronous API calls from the order service."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "SNS plus separate SQS subscriptions creates fanout while preserving independent buffering and retries. Learn more in the [AWS application integration decision guide](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)."
+    },
+    {
+      "id": "event-routing",
+      "type": "single",
+      "scenario": "A platform bus receives events from many teams. Consumers select events by source, detail type, tenant, and payload fields, and operations needs archive and replay. Which service owns this routing problem?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Amazon EBS."
+        },
+        {
+          "id": "c",
+          "text": "AWS Transit Gateway."
+        },
+        {
+          "id": "d",
+          "text": "Amazon API Gateway."
+        },
+        {
+          "id": "a",
+          "text": "Amazon EventBridge."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "EventBridge provides content-based event routing, buses, archives, and replay. Learn more in the [AWS application integration decision guide](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)."
+    },
+    {
+      "id": "workflow-fit",
+      "type": "multiple",
+      "scenario": "A loan application has validation, fraud review, a human callback that can arrive hours later, compensating steps, and an audit trail of state transitions. Which statements support Step Functions?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The process has explicit multi-step state and failure paths."
+        },
+        {
+          "id": "b",
+          "text": "Every step must complete within one HTTP request."
+        },
+        {
+          "id": "c",
+          "text": "A callback token can represent the long-running human step."
+        },
+        {
+          "id": "d",
+          "text": "The workflow should replace all durable queues regardless of delivery semantics."
+        }
+      ],
+      "correct": [
+        "a",
+        "c"
+      ],
+      "explanation": "Explicit state, branching, retries, compensation, and callbacks are workflow concerns. Step Functions does not make every queue or direct API obsolete. Learn more in the [AWS application integration decision guide](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)."
+    }
+  ]
+}

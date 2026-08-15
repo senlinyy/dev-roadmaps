@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "service-contract",
+      "type": "single",
+      "scenario": "The checkout application already calls `inventory.store.svc.cluster.local` through a Kubernetes Service. The platform enables an Istio sidecar mesh for the `store` namespace. What should application developers normally expect about that destination contract?",
+      "options": [
+        { "id": "a", "text": "The application keeps calling the Kubernetes Service name while proxies intercept the request path around the application containers." },
+        { "id": "b", "text": "The application must replace every Service name with the private IP address of its local sidecar." },
+        { "id": "c", "text": "Kubernetes Services stop selecting Pods because the mesh control plane becomes the scheduler." },
+        { "id": "d", "text": "The application must call `istiod` directly for every inventory request." }
+      ],
+      "correct": ["a"],
+      "explanation": "The mesh adds a managed proxy layer to the request path, but Kubernetes Services and DNS continue to provide the normal application destination. The control plane distributes configuration rather than carrying each application request."
+    },
+    {
+      "id": "planes",
+      "type": "multiple",
+      "scenario": "A traffic rule appears stale on many checkout Pods, while individual requests flow through Envoy sidecars. Which two statements correctly separate the mesh planes during investigation?",
+      "options": [
+        { "id": "a", "text": "The Envoy sidecars are part of the data plane because they handle live service traffic." },
+        { "id": "c", "text": "The Kubernetes scheduler is the mesh data plane because it chooses nodes for Pods." },
+        { "id": "b", "text": "`istiod` is part of the control plane because it distributes configuration to proxies." },
+        { "id": "d", "text": "The application database is the mesh control plane because it stores business state." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Data-plane proxies handle requests. The control plane watches configuration and pushes it to those proxies, so broad configuration staleness points toward control-plane or proxy-sync evidence rather than application business data."
+    },
+    {
+      "id": "injection-evidence",
+      "type": "single",
+      "scenario": "Namespace `store` has just received label `istio-injection=enabled`, but its three application Pods still show `1/1` ready. Which interpretation is most accurate?",
+      "options": [
+        { "id": "a", "text": "The label affects admission of newly created Pods, so existing workloads need a controlled restart before sidecars can appear." },
+        { "id": "b", "text": "The label injects a proxy into every already-running Pod immediately without changing Pod identity." },
+        { "id": "c", "text": "A `1/1` Pod proves the mesh is active because the app container has become the proxy." },
+        { "id": "d", "text": "The namespace label replaces the need for an installed mesh control plane." }
+      ],
+      "correct": ["a"],
+      "explanation": "Sidecar injection happens when a Pod is admitted. Labeling a namespace makes future Pods eligible, so workloads must be restarted or rolled out, then verified for an application container plus a ready proxy."
+    },
+    {
+      "id": "mesh-value-boundary",
+      "type": "multiple",
+      "scenario": "A store has fifteen services written in four languages. Each team has implemented different retry limits, identity checks, and request metrics for service-to-service calls. Which two repeated concerns are reasonable candidates for a centrally operated mesh layer?",
+      "options": [
+        { "id": "b", "text": "Business rules that calculate customer discounts." },
+        { "id": "a", "text": "Consistent workload identity and mutual TLS between selected services." },
+        { "id": "d", "text": "Database schema migrations owned by each application." },
+        { "id": "c", "text": "Bounded traffic policy and proxy-level telemetry applied across languages." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "A mesh targets repeated communication concerns around traffic, identity, security, and telemetry. Application business rules and database migrations remain application responsibilities."
+    },
+    {
+      "id": "production-cost",
+      "type": "single",
+      "scenario": "A platform proposal describes a mesh as free reliability because applications do not change source code. Before production approval, which missing cost should reviewers insist on evaluating?",
+      "options": [
+        { "id": "a", "text": "Only the number of characters in the mesh product name." },
+        { "id": "b", "text": "Proxy CPU and memory, request latency, control-plane availability, certificate rotation, upgrades, and new debugging paths." },
+        { "id": "c", "text": "Whether Kubernetes Services can be deleted after mesh installation." },
+        { "id": "d", "text": "Whether every business operation can move into the proxy configuration." }
+      ],
+      "correct": ["b"],
+      "explanation": "The mesh adds infrastructure and failure modes even when application call sites stay unchanged. Production adoption needs capacity, latency, control-plane, identity, upgrade, and troubleshooting ownership."
+    }
+  ]
+}

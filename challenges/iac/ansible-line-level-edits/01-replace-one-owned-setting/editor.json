@@ -1,0 +1,63 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Tune PostgreSQL\n  hosts: orders_db\n  become: true\n  tasks:\n    - name: Append connection setting\n      ansible.builtin.shell: echo 'max_connections = 300' >> /etc/postgresql/16/main/postgresql.conf\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "lineinfile"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.lineinfile",
+              "path"
+            ],
+            "equals": "/etc/postgresql/16/main/postgresql.conf"
+          },
+          {
+            "path": [
+              "ansible.builtin.lineinfile",
+              "regexp"
+            ],
+            "equals": "^max_connections\\s*="
+          },
+          {
+            "path": [
+              "ansible.builtin.lineinfile",
+              "line"
+            ],
+            "equals": "max_connections = 300"
+          },
+          {
+            "path": [
+              "ansible.builtin.lineinfile",
+              "backup"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "ansible.builtin.lineinfile",
+              "validate"
+            ],
+            "exists": true
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "shell",
+      "command"
+    ]
+  }
+}

@@ -56,6 +56,10 @@
       "arn:aws:acm:us-east-1:123456789012:certificate/orders-cert",
       "devpolaris-orders-api-tg"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+acm\\\\s+describe-certificate\\\\b",
+      "^aws\\\\s+elbv2\\\\s+describe-listeners\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

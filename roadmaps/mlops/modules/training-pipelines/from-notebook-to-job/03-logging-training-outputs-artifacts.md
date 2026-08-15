@@ -43,7 +43,7 @@ flowchart TD
     D -->|No| G["Quarantine Attempt<br/>(release remains blocked)"]
 ```
 
-In essence, a model file is a result of training. A committed artifact bundle is the evidence needed to evaluate, reproduce, and release that result safely.
+A model file is one result of training. A committed artifact bundle supplies the evidence needed to evaluate, reproduce, and release that result safely.
 
 ## Understand The Outputs A Training Job Must Produce
 <!-- section-summary: An evidence system preserves the model, its meaning, its origin, and the checks that make it usable after the training process ends. -->
@@ -117,6 +117,10 @@ For example, a Delta table version or Iceberg snapshot ID identifies a fixed dat
 A **registry candidate** points to one immutable deployable model package and its review evidence. It adds ownership, intended use, approval state, and lifecycle history. The registry is a control plane for selecting versions. It should avoid serving as a duplicate home for training datasets or verbose logs.
 
 Candidate status means the model is eligible for downstream release checks. It carries no authority to receive production traffic. A deployment workflow still needs environment-specific validation, approval, rollout, and rollback controls.
+
+![A training attempt sending events, metrics, metadata, artifacts, and governed data references to their proper stores, with only artifacts and data references forming a registry candidate.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/training-output-stores.png)
+
+*Each output uses a store suited to its query and retention needs; the registry identifies the reviewed model package rather than duplicating every record.*
 
 ## Define The Files Every Successful Training Run Must Produce
 <!-- section-summary: The artifact contract names required objects, their responsibilities, validation rules, and the evidence that marks a bundle complete. -->
@@ -195,6 +199,10 @@ Evaluation evidence needs semantic checks as well. The report must name the same
 Readers treat the committed manifest as the visibility gate. The publisher uploads all content first, verifies the remote bytes, then creates the manifest or a small `committed.json` pointer with an object-store precondition. Amazon S3 can use `If-None-Match: *`; Google Cloud Storage can use a generation-match precondition of zero; Azure Blob Storage supports conditional headers.
 
 This operation makes the decision atomic from the consumer's perspective. The object store still holds several independent objects. Consumers gain a simple rule: bundles without a committed manifest remain invisible.
+
+![Three-state artifact publication flow from attempt-specific staging through contract verification to a manifest-gated committed bundle, with failure quarantined.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/safe-artifact-publication.png)
+
+*The manifest is published last, so readers discover only a complete, verified attempt.*
 
 ## Give The Training Run And Each Retry Separate IDs
 <!-- section-summary: A logical run groups one intended computation while attempt identities separate retries, publication workspaces, and failure evidence. -->
@@ -364,7 +372,11 @@ A reliable training job leaves more than a model file. It emits operational even
 
 The publisher writes into an attempt-specific staging area, verifies bytes and behavior, and exposes the bundle by committing its manifest last. Run and attempt identities keep retries separate. Content digests make uploads idempotent. Lineage connects code, configuration, data, environment, evaluation, and parent models without copying large governed datasets.
 
-MLflow 3 Logged Models and W&B Artifacts can implement this evidence model once the lifecycle is clear. The final handoff selects one immutable candidate and sends it to a separate release process. Training success supplies a result; committed evidence makes that result safe to evaluate and govern.
+MLflow 3 Logged Models and W&B Artifacts can implement this evidence model. The final handoff selects one immutable candidate and sends it to a separate release process. Training success supplies a result; committed evidence makes that result safe to evaluate and govern.
+
+![Six evidence types joining a verified committed bundle, which becomes a selected candidate for a separate release workflow.](/content-assets/articles/article-mlops-training-pipelines-logging-training-outputs-artifacts/release-ready-evidence-summary.png)
+
+*The committed bundle gives a reviewer one trusted identity for the model and the evidence used to select it.*
 
 ## References
 

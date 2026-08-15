@@ -27,7 +27,7 @@ aliases:
 ## Use Retrieval To Give The Model External Evidence
 <!-- section-summary: Retrieval finds relevant external material and supplies selected evidence to a model without turning the model into the owner of that knowledge. -->
 
-At a high level, **retrieval** is the process of finding information outside a model and bringing the useful parts into one model decision. The external information might be a policy, product manual, source file, support record, research paper, or incident runbook.
+A model cannot answer reliably from a policy or incident runbook that never entered its input. **Retrieval** finds information outside the model and brings the relevant parts into one model decision. The source might be a product manual, source file, support record, research paper, or governed business document.
 
 This capability matters because a model's training cannot contain every private record or every recent change. Imagine a user asking:
 
@@ -116,6 +116,10 @@ flowchart TD
 Consider a current travel policy stored in a document repository. The repository record is the source. OpenSearch may hold one lexical and vector representation per section. A query returns twenty candidates. The application selects the active global limit and the applicable regional exception as two evidence blocks. Those blocks enter the model context with the user's question.
 
 Each object has its own failure mode. A missing source is an ingestion problem. A missing index entry is an indexing problem. Poor candidate order is a ranking problem. A missing exception in the final evidence is a selection problem. A correct evidence set followed by an unsupported answer is a generation problem.
+
+![Five distinct retrieval objects connect an authoritative travel-policy revision to a temporary model context, while citations return to the exact source revision.](/content-assets/articles/article-mlops-llmops-retrieval-and-knowledge/source-index-evidence-boundary.png)
+
+*The source owns the fact; the index, candidates, evidence blocks, and model context are derived views with different responsibilities.*
 
 ## Manage Source Versions Before Tuning Search
 <!-- section-summary: Search quality depends on a governed lifecycle that publishes, versions, activates, supersedes, revokes, and deletes source material across every retrieval path. -->
@@ -471,22 +475,9 @@ You can think of the citation resolver as a link service with access control. It
 - Does the current viewer still have access?
 - Is the source active, superseded, revoked, or retained for historical audit?
 
-```mermaid
-sequenceDiagram
-    participant A as Answer
-    participant V as Citation validator
-    participant E as Evidence manifest
-    participant R as Citation resolver
-    participant S as Governed source
+![A five-step citation path validates an answer label against the immutable evidence manifest, rechecks the viewer's current access, and opens the exact governed source location.](/content-assets/articles/article-mlops-llmops-retrieval-and-knowledge/citation-resolution-boundary.png)
 
-    A->>V: cites E2
-    V->>E: confirm E2 was supplied
-    E-->>V: chunk ID, revision, locator
-    V->>R: resolve for current viewer
-    R->>R: recheck access and source status
-    R->>S: open exact source location
-    S-->>A: inspectable evidence
-```
+*Citation resolution proves that a label maps to supplied evidence; citation support asks whether that evidence justifies the nearby claim.*
 
 The evidence manifest should be immutable for the completed response. A later index rebuild may assign different internal document positions. Stable source IDs and revision-aware locators keep older answers reproducible.
 
@@ -663,6 +654,10 @@ Suppose a withdrawn handbook revision keeps appearing in answers. The first acti
 The deny rule provides immediate protection during an eventually consistent delete. The targeted evaluation confirms that the replacement still answers the important questions. Lineage identifies which previous outputs may need review.
 
 A mature retrieval system delivers governed evidence, not merely similar text. Source ownership keeps facts current. Parsing and chunking preserve meaning. Hybrid search, filters, reranking, and diversity find useful candidates. Selection creates a sufficient evidence set. Citation resolution lets people inspect it. Separate evaluations and stage-level traces show exactly where a failure entered the path.
+
+![Production retrieval summary with separate knowledge and request paths, stage-specific evaluation, source-to-model incident tracing, and revoked-source containment.](/content-assets/articles/article-mlops-llmops-retrieval-and-knowledge/production-retrieval-summary.png)
+
+*A production retrieval system governs source revisions, constrains search before ranking, validates complete evidence, and traces failures at the stage where they entered the answer.*
 
 ## References
 

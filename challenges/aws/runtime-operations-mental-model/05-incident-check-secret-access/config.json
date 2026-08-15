@@ -105,6 +105,12 @@
       "\"EvalActionName\": \"secretsmanager:GetSecretValue\"",
       "\"EvalDecision\": \"implicitDeny\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+secretsmanager\\\\s+describe-secret\\\\b",
+      "^aws\\\\s+iam\\\\s+get-role\\\\b",
+      "^aws\\\\s+iam\\\\s+list-attached-role-policies\\\\b",
+      "^aws\\\\s+iam\\\\s+simulate-principal-policy\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

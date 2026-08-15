@@ -23,7 +23,7 @@ id: "article-mlops-llmops-context-design"
 ## Choose What The Model Sees For One Step
 <!-- section-summary: Context engineering assembles a bounded, task-specific view for one model decision from a much larger application state. -->
 
-At a high level, **context engineering** is the work of deciding what a model can see for one step of a task. The application may know thousands of facts and have access to many services. The model receives only the instructions, messages, evidence, tool descriptions, and results included in its current input.
+An application may know thousands of facts and have access to many services, while one model call can use only a selected portion of that information. **Context engineering** is the work of deciding what the model sees for that step: the instructions, messages, evidence, tool descriptions, and results included in its current input.
 
 You can think of context as the model's **working desk**. A real organisation may have warehouses full of records, policies, conversations, and system state. For one decision, the application places a small set of relevant material on the desk. Good context engineering chooses and labels that material. It also keeps the view current and removes distractions or information outside the access boundary.
 
@@ -75,6 +75,10 @@ A production context design makes six decisions explicit:
 4. how that view is ordered and budgeted;
 5. how untrusted content stays inside a data boundary;
 6. which records and evaluations make the context observable.
+
+![A refund-request context boundary in which authenticated runtime data, authoritative order state, governed policy evidence, recent history, and permitted tools pass through an application assembler before the model sees a bounded working view.](/content-assets/articles/article-mlops-llmops-context-design/refund-decision-context-boundary.png)
+
+*The application can read organisational systems, but the model receives only selected, labelled blocks. A model response remains a proposal until trusted code validates identity, amount, policy, approval, and idempotency.*
 
 ## Give Each Information Source A Clear Job
 <!-- section-summary: Instructions, user input, application state, evidence, tool results, and history contribute different kinds of information and should retain those roles. -->
@@ -182,7 +186,7 @@ History helps the model understand references such as â€œuse the second optionâ€
 
 Sending a full transcript on every step often preserves noise along with continuity. Select the recent turns that explain the current request. Carry forward durable decisions as structured state or artefacts. Re-read current business facts from their owning services.
 
-In essence, history explains **how the conversation arrived here**. Run state explains **what the workflow has completed**. Domain state explains **what the business system currently records**. Long-term memory stores **selected information that may help in a later interaction**. Context engineering chooses the small portion of each that this model step needs.
+History explains **how the conversation arrived here**. Run state explains **what the workflow has completed**. Domain state explains **what the business system currently records**. Long-term memory stores **selected information that may help in a later interaction**. Context engineering chooses the small portion of each that this model step needs.
 
 ## How Prompts, Retrieval, And Memory Fit Together
 <!-- section-summary: Prompt wording, retrieval, memory, and context engineering solve related problems at different points in the system. -->
@@ -340,7 +344,7 @@ This manifest supports reproduction, debugging, evaluation, and audit. Store it 
 ## Set The Order And Token Budget For Context
 <!-- section-summary: Token allocation and block order reveal which information the application considers essential for a model decision. -->
 
-A **token budget** is a plan for spending the model's limited input capacity. In essence, it converts product priorities into space reservations.
+A **token budget** is a plan for spending the model's limited input capacity. It converts product priorities into space reservations.
 
 Start with the material the decision cannot safely lose:
 
@@ -369,6 +373,10 @@ optional:
   supporting_evidence: 3300
 reserved_output_tokens: 4000
 ```
+
+![An illustrative 24,000-token input budget split into 16,800 required tokens and 7,200 optional tokens, with a separate 4,000-token output reserve and a policy for admitting or pruning complete context blocks.](/content-assets/articles/article-mlops-llmops-context-design/context-token-budget.png)
+
+*The allocation reserves space for instructions, the current request, authoritative state, required evidence, and tools before optional history or examples compete for space. Output capacity stays separate, and every pruned source keeps a recorded reason.*
 
 These numbers are workload-specific. A code-review task may need more retrieved files. A routing decision may need only a taxonomy and the current request. Representative evaluations should determine the allocation.
 
@@ -512,6 +520,10 @@ The production loop is therefore:
 5. release changes gradually and compare them against the same fixtures.
 
 Context engineering turns a prompt from an improvised text bundle into a testable production input. The model receives a focused working view. The application retains control of truth and permissions. Operators gain enough evidence to explain why a decision succeeded or failed.
+
+![A context fixture for refund order 482 that tests required, forbidden, superseded, and untrusted candidates before separately evaluating whether the model used the accepted projection correctly.](/content-assets/articles/article-mlops-llmops-context-design/context-evaluation-summary.png)
+
+*Evaluate the assembler first: hard tenant, freshness, and revision rules must produce the expected projection. Only then evaluate model use, so retrieval, selection, instruction, model, and application-control failures lead to the correct repair.*
 
 ## References
 

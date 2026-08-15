@@ -1,0 +1,86 @@
+{
+  "language": "json",
+  "filename": "trust-policy.json",
+  "completionProfile": "aws-iam-policy",
+  "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"GitHubRelease\",\n      \"Effect\": \"Allow\",\n      \"Principal\": {},\n      \"Action\": \"\",\n      \"Condition\": {\n        \"StringEquals\": {}\n      }\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "Version"
+        ],
+        "equals": "2012-10-17",
+        "label": "policy language version"
+      },
+      {
+        "path": [
+          "Statement"
+        ],
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "single bounded trust statement"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Effect"
+        ],
+        "equals": "Allow",
+        "label": "allow effect"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Principal",
+          "Federated"
+        ],
+        "equals": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com",
+        "label": "GitHub OIDC provider"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Action"
+        ],
+        "equals": "sts:AssumeRoleWithWebIdentity",
+        "label": "web identity role action"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Condition",
+          "StringEquals",
+          "token.actions.githubusercontent.com:aud"
+        ],
+        "equals": "sts.amazonaws.com",
+        "label": "STS audience restriction"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Condition",
+          "StringEquals",
+          "token.actions.githubusercontent.com:sub"
+        ],
+        "equals": "repo:devpolaris/orders-api:ref:refs/heads/main",
+        "label": "repository and branch restriction"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Principal",
+          "AWS"
+        ],
+        "exists": false,
+        "label": "AWS account principal"
+      }
+    ]
+  }
+}

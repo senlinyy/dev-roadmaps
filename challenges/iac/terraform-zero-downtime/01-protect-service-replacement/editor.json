@@ -1,0 +1,143 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "service.tf",
+  "files": [
+    {
+      "filename": "service.tf",
+      "initialValue": "resource \"aws_lb_target_group\" \"orders\" {\n  name     = \"orders-prod\"\n  port     = 8080\n  protocol = \"HTTP\"\n  vpc_id   = var.vpc_id\n}\n\nresource \"aws_launch_template\" \"orders\" {\n  name_prefix = \"orders-\"\n}\n\nresource \"aws_autoscaling_group\" \"orders\" {\n  min_size = 3\n  max_size = 6\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "service.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_lb_target_group",
+                "orders"
+              ]
+            },
+            {
+              "type": "health_check"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "path"
+            ],
+            "valueEquals": "/ready"
+          },
+          {
+            "path": [
+              "matcher"
+            ],
+            "valueEquals": "200-299"
+          },
+          {
+            "path": [
+              "interval"
+            ],
+            "valueEquals": 30
+          },
+          {
+            "path": [
+              "healthy_threshold"
+            ],
+            "valueEquals": 3
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "service.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_launch_template",
+                "orders"
+              ]
+            },
+            {
+              "type": "lifecycle"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "create_before_destroy"
+            ],
+            "valueEquals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "service.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_autoscaling_group",
+                "orders"
+              ]
+            },
+            {
+              "type": "instance_refresh"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "strategy"
+            ],
+            "valueEquals": "Rolling"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "service.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_autoscaling_group",
+                "orders"
+              ]
+            },
+            {
+              "type": "instance_refresh"
+            },
+            {
+              "type": "preferences"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "min_healthy_percentage"
+            ],
+            "valueEquals": 90
+          },
+          {
+            "path": [
+              "instance_warmup"
+            ],
+            "valueEquals": 120
+          }
+        ]
+      }
+    ]
+  }
+}

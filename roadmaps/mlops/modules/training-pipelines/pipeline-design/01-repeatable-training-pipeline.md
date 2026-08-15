@@ -29,7 +29,7 @@ id: "article-mlops-training-pipelines-repeatable-training-pipeline"
 
 An overnight risk-model workflow spends several hours preparing features and training a candidate. The evaluation worker then loses its network connection while uploading the segment report. The morning operator must decide whether to rerun evaluation, rerun training, or restart the entire workflow. That decision is dangerous if feature preparation reads a mutable `latest` table or several stages write to the same model path. A restart could evaluate a different population or overwrite the trained model that investigators need.
 
-At a high level, a **training pipeline is a versioned workflow that turns an approved training request into a traceable model candidate**. It connects data resolution, validation, feature preparation, training, evaluation, packaging, and registry handoff. Each step receives identified inputs and publishes identified outputs. The workflow engine records which work ran, which evidence passed, and where recovery can continue.
+Rerunning one training command does not reproduce a result if the data pointer moved, feature logic changed, or a failed publication left half of the outputs behind. A **training pipeline is a versioned workflow that turns an approved training request into a traceable model candidate.** It connects data resolution, validation, feature preparation, training, evaluation, packaging, and registry handoff. Each step receives identified inputs and publishes identified outputs, while the workflow engine records which work ran, which evidence passed, and where recovery can continue.
 
 Repeatability means more than running the same Python file twice. A reliable rerun uses the same pipeline definition, source code, environment, resolved configuration, data snapshots, and evaluation policy. It creates a fresh execution identity while preserving links to the original attempt. That design lets an operator replay the failed evaluation step while reusing the exact model and feature artifacts already proven by upstream stages.
 
@@ -120,6 +120,10 @@ The input contract names types and immutable identities. A feature stage accepts
 The output contract describes durable artifacts. A URI locates the bytes, and a media or schema type tells the consumer how to read them. A digest verifies content identity. Producer identity links the artifact to its stage attempt, while creation state reveals whether publication finished. A stage writes into an attempt-specific temporary location first. It verifies the output, then publishes a small manifest as the commit point. Downstream tasks consume only committed manifests. A worker crash therefore leaves an abandoned temporary prefix without exposing a half-written dataset as a valid output.
 
 The execution contract pins code and environment. It declares the image digest, command, resource class, timeout, and workload identity. Repetition rules state which failures qualify for automatic retry and which fields build the cache fingerprint. The evidence contract records logs, validation results, runtime metadata, and lineage links.
+
+![A pipeline stage moves immutable inputs through execution, temporary output, validation, and a committed manifest before a downstream task can consume it](/content-assets/articles/article-mlops-training-pipelines-repeatable-training-pipeline/pipeline-stage-output-commit.png)
+
+*The downstream task receives only a committed manifest. Logs and attempt state describe execution, while the validation report records why publication was accepted.*
 
 ```yaml
 stage:
@@ -233,7 +237,7 @@ flowchart TD
     E --> G
 ```
 
-Airflow illustrates this split through its scheduler and pluggable executors. Airflow tasks can run locally, on queued workers, or in task-specific containers. Kubeflow Pipelines converts a compiled component graph into Kubernetes workloads. Vertex AI Pipelines runs KFP-compatible graphs as a managed service. SageMaker Pipelines and Azure Machine Learning pipelines submit managed processing and training jobs through provider control planes. Prefect flows and tasks can dispatch work through configured worker infrastructure.
+Airflow illustrates this split through its scheduler and pluggable executors. Airflow tasks can run locally, on queued workers, or in task-specific containers. Kubeflow Pipelines converts a compiled component graph into Kubernetes workloads. Gemini Enterprise Agent Platform Pipelines runs KFP-compatible graphs as a managed service. SageMaker Pipelines and Azure Machine Learning pipelines submit managed processing and training jobs through provider control planes. Prefect flows and tasks can dispatch work through configured worker infrastructure.
 
 Credentials follow the same boundary. The run specification carries resource identities and locations. The worker receives a short-lived workload identity with the minimum permissions for its stage. Secret values stay in a secret manager or platform connection and remain absent from run manifests, task arguments, and cache keys.
 
@@ -285,7 +289,7 @@ def validation_flow(run_spec_uri: str) -> str:
 
 The platform feature never discovers hidden dependencies by magic. Imported library code, mutable database reads, undeclared environment variables, or a floating container tag can make a cache key incomplete. Pass those dependencies as versioned inputs or disable reuse for the stage.
 
-Current managed systems implement the same idea through different fingerprints. Kubeflow Pipelines and Vertex AI Pipelines consider component and input identities. SageMaker Pipelines reuses successful step output after matching step-specific attributes within a configured lifetime. Azure Machine Learning reuses deterministic component output after checking code, environment, inputs, parameters, output settings, and run settings. The team still owns the claim that these declared fields fully determine the output.
+Current managed systems implement the same idea through different fingerprints. Kubeflow Pipelines and Gemini Enterprise Agent Platform Pipelines consider component and input identities. SageMaker Pipelines reuses successful step output after matching step-specific attributes within a configured lifetime. Azure Machine Learning reuses deterministic component output after checking code, environment, inputs, parameters, output settings, and run settings. The team still owns the claim that these declared fields fully determine the output.
 
 ## Rerun Only The Failed Part Of The Pipeline
 <!-- section-summary: A partial replay creates a new traceable run while reusing verified upstream artifacts and rerunning only invalid or failed work. -->
@@ -307,6 +311,10 @@ flowchart TD
 The reuse decision occurs per stage. A changed feature definition invalidates feature preparation and every downstream output. A changed evaluation implementation leaves the model eligible for reuse. A changed dataset invalidates feature preparation and training. The system computes the affected subgraph from artifact dependencies and explicit compatibility rules.
 
 Partial replay also helps after infrastructure interruption. SageMaker Pipelines supports retrying from a failed step, while other managed and open orchestrators expose repair, selective execution, task clearing, or cache-driven reuse. Product controls vary, so the pipeline's own lineage must record which previous execution supplied each reused artifact.
+
+![A partial replay verifies reused data, feature, and model digests before rerunning evaluation, packaging, and candidate handoff](/content-assets/articles/article-mlops-training-pipelines-repeatable-training-pipeline/partial-replay-path.png)
+
+*The replay keeps the failed evaluation as evidence, creates a new run with a parent link, and recomputes only the repaired downstream path.*
 
 ## Rerun The Pipeline For Past Data
 <!-- section-summary: Backfills apply one declared pipeline policy across historical data intervals while controlling identity, concurrency, and release side effects. -->
@@ -378,6 +386,10 @@ A production training pipeline is a versioned graph of contracts. The run specif
 
 The control plane coordinates state and worker execution. Retry handles eligible transient failures. Idempotency prevents duplicate effects. Caching reuses a proven output under a complete fingerprint. Partial replay creates a new lineage-aware run from valid upstream evidence, while backfills create bounded runs across historical intervals.
 
+![A repeatable training pipeline connects seven contracted stages to control-plane coordination, durable evidence, and distinct repetition policies](/content-assets/articles/article-mlops-training-pipelines-repeatable-training-pipeline/repeatable-training-pipeline.png)
+
+*The run specification and stage contracts create the main path. Retry, cache, replay, and backfill remain separate recovery choices with different identities.*
+
 This structure works across Airflow, Dagster, Prefect, Kubeflow Pipelines, and managed ML pipeline services. Product syntax changes. The durable design remains the same: one identified request, one inspectable graph, explicit stage boundaries, and enough evidence to recover safely.
 
 ## References
@@ -396,6 +408,6 @@ This structure works across Airflow, Dagster, Prefect, Kubeflow Pipelines, and m
 - [Kubeflow Pipelines: Local execution](https://www.kubeflow.org/docs/components/pipelines/user-guides/core-functions/execute-kfp-pipelines-locally/)
 - [Amazon SageMaker AI: Pipeline step caching](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-caching.html)
 - [Amazon SageMaker AI: Pipeline retry policies](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines-retry-policy.html)
-- [Google Cloud: Visualize and analyze Vertex AI pipeline results](https://cloud.google.com/vertex-ai/docs/pipelines/visualize-pipeline)
+- [Google Cloud: Visualize and analyze Agent Platform pipeline results](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/visualize-pipeline)
 - [Azure Machine Learning: Component concepts](https://learn.microsoft.com/en-us/azure/machine-learning/concept-component?view=azureml-api-2)
 - [Azure Machine Learning: Pipeline output reuse](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-debug-pipeline-reuse-issues?view=azureml-api-2)

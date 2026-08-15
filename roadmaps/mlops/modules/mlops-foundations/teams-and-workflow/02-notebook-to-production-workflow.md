@@ -25,7 +25,7 @@ id: "article-mlops-mlops-foundations-notebook-to-production-workflow"
 
 <!-- section-summary: Notebook-to-production work preserves interactive exploration while giving stable model behavior a repeatable, testable, and operable execution path. -->
 
-At a high level, a notebook is a laboratory. It lets a data scientist inspect a
+A notebook works like a laboratory. It lets a data scientist inspect a
 dataset, try a transformation, draw a chart, train several models, and explain
 what the results might mean. The short loop between code, output, and reasoning
 is one of the strengths of machine-learning work.
@@ -75,7 +75,9 @@ created several cells earlier. A workstation may contain an undeclared package.
 A person may edit a file before training or hold a credential that nobody else
 can use. Production work gives each dependency an explicit source and owner.
 
-![Notebook exploration maturing into a tracked and operated production workflow](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/notebook-production-path.png)
+![Notebook exploration compared with the explicit package, data, configuration, environment, and outputs of a repeatable production job](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/experiment-to-repeatable-job.png)
+
+*Exploration remains interactive. Stable behavior moves into a production job whose inputs, runtime, and outputs have explicit sources and identities.*
 
 ## The Steps From A Notebook To Production
 
@@ -328,6 +330,10 @@ producer or contract owner. A runtime load failure returns to packaging. A
 segment guardrail failure returns to model and product review. This routing turns
 test output into an operational action.
 
+![A trained model crossing data, model-quality, system, and release-review gates before receiving production traffic](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/model-release-gates.png)
+
+*A candidate reaches production only after its data, model behavior, runtime package, and residual risk have passed distinct reviews. Failed gates preserve evidence and return the work to its owner.*
+
 ## Run And Track A Reproducible Training Job
 
 <!-- section-summary: A managed training job executes a declared package with exact data, configuration, runtime, and identity while tracking the evidence and candidate it produces. -->
@@ -461,7 +467,7 @@ other environments.
 The release needs a previous trusted version, a concrete routing or promotion
 action, an authorized owner, and a verification query. Online releases may use
 shadow or canary traffic. Batch releases can publish to a new versioned output
-and switch consumers only after validation.
+and validate that output before switching consumers.
 
 Rollback restores the earlier release quickly. Investigation and retraining can
 continue with the impact contained. If the failure came from data or policy, the
@@ -524,8 +530,6 @@ flowchart TD
     class D,E,F action;
     class G,H learn;
 ```
-
-![Production evidence returning through monitoring and feedback into evaluation and the next candidate](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/production-feedback-loop.png)
 
 ## A Practical Starter Stack
 
@@ -596,6 +600,10 @@ The candidate binds a model to its evidence. The release authorizes that
 candidate for a production route. Monitoring, rollback, and delayed outcomes
 then return real evidence to exploration. The result is a workflow that another
 person can inspect, repeat, release, recover, and improve.
+
+![Notebook experimentation connected to packaging, testing, tracked training, evaluation, release, monitoring, and production feedback](/content-assets/articles/article-mlops-mlops-foundations-notebook-to-production-workflow/notebook-to-production-summary.png)
+
+*The notebook remains a laboratory inside a larger operating loop. Production feedback creates focused questions for the next experiment instead of turning the notebook into the production runtime.*
 
 ## References
 

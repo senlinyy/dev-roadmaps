@@ -4,6 +4,6 @@ description: "Practice recognizing event-shaped jobs, triggers, function app evi
 articleId: article-cloud-providers-azure-compute-application-hosting-azure-functions-event-driven-work
 articleSlug: functions
 difficulty: medium
-order: 22
+order: 16
 tags: ["azure","functions","events","triggers"]
 ---

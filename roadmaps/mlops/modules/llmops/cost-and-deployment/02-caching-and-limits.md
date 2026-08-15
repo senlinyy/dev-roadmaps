@@ -30,7 +30,7 @@ id: "article-mlops-llmops-caching-and-limits"
 
 <!-- section-summary: Caching avoids safe-to-reuse work, while limits prevent a service from accepting more new work than it can complete reliably. -->
 
-At a high level, caching and limits keep an LLM product from paying for the same work repeatedly or accepting more work than it can finish safely. Both problems can appear while every individual model call still works.
+An LLM product can answer every individual request successfully while repeatedly paying for identical work or accumulating more work than it can finish. **Caching** reuses eligible results, while **limits** bound the work the system will accept and perform.
 
 Imagine hundreds of users asking for the same public return policy. Generating an identical explanation every time wastes input processing, output tokens, and latency. Now imagine one agent repeatedly calling search because it cannot settle on an answer. That run can consume minutes of worker time and a large token bill. A traffic burst, automatic retry loop, or large document upload can create the same pressure across the whole service.
 
@@ -138,6 +138,10 @@ An **exact result cache** returns a previous application result after determinis
 A **semantic cache** goes further. It embeds the new request, searches earlier requests, and may return an answer whose wording differs. The cache is making a product-level claim: the old answer is valid for the new intent. Vector similarity alone cannot prove that claim.
 
 Consider two policy questions: “Can contractors access the benefit?” and “Can employees access the benefit?” The sentences are close in embedding space, while the answer may depend entirely on the changed role. Similar risks appear with locale, plan tier, jurisdiction, product version, customer identity, and requested time period.
+
+![A comparison of provider prompt, exact result, semantic result, and retrieval or tool caches, using the contractor-versus-employee example to show the identity, freshness, authorization, and evidence required for reuse](/content-assets/articles/article-mlops-llmops-caching-and-limits/cache-hit-reuse-decision.png)
+
+*A cache hit is a governed reuse decision: close wording is not equivalent meaning, and every hit still has to match identity, freshness, authorization, and current evidence.*
 
 A semantic hit therefore needs hard filters before and after similarity:
 
@@ -295,25 +299,9 @@ Bound the queue by tenant, route, count, estimated tokens, and oldest acceptable
 
 Retries address a narrow class of transient failures. Follow a provider’s `Retry-After` value where supplied. Otherwise, use exponential backoff with random jitter. Cap attempts and total elapsed time. OpenAI’s official SDKs already retry eligible rate-limit errors, so an extra application loop can accidentally multiply retries.
 
-```mermaid
-sequenceDiagram
-    participant C as Caller
-    participant A as Admission
-    participant Q as Bounded queue
-    participant W as Worker
-    participant D as Dependency
+![A capacity-control and overload flow that distinguishes rate, quota, concurrency, and per-run budgets, then retries a temporary dependency limit only after waiting, checking the deadline and attempt budget, and preserving the same operation identity](/content-assets/articles/article-mlops-llmops-caching-and-limits/limits-and-safe-retry.png)
 
-    C->>A: Request with operation ID
-    A->>A: Reserve tenant budget
-    A->>Q: Enqueue before deadline
-    Q->>W: Deliver eligible work
-    W->>D: Call with idempotency key
-    D-->>W: Temporary 429 + Retry-After
-    W->>W: Wait, jitter, check deadline
-    W->>D: Retry same operation
-    D-->>W: Original or completed result
-    W-->>C: Final status
-```
+*Admission limits protect shared capacity, run budgets bound one accepted task, and a safe retry follows the dependency's guidance without creating a second operation.*
 
 Idempotency protects retries that may create an external effect. The same key must describe the same normalized operation and scope. The domain service stores the result or detects an in-progress request. A changed payload with the same key should return a conflict. Reads and pure computations may be naturally repeatable; payments, messages, deployments, and record creation need explicit guarantees.
 
@@ -442,9 +430,13 @@ Residual uncertainty remains. Provider cache semantics, billing, model support, 
 
 Caching and limits form one control system. Caches reuse prompt computation, results, retrieval, or tool observations only while identity, freshness, and source assumptions remain valid. Limits allocate arrival rate, accumulated quota, concurrency, and one run’s finite budget.
 
-In essence, reuse needs proof and new work needs permission from capacity. Backpressure and bounded queues protect downstream services. Idempotent retries recover uncertain operations, circuit breakers stop repeated failure, and honest fallback keeps reduced service visible.
+Reuse needs proof, and new work needs permission from available capacity. Backpressure and bounded queues protect downstream services. Idempotent retries recover uncertain operations, circuit breakers stop repeated failure, and honest fallback keeps reduced service visible.
 
 A reliable implementation can explain every shortcut and every refusal. Operators can see why an entry was reusable, why work entered the system, which budget ended a run, and which safe path handled the result.
+
+![A complete caching and limits control system in which admission outcomes, governed cache hits, bounded execution results, rollout evidence, and incident recovery all pass through observable product outcomes](/content-assets/articles/article-mlops-llmops-caching-and-limits/caching-and-limits-system-summary.png)
+
+*Caching and limits work as one control system when every accepted, reused, deferred, reduced, or failed request remains observable and the incident path ends in routine monitoring only after stable recovery.*
 
 ## References
 

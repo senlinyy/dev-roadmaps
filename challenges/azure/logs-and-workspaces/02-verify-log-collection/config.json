@@ -487,6 +487,10 @@
       "ApplicationGatewayAccessLog"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+monitor\\s+log-analytics\\s+workspace\\s+show\\b",
+      "^az\\s+monitor\\s+diagnostic-settings\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

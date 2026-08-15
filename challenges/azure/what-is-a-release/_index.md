@@ -4,6 +4,6 @@ description: "Practice separating artifact, runtime, configuration, traffic, hea
 articleId: article-cloud-providers-azure-deployment-runtime-operations-mental-model
 articleSlug: what-is-a-release
 difficulty: medium
-order: 35
+order: 27
 tags: ["azure", "deployment", "release", "runtime", "rollback"]
 ---

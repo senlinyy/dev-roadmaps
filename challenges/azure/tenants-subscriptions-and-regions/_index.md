@@ -4,6 +4,6 @@ description: "Practice choosing Azure tenant, subscription, resource group, regi
 articleId: article-cloud-providers-azure-foundations-tenants-and-subscriptions
 articleSlug: tenants-subscriptions-and-regions
 difficulty: medium
-order: 2
+order: 1
 tags: ["azure", "tenants", "subscriptions", "regions", "zones", "az-cli"]
 ---

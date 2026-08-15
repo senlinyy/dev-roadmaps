@@ -25,7 +25,7 @@ id: "article-mlops-llmops-prompt-versioning-release"
 14. [Make Every Release Explainable And Reversible](#make-every-release-explainable-and-reversible)
 15. [References](#references)
 
-At a high level, **prompt versioning and release** applies normal production discipline to the instructions that shape an LLM application's behaviour.
+Changing an instruction can alter routing, tool use, tone, and safety behaviour even if the application code stays the same. **Prompt versioning and release** applies production discipline to those instructions so teams can review, test, deploy, and restore them deliberately.
 
 A conventional software change may fail by refusing to compile, crashing a process, or returning an error. A prompt change can keep every endpoint healthy while changing the answers users receive. Replacing “include relevant limitations” with “keep the answer brief” may remove an important warning. Reordering tool instructions may make a model call a tool more often. Adding one example may improve one language and quietly distort another.
 
@@ -101,6 +101,19 @@ For a document-summary request, the identities might look like this:
 - the runtime trace records bundle `27`, the document revision, selected page IDs, and the actual model response ID.
 
 This vocabulary makes two questions answerable. The release record explains **what the team approved**. The trace explains **what one request actually used**.
+
+```mermaid
+flowchart TD
+    Draft["Draft<br/>(editable working content)"] --> Version["Published version<br/>(immutable prompt or template)"]
+    Version --> Alias["Alias<br/>(moveable name for discovery or rollout)"]
+    Version --> Bundle["Behaviour release bundle<br/>(prompt, model, tools, schemas, and policies)"]
+    Bundle --> Request["Assembled request<br/>(release plus current user data and context)"]
+    Request --> Trace["Runtime trace<br/>(exact release and dynamic evidence used)"]
+```
+
+![Four connected prompt-release identities separating a stored template, the approved behaviour bundle, one assembled request, and the runtime trace, with a production alias resolving to immutable bundle 27.](/content-assets/articles/article-mlops-llmops-prompt-versioning-release/four-prompt-release-identities.png)
+
+*The template describes the reusable form, while the release bundle binds every approved behaviour component. Runtime adds current documents and selected sources, then the trace records the concrete bundle and dynamic evidence that served the request.*
 
 ## Version Every Component That Can Change Behaviour
 
@@ -291,6 +304,10 @@ Consider this small edit:
 ```
 
 The new instruction is more precise. It also introduces a required output field, changes the expected length, and may increase false warnings. A meaningful review checks whether the output schema contains `warnings` and defines how “material” is evaluated. It also names the behaviour that should stay constant and the dataset slices that contain uncertain documents.
+
+![A prompt diff that introduces a warnings list, followed by four compatibility checks for the output schema, source evidence, evaluation cases, and downstream consumers before one immutable candidate bundle can be built.](/content-assets/articles/article-mlops-llmops-prompt-versioning-release/prompt-edit-contract-impact.png)
+
+*A text edit can change the data contract and every consumer around it. The release stays blocked until the schema can represent the field, context supplies its evidence, evaluation can judge it, and downstream systems can read it.*
 
 Every material change proposal should explain:
 
@@ -600,6 +617,16 @@ OpenAI's current direction for new applications is code-managed prompt helpers w
 
 The tools can vary across organisations. The operating model should still answer the same questions: Who can edit a draft? What makes a version immutable? Which evidence permits promotion? How does runtime resolve and record the concrete version? How quickly can operators restore a compatible bundle?
 
+```mermaid
+flowchart TD
+    Author["Authoring and review<br/>(Git or controlled prompt workspace)"] --> Version["Immutable version<br/>(registry or versioned artifact)"]
+    Version --> Evaluate["Evaluation evidence<br/>(task, safety, and compatibility checks)"]
+    Evaluate --> Approve["Promotion decision<br/>(CI gate and named owner)"]
+    Approve --> Resolve["Runtime resolution<br/>(concrete version, never an unresolved alias)"]
+    Resolve --> Observe["Runtime evidence<br/>(trace, provider IDs, and outcome)"]
+    Observe --> Recover["Recovery<br/>(restore a compatible approved bundle)"]
+```
+
 ## Make Every Release Explainable And Reversible
 
 <!-- section-summary: Mature prompt release engineering connects one reviewed change to one evaluated artifact, one controlled rollout, and one reconstructable runtime identity. -->
@@ -609,6 +636,10 @@ Prompt versioning is useful because LLM behaviour depends on more than a visible
 A production release gives that complete combination an immutable bundle identity. Reviewers examine the intended behavioural change. Evaluation gates protect core, regression, and adversarial cases. CI/CD packages and promotes the same tested digest. Shadow and canary stages limit exposure. Traces connect real requests to the bundle and dynamic context. Rollback restores a compatible known-good artifact and reconciliation handles effects that already occurred.
 
 With those controls in place, the team can answer the questions that matter during normal improvement and during an incident: What changed? Why was it approved? Which users saw it? Did it improve the intended behaviour? Which artifact can safely replace it?
+
+![A two-row prompt-release control path that builds and evaluates one immutable bundle, sends only a passed candidate into limited live exposure, and routes successful promotion or restoration into verification and effect reconciliation.](/content-assets/articles/article-mlops-llmops-prompt-versioning-release/prompt-release-recovery-summary.png)
+
+*Build and evaluate one resolved artifact, then limit its live exposure according to risk. Promotion increases traffic only after live criteria pass; restoration returns future requests to the compatible known-good bundle, while verification finds exposed requests and reconciles effects already created.*
 
 ## References
 

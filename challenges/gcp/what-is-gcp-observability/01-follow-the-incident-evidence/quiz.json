@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "Users report that image uploads fail intermittently, and the team needs the exact error message, request ID, and affected object name for one failed request. Which signal should they inspect first?",
+      "options": [
+        { "id": "a", "text": "A structured Cloud Logging entry for the failed request" },
+        { "id": "b", "text": "A monthly billing export grouped by service" },
+        { "id": "c", "text": "A project label inventory" },
+        { "id": "d", "text": "A Cloud Monitoring uptime-check configuration without its results" }
+      ],
+      "correct": ["a"],
+      "explanation": "Structured logs preserve event-specific fields such as request IDs, object names, severity, and error details. See [structured logging](https://cloud.google.com/logging/docs/structured-logging)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "The incident commander needs to know whether upload failures are isolated or whether the error rate increased across every Cloud Run instance during the last fifteen minutes. Which evidence is most useful?",
+      "options": [
+        { "id": "a", "text": "One successful request log" },
+        { "id": "b", "text": "A time-series metric for request count grouped by response class" },
+        { "id": "c", "text": "The service account display name" },
+        { "id": "d", "text": "The container image manifest alone" }
+      ],
+      "correct": ["b"],
+      "explanation": "Metrics aggregate numerical behavior over time and can be grouped by labels to show scope and trend. See [Cloud Monitoring metrics](https://cloud.google.com/monitoring/api/metrics_gcp)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "One upload request crosses Cloud Run, Pub/Sub, and a GKE worker before failing in Cloud SQL. The team wants the latency and status of each hop for that single request. Which signal provides that path?",
+      "options": [
+        { "id": "b", "text": "A list of enabled APIs" },
+        { "id": "c", "text": "A dashboard containing only CPU utilization" },
+        { "id": "a", "text": "A trace containing spans with propagated trace context" },
+        { "id": "d", "text": "An organization policy export" }
+      ],
+      "correct": ["a"],
+      "explanation": "A distributed trace links spans from participating services into one request path. See [Cloud Trace overview](https://cloud.google.com/trace/docs/overview)."
+    },
+    {
+      "id": "q4",
+      "type": "multiple",
+      "scenario": "The first failure started immediately after a production configuration change. Which two evidence sources best establish what users experienced and who changed the system?",
+      "options": [
+        { "id": "c", "text": "The project creation date" },
+        { "id": "a", "text": "Application request logs correlated by trace or request ID" },
+        { "id": "d", "text": "An unrelated development dashboard" },
+        { "id": "b", "text": "Cloud Audit Logs for the relevant administrative operation" }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Application evidence shows the user-facing failure while audit logs record administrative activity and caller identity. See [Cloud Audit Logs overview](https://cloud.google.com/logging/docs/audit)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A dashboard mixes staging and production traffic, so responders cannot tell whether the production fix worked. What should the telemetry design add?",
+      "options": [
+        { "id": "b", "text": "More free-form message text without structured fields" },
+        { "id": "c", "text": "One global threshold with every label removed" },
+        { "id": "d", "text": "A second project with the same unlabeled signals" },
+        { "id": "a", "text": "Consistent environment, service, and revision labels on relevant telemetry" }
+      ],
+      "correct": ["a"],
+      "explanation": "Stable labels let responders filter and compare the exact service and environment under investigation. See [Monitored resource and metric labels](https://cloud.google.com/monitoring/api/resources)."
+    }
+  ]
+}

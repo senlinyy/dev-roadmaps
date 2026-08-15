@@ -56,6 +56,9 @@
       "\"Amount\": \"1268.40\"",
       "\"Amount\": \"1842.55\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ce\\\\s+get-cost-and-usage\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

@@ -53,7 +53,7 @@
       "correct": [
         "c"
       ],
-      "explanation": "Child groups let the broader `prod` pattern include every production role while `prod_web` expresses the smaller release boundary. Hardcoded addresses and temporary membership changes make the real fleet harder to review. A task name does not narrow Ansible's selected hosts."
+      "explanation": "Child groups let the broader `prod` pattern include every production role while `prod_web` expresses the smaller release boundary. Hardcoded addresses and temporary membership changes make the real fleet harder to review. A task name does not narrow Ansible's selected hosts. See [Ansible inventory patterns](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)."
     },
     {
       "id": "q3",
@@ -80,7 +80,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "For a small stable fleet, a static file makes membership changes explicit in version control. It does not prove connectivity, remove variable scoping, or follow autoscaling automatically. Those last requirements are reasons to consider dynamic inventory later."
+      "explanation": "For a small stable fleet, a static file makes membership changes explicit in version control. It does not prove connectivity, remove variable scoping, or follow autoscaling automatically. Those last requirements are reasons to consider dynamic inventory later. See [Ansible inventory patterns](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)."
     },
     {
       "id": "q4",
@@ -189,7 +189,7 @@
       "correct": [
         "c"
       ],
-      "explanation": "The targeting map is wrong, so the team should stop, repair and verify it, assess the unintended production change, and use a narrow retry. Renaming the host or hiding errors does not correct membership. Moving connection data into the playbook would make the boundary harder to audit."
+      "explanation": "The targeting map is wrong, so the team should stop, repair and verify it, assess the unintended production change, and use a narrow retry. Renaming the host or hiding errors does not correct membership. Moving connection data into the playbook would make the boundary harder to audit. See [Ansible inventory patterns](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)."
     }
   ]
 }

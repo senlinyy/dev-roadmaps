@@ -31,7 +31,7 @@ id: "article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems"
 ## What An ML Audit Trail Lets You Reconstruct
 <!-- section-summary: An ML audit trail connects a production outcome to the evidence that created, approved, served, and later reviewed it. -->
 
-At a high level, an **ML audit trail** is the durable evidence that lets an authorised person reconstruct the history of a model release or an individual model-assisted decision. The reviewer should be able to start from a complaint, incident, approval question, or prediction identifier and work back to the data, code, model, evaluation, and human decisions that shaped it.
+A reviewer may start with a complaint, incident, approval question, or prediction identifier and need to reconstruct everything that shaped the result. An **ML audit trail** is the durable evidence that connects that event to the data, code, model, evaluation, release, and human decisions behind it.
 
 Imagine a customer disputes a rejected application. The API log may show a successful response with status `200`. That record proves that the endpoint answered. It rarely proves which immutable model artifact produced the score, which policy converted the score into a rejection, which feature values were available at decision time, or who approved that combination for production. Those missing links are the reason an ML audit trail exists.
 
@@ -77,6 +77,10 @@ An audit record captures an action or decision that the organisation has chosen 
 
 The full audit trail links all four kinds of evidence. A trace ID helps locate runtime operations. A decision ID identifies the durable business event. Artifact digests and lineage identifiers connect that decision to reproducible technical inputs. Approval records explain the human authority behind the release.
 
+![Comparison of observability, provenance, lineage, and audit records connected through durable decision identifiers, trace pointers, artifact digests, data snapshots, and approval identities](/content-assets/articles/article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems/four-audit-evidence-types.png)
+
+*Observability, provenance, lineage, and audit records answer different questions. Durable decision identity, trace pointers, artifact digests, data snapshots, and approval identity connect them during reconstruction.*
+
 ## What To Record From Design Through Retirement
 <!-- section-summary: A complete trail follows the model from its original purpose through production decisions and eventual retirement. -->
 
@@ -103,7 +107,7 @@ The chain does not require one giant database. Mature systems usually keep evide
 
 The first audit record states what the system may do, which decision or workflow it supports, and who may be affected. This **intended-use record** also names the person or service consuming the output, the action that follows, and the accountable owner.
 
-Consider a model that predicts whether a machine needs preventive maintenance. A useful intended-use record says that the score helps a maintenance planner choose which machines receive inspection during the next shift. It states that the score cannot automatically shut down equipment and that safety alarms override it. False negatives risk unplanned failure; false positives consume inspection capacity. These facts determine the evaluation, monitoring, and approval evidence that later stages need.
+Consider a model that predicts whether a machine needs preventive maintenance. Its intended-use record says that the score helps a maintenance planner choose which machines receive inspection during the next shift. It states that the score cannot automatically shut down equipment and that safety alarms override it. False negatives risk unplanned failure; false positives consume inspection capacity. These facts determine the evaluation, monitoring, and approval evidence that later stages need.
 
 The record should describe excluded uses as concrete boundaries. A model approved for prioritising human review should not silently become an automatic rejection system. The serving route and decision policy should carry an intended-use version so an investigator can see which boundary applied at the time.
 
@@ -178,8 +182,8 @@ The release event should identify the immutable registered-model version or Logg
 {
   "event_type": "model_route_changed",
   "audit_event_id": "01J...",
-  "occurred_at": "2026-08-02T10:41:27.318Z",
-  "recorded_at": "2026-08-02T10:41:28.004Z",
+  "occurred_at": "${OCCURRED_AT}",
+  "recorded_at": "${RECORDED_AT}",
   "actor": {"type": "workload", "id": "ci:release-model"},
   "target": {"endpoint": "risk-prod", "route": "champion"},
   "model": {"registered_version": "42", "artifact_digest": "sha256:ab17..."},
@@ -269,7 +273,7 @@ flowchart TD
 ```
 
 ## Check That Required Audit Records Are Present
-<!-- section-summary: An audit trail is trustworthy only after teams test required links, delivery coverage, retention, and integrity. -->
+<!-- section-summary: Teams test required links, delivery coverage, retention, and integrity before relying on an audit trail. -->
 
 An audit trail can appear healthy while required records are missing. A new serving path may omit the decision ID, a telemetry sampler may drop traces, or a lineage integration may not support one transformation engine. Regional exports can stop delivering, and schema changes can send events to a dead-letter queue.
 
@@ -318,6 +322,10 @@ flowchart TD
     F --> G["Recovery Proof<br/>(route, events, and guardrails agree)"]
 ```
 
+![Decision reconstruction comparing two production decisions that used the same model artifact but different policy versions, locating the cause at the policy boundary and verifying policy-only recovery](/content-assets/articles/article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems/policy-change-decision-reconstruction.png)
+
+*Two decisions used the same model artifact and different policies. Linked release, approval, CI, and cloud evidence locates the cause at the policy boundary, so containment changes the policy while leaving the model unchanged.*
+
 ## What Each Tool Records And What It Misses
 <!-- section-summary: Industrial tools contribute different parts of the evidence chain and should be joined through stable identifiers. -->
 
@@ -334,11 +342,15 @@ Cloud audit systems such as AWS CloudTrail, Google Cloud Audit Logs, and Azure A
 The architecture works because each tool owns a clear part of the chain. Stable identifiers and digests cross the boundaries. Copying every raw record into one ungoverned table would increase exposure and still leave meaning unresolved.
 
 ## Main Idea
-<!-- section-summary: A useful ML audit trail reconstructs purpose, production action, and organisational response through verified linked evidence. -->
+<!-- section-summary: An ML audit trail reconstructs purpose, production action, and organisational response through verified linked evidence. -->
 
 An ML audit trail should let an authorised reviewer start from a model release or production decision and reach the full evidence chain. That chain covers intended use, governed data, reproducible build inputs, training, evaluation, approval, registry identity, deployment route, prediction, business action, monitoring, incident response, exceptions, and retirement.
 
 Logs, traces, lineage, provenance, registries, and cloud audit records each contribute evidence. Durable decision IDs, immutable artifact and data identities, explicit actors, meaningful timestamps, protected retention, and continuous reconciliation connect them. The result is a history that engineers can investigate, reviewers can verify, and owners can act on.
+
+![Complete ML audit-trail lifecycle linking intended use, governed data, reproducible build, evaluation and approval, registry and release, production decisions, operational follow-up, and exception or retirement, supported by evidence controls and reconstruction tests](/content-assets/articles/article-mlops-governance-and-responsible-ai-audit-trails-for-ml-systems/audit-trail-lifecycle-summary.png)
+
+*A joinable audit trail connects intended use, data, build, approval, release, production decisions, operational follow-up, and exception or retirement. Completeness, integrity, access, retention, and reconstruction tests protect the chain.*
 
 ## References
 
@@ -348,7 +360,7 @@ Logs, traces, lineage, provenance, registries, and cloud audit records each cont
 - [Databricks Unity Catalog lineage](https://docs.databricks.com/aws/en/data-governance/unity-catalog/data-lineage)
 - [Databricks lineage system tables](https://docs.databricks.com/aws/en/admin/system-tables/lineage)
 - [Databricks audit log system table](https://docs.databricks.com/aws/en/admin/system-tables/audit-logs)
-- [OpenLineage specification](https://openlineage.io/docs/spec/)
+- [OpenLineage object model](https://openlineage.io/docs/spec/object-model/)
 - [OpenLineage facets](https://openlineage.io/docs/spec/facets/)
 - [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/)
 - [OpenTelemetry specification overview](https://opentelemetry.io/docs/specs/otel/overview/)

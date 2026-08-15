@@ -37,7 +37,7 @@ Several models may need the same input calculated with the same meaning and time
 
 The need usually appears gradually. One model starts with warehouse SQL and a small prediction service. A second model needs the same customer activity count, so another team copies the query. A live model later rewrites that calculation in a stream processor and places the result in Redis. The feature now has several implementations, several owners, and no dependable answer to a basic question: do all models receive the same value for the same customer and time?
 
-A feature store addresses this coordination problem. In essence, it turns reusable model inputs into governed production assets. It provides a shared definition, identifies the real-world object each value belongs to, reconstructs historical values without future leakage, and delivers recent values within the serving budget.
+A feature store addresses this coordination problem by turning reusable model inputs into governed production assets. It provides a shared definition, identifies the real-world object each value belongs to, reconstructs historical values without future leakage, and delivers recent values within the serving budget.
 
 The word “store” can be misleading. A production feature store is rarely one database. It commonly connects a warehouse or lakehouse, transformation jobs, a metadata registry, an optional online database, retrieval APIs, permissions, and monitoring. Some products manage most of those parts. Others provide a common interface over infrastructure the team already operates.
 
@@ -80,6 +80,10 @@ flowchart TD
 This separation explains an important failure pattern. A registry can show a correct definition while the online value remains stale because materialization stopped. The control plane is healthy, but part of the data plane is unhealthy. The reverse can also happen: Redis responds quickly while a mistaken registry change points the model to the wrong feature version.
 
 A dependable platform verifies both planes and the links between them.
+
+![Feature-store control plane for definitions and governance connected to data-plane computation, historical storage, materialization, and online serving](/content-assets/articles/article-mlops-data-for-ml-systems-feature-stores-explained/two-feature-store-planes.png)
+
+*The control plane governs what a feature means. The data plane computes and delivers its values. A dependable feature platform verifies each plane and the connection between them.*
 
 ## Record Feature Definitions And Owners In One Catalog
 <!-- section-summary: The registry records feature contracts, ownership, sources, schemas, versions, and consumers so teams can discover and review the same definitions. -->
@@ -168,6 +172,10 @@ A feature-store retrieval API can standardize this join across teams. It still d
 ### Record Which Data And Rules Produced The Training Features
 
 Historical retrieval should return provenance with the dataset. Useful evidence includes the registry version, feature references, entity input, source snapshots, retrieval time, and selected feature timestamps. That evidence lets a later model review rebuild the training input.
+
+![Historical point-in-time feature retrieval compared with a current online lookup for the same entity](/content-assets/articles/article-mlops-data-for-ml-systems-feature-stores-explained/historical-and-online-retrieval.png)
+
+*Offline retrieval reconstructs the value available at an old decision time. Online retrieval supplies the current published value quickly. Both paths follow the same governed definition.*
 
 ## Retrieve Current Values For Live Predictions
 <!-- section-summary: Online serving returns recent feature values by entity key within the latency, freshness, and availability policy of a live model. -->
@@ -442,6 +450,10 @@ A feature store gives an organization a shared way to operate reusable model inp
 The platform remains trustworthy through the connections between those parts. Point-in-time tests protect training. Materialization watermarks protect publication. Online timestamps and typed failure states protect serving. Parity comparisons connect historical reconstruction with the vector the model actually received. Lineage and ownership make changes and incidents actionable.
 
 Start with the smallest design that solves the production problem. Versioned transformations and an offline catalog may be enough. Add online serving for live models that need shared precomputed values. Adopt Feast or a managed platform after reuse, governance, or operational scale makes the shared layer valuable. Product choice can reduce engineering work, while feature meaning and decision safety remain responsibilities of the teams that own the data and model.
+
+![Complete feature-store design connecting a governed feature catalog to offline and online paths, consumers, materialization, monitoring, access, and ownership](/content-assets/articles/article-mlops-data-for-ml-systems-feature-stores-explained/complete-feature-store-summary.png)
+
+*A feature store earns its place by solving repeated definition and retrieval problems. Materialization, monitoring, access, and ownership keep the shared layer dependable after adoption.*
 
 ## References
 

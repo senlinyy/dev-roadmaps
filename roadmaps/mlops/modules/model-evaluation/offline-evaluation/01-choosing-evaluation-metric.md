@@ -37,7 +37,7 @@ No number is universally correct. Accuracy answers how often the predicted class
 
 An **evaluation metric** is a rule that summarizes predictions and known outcomes for a particular question. The metric may count correct decisions, measure numeric error, reward useful ranking positions, or judge probability estimates. Its value comes from the question it represents.
 
-At a high level, **choosing a metric is a product-decision problem expressed through measurement**. The team first defines what the model predicts and how the product uses that output. It then identifies the costly mistakes and the operating rule that turns predictions into action. Only then can a metric show whether the model supports the intended decision.
+A model can improve its accuracy and still make the product worse if the improved cases matter little while costly mistakes increase. **Choosing a metric is a product-decision problem expressed through measurement.** The team first defines what the model predicts and how the product uses that output. It then identifies the costly mistakes and the operating rule that turns predictions into action. A metric can support the intended decision only after those choices are explicit.
 
 You can think of metric selection through five connected layers:
 
@@ -354,10 +354,6 @@ uncertainty:
 
 The example stays focused on the decision. It avoids dozens of library options and records the facts that change interpretation. A real contract also carries dataset, code, policy, and candidate identities in the release evidence.
 
-![A metric contract connects the primary benefit and guardrails to an explicit release interpretation](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-contract-gates.png)
-
-*The contract preserves why each metric exists and which product boundary it protects.*
-
 ### Automate Metric Calculation And Keep Final Judgement With Reviewers
 
 Scikit-learn provides metric functions and scoring interfaces for model selection. Be explicit about `scoring`; estimator defaults are commonly accuracy for classifiers and R² for regressors, which may have little connection to the product decision.
@@ -376,6 +372,10 @@ An evaluation metric summarizes one question about predictions and outcomes. Its
 Choose a primary metric for the intended benefit. Add guardrails for competing harms, capacity, probability quality, and cost. Evaluate the threshold, top-k cutoff, quantile, or interval that production will use. Then compare with meaningful baselines across important segments and report uncertainty.
 
 Offline metrics provide controlled release evidence. Production outcomes also depend on current data, reliable delivery, workflow capacity, and human response. A versioned metric contract keeps those assumptions visible and makes each candidate face the same decision.
+
+![A metric contract flows through repeatable evaluation and explicit evidence checks to pass hold or fail outcomes](/content-assets/articles/article-mlops-model-evaluation-choosing-evaluation-metric/metric-contract-gates.png)
+
+*The contract preserves the decision context, applies the same checks to every candidate, and keeps missing or uncertain evidence from becoming an automatic pass.*
 
 ## References
 

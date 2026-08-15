@@ -4,6 +4,6 @@ description: "Practice using Azure Cost Management, Cost Analysis, tags, budgets
 articleId: article-cloud-providers-azure-cost-resilience-cost-management-budgets-tags
 articleSlug: cost-visibility
 difficulty: medium
-order: 40
+order: 31
 tags: ["azure", "cost-management", "budgets", "tags", "advisor"]
 ---

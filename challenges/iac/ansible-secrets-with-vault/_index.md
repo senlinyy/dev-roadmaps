@@ -1,9 +1,8 @@
 ---
 title: "Ansible Vault"
-description: "Practice referencing vaulted values, avoiding secret logs, and choosing safe Vault workflows."
+description: "Practice inspection and rotation, then connect an encrypted variable file to a play without exposing plaintext."
 articleId: "article-infrastructure-as-code-ansible-secrets-with-ansible-vault"
 difficulty: "medium"
-order: 20
-tags: ["ansible", "vault", "secrets", "no-log"]
+order: 19
+tags: ["ansible", "vault", "secrets"]
 ---
-

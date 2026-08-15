@@ -1,7 +1,7 @@
 ---
 title: "Runtime Compatibility"
 description: "Understand and test the complete compatibility chain from serving requests and model artifacts to native libraries, runtimes, hardware, readiness, and rollback."
-overview: "A model can load successfully and still produce the wrong result, miss its latency target, or run on unintended hardware. This article explains each compatibility boundary, builds a small set of supported serving lanes, and shows how release and incident evidence identify the exact combination that was tested."
+overview: "A model can load successfully and still produce the wrong result, miss its latency target, or run on unintended hardware. Compatibility boundaries and supported serving lanes let release and incident evidence identify the exact combination that was tested."
 tags: ["MLOps", "production", "packaging"]
 order: 3
 id: "article-mlops-model-serving-model-artifacts-runtime-dependencies"
@@ -27,7 +27,7 @@ id: "article-mlops-model-serving-model-artifacts-runtime-dependencies"
 ## What Runtime Compatibility Means
 <!-- section-summary: Runtime compatibility means that a specific model release preserves its intended behavior and operating envelope throughout the real serving path. -->
 
-At a high level, **runtime compatibility** means that an approved model works as intended in the environment that serves it.
+A model file can open successfully while a changed preprocessing library produces different inputs or an unsupported hardware kernel changes execution. **Runtime compatibility** means that an approved model works as intended in the environment that serves it.
 Opening the model file proves only the artifact-to-loader boundary.
 The service must accept the right request, reproduce the reviewed preprocessing, and execute the model on supported software and hardware.
 It must also return an acceptable result and meet its startup, memory, and latency limits.
@@ -39,6 +39,10 @@ An ONNX model may return correct predictions through the CPU even though the rel
 Every case has a different repair.
 
 You can think of compatibility as a chain of agreements. Each boundary translates one representation into the next:
+
+![Seven compatibility boundaries from request contract through preprocessing, model artifact, runtime, native libraries, and hardware, plus the operating-envelope checks required for acceptance.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/runtime-compatibility-chain.png)
+
+*A model is compatible only when every translation boundary preserves meaning and the complete service still meets its output, startup, memory, latency, and concurrency targets.*
 
 ```mermaid
 flowchart TD
@@ -266,6 +270,10 @@ A live reload needs a transactional design. Load and test the candidate beside t
 
 The phrase “incompatible model” hides three separate outcomes. Each outcome points toward a different boundary, requires different evidence, and leads to a different repair. Naming the outcome helps the team choose the next investigation.
 
+![Three runtime compatibility failure classes with the evidence each exposes and the boundaries engineers should investigate.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/compatibility-failure-triage.png)
+
+*Load failure, behavioral drift, and operating-envelope failure can look similar from outside the service, but each one sends the investigation to a different part of the compatibility chain.*
+
 ### The Model Cannot Load
 
 The service fails before a usable inference session exists. Common causes include an unsupported artifact format, missing operator, incompatible pickle dependency, absent native library, wrong CPU architecture, unavailable execution provider, or unsupported driver/runtime pair. Import checks and model-load tests find much of this class.
@@ -403,6 +411,10 @@ Rollback restores the complete prior release record. Operators verify its loaded
 <!-- section-summary: Runtime compatibility is a tested chain of agreements whose complete identity must survive deployment, upgrade, diagnosis, and rollback. -->
 
 Runtime compatibility extends from the client request to the hardware that executes the model. A valid schema protects structure, while semantic fixtures protect meaning. The serialization format defines which graph, weights, code, and metadata cross into serving. Python locks record package versions, while wheels, ABIs, native libraries, and architecture determine which compiled code can run. The runtime engine and model server add operator support, repository layout, protocol, batching, and lifecycle behavior. CPU or accelerator execution adds provider, user-space library, driver, device, and resource constraints. Finally, load, warm-up, readiness, behavior, latency, and memory tests prove that the combination is usable in production. A deliberately small support matrix keeps this promise operable. The immutable release record binds the exact lane and artifacts that passed. During an incident, the same boundary chain reveals the first mismatch and gives rollback a complete, tested target.
+
+![A tested serving lane moving from qualification into an immutable release record, canary observation, and complete recovery.](/content-assets/articles/article-mlops-model-serving-model-artifacts-runtime-dependencies/tested-serving-lane-summary.png)
+
+*Qualification proves one explicit combination of model, runtime, and hardware; the release record keeps that combination identifiable during canary rollout, diagnosis, and rollback.*
 
 ## References
 

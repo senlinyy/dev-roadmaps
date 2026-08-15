@@ -1,0 +1,54 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/main.tf": {
+      "type": "file",
+      "content": "resource \"aws_s3_bucket\" \"website\" {}\nresource \"aws_s3_bucket_website_configuration\" \"website\" {}\nresource \"aws_s3_object\" \"index\" {}\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "unformattedFiles": [
+      "main.tf"
+    ],
+    "plan": {
+      "add": 3,
+      "change": 0,
+      "destroy": 0
+    }
+  },
+  "grader": {
+    "strategy": "terraform-state",
+    "source": "all-stdout",
+    "expected": [
+      "Success! The configuration is valid.",
+      "Plan: 3 to add, 0 to change, 0 to destroy."
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+fmt(?:\\s|$)",
+      "^terraform\\s+init(?:\\s|$)",
+      "^terraform\\s+validate$",
+      "^terraform\\s+plan(?=.*-out(?:=|\\s+)website\\.tfplan)"
+    ],
+    "expectedFs": {
+      "/workspace/website.tfplan": {
+        "type": "file",
+        "exists": true,
+        "contentContains": "Plan: 3 to add"
+      }
+    },
+    "expectedTerraform": {
+      "initialized": true,
+      "lastAction": "plan"
+    }
+  }
+}

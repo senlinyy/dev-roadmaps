@@ -1,0 +1,20 @@
+{
+  "language": "javascript",
+  "activeFile": "handler.js",
+  "completionProfile": "node-standard",
+  "files": [
+    { "filename": "package.json", "initialValue": "{\n  \"type\": \"module\"\n}\n", "readOnly": true },
+    { "filename": "handler.js", "initialValue": "export async function handleReceiptEvent(event, dependencies) {\n  throw new Error('Implement the Pub/Sub handler');\n}\n" },
+    {
+      "filename": "tests.mjs",
+      "initialValue": "import assert from 'node:assert/strict';\nimport { handleReceiptEvent } from './handler.js';\n\nconst processed = new Set();\nconst receipts = [];\nconst dependencies = { processed, receipts: { async create(value) { receipts.push(value); } } };\nconst payload = Buffer.from(JSON.stringify({ orderId: 'ord-42', email: 'buyer@example.com' })).toString('base64');\nconst event = { id: 'evt-42', data: { message: { data: payload } } };\nassert.deepEqual(await handleReceiptEvent(event, dependencies), { duplicate: false });\nassert.equal(receipts.length, 1);\nassert.equal(receipts[0].orderId, 'ord-42');\nassert.deepEqual(await handleReceiptEvent(event, dependencies), { duplicate: true });\nassert.equal(receipts.length, 1);\nawait assert.rejects(() => handleReceiptEvent({ data: {} }, dependencies), /event id|message data/i);\nconsole.log('6 assertions passed');\n",
+      "readOnly": true
+    }
+  ],
+  "executor": { "runtime": "node-22", "entrypoint": "tests.mjs", "mode": "run", "runLabel": "Run Tests" },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "stdout": [ { "match": "contains", "value": "6 assertions passed", "label": "visible Pub/Sub tests pass" } ]
+  }
+}

@@ -93,6 +93,10 @@
       "\"TargetHealth\": {",
       "\"State\": \"healthy\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ecs\\\\s+describe-services\\\\b",
+      "^aws\\\\s+elbv2\\\\s+describe-target-health\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

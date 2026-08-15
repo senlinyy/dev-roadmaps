@@ -194,6 +194,10 @@ flowchart TD
     F["Serving Identity<br/>(Read approved version only)"] --> E
 ```
 
+![Training, validation, release, and serving identities have separate permissions over candidate artifacts, review evidence, and approved model versions.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/stage-authority-boundaries.png)
+
+*Each pipeline stage receives only the read and write authority it needs, so a training or validation workload cannot promote its own output.*
+
 Temporary credentials reduce the window of misuse after leakage. Scope determines the remaining blast radius. A fifteen-minute token with administrator access can still cause severe damage. Resource restrictions, conditions, network origin, environment, and pipeline identity all contribute to least privilege.
 
 Human access uses federated identity, multi-factor authentication, and time-limited elevation. A data scientist may inspect sampled or masked training records and candidate models. Production artifact writes belong to automation. Emergency access should require approval, expire automatically, and emit a prominent audit event.
@@ -274,6 +278,10 @@ ONNX stores a computational graph with protobuf and can reduce dependence on Pyt
 
 MLflow models can package model files, flavour metadata, dependency specifications, and custom Python code. A registry entry therefore does not make every contained file safe. The import path should inventory the package, verify its source and digest, construct the environment from pinned dependencies, and run the first load in an isolated validation workload with no production credentials.
 
+![PyTorch weights-only loading, Safetensors, ONNX, and MLflow packages reduce different loading risks but still require format-specific validation and isolated first loading.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/model-loading-format-boundaries.png)
+
+*The model format changes what a loader may construct, but provenance, digest checks, content validation, and an isolated first load remain necessary.*
+
 ## Record Build and Dependency Provenance
 <!-- section-summary: Provenance connects an artifact digest to the source, builder, dependencies, and parameters that produced it. -->
 
@@ -317,11 +325,11 @@ flowchart TD
 ```
 
 ## Quarantine, Verify, and Promote Candidates
-<!-- section-summary: Promotion changes an artifact's trust state only after automated checks and accountable approval bind to one immutable digest. -->
+<!-- section-summary: Automated checks and accountable approval bind to one immutable digest before promotion changes an artifact's trust state. -->
 
 A candidate model is an output of training, not an approved production release. It enters an artifact quarantine area where validation can inspect it without exposing production credentials or serving traffic. The candidate record includes every file, size, digest, format, source run, training snapshot, code revision, and intended runtime.
 
-### Grant Production Trust Only After Verification
+### Verify An Artifact Before Granting Production Trust
 
 Validation proceeds in layers. The first layer checks evidence integrity: required manifests exist, digests match, provenance refers to the candidate, signatures come from expected identities, and the source data versions remain resolvable. The second layer inspects content: allowed file types, archive paths, model structure, tensor shapes, operator domains, dependencies, secrets, and malware indicators. The third layer runs the model in an isolated environment under CPU, memory, time, filesystem, and network limits. Quality, robustness, privacy, and policy evaluations then determine whether the candidate can serve its intended use.
 
@@ -404,6 +412,10 @@ Authorized sources enter a governed, immutable snapshot. Scoped workload identit
 Industrial tools fit around this framework. Delta Lake and Apache Iceberg identify training snapshots. Unity Catalog and cloud IAM govern access and lineage. S3, Azure Blob Storage, and Google Cloud Storage provide versioning, retention, encryption, and recovery controls with different limitations. MLflow and managed registries record model versions and aliases. OCI registries, SLSA provenance, SPDX or CycloneDX SBOMs, and Sigstore Cosign strengthen the software supply chain. Safetensors, restricted PyTorch loading, and validated ONNX graphs reduce model-loading risk.
 
 The tool list changes across platforms. The enduring security question stays concrete: can the team prove which authorized data and software produced the exact model bytes that production loaded, and can it restore that trusted state after an incident?
+
+![Seven-stage secure ML artifact chain from exact Delta table versions through scoped training, candidate quarantine, approval, serving startup verification, and the digest reported by the running model, with mismatch and recovery paths.](/content-assets/articles/article-mlops-governance-and-responsible-ai-securing-training-data-model-artifacts/verified-artifact-chain-summary.png)
+
+*A trustworthy release preserves one identity from the exact feature and label snapshots to the digest production reports, while mismatch and recovery paths stop unverified traffic.*
 
 ## References
 

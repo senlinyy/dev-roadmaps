@@ -27,7 +27,7 @@ id: "article-mlops-monitoring-and-feedback-human-review-workflows"
 ## What a Human Review Workflow Means
 <!-- section-summary: Human review is a controlled handoff from an automated decision to a qualified person who has the evidence and authority to act. -->
 
-At a high level, **a human review workflow is the controlled handoff from an automated system to a qualified person.** The model still supplies a prediction, score, or extracted value. A person receives selected cases and examines the relevant evidence. Their decision then returns to the product through a controlled action.
+A model may be uncertain about a case whose consequence is too important for an automatic guess. **A human review workflow is the controlled handoff from that automated system to a qualified person.** The model supplies a prediction, score, or extracted value. The reviewer receives selected evidence, makes a decision, and returns it to the product through a controlled action.
 
 Consider an invoice-processing system. A model reads a supplier's bank details from a PDF so the payment system does not require manual data entry for every invoice. Most documents match the supplier record and move through automatically. One invoice contains a new bank account and the scan is difficult to read. An accounts-payable specialist receives the case. Money stays inside the organisation until that person confirms the change against approved supplier evidence.
 
@@ -123,6 +123,10 @@ A routing policy should identify the policy version and the selection probabilit
 ### Define What Happens If The Review Queue Is Overloaded
 
 Queue capacity belongs in the policy. If an urgent queue reaches its safe limit, the system needs an explicit fallback. It may hold the action, apply a conservative rule, or page an authorised responder. Silently dropping review or raising the confidence threshold transfers risk to users without recording the change.
+
+![Human-review routing policy using impact, uncertainty, novelty, and policy to choose an automated path, pre-action review, post-action audit, or specialist escalation](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-routing-policy.png)
+
+*Impact, uncertainty, novelty, and policy all feed the routing policy. Only human-review routes consume review capacity; ordinary automated cases continue under the approved product policy.*
 
 ## What Information A Reviewer Needs
 <!-- section-summary: A review item is an immutable record that connects the original prediction, routing rule, governed evidence, deadline, and permitted reviewer actions. -->
@@ -220,6 +224,10 @@ The submission request also carries an **idempotency key**, which identifies one
 Tests should run simultaneous claims and confirm that each reviewer receives a different task. Another test should expire a lease and reclaim the task once. A submission retry should still produce exactly one product action.
 
 PostgreSQL does not need to own every later use of the data. The transaction database can run the live queue, while completed review events flow to a warehouse or lakehouse for analytics and dataset construction.
+
+![Atomic review-task claim with a lease, expiry recovery, and idempotent final submission](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-claim-lease.png)
+
+*An atomic claim gives one reviewer a lease. Expiry can reopen abandoned work, while an idempotency key prevents a retry from creating a second product action.*
 
 ## Design The Interface For An Independent Human Decision
 <!-- section-summary: The interface gives reviewers the source evidence, task purpose, label definitions, and permitted actions without pushing them toward the model's answer. -->
@@ -484,6 +492,10 @@ The smallest useful stack may be one application and PostgreSQL. Kafka earns its
 Human review is a production decision system. Eligibility selects the cases that need people. Routing supplies the right priority and expertise. Immutable review items preserve the original context. Claims and leases prevent conflicting work. The interface supports an informed judgement, while decision taxonomies and adjudication keep disagreement visible.
 
 The same system needs privacy controls and capacity targets. Quality measurement and tested fallbacks keep the human layer dependable. Its outcomes can improve monitoring and future models after the pipeline applies provenance, sampling, maturity, and point-in-time rules. These controls turn a person's click into accountable evidence that the product and MLOps lifecycle can safely use.
+
+![Complete human-review production path from routing and capacity through one controlled decision, accepted events, monitoring, and governed training admission](/content-assets/articles/article-mlops-monitoring-and-feedback-human-review-workflows/human-review-production-summary.png)
+
+*The live review path controls one product decision. Its accepted event supports monitoring immediately and reaches training only after eligibility, maturity, correction, selection, and point-in-time checks.*
 
 ## References
 

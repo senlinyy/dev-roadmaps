@@ -61,6 +61,10 @@ flowchart TD
 
 The flow has a deliberate time boundary. Features look backward from the historical decision. The label looks forward. Dataset engineering joins those two views without allowing the future answer to leak into the earlier evidence.
 
+![One maintenance-prediction training row showing the entity and features available before prediction time, followed by the later label and target](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/one-training-row.png)
+
+*The row recreates one historical decision. Features capture what the system could know at prediction time, while the label and target come from an outcome observed later.*
+
 ## Define Which Cases Become Rows And What Each Row Represents
 <!-- section-summary: Population, entity, grain, and prediction time define which historical cases exist and what each row means. -->
 
@@ -195,6 +199,10 @@ GROUP BY d.example_id, d.prediction_ts;
 ```
 
 The `WHERE` clause admits only mature examples. The join looks forward solely for the target. Feature retrieval remains a separate backward-looking operation. A production implementation also records cancelled decisions, source outages, and censoring rules instead of silently converting them to zero.
+
+![Timeline separating pre-decision features from pending and mature outcome evidence while blocking future-data leakage](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/prediction-time-boundary.png)
+
+*Prediction time separates inputs from answers. Pending outcomes remain unknown until the maturity window closes, and future evidence never crosses backward into the features.*
 
 ## Keep Future Information And Answers Out Of Features
 <!-- section-summary: Leakage occurs when a feature reveals future information, the target itself, or evidence unavailable to the production decision. -->
@@ -364,6 +372,10 @@ A supervised training dataset is a historical reconstruction of product decision
 Production quality comes from preserving those meanings through the whole build. Source and label provenance explain where values came from. Explicit maturity and censoring states keep unknown outcomes away from confirmed negatives. Point-in-time rules protect the feature boundary. Contracts, immutable snapshots, dataset tracking, and validation make each release reviewable and reproducible.
 
 The most useful final test is concrete. Select one row and explain why it exists and what the model could know. Then identify how the answer was observed and which exact dataset release supplied it to training. If the evidence supports every step, the model is learning from the problem the team intended to encode.
+
+![Training dataset workflow from a dataset contract through case selection, historical evidence, mature outcomes, fixed versioning, validation, and row-level tracing](/content-assets/articles/article-mlops-data-for-ml-systems-training-data-labels-features-targets/trustworthy-training-dataset-summary.png)
+
+*A trustworthy dataset can be rebuilt, explained, and validated from source records to feature values, label, and target. The contract keeps each build tied to the intended product decision.*
 
 ## References
 

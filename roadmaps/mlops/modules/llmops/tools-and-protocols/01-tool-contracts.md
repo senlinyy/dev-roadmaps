@@ -43,9 +43,9 @@ The visible result is a single refund reference, or a clear rejection that expla
 
 A **tool** is the capability exposed to the model. A **tool call** is the model's proposed use of that capability. A **tool contract** is the complete agreement that carries the proposal into trusted software. It covers the model-visible name and schema, the runtime controls around execution, the meaning of each result, and the evidence needed for release and investigation.
 
-![A tool call moving from an untrusted model proposal through runtime governance, controlled execution, and a stable result](/content-assets/articles/article-mlops-llmops-tool-contracts/tool-call-controlled-effect.png)
+![A duplicate-charge refund request moving from a constrained model-facing proposal through trusted runtime gates to payment-service truth and a safe result](/content-assets/articles/article-mlops-llmops-tool-contracts/refund-tool-call-proposal-boundary.png)
 
-*The model proposes a bounded operation. Trusted software validates the proposal, applies authority and safety controls, executes through server-held credentials, and returns a stable result.*
+*Valid JSON remains an untrusted proposal. The runtime supplies identity, current state, exact approval, effect protection, and server-held authority before the payment service executes anything.*
 
 A production tool has five responsibilities: describe one operation, restrict what enters execution, prove authority, protect the effect, and report what happened. The input schema defines the proposed operation at the execution boundary. Trusted runtime controls carry the authority, effect-safety, and reporting responsibilities.
 
@@ -105,7 +105,7 @@ Descriptions should state the real boundary in ordinary language. “Create a ti
 
 <!-- section-summary: JSON Schema constrains the fields a model may propose, while semantic and business checks establish whether those values make sense. -->
 
-The schema turns free-form model output into an object that application code can validate. In essence, it defines the shape of the request: field names, types, required values, allowed enums, numeric bounds, and whether unknown properties are accepted.
+The schema turns free-form model output into an object that application code can validate. It defines the request's field names, types, required values, allowed enums, numeric bounds, and treatment of unknown properties.
 
 Suppose the refund workflow has already established the payment and amount shown to the user. The model-facing tool needs only the fields the model can legitimately propose:
 
@@ -248,9 +248,9 @@ An indeterminate result requires **reconciliation**, which means checking the do
 
 A completed refund turns the operation into `succeeded`, and the runtime returns the existing reference. Evidence that no effect occurred may permit a new attempt under policy. If the provider offers no reliable lookup, automation stops and routes the case to an operator. This branch preserves uncertainty instead of guessing that a timeout means failure.
 
-![Exact approval, durable idempotency states, and reconciliation of an unknown tool outcome](/content-assets/articles/article-mlops-llmops-tool-contracts/safe-side-effects-durable-identity.png)
+![Exact approval, a durable idempotency identity, the four stored effect states, and reconciliation after a refund response is lost](/content-assets/articles/article-mlops-llmops-tool-contracts/refund-approval-idempotency-reconciliation.png)
 
-*Approval identifies the accepted action. The idempotency record tells the runtime whether to replay a stored result, retry safely, reconcile an uncertain effect, or stop.*
+*Approval identifies the accepted action, while idempotency identifies one intended effect. An indeterminate result returns to the payment service for reconciliation before any retry.*
 
 Provider idempotency windows have limits. Stripe and several AWS APIs, for example, retain keys for bounded periods and reject a reused key with changed parameters. The application contract should record the provider's scope and retention, preserve its own operation record for the required audit period, and avoid promising stronger duplicate protection than the downstream system can supply.
 
@@ -341,9 +341,9 @@ A production tool represents one bounded operation. The model sees a precise des
 
 The main design question is therefore larger than “Can the model produce valid arguments?” The team must also answer who may request the operation, which current facts make it valid, how one intended effect survives retries, how uncertainty is reconciled, and which evidence proves the final outcome.
 
-![Complete production tool contract with model-facing definitions, runtime controls, release evidence, and layered tests](/content-assets/articles/article-mlops-llmops-tool-contracts/production-tool-contract-summary.png)
+![A production tool contract spanning model-facing definition, eligibility, trusted gates, controlled effects, stable results, evidence, versioned release units, tests, canary comparison, and rollback](/content-assets/articles/article-mlops-llmops-tool-contracts/production-tool-contract-summary.png)
 
-*The model-facing definition is intentionally small. The production contract continues through authorization, execution, recovery, observability, testing, and release control.*
+*The production contract continues far beyond the schema. Definition, runtime controls, result meaning, evidence, evaluations, and implementation travel through release as one unit.*
 
 ## References
 

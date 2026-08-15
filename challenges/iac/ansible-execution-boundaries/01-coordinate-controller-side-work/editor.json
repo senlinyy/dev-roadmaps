@@ -1,0 +1,122 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Deploy orders web\n  hosts: orders_web\n  tasks:\n    - name: Look up release\n      ansible.builtin.uri:\n        url: https://releases.internal.example/orders/latest\n\n    - name: Drain host\n      ansible.builtin.uri:\n        url: https://lb.internal.example/drain\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "pre_task",
+          "module": "uri",
+          "name": "Resolve the approved release once"
+        },
+        "paths": [
+          {
+            "path": [
+              "delegate_to"
+            ],
+            "equals": "localhost"
+          },
+          {
+            "path": [
+              "run_once"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "register"
+            ],
+            "equals": "approved_release"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "pre_task",
+          "module": "set_fact"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.set_fact",
+              "orders_release"
+            ],
+            "contains": "approved_release.json.version"
+          },
+          {
+            "path": [
+              "delegate_facts"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "run_once"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "loop"
+            ],
+            "contains": "ansible_play_hosts_all"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "pre_task",
+          "module": "uri",
+          "name": "Drain each managed host"
+        },
+        "paths": [
+          {
+            "path": [
+              "delegate_to"
+            ],
+            "equals": "localhost"
+          },
+          {
+            "path": [
+              "run_once"
+            ],
+            "exists": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "register-used",
+        "producer": {
+          "file": "deploy.yml",
+          "name": "Resolve the approved release once"
+        },
+        "consumer": {
+          "file": "deploy.yml",
+          "module": "set_fact"
+        },
+        "fields": [
+          "json"
+        ]
+      }
+    ]
+  }
+}

@@ -1,19 +1,73 @@
 {
   "language": "yaml",
-  "filename": "orders-release-role.yaml",
   "completionProfile": "kubernetes",
-  "initialValue": "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: orders-release\n  labels:\n    app.kubernetes.io/part-of: orders-release\n",
+  "activeFile": "role.yaml",
+  "files": [
+    {
+      "filename": "service-account.yaml",
+      "initialValue": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: orders-release\n"
+    },
+    {
+      "filename": "role.yaml",
+      "initialValue": "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: orders-release\n"
+    },
+    {
+      "filename": "role-binding.yaml",
+      "initialValue": "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: orders-release\n"
+    }
+  ],
   "grader": {
-    "strategy": "yaml-paths",
-    "expected": [
-      { "path": ["apiVersion"], "equals": "rbac.authorization.k8s.io/v1", "label": "RBAC API version" },
-      { "path": ["kind"], "equals": "Role", "label": "Role kind" },
-      { "path": ["metadata", "name"], "equals": "orders-release", "label": "release Role name" },
-      { "path": ["metadata", "namespace"], "equals": "orders", "label": "orders namespace" },
-      { "path": ["metadata", "labels", "app.kubernetes.io/part-of"], "equals": "orders-release", "label": "approved ownership label" },
-      { "path": ["rules"], "containsObject": { "apiGroups": ["apps"], "resources": ["deployments", "replicasets"], "verbs": ["get", "list", "watch", "patch", "update"] }, "label": "workload release rule" },
-      { "path": ["rules"], "containsObject": { "apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"] }, "label": "Pod observation rule" },
-      { "path": ["rules"], "minItems": 2, "maxItems": 2, "label": "only the two approved release rules" }
+    "strategy": "kubernetes-manifests",
+    "minResources": 3,
+    "maxResources": 3,
+    "allowedResources": [
+      { "apiVersion": "v1", "kind": "ServiceAccount" },
+      { "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role" },
+      { "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding" }
+    ],
+    "forbiddenResources": [
+      { "kind": "Secret" },
+      { "kind": "ClusterRole" },
+      { "kind": "ClusterRoleBinding" }
+    ],
+    "resources": [
+      {
+        "select": { "file": "service-account.yaml", "apiVersion": "v1", "kind": "ServiceAccount", "name": "orders-release", "namespace": "orders" }
+      },
+      {
+        "select": { "file": "role.yaml", "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role", "name": "orders-release", "namespace": "orders" },
+        "paths": [
+          { "path": ["rules"], "containsObject": { "apiGroups": ["apps"], "resources": ["deployments", "replicasets"], "verbs": ["get", "list", "watch", "patch", "update"] }, "label": "workload release rule" },
+          { "path": ["rules"], "containsObject": { "apiGroups": [""], "resources": ["pods"], "verbs": ["get", "list", "watch"] }, "label": "Pod observation rule" },
+          { "path": ["rules"], "minItems": 2, "maxItems": 2, "label": "only the two approved release rules" }
+        ]
+      },
+      {
+        "select": { "file": "role-binding.yaml", "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding", "name": "orders-release", "namespace": "orders" },
+        "paths": [
+          { "path": ["roleRef", "apiGroup"], "equals": "rbac.authorization.k8s.io", "label": "Role reference API group" },
+          { "path": ["roleRef", "kind"], "equals": "Role", "label": "namespaced Role reference kind" },
+          { "path": ["subjects"], "minItems": 1, "maxItems": 1, "label": "single release identity subject" },
+          { "path": ["subjects", 0, "kind"], "equals": "ServiceAccount", "label": "ServiceAccount subject kind" },
+          { "path": ["subjects", 0, "namespace"], "equals": "orders", "label": "ServiceAccount subject namespace" }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "reference-exists",
+        "source": { "kind": "RoleBinding", "name": "orders-release", "namespace": "orders" },
+        "path": ["roleRef", "name"],
+        "target": { "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role" },
+        "label": "RoleBinding Role reference"
+      },
+      {
+        "type": "reference-exists",
+        "source": { "kind": "RoleBinding", "name": "orders-release", "namespace": "orders" },
+        "path": ["subjects", "*", "name"],
+        "target": { "apiVersion": "v1", "kind": "ServiceAccount" },
+        "label": "RoleBinding ServiceAccount subject"
+      }
     ]
   }
 }

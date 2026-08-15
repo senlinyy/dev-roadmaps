@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "file-share",
+      "type": "single",
+      "scenario": "A company must move 80 TB from an on-premises NFS share to EFS, preserve metadata, run incremental copies before cutover, and verify transferred data. Which service is the direct fit?",
+      "options": [
+        {
+          "id": "a",
+          "text": "AWS DataSync."
+        },
+        {
+          "id": "b",
+          "text": "Amazon SNS."
+        },
+        {
+          "id": "c",
+          "text": "AWS Step Functions alone."
+        },
+        {
+          "id": "d",
+          "text": "Route 53 Resolver."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "DataSync is designed for managed online transfers between file and object storage locations with scheduling and verification. Learn more in [What is AWS DataSync](https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html)."
+    },
+    {
+      "id": "database-cdc",
+      "type": "single",
+      "scenario": "A PostgreSQL database must move to RDS with a short cutover window. The team needs an initial load followed by ongoing change replication. Which service fits?",
+      "options": [
+        {
+          "id": "b",
+          "text": "AWS Transfer Family."
+        },
+        {
+          "id": "a",
+          "text": "AWS Database Migration Service."
+        },
+        {
+          "id": "c",
+          "text": "Amazon EBS snapshots copied by hand."
+        },
+        {
+          "id": "d",
+          "text": "CloudWatch Synthetics."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AWS DMS supports full load plus change data capture for supported source and target engines. Learn more in the [AWS DMS User Guide](https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html)."
+    },
+    {
+      "id": "partner-sftp",
+      "type": "single",
+      "scenario": "External partners must keep using SFTP while files land in S3 under controlled identities and paths. Which managed service matches the protocol boundary?",
+      "options": [
+        {
+          "id": "b",
+          "text": "AWS Config."
+        },
+        {
+          "id": "c",
+          "text": "Amazon EventBridge Scheduler."
+        },
+        {
+          "id": "a",
+          "text": "AWS Transfer Family."
+        },
+        {
+          "id": "d",
+          "text": "VPC Reachability Analyzer."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AWS Transfer Family provides managed SFTP and related protocol endpoints backed by S3 or EFS. Learn more in [AWS Transfer Family](https://docs.aws.amazon.com/transfer/latest/userguide/what-is-aws-transfer-family.html)."
+    },
+    {
+      "id": "offline-volume",
+      "type": "single",
+      "scenario": "A remote site has petabytes of data and insufficient network bandwidth for the migration deadline. Which family of options should be evaluated?",
+      "options": [
+        {
+          "id": "b",
+          "text": "More SNS subscriptions."
+        },
+        {
+          "id": "c",
+          "text": "A larger IAM policy."
+        },
+        {
+          "id": "d",
+          "text": "CloudWatch Logs Insights."
+        },
+        {
+          "id": "a",
+          "text": "AWS Snow Family offline transfer devices."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Snow Family devices address migrations where online transfer bandwidth or duration is impractical. Learn more in [AWS Snowball Edge](https://docs.aws.amazon.com/snowball/latest/developer-guide/whatisedge.html)."
+    },
+    {
+      "id": "cutover-safety",
+      "type": "multiple",
+      "scenario": "A migration has passed its first copy test and is moving toward a production cutover. Which controls belong in the final migration plan?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Define source freeze or change-capture behavior."
+        },
+        {
+          "id": "d",
+          "text": "Delete the source before consumers validate the target."
+        },
+        {
+          "id": "b",
+          "text": "Validate counts, checksums, or application-level invariants."
+        },
+        {
+          "id": "e",
+          "text": "Skip reconciliation because a managed transfer reported success."
+        },
+        {
+          "id": "c",
+          "text": "Plan cutover, rollback, and ownership of the final sync."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A safe migration controls data change, validates correctness, and makes cutover and rollback explicit. Learn more in [AWS DataSync](https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html) and [AWS DMS](https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html)."
+    }
+  ]
+}

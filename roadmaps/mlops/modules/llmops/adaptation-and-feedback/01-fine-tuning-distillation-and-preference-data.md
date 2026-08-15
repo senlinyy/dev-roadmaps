@@ -33,7 +33,7 @@ aliases:
 ## What Model Adaptation Means
 <!-- section-summary: Model adaptation changes learned parameters so a behaviour persists across requests without being restated in every prompt. -->
 
-At a high level, **model adaptation changes what a model has learned**. A normal prompt gives instructions for one request. Retrieval supplies information for one request. A tool lets the model act on an external system. Adaptation goes deeper: it updates model parameters and raises the probability of a behaviour across future requests.
+A prompt can correct one response, yet the same unwanted behaviour may return on the next request. **Model adaptation changes what the model has learned** by updating its parameters and raising the probability of a behaviour across future requests. Retrieval still supplies information for one request, and tools still connect the model to external systems; adaptation changes the model itself.
 
 Those parameters are commonly called **weights**. You can think of weights as millions or billions of adjustable values that shape which token the model is likely to produce next. Pretraining gives those values broad language and reasoning patterns. Fine-tuning makes a smaller, targeted adjustment using examples from a particular task.
 
@@ -64,7 +64,7 @@ Supervised fine-tuning, preference optimization, reinforcement fine-tuning, and 
 ## Decide Whether The Weights Need To Change
 <!-- section-summary: Prompting, retrieval, tools, application logic, routing, and adaptation solve different classes of failure. -->
 
-At a high level, this decision asks which part of the system is failing. A model application has several layers, and each layer has its own repair. Changing weights for a retrieval or authorization problem adds training work while leaving the original responsibility unresolved.
+Before changing model weights, identify which part of the application is failing. Each layer has its own repair. Changing weights for a retrieval or authorization problem adds training work while leaving the original responsibility unresolved.
 
 **Prompting** supplies instructions, examples, constraints, and context at request time. It is the usual starting point for tone, structure, and task clarity because prompt changes are cheap to test and easy to reverse. Structured Outputs or schema validation can solve many format failures more reliably than training.
 
@@ -78,6 +78,18 @@ At a high level, this decision asks which part of the system is failing. A model
 
 Adaptation fits a narrower pattern. The desired behaviour is stable and appears often. Trustworthy training signals can represent it, while the existing system still produces it poorly or at excessive cost.
 
+```mermaid
+flowchart TD
+    Failure["Observed model-system failure<br/>(measured on representative cases)"] --> Cause{"Owning Layer<br/>(which responsibility should repair the behaviour?)"}
+    Cause --> Prompt["Instructions or output shape<br/>(prompt, schema, and validation)"]
+    Cause --> Knowledge["Current or private knowledge<br/>(retrieval and source governance)"]
+    Cause --> Action["Authoritative calculation or action<br/>(tool and application logic)"]
+    Cause --> Route["Recognisable workload slice<br/>(model or workflow routing)"]
+    Cause --> Weights["Stable repeated model behaviour<br/>(adaptation candidate)"]
+    Weights --> Baseline["Strongest practical baseline<br/>(same tools, retrieval, and settings)"]
+    Baseline --> Evidence["Adapt only with trustworthy evidence<br/>(measured benefit and reversible release)"]
+```
+
 Consider four concrete failures:
 
 - A support assistant quotes an old returns policy. Retrieval should supply the current policy.
@@ -87,10 +99,14 @@ Consider four concrete failures:
 
 The team should compare every candidate with the strongest practical baseline. Testing a fine-tuned model against a weak, unstructured prompt exaggerates the benefit. Start with the best shippable prompt and retrieval setup. Add the real tools, routing, validation, and inference settings used by the application.
 
+![Six measured failures map to their owning system layers and first repairs, with only stable learned behaviour and bounded capability economics treated as adaptation candidates.](/content-assets/articles/article-mlops-llmops-fine-tuning-distillation-preference-data/repair-owning-layer.png)
+
+*Current knowledge, output contracts, business truth, and routing should be repaired in their own layers before a team changes model weights.*
+
 ## Four Learning Signals, Four Different Jobs
 <!-- section-summary: Demonstrations, preferences, rewards, and teacher outputs express different information, so each supports a different adaptation method. -->
 
-At a high level, every adaptation method turns evidence into a weight update. The methods differ in the evidence they accept. Looking at one training row reveals the lesson the optimizer receives.
+A training method can update weights only from evidence encoded in the form it expects. The four adaptation methods differ in that evidence. Looking at one training row reveals the lesson the optimizer receives.
 
 **Supervised fine-tuning**, or **SFT**, says, “For an input like this, produce an output like this.” The training signal is a demonstration.
 
@@ -118,6 +134,10 @@ flowchart TD
 These signals cannot be swapped casually. A task with several equally valid answers may be awkward for SFT because one demonstration can make other good answers look less likely. Preference pairs may express that one answer is better without pretending it is the only correct answer. A task with an exact verifier may suit RFT because thousands of sampled solutions can be scored consistently.
 
 The quality of the signal matters more than the method's name. Hundreds of contradictory demonstrations can teach contradictory behaviour. Preference pairs with low reviewer agreement encode noise. A reward with an easy loophole teaches the loophole. Teacher outputs transfer teacher mistakes along with teacher strengths.
+
+![Four-column comparison of supervised fine-tuning, preference optimization, reinforcement fine-tuning, and distillation by training signal, learned behaviour, good fit, and primary failure to test.](/content-assets/articles/article-mlops-llmops-fine-tuning-distillation-preference-data/four-learning-signals.png)
+
+*Demonstrations, chosen-versus-rejected pairs, numeric rewards, and reviewed teacher behaviour express different lessons and require different failure tests.*
 
 ## Supervised Fine-Tuning Learns From Demonstrations
 <!-- section-summary: SFT raises the probability of reviewed target responses and works best for stable tasks with repeatable examples of good behaviour. -->
@@ -295,7 +315,7 @@ Managed distillation services can generate teacher responses and train a support
 ## Choose How Much Of The Model To Train
 <!-- section-summary: Full fine-tuning updates the base model broadly, while PEFT methods such as LoRA train smaller adapters and reduce compute and artifact size. -->
 
-At a high level, the learning signal describes what the model learns. The training approach determines how much of the model is allowed to change. This second decision controls accelerator memory, artifact size, and the amount of adaptation capacity available.
+The learning signal describes what the model should learn. A separate choice determines how much of the model may change during training. That choice controls accelerator memory, artifact size, and the amount of adaptation capacity available.
 
 **Full fine-tuning** updates most or all of the model's weights. It offers high adaptation capacity and can support large behavioural changes. Large models also require substantial accelerator memory, optimizer state, checkpoint storage, and distributed-training discipline.
 
@@ -401,7 +421,7 @@ If a source record must be removed, the team first locates every derived asset. 
 ## Establish The Baseline Before Training
 <!-- section-summary: An adaptation experiment needs a representative test set, strongest practical baseline, explicit improvement target, and guardrails before the first training job. -->
 
-At a high level, the baseline records how well the current production system performs before any weights change. The held-out test set supplies the same examination for every candidate. Without these controls, repeated data and hyperparameter changes gradually leak knowledge of the test into the experiment.
+Training has no trustworthy improvement claim without a measurement of the current production system. That measurement is the **baseline**. A held-out test set then gives every candidate the same examination. Without these controls, repeated data and hyperparameter changes gradually leak knowledge of the test into the experiment.
 
 One useful failure statement is: *On long customer messages containing two requests, the current system selects the correct primary category in 78 percent of reviewed cases. The candidate should reach 90 percent while preserving evidence accuracy, safety escalation, p95 latency, and cost limits.*
 
@@ -441,7 +461,7 @@ MLflow is a common experiment-tracking layer for open and managed training envir
 ## Detect Overfitting And Lost General Capabilities
 <!-- section-summary: Overfitting harms new examples from the target task, while catastrophic forgetting harms capabilities outside the narrow adaptation data. -->
 
-At a high level, training can harm the narrow task or damage capabilities outside it. These two outcomes have different causes and repairs. **Overfitting** describes poor generalization within the target task, while **catastrophic forgetting** describes lost behaviour outside the narrow adaptation data.
+A candidate can improve on its training examples while failing new examples, or it can lose capabilities that the narrow training data never exercised. These outcomes have different causes and repairs. **Overfitting** describes poor generalization within the target task, while **catastrophic forgetting** describes lost behaviour outside the adaptation data.
 
 **Overfitting** means the model learns the training examples more closely than the general task. Training performance improves, while validation or test performance stops improving or gets worse.
 
@@ -515,7 +535,7 @@ Provider safety checks are useful platform controls. They do not know every prod
 ## Choose A Current Industrial Stack
 <!-- section-summary: Managed services reduce training operations, while open stacks expose more model and algorithm control; current maturity and deprecations should shape the choice. -->
 
-At a high level, the stack decides where the training job runs and which parts the platform manages. The choice follows the model and learning signal. Data controls, regional requirements, accelerator scale, and the team's operational capacity narrow the options further.
+The chosen training method must run somewhere the team can secure, observe, and recover. The industrial stack determines where that job runs and which responsibilities the platform manages. The model, learning signal, data controls, regional requirements, accelerator scale, and operational capacity narrow the options.
 
 ### Managed model customization
 
@@ -562,7 +582,7 @@ flowchart TD
     class A data; class B,C train; class D,E govern; class F,G release
 ```
 
-Databricks is one option among managed GPU environments. SageMaker, Vertex AI, and Azure Machine Learning provide managed training jobs. Kubernetes with GPU operators offers another path. The durable design is a versioned job with governed data and pinned dependencies. It tracks experiments and checkpoints, runs evaluation gates, and produces a releasable artifact.
+Databricks is one option among managed GPU environments. SageMaker AI, Google Cloud's Gemini Enterprise Agent Platform, and Azure Machine Learning provide managed training jobs. Kubernetes with GPU operators offers another path. The durable design is a versioned job with governed data and pinned dependencies. It tracks experiments and checkpoints, runs evaluation gates, and produces a releasable artifact.
 
 ### Choose by constraints
 
@@ -573,7 +593,7 @@ Provider choice does not replace the learning decision. A platform can execute S
 ## Compare Training, Serving, And Operating Costs
 <!-- section-summary: The financial decision includes data work, teacher generation, training, evaluation, serving, and ongoing operations rather than GPU time alone. -->
 
-At a high level, adaptation adds an upfront investment and changes the cost of every future request. The business case compares both sides at the quality level users actually need. GPU time is only one part of that calculation.
+Adaptation creates an upfront training investment and can change the cost of every future request. The business case must compare both sides at the quality level users actually need. GPU time is only one part of that calculation.
 
 The one-time side starts with data discovery and permission review. Redaction, annotation, adjudication, and teacher generation prepare the learning signal. Training experiments, evaluation, security review, and integration complete the initial investment. Recurring costs cover inference or hosting, artifact management, monitoring, storage, retraining, and incident response.
 
@@ -606,7 +626,7 @@ Track estimated and actual values. MLflow can record GPU hours, job duration, da
 ## Release And Roll Back The Complete System
 <!-- section-summary: A tuned model ships as part of a versioned application bundle with offline gates, staged exposure, monitoring, and a tested route to the previous bundle. -->
 
-At a high level, a fine-tuning job produces one candidate component. Production combines that component with prompts, tools, retrieval, policies, and serving code. The release process evaluates and promotes this complete bundle.
+A fine-tuning job produces one candidate model component, while users interact with a complete application. Production combines the model with prompts, tools, retrieval, policies, and serving code. The release process therefore evaluates and promotes that complete bundle.
 
 The releasable unit includes:
 
@@ -647,13 +667,17 @@ Retirement stops new routing and revokes artifact access. It updates downstream 
 ## Choose An Adaptation Method Step By Step
 <!-- section-summary: The final choice links a measured failure to the smallest trustworthy signal, the safest training path, and a reversible production release. -->
 
-At a high level, the final decision connects one measured failure to one trustworthy learning signal and one reversible release. Five questions keep the reasoning focused: what failed, which layer owns it, what evidence can teach the correction, where should training run, and which gates authorize production?
+Choose an adaptation method by connecting one measured failure to a trustworthy learning signal and a reversible release. Five questions keep the reasoning focused: what failed, which layer owns it, what evidence can teach the correction, where should training run, and which gates authorize production?
 
 First, describe the repeated failure and reproduce it on a versioned evaluation set. Second, repair the prompt, context, tools, workflow, or routing if one of those layers owns the problem. Third, identify the strongest signal the team can produce honestly. It may be demonstrations, preferences, a grader, or teacher behaviour. Fourth, choose a managed or open training path that meets governance and operational constraints. Fifth, promote the complete system bundle after target, retention, safety, cost, and service gates pass.
 
 Use SFT for repeatable desired outputs. Use preference optimization for reliable comparisons between plausible responses. Use RFT for tasks with a robust, hard-to-game grader and enough initial success to reinforce. Use distillation for a defined high-volume slice where a smaller student can meet explicit quality and safety thresholds.
 
 The central idea is simple: adaptation turns data into durable model behaviour. The data must express the right behaviour, and evaluation must detect regressions. Production also needs a safe route to the previous system.
+
+![Adaptation release summary connecting measured failure, baseline, governed data, reproducible training, four complete-system gates, and a versioned bundle released through shadow and canary stages with rollback.](/content-assets/articles/article-mlops-llmops-fine-tuning-distillation-preference-data/adaptation-release-summary.png)
+
+*An adapted model earns release only when the complete versioned bundle passes target, retention, safety, and operations gates and preserves a compatible rollback path.*
 
 ## References
 

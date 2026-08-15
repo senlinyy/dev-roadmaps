@@ -1,0 +1,16 @@
+{
+  "language": "yaml",
+  "filename": "runtime-config.yaml",
+  "completionProfile": "azure-container-app",
+  "initialValue": "name: ca-orders-api-prod\nidentity:\n  type: UserAssigned\nproperties:\n  configuration:\n    secrets: []\n  template:\n    containers:\n      - name: orders-api\n        env:\n          - name: LOG_LEVEL\n            value: debug\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["name"], "equals": "ca-orders-api-prod" },
+      { "path": ["identity", "type"], "equals": "UserAssigned" },
+      { "path": ["properties", "configuration", "secrets"], "containsObject": { "name": "appinsights-connection", "keyVaultUrl": "https://kv-devpolaris-prod.vault.azure.net/secrets/appinsights-orders", "identity": "/subscriptions/sub-prod/resourceGroups/rg-devpolaris-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders-api-prod" }, "minItems": 1, "maxItems": 1 },
+      { "path": ["properties", "template", "containers", 0, "env"], "containsObject": { "name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "secretRef": "appinsights-connection" } },
+      { "path": ["properties", "template", "containers", 0, "env"], "containsObject": { "name": "LOG_LEVEL", "value": "info" }, "minItems": 2, "maxItems": 2 }
+    ]
+  }
+}

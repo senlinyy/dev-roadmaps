@@ -1,0 +1,129 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "logs.tf",
+  "files": [
+    {
+      "filename": "logs.tf",
+      "initialValue": "variable \"enable_log_archive\" {\n}\n\nresource \"aws_s3_bucket\" \"log_archive\" {\n  bucket = \"dp-orders-log-archive\"\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"log_archive\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "logs.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "enable_log_archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "bool"
+          },
+          {
+            "path": [
+              "default"
+            ],
+            "valueEquals": false
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "logs.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "log_archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "count"
+            ],
+            "references": [
+              "var.enable_log_archive"
+            ],
+            "expressionContains": [
+              "?1:0"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "logs.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_public_access_block",
+                "log_archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "count"
+            ],
+            "references": [
+              "var.enable_log_archive"
+            ],
+            "expressionContains": [
+              "?1:0"
+            ]
+          },
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "aws_s3_bucket.log_archive[0].id"
+            ]
+          },
+          {
+            "path": [
+              "block_public_acls"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "block_public_policy"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "ignore_public_acls"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "restrict_public_buckets"
+            ],
+            "valueEquals": true
+          }
+        ]
+      }
+    ]
+  }
+}

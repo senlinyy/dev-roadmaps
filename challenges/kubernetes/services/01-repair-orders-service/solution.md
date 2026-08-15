@@ -17,4 +17,4 @@ spec:
 ```
 
 - The two selector labels identify the intended orders API Pods in the same namespace.
-- Callers use port `80`, while the named target port keeps the Service independent of the container's numeric port.
+- Callers use port `80`, while the named target port is validated against the supplied Deployment and keeps the Service independent of the container's numeric port.

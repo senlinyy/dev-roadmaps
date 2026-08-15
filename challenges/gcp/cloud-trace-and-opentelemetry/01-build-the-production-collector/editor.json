@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "otel-collector.yaml",
+  "completionProfile": "gcp-otel",
+  "initialValue": "receivers:\n  otlp:\n    protocols: {}\nprocessors:\n  resource:\n    attributes: []\nexporters:\n  googlecloud:\n    project: devpolaris-prod\nservice:\n  pipelines:\n    traces:\n      receivers: []\n      processors: []\n      exporters: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["receivers", "otlp", "protocols", "grpc"], "exists": true },
+      { "path": ["receivers", "otlp", "protocols", "http"], "exists": true },
+      { "path": ["processors", "batch", "timeout"], "equals": "5s" },
+      { "path": ["processors", "resource", "attributes"], "containsObject": { "key": "service.name", "value": "orders-api", "action": "upsert" } },
+      { "path": ["processors", "resource", "attributes"], "containsObject": { "key": "deployment.environment.name", "value": "production", "action": "upsert" } },
+      { "path": ["exporters", "googlecloud", "project"], "equals": "devpolaris-prod" },
+      { "path": ["service", "pipelines", "traces", "receivers"], "includes": "otlp", "minItems": 1, "maxItems": 1 },
+      { "path": ["service", "pipelines", "traces", "processors"], "equals": ["resource", "batch"] },
+      { "path": ["service", "pipelines", "traces", "exporters"], "includes": "googlecloud", "minItems": 1, "maxItems": 1 }
+    ]
+  }
+}

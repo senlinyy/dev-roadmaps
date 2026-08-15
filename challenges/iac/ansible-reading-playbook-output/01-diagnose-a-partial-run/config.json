@@ -1,0 +1,82 @@
+{
+  "cwd": "/workspace/ansible",
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/ansible": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "ansible"
+  ],
+  "ansible": {
+    "hosts": [
+      {
+        "name": "web-01",
+        "address": "192.0.2.10",
+        "reachable": true
+      },
+      {
+        "name": "web-02",
+        "address": "192.0.2.11",
+        "reachable": false
+      }
+    ],
+    "groups": [
+      {
+        "name": "orders_web",
+        "hosts": [
+          "web-01",
+          "web-02"
+        ]
+      },
+      {
+        "name": "production",
+        "children": [
+          "orders_web"
+        ]
+      }
+    ],
+    "playbooks": [
+      {
+        "path": "deploy.yml",
+        "name": "Deploy orders web",
+        "hosts": "orders_web",
+        "tasks": [
+          {
+            "name": "Install release package",
+            "status": "ok"
+          },
+          {
+            "name": "Render orders configuration",
+            "status": "changed",
+            "diff": "-upstream=orders-old\n+upstream=orders-v2"
+          },
+          {
+            "name": "Validate orders configuration",
+            "status": "failed",
+            "message": "{\"rc\": 1, \"stderr\": \"unknown directive upstream\"}"
+          }
+        ]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "ansible-state",
+    "requireCommands": [
+      "ansible-playbook"
+    ],
+    "expectedAnsible": {
+      "includesActions": [
+        "playbook-check",
+        "playbook-diff"
+      ],
+      "targetHosts": [
+        "web-01"
+      ],
+      "lastPlaybook": "deploy.yml"
+    }
+  }
+}

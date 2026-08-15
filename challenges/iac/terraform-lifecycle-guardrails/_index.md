@@ -1,8 +1,8 @@
 ---
-title: "Terraform Lifecycle Guardrails"
-description: "Apply replacement, deletion, and dependency guardrails to production resources."
+title: "Terraform Meta-Argument Guardrails"
+description: "Add lifecycle protection and replacement ordering to a production database without hiding ordinary data dependencies."
 articleId: article-iac-terraform-config-meta-arguments
-difficulty: hard
-order: 41
-tags: [terraform, lifecycle, depends-on, safety]
+difficulty: medium
+order: 24
+tags: ["terraform","meta-arguments","lifecycle","safety"]
 ---

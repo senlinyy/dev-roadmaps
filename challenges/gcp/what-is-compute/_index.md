@@ -4,6 +4,6 @@ description: "Practice matching GCP runtimes to workload shape, start signal, sc
 articleId: article-cloud-providers-gcp-compute-application-hosting-gcp-compute-hosting-mental-model
 articleSlug: what-is-compute
 difficulty: easy
-order: 13
+order: 14
 tags: ["gcp", "compute", "runtime", "cloud-run"]
 ---

@@ -151,6 +151,10 @@ flowchart TD
 
 The pipeline publishes explicit states such as `pending`, `mature_observed`, `mature_from_trusted_absence`, `censored`, and `mature_missing`. The state records how the answer was obtained. An explicit payment event and a reconciled absence may both produce valid labels, but they carry different evidence.
 
+![An invoice label at day five remaining pending, followed by the maturity branches for an observed payment, an open window, censoring, trusted absence, or missing evidence.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/invoice-label-maturity.png)
+
+*No payment event on day five is not a negative label; the outcome is final only after an explicit event or a contracted, reconciled absence after the full window.*
+
 ### Keep Unobserved Outcomes As Unknown
 
 A case is **right-censored** if observation ended before the outcome window completed. A customer may leave the study, an account may be deleted, or the dataset cutoff may arrive before the ninety-day horizon closes. The final answer remains unknown, and the available evidence cannot prove a negative outcome.
@@ -310,6 +314,10 @@ flowchart TD
 
 The diagram keeps unobserved outcomes visible. No weighting formula can recover information that the product never collected without assumptions.
 
+![Recommendation exposure, fraud actions, and a full prediction-cohort left join showing how observability, missingness, and route-level label coverage differ from negative outcomes.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/observation-eligibility-and-coverage.png)
+
+*Product policy determines which outcomes can exist: keep unexposed and blocked cases distinct from negatives, and measure coverage against the complete eligible cohort by route.*
+
 ### Keep A Representative Measurement Path
 
 A practical design reserves a bounded audit sample across model-score bands, routes, and important segments. The sampling service records eligibility and selection probability. A risk owner defines which cases may enter the sample, the maximum exposure, the review capacity, and a stop condition.
@@ -426,6 +434,10 @@ A production label is a claim about what happened after a live prediction. That 
 The complete lifecycle carries events into governed history, resolves them under a versioned policy, joins them from the full prediction cohort, blocks weak snapshots, and records the exact evidence admitted to each use. Explicit run parameters and durable source history then make repair and replay possible.
 
 This design keeps unknown outcomes visible and prevents the current product policy from quietly writing its own answer key. Monitoring, evaluation, and training can then use production feedback with a clear account of what the data represents and where its limits remain.
+
+![The governed production-label lifecycle from prediction receipt and observation eligibility through outcome events, maturity, left joins, quality gates, replay, immutable snapshots, and approved downstream uses.](/content-assets/articles/article-mlops-monitoring-and-feedback-collecting-labels-after-deployment/production-label-lifecycle-summary.png)
+
+*Explicit observability, timing, provenance, maturity, coverage, snapshot, and use-eligibility decisions turn a label into governed evidence; failed cohorts remain quarantined until replay under the original parameters passes the gate.*
 
 ## References
 

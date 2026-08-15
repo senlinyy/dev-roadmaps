@@ -45,6 +45,9 @@
       "10.40.10.24",
       "sg-orders-api"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ec2\\\\s+describe-instances\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

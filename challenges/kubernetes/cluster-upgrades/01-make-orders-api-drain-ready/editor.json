@@ -1,0 +1,59 @@
+{
+  "language": "yaml",
+  "completionProfile": "kubernetes",
+  "activeFile": "deployment.yaml",
+  "files": [
+    {
+      "filename": "deployment.yaml",
+      "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: devpolaris-orders-api\n  namespace: orders\nspec:\n"
+    },
+    {
+      "filename": "pod-disruption-budget.yaml",
+      "initialValue": "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: devpolaris-orders-api\n  namespace: orders\nspec:\n"
+    }
+  ],
+  "grader": {
+    "strategy": "kubernetes-manifests",
+    "minResources": 2,
+    "maxResources": 2,
+    "allowedResources": [
+      { "apiVersion": "apps/v1", "kind": "Deployment" },
+      { "apiVersion": "policy/v1", "kind": "PodDisruptionBudget" }
+    ],
+    "resources": [
+      {
+        "select": { "file": "deployment.yaml", "apiVersion": "apps/v1", "kind": "Deployment", "name": "devpolaris-orders-api", "namespace": "orders" },
+        "paths": [
+          { "path": ["spec", "replicas"], "equals": 3, "label": "drain-ready replica count" },
+          { "path": ["spec", "template", "spec", "containers"], "containsObject": { "name": "api", "image": "ghcr.io/devpolaris/orders-api:2026.08.1" }, "label": "orders API container" },
+          { "path": ["spec", "template", "spec", "containers", 0, "ports"], "containsObject": { "name": "http", "containerPort": 8080 }, "label": "named HTTP port" },
+          { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "path"], "equals": "/readyz", "label": "readiness endpoint" },
+          { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "httpGet", "port"], "equals": "http", "label": "readiness named port" },
+          { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "periodSeconds"], "equals": 5, "label": "readiness period" },
+          { "path": ["spec", "template", "spec", "containers", 0, "readinessProbe", "failureThreshold"], "equals": 3, "label": "readiness failure threshold" }
+        ]
+      },
+      {
+        "select": { "file": "pod-disruption-budget.yaml", "apiVersion": "policy/v1", "kind": "PodDisruptionBudget", "name": "devpolaris-orders-api", "namespace": "orders" },
+        "paths": [
+          { "path": ["spec", "minAvailable"], "equals": 2, "label": "minimum available Pods during disruption" }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "workload-selector",
+        "workload": { "kind": "Deployment", "name": "devpolaris-orders-api", "namespace": "orders" },
+        "label": "orders API controller selector"
+      },
+      {
+        "type": "selector-matches",
+        "source": { "kind": "PodDisruptionBudget", "name": "devpolaris-orders-api", "namespace": "orders" },
+        "sourcePath": ["spec", "selector", "matchLabels"],
+        "target": { "kind": "Deployment", "name": "devpolaris-orders-api", "namespace": "orders" },
+        "targetPath": ["spec", "template", "metadata", "labels"],
+        "label": "disruption budget workload selector"
+      }
+    ]
+  }
+}

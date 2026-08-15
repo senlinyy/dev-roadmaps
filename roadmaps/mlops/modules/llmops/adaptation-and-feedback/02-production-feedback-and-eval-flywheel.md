@@ -31,7 +31,7 @@ aliases:
 ## What the Feedback Flywheel Is
 <!-- section-summary: A production feedback flywheel turns real product evidence into reviewed evaluation cases, focused changes, controlled releases, and measured improvements. -->
 
-At a high level, a **production feedback flywheel** is the learning system around an AI product. It collects evidence from real use, works out what that evidence means, turns trustworthy cases into evaluations, proposes a focused improvement, and checks the result in production.
+Production use produces complaints, corrections, outcomes, and traces, although none of those signals automatically explains what should change. A **production feedback flywheel** is the learning system that interprets that evidence, turns trustworthy cases into evaluations, proposes a focused improvement, and checks the result in production.
 
 The word *flywheel* can make the process sound automatic. In practice, the valuable part is careful judgment. A thumbs-down leaves the cause open. A successful purchase records an outcome without proving that an assistant caused it. A tool error points toward service reliability. Teams first move from observation to explanation. That explanation identifies the responsible area: model behavior, knowledge and retrieval, tools, or product policy.
 
@@ -95,6 +95,10 @@ flowchart TD
 In real systems, a tool timeout is suitable for a deterministic rule because the trace contains the tool result. Helpfulness often needs human judgment because it depends on the user’s goal and the quality of the whole response.
 
 The safest design keeps raw observations separate from interpreted labels. If the rubric changes, the team can relabel the original evidence and compare the old and new definitions.
+
+![A reopened customer case remains an ambiguous production signal until it is joined to the exact delivered output and interpreted through governed evidence, a versioned rule, and provenance.](/content-assets/articles/article-mlops-llmops-production-feedback-eval-flywheel/event-to-governed-label.png)
+
+*Observed events can support several explanations; only a reliable join and reviewed interpretation create a governed label.*
 
 ## Understand Explicit and Implicit Feedback
 <!-- section-summary: Explicit feedback states an opinion directly, while implicit feedback infers possible meaning from user behaviour. -->
@@ -217,6 +221,10 @@ flowchart TD
 
 Deletion must also travel through the lineage graph. Removing a source trace may require deletion or invalidation of derived review tasks, labels, evaluation cases, and training examples, according to the organization’s retention policy and legal obligations.
 
+![Seven complementary queues sample random, risk-triggered, behavioural, slice, novelty, disagreement, and successful production evidence before privacy controls create a restricted review view.](/content-assets/articles/article-mlops-llmops-production-feedback-eval-flywheel/production-evidence-sampling.png)
+
+*Sampling purpose determines what a review queue can prove, while retention, consent, redaction, and lineage protect the evidence before review.*
+
 ## Use Human Review to Create Trustworthy Labels
 <!-- section-summary: Human review turns ambiguous production evidence into consistent judgments through clear rubrics, calibrated reviewers, and adjudication. -->
 
@@ -327,7 +335,7 @@ Use human review or model-based graders for qualities such as relevance, coheren
 
 ### Compare the baseline and candidate on equal terms
 
-OpenAI’s current evaluation guidance recommends task-specific evaluations, production-derived cases, and a mixture of automated metrics and human judgment. Its agent evaluation tools can score final outputs and traces, including tool choices and handoffs. MLflow’s `mlflow.genai.evaluate` evaluates inputs, outputs, and traces with built-in or custom scorers. LangSmith experiments compare versions on datasets and can promote failing production traces into regression cases. Vertex AI’s evaluation service exposes per-row and summary metrics and supports comparison of judge-model ratings with human ratings.
+OpenAI’s current evaluation guidance recommends task-specific evaluations, production-derived cases, and a mixture of automated metrics and human judgment. Its agent evaluation tools can score final outputs and traces, including tool choices and handoffs. MLflow’s `mlflow.genai.evaluate` evaluates inputs, outputs, and traces with built-in or custom scorers. LangSmith experiments compare versions on datasets and can promote failing production traces into regression cases. Gemini Enterprise Agent Platform Evals exposes per-row and summary metrics and supports comparison of judge-model ratings with human ratings.
 
 A good comparison asks more than “Did the average score rise?” It checks:
 
@@ -414,7 +422,7 @@ Label Studio provides configurable labeling interfaces, model preannotations, re
 
 MLflow 3 supports production traces and feedback assessments. Its current GenAI APIs also provide datasets, scorers, and offline evaluation. LangSmith connects traces and online evaluators to datasets and offline experiments for LangChain and other instrumented applications.
 
-OpenAI’s current agent evaluation tools support datasets, graders, trace grading, and evaluation runs. The documentation navigation classifies the Evals API under Legacy APIs. The agent-evals guide still directs advanced workflows to Evals alongside datasets. Both parts of the documentation inform capability selection. Vertex AI offers managed GenAI evaluation with summary and per-example results.
+OpenAI’s current agent evaluation tools support datasets, graders, trace grading, and evaluation runs. The documentation navigation classifies the Evals API under Legacy APIs. The agent-evals guide still directs advanced workflows to Evals alongside datasets. Both parts of the documentation inform capability selection. Gemini Enterprise Agent Platform offers managed GenAI evaluation with summary and per-example results.
 
 MLflow can run automatic evaluations over sampled traces with filters and asynchronous model-based scorers. Databricks exposes this MLflow 3 production-monitoring workflow as a Beta capability, so production adoption should account for that maturity level. LangSmith can also apply online evaluators to sampled or filtered traces.
 
@@ -472,7 +480,11 @@ The most useful feedback report follows a small number of important changes from
 
 Production feedback creates value through a governed evidence lifecycle. Signals record what happened. Stable identifiers connect later outcomes to the exact system run. Sampling and privacy controls select safe, representative evidence. Human review and deterministic rules turn ambiguous events into labels. Failure diagnosis directs work to the responsible system layer. Curated datasets convert reviewed cases into repeatable evaluations. Progressive delivery tests the change with real traffic, and monitoring verifies the intended outcome.
 
-In essence, the flywheel is a way to learn from production without confusing activity with truth. Its output is a traceable engineering decision backed by evidence.
+The flywheel lets a team learn from production without confusing activity with truth. Its output is a traceable engineering decision backed by evidence.
+
+![Eight-stage feedback flywheel connecting capture, outcome joins, protected sampling, reviewed labels, curated evaluations, diagnosis, controlled release, live verification, and a rollback path that adds regression cases.](/content-assets/articles/article-mlops-llmops-production-feedback-eval-flywheel/feedback-eval-flywheel-summary.png)
+
+*A trustworthy feedback flywheel preserves evidence through every stage and sends failed release evidence back into governed evaluation cases instead of treating the loop as automatic training.*
 
 ## References
 
@@ -485,8 +497,8 @@ In essence, the flywheel is a way to learn from production without confusing act
 - [LangSmith: Evaluation concepts](https://docs.langchain.com/langsmith/evaluation)
 - [Label Studio: Connect a model and use predictions](https://labelstud.io/guide/ml.html)
 - [Label Studio: Export annotations](https://labelstud.io/guide/export.html)
-- [Vertex AI: View GenAI evaluation results](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/eval-python-sdk/view-evaluation)
-- [Vertex AI: Evaluate a judge model](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/evaluate-judge-model)
+- [Gemini Enterprise Agent Platform: Gen AI evaluation service](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/evaluation-overview)
+- [Gemini Enterprise Agent Platform: Evaluate a judge model](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/evaluate-judge-model)
 - [Databricks: MLflow 3 production monitoring for GenAI](https://docs.databricks.com/gcp/en/mlflow3/genai/eval-monitor/production-monitoring)
 - [OpenTelemetry: GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
 - [Argo Rollouts: Analysis and progressive delivery](https://argo-rollouts.readthedocs.io/en/stable/features/analysis/)

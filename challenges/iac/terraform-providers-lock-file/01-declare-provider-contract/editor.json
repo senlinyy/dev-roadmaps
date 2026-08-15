@@ -1,0 +1,102 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "providers.tf",
+  "files": [
+    {
+      "filename": "providers.tf",
+      "initialValue": "terraform {\n  required_providers {\n    aws = {\n    }\n  }\n}\n\nprovider \"aws\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenAttributeNames": [
+      "access_key",
+      "secret_key",
+      "session_token"
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "providers.tf",
+          "path": [
+            {
+              "type": "terraform"
+            },
+            {
+              "type": "required_providers"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "aws",
+              "source"
+            ],
+            "valueEquals": "hashicorp/aws"
+          },
+          {
+            "path": [
+              "aws",
+              "version"
+            ],
+            "valueEquals": "~> 6.0"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "providers.tf",
+          "path": [
+            {
+              "type": "provider",
+              "labels": [
+                "aws"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "region"
+            ],
+            "valueEquals": "eu-west-2"
+          }
+        ],
+        "minMatches": 1,
+        "maxMatches": 2
+      },
+      {
+        "select": {
+          "file": "providers.tf",
+          "path": [
+            {
+              "type": "provider",
+              "labels": [
+                "aws"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "alias"
+            ],
+            "valueEquals": "dr"
+          },
+          {
+            "path": [
+              "region"
+            ],
+            "valueEquals": "eu-west-1"
+          }
+        ],
+        "minMatches": 1,
+        "maxMatches": 2
+      }
+    ]
+  }
+}

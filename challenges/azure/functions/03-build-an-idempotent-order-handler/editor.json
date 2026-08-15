@@ -1,0 +1,34 @@
+{
+  "language": "javascript",
+  "activeFile": "handler.js",
+  "completionProfile": "node-standard",
+  "files": [
+    {
+      "filename": "package.json",
+      "initialValue": "{\n  \"type\": \"module\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "handler.js",
+      "initialValue": "export async function handleEvent(event, dependencies) {\n  throw new Error('Implement the idempotent handler');\n}\n"
+    },
+    {
+      "filename": "tests.mjs",
+      "initialValue": "import assert from 'node:assert/strict';\nimport { handleEvent } from './handler.js';\n\nconst processed = new Set();\nconst created = [];\nconst dependencies = {\n  processed,\n  orders: {\n    async create(order) {\n      created.push(order);\n    }\n  }\n};\n\nconst event = { id: 'evt-1001', data: { orderId: 'ord-42', total: 125 } };\nassert.deepEqual(await handleEvent(event, dependencies), { duplicate: false });\nassert.equal(created.length, 1);\nassert.equal(processed.has('evt-1001'), true);\nassert.deepEqual(await handleEvent(event, dependencies), { duplicate: true });\nassert.equal(created.length, 1);\nawait assert.rejects(() => handleEvent({ data: {} }, dependencies), /event id/i);\nconsole.log('6 assertions passed');\n",
+      "readOnly": true
+    }
+  ],
+  "executor": {
+    "runtime": "node-22",
+    "entrypoint": "tests.mjs",
+    "mode": "run",
+    "runLabel": "Run Tests"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "stdout": [
+      { "match": "contains", "value": "6 assertions passed", "label": "visible idempotency tests pass" }
+    ]
+  }
+}

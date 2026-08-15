@@ -44,13 +44,11 @@ An ML decision carries a second production promise. The intended model must run 
 
 This creates several places for a quiet failure to enter. A route can execute an old artifact. A feature can use the wrong unit. Model probabilities can lose calibration. A threshold can double the number of rejected cases. A label pipeline can stop joining difficult outcomes and leave the quality chart looking better than reality.
 
-The path can be read as a sequence of claims:
-
-![Successful 200 OK response passing through execution, feature, prediction, decision, outcome, and monitoring-coverage checks while stale traffic data creates a bad promise](/content-assets/articles/article-mlops-monitoring-silent-model-failure/silent-failure-boundaries.png)
-
-*The endpoint can stay green while meaning fails deeper in the path. Each checkpoint makes a different claim, and monitoring coverage determines whether the evidence is current and complete.*
-
 Each level depends on the level above it. A successful request cannot prove that the intended model version ran. The intended model cannot produce a trustworthy decision from stale inputs. A plausible prediction cannot prove that a new threshold used it safely. A healthy outcome chart cannot be trusted when half of the labels stopped joining.
+
+![Healthy API and bad delivery decision example showing a 200 OK response in 40 milliseconds while a three-hour-stale traffic feature creates consistently short promises](/content-assets/articles/article-mlops-monitoring-silent-model-failure/healthy-api-bad-decision.png)
+
+*The request remains fast and error-free while a three-hour-stale traffic feature produces consistently short delivery promises. Service delivery succeeds; the decision meaning fails.*
 
 ## The Five Places Silent Failure Can Begin
 <!-- section-summary: Five connected surfaces show where a healthy-looking ML request can first diverge from the reviewed production design. -->
@@ -110,6 +108,10 @@ Imagine a fraud team that labels only transactions sent to review. A stricter mo
 Outcome evidence usually arrives later than feature or execution evidence. That delay does not make it less important. It gives the strongest confirmation that a production decision helped or harmed the user. The team keeps leading warnings and mature outcomes connected through prediction identity, route, versions, and decision time.
 
 The framework has one operating rule: locate the first broken surface. A shared stale feature will survive a model rollback. A broken label join will survive retraining. A changed threshold will survive a feature repair. The response should target the surface whose evidence first diverged from the reviewed design.
+
+![Five silent-failure surfaces mapped to evidence controls, from monitoring coverage and feature meaning through model behaviour, decision policy, and outcome quality](/content-assets/articles/article-mlops-monitoring-silent-model-failure/silent-failure-surfaces.png)
+
+*Each failure surface has a matching control. A shared stale feature survives model rollback, while a broken label join survives retraining.*
 
 ## Record The Complete Path Behind Each Decision
 <!-- section-summary: A decision record ties one request to the exact model, features, policy, action, and later outcome used during investigation. -->
@@ -186,14 +188,10 @@ For example, a loan-decision system may send a case to manual review whenever a 
 
 In the loan example, the inference service increments Prometheus counters for total decisions, stale required features, and manual-review actions by stable route and region. Alertmanager pages when the stale share breaches the reviewed contract and the review queue still has capacity. The service also writes the affected prediction IDs to a governed warehouse table. Weeks later, dbt builds the mature repayment cohort for those IDs and the quality job compares the fallback path with normal decisions. The fast stack activates a safe response; the delayed stack tests whether that response protected the product outcome.
 
-![Timeline connecting leading signals at prediction time to lagging quality and harm signals after outcomes mature, with containment and recovery confirmation](/content-assets/articles/article-mlops-monitoring-silent-model-failure/signal-timeline.png)
-
-*Leading signals buy time for a reversible safety action. Prediction identity connects those early warnings to the later outcomes that confirm harm and prove whether recovery worked.*
-
 ## Correlate Signals Before Declaring A Silent Failure
 <!-- section-summary: Detection connects related evidence by route, version, segment, and time so responders can distinguish a broken contract from an isolated movement. -->
 
-One moving chart rarely identifies a silent failure. Related evidence about the same production path strengthens the case. At a high level, detection first checks hard contracts, then looks for sustained behavioural change and route-specific differences. A controlled probe separately proves that the monitoring path can still carry a known failure to the responder.
+One moving chart rarely identifies a silent failure. A stale-feature alert carries more weight if fallback use rises on the same route and later outcomes worsen for the same prediction IDs. Detection first checks hard contracts, then looks for sustained behavioural change and route-specific differences. A controlled probe separately proves that the monitoring path can still carry a known failure to the responder.
 
 ### Correlate the Same Route, Version, and Time
 
@@ -252,7 +250,7 @@ High-volume systems often precompute expensive or repeated expressions as Promet
 
 **Monitoring coverage** asks whether the evidence pipeline can support the claims shown on the dashboard. It protects every other signal because a broken monitor can freeze an old healthy result while production continues to change.
 
-In essence, a green dashboard is a production claim. The team needs proof that the dashboard saw enough traffic and that fresh evidence can still reach the alert destination.
+A green dashboard makes a production claim. The team needs proof that the dashboard saw enough traffic and that fresh evidence can still reach the alert destination.
 
 ### Reconcile Counts from Independent Sources
 
@@ -288,10 +286,6 @@ Every panel should show the production window and outcome-maturity cutoff behind
 The monitoring pipeline receives explicit objectives. A team might require at least 99.9% prediction-receipt coverage for an automated decision, a documented join-coverage range for mature outcomes, publication within two hours of the source window, and successful paging tests within the agreed interval. These limits come from the risk and timing of the decision.
 
 An absent time series receives explicit treatment. It can mean zero events, a disabled route, a failed exporter, or a query that stopped matching after a label change. The dashboard should show the state as unknown until another signal establishes which explanation is true.
-
-![Controlled path probes testing monitoring logic alongside independent production-count reconciliation and full recovery replay](/content-assets/articles/article-mlops-monitoring-silent-model-failure/monitoring-coverage-proof.png)
-
-*Controlled probes test path liveness and metric logic. Independent count reconciliation tests production completeness. Both forms of evidence must pass before the dashboard can publish a current quality claim.*
 
 ## Investigate in a Fixed Order
 <!-- section-summary: A fixed investigation order verifies the evidence first, then narrows execution, data, model, policy, and outcome causes before production changes are made. -->
@@ -475,16 +469,16 @@ SageMaker Model Monitor remains available to existing customers. Access is close
 
 Provider services can reduce capture, scheduling, and dashboard work. The application still has to record decision identity, define outcome maturity, preserve policy and action, and expose a reversible control. Those responsibilities decide whether the team can explain and contain a silent failure after the platform raises an alert.
 
-![Silent-failure response locating the broken surface, applying a reversible control, repairing in shadow, replaying evidence, canarying the route, restoring gradually, and confirming immediate and mature proof](/content-assets/articles/article-mlops-monitoring-silent-model-failure/silent-failure-response.png)
-
-*The recovery framework stays stable across tools: locate the first broken surface, contain it with a reversible control, repair in isolation, and expand only after immediate and mature evidence support the change.*
-
 ## The Main Idea
 <!-- section-summary: Silent model failure is detected by connecting successful computation to execution identity, healthy inputs, expected decisions, mature outcomes, and monitoring coverage. -->
 
 Silent model failure lives in the space between “the request succeeded” and “the decision helped.” Ordinary service metrics protect the request. Execution identity, feature health, prediction behaviour, product actions, and mature outcomes protect the meaning of that request.
 
 The monitoring system completes the chain by proving that its own evidence is current. Several signals can point to the same surface. The team can then contain the affected decision, repair the cause, verify the replacement path, and restore traffic gradually. The final prevention change exposes the same failure family earlier. That connected evidence turns a quiet model failure into an incident the organization can understand and control.
+
+![Silent-model-failure recovery summary from evidence verification and route containment through isolated repair, replay, canary release, immediate proof, and mature outcome confirmation](/content-assets/articles/article-mlops-monitoring-silent-model-failure/silent-failure-recovery-summary.png)
+
+*Silent-failure recovery contains the affected decision, repairs and replays in isolation, uses immediate canary gates, and waits for mature outcomes before keeping the repaired path.*
 
 ## References
 

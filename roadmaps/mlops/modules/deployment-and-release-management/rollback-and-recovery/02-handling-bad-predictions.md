@@ -28,7 +28,7 @@ id: "article-mlops-deployment-and-release-management-handling-bad-predictions"
 ## A Service Can Return HTTP 200 And Still Make Bad Predictions
 <!-- section-summary: A prediction-quality incident can continue while the serving API remains fast, available, and technically successful. -->
 
-At a high level, **handling bad predictions** means protecting people from harmful ML-driven decisions and then discovering which part of the decision system failed. The difficult part is that the serving API may look perfectly healthy. It can return `200 OK`, meet its latency target, and produce a valid JSON response for every request while the product makes increasingly poor choices.
+A serving API can return `200 OK`, meet its latency target, and produce valid JSON while the product makes increasingly poor choices. **Handling bad predictions** means protecting people from those harmful decisions, then discovering which part of the decision system failed.
 
 An HTTP success code answers a narrow operational question: *Did the service process the request?* It cannot answer: *Was the score correct? Was the action appropriate? Did the user receive a safe result?* This is why service-health monitoring and decision-quality monitoring serve different purposes.
 
@@ -67,7 +67,7 @@ The distinction matters because the same symptom can come from very different ca
 
 Retraining addresses only a subset of those causes. It will not repair a currency conversion, restore missing labels, revert a threshold, or load the correct feature transformer. In some cases, retraining on corrupted evidence teaches the model the failure.
 
-In essence, the initial alert says, “Investigate this decision path.” It has not yet earned the conclusion, “Replace the model.”
+The initial alert means, “Investigate this decision path.” It has not yet earned the conclusion, “Replace the model.”
 
 ```mermaid
 mindmap
@@ -97,6 +97,10 @@ mindmap
       Join coverage fell
       Definition changed
 ```
+
+![A sharply lower measured precision branching into six possible causes, each paired with the specific data, model, policy, runtime, outcome, or release repair it requires.](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/quality-symptom-six-causes.png)
+
+*The same quality symptom can require six different repairs, so trustworthy evidence and the first meaningful divergence must determine the response.*
 
 ## Protect Users And Save The Evidence Needed For Investigation
 <!-- section-summary: The first response reduces immediate harm while keeping enough evidence to reconstruct the affected decision path. -->
@@ -310,23 +314,9 @@ After cohort analysis finds an affected decision ID, distributed tracing helps a
 
 OpenTelemetry provides a vendor-neutral way to emit traces, metrics, and logs. A **trace** represents the end-to-end path of one request. A **span** represents one operation inside that path, such as loading features, running inference, or applying a policy. Every span in the same path shares a trace ID, and each span has its own span ID.
 
-```mermaid
-sequenceDiagram
-    participant API as Decision API
-    participant FS as Feature Service
-    participant MS as Model Server
-    participant PE as Policy Engine
-    participant DR as Decision Record
+![A traced live prediction path from the decision API through feature lookup, model scoring, policy evaluation, durable decision recording, and the final product action.](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/live-decision-trace.png)
 
-    API->>FS: load features
-    FS-->>API: values + feature version
-    API->>MS: predict with model route
-    MS-->>API: score + model version
-    API->>PE: evaluate score and context
-    PE-->>API: action + policy version
-    API->>DR: persist decision_id + trace_id + identities
-    API-->>API: return product action
-```
+*The shared trace explains the sampled runtime path, while logs and the governed decision record preserve the identities needed to investigate the product action.*
 
 Instrumentation needs a few ML-specific attributes. Keep values bounded so the telemetry backend can aggregate them safely:
 
@@ -459,6 +449,10 @@ A bad-prediction incident is a decision incident. The API can stay healthy while
 Protect users first. Preserve the identities that explain each decision. Verify that labels and joins are trustworthy. Bound the affected cohort, compare it with a healthy path, and find the first failing layer. Then repair that layer and account for decisions that already reached the world.
 
 Retraining is valuable for genuine model decay. Data, policy, runtime, and measurement failures need their own repairs. A mature MLOps system makes those distinctions visible before an incident forces the team to guess.
+
+![The complete bad-prediction response path from user protection and evidence preservation through cohort analysis, layer-specific repair, past-decision remediation, and recovery proof.](/content-assets/articles/article-mlops-deployment-and-release-management-handling-bad-predictions/bad-prediction-response-summary.png)
+
+*Protect future decisions with the narrowest safe control, repair the proven cause, preserve prior records, and track every consumed decision to a final disposition.*
 
 ## References
 

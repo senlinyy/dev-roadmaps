@@ -1,0 +1,77 @@
+{
+  "cwd": "/workspace/ansible",
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/ansible": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "ansible"
+  ],
+  "ansible": {
+    "hosts": [
+      {
+        "name": "web-canary-01",
+        "reachable": true
+      },
+      {
+        "name": "web-02",
+        "reachable": true
+      }
+    ],
+    "groups": [
+      {
+        "name": "orders_web",
+        "hosts": [
+          "web-canary-01",
+          "web-02"
+        ]
+      },
+      {
+        "name": "production",
+        "children": [
+          "orders_web"
+        ]
+      }
+    ],
+    "playbooks": [
+      {
+        "path": "deploy.yml",
+        "name": "Deploy orders web",
+        "hosts": "orders_web",
+        "tasks": [
+          {
+            "name": "Render orders configuration",
+            "status": "changed",
+            "diff": "-workers=2\n+workers=6"
+          },
+          {
+            "name": "Verify health",
+            "status": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "ansible-state",
+    "requireCommands": [
+      "ansible-playbook"
+    ],
+    "expectedAnsible": {
+      "includesActions": [
+        "syntax-check",
+        "playbook-list-hosts",
+        "playbook-check",
+        "playbook-diff"
+      ],
+      "targetHosts": [
+        "web-canary-01"
+      ],
+      "lastPlaybook": "deploy.yml"
+    }
+  }
+}

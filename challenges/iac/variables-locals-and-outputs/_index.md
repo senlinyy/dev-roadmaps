@@ -1,8 +1,8 @@
 ---
-title: "Input Variables"
-description: "Practice moving outside choices into variables, naming module decisions with locals, exposing review outputs, and judging sensitive values."
+title: "Terraform Input Variables"
+description: "Define a typed deployment contract with a safe default and a validation rule before wiring it into a managed resource."
 articleId: article-iac-terraform-values-input-variables
 difficulty: easy
-order: 6
-tags: ["terraform", "variables", "locals", "outputs"]
+order: 7
+tags: ["terraform","variables","validation","types"]
 ---

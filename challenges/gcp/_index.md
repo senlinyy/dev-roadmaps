@@ -1,6 +1,6 @@
 ---
 title: "GCP"
-description: "Practice GCP projects, placement, resource identity, service mapping, and beginner cloud judgment through scenario-based quizzes."
+description: "Build and inspect production GCP identity, networking, compute, data, and observability systems through editors, focused CLI investigations, and scenario checks."
 kind: gcp
 icon: Cloud
 color: "#34A853"

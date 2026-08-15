@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "arn-policy",
+      "type": "single",
+      "scenario": "A policy should allow reads only from objects under receipts/ in one S3 bucket. Which resource is correctly scoped?",
+      "options": [
+        {
+          "id": "b",
+          "text": "arn:aws:s3:::devpolaris-receipts-prod/receipts/*"
+        },
+        {
+          "id": "a",
+          "text": "arn:aws:s3:::devpolaris-receipts-prod"
+        },
+        {
+          "id": "c",
+          "text": "arn:aws:s3:*:*:bucket/devpolaris-receipts-prod"
+        },
+        {
+          "id": "d",
+          "text": "devpolaris-receipts-prod:receipts"
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "S3 object ARNs include the bucket and object key. The prefix wildcard belongs after receipts/. Learn more in [IAM ARN reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)."
+    },
+    {
+      "id": "stable-id",
+      "type": "single",
+      "scenario": "Two security groups share the display name web in different VPCs. An incident command must inspect exactly one of them. Which identifier should the runbook record?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The Name tag only."
+        },
+        {
+          "id": "b",
+          "text": "The security group ID and Region."
+        },
+        {
+          "id": "c",
+          "text": "The console page title."
+        },
+        {
+          "id": "d",
+          "text": "The creation timestamp only."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Service resource IDs plus regional context identify the exact resource when friendly names collide. Learn more in [IAM ARN reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)."
+    },
+    {
+      "id": "tag-ownership",
+      "type": "single",
+      "scenario": "A cost anomaly affects resources tagged Environment=prod but half have no Owner tag. What should the platform team fix first?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use a longer resource name instead of tags."
+        },
+        {
+          "id": "c",
+          "text": "Move every resource into one VPC."
+        },
+        {
+          "id": "b",
+          "text": "Add an enforced ownership tagging standard and remediate missing tags."
+        },
+        {
+          "id": "d",
+          "text": "Put owner names in IAM policy Sids."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Consistent ownership and cost-allocation tags make inventory and spend actionable. Learn more in [Tagging AWS resources](https://docs.aws.amazon.com/tag-editor/latest/userguide/tagging.html)."
+    },
+    {
+      "id": "tags-security",
+      "type": "single",
+      "scenario": "A bucket is tagged Confidential=true. A developer assumes the tag alone blocks public access. Which response is correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The tag is an access control by itself."
+        },
+        {
+          "id": "b",
+          "text": "The tag encrypts objects automatically."
+        },
+        {
+          "id": "d",
+          "text": "The tag creates an SCP automatically."
+        },
+        {
+          "id": "c",
+          "text": "The tag is metadata unless a policy or service control explicitly evaluates it."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Tags are metadata. They influence access only when an IAM, resource, or organization policy uses tag condition keys. Learn more in [Tagging AWS resources](https://docs.aws.amazon.com/tag-editor/latest/userguide/tagging.html)."
+    },
+    {
+      "id": "incident-inventory",
+      "type": "multiple",
+      "scenario": "An alert contains an EC2 instance ID and Region. Which evidence should an incident workflow collect before changing it?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Current tags and owning account."
+        },
+        {
+          "id": "c",
+          "text": "A guessed resource name based on the application."
+        },
+        {
+          "id": "b",
+          "text": "Attached security groups, subnet, and IAM role."
+        },
+        {
+          "id": "e",
+          "text": "Replace stable service identifiers with copied console URLs."
+        },
+        {
+          "id": "d",
+          "text": "Related CloudTrail events and deployment records."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Identity, ownership, network placement, runtime role, and change evidence establish what the resource is and why it changed. Learn more in [Tagging AWS resources](https://docs.aws.amazon.com/tag-editor/latest/userguide/tagging.html)."
+    }
+  ]
+}

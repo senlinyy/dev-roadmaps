@@ -1,7 +1,7 @@
 ---
 title: "Serving a Model with FastAPI"
 description: "Build a production-oriented FastAPI inference boundary with model lifecycle, typed contracts, controlled execution, probes, telemetry, container configuration, tests, and rollback."
-overview: "FastAPI supplies the HTTP application boundary around inference. This article explains how that boundary works with model loading, prediction services, execution capacity, observability, security, deployment, and release evidence."
+overview: "FastAPI supplies the HTTP application boundary around inference and connects it to model loading, prediction services, execution capacity, observability, security, deployment, and release evidence."
 tags: ["MLOps", "production", "serving"]
 order: 3
 id: "article-mlops-model-serving-serving-model-with-fastapi"
@@ -15,26 +15,17 @@ aliases:
 1. [What FastAPI Does In A Model Service](#what-fastapi-does-in-a-model-service)
 2. [Follow One Prediction Through The System](#follow-one-prediction-through-the-system)
 3. [Choose Where The Model Runs](#choose-where-the-model-runs)
-4. [Load And Verify The Model At Application Startup](#load-and-verify-the-model-at-application-startup)
-5. [Define Typed Request And Response Models](#define-typed-request-and-response-models)
-6. [Use Dependency Injection For Testing And Replacement](#use-dependency-injection-for-testing-and-replacement)
-7. [Choose Async, Threads, Or Processes For The Workload](#choose-async-threads-or-processes-for-the-workload)
-8. [Bound Concurrency And Apply Backpressure](#bound-concurrency-and-apply-backpressure)
-9. [Use Separate Startup, Readiness, And Liveness Checks](#use-separate-startup-readiness-and-liveness-checks)
-10. [Define Errors And Fallbacks In The API Contract](#define-errors-and-fallbacks-in-the-api-contract)
-11. [Return The Model Version And Decision Evidence](#return-the-model-version-and-decision-evidence)
-12. [Trace And Measure The Whole Prediction Path](#trace-and-measure-the-whole-prediction-path)
-13. [Secure The API Boundary](#secure-the-api-boundary)
-14. [Choose The Container And Worker Layout](#choose-the-container-and-worker-layout)
-15. [Test More Than The Happy Prediction](#test-more-than-the-happy-prediction)
-16. [Roll Out And Roll Back The Exact Model And Runtime](#roll-out-and-roll-back-the-exact-model-and-runtime)
-17. [The Main Idea](#the-main-idea)
-18. [References](#references)
+4. [Choose Async, Threads, Or Processes For The Workload](#choose-async-threads-or-processes-for-the-workload)
+5. [Use Separate Startup, Readiness, And Liveness Checks](#use-separate-startup-readiness-and-liveness-checks)
+6. [Trace And Measure The Whole Prediction Path](#trace-and-measure-the-whole-prediction-path)
+7. [Choose The Container And Worker Layout](#choose-the-container-and-worker-layout)
+8. [The Main Idea](#the-main-idea)
+9. [References](#references)
 
 ## What FastAPI Does In A Model Service
 <!-- section-summary: FastAPI turns HTTP requests into typed Python calls and typed responses, while the serving design still owns model execution, policy, capacity, and release safety. -->
 
-At a high level, **FastAPI** is a Python framework for building HTTP applications. It runs on the ASGI interface, uses Python type annotations and Pydantic models, and generates an OpenAPI description of the routes it exposes. In an MLOps system, FastAPI is usually the application boundary around a prediction capability.
+A model that works through a Python function still needs an HTTP boundary. Product services use that boundary to send requests and receive stable responses. **FastAPI** is a Python framework for building the boundary and validating its inputs. It runs on the ASGI interface, uses Python type annotations and Pydantic models, and generates an OpenAPI description of the routes it exposes. In an MLOps system, it usually sits around a prediction capability rather than replacing the serving runtime itself.
 
 That boundary has a clear job. It accepts an authenticated request, validates the public contract, calls the prediction service, maps the result into a response, and records operational evidence. This is the part that turns a Python model into something another service can call over a network.
 
@@ -69,6 +60,10 @@ The request first passes through a gateway that handles TLS, caller authenticati
 The prediction service then retrieves approved features as of the event time. It checks freshness before calling the loaded model. The raw model score goes through calibration and the active policy. A high-uncertainty result may route to review; a feature outage may select an evaluated fallback.
 
 FastAPI serializes the resulting decision through a Pydantic response model. OpenTelemetry connects the request span to feature and execution spans. Metrics record queue wait, model time, route, outcome class, and error category using bounded labels. A protected decision record keeps the actual model, feature, policy, and release identities.
+
+![A transaction-risk request moving from the client through the gateway, Pydantic validation, feature and preprocessing service, immutable model, decision policy, and typed response under one trace.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/fastapi-prediction-path.png)
+
+*FastAPI owns the typed HTTP boundary while the prediction service, model, and policy remain explicit stages whose latency and release identities can be traced together.*
 
 ```mermaid
 flowchart TD
@@ -111,7 +106,7 @@ flowchart TD
     class C,D,E,F process
 ```
 
-## Load And Verify The Model At Application Startup
+### Load And Verify The Model At Application Startup
 <!-- section-summary: FastAPI lifespan loads one verified model bundle per process, warms it, runs a fixture, and exposes readiness only after successful initialization. -->
 
 Model loading belongs to the application lifecycle. Loading from object storage for every request adds seconds of latency, duplicates memory, and introduces a remote dependency into every prediction. Concurrent first requests can also race to initialize several copies.
@@ -160,7 +155,7 @@ A failed digest check, incompatible preprocessor, or failed fixture should fail 
 
 This design also separates desired identity from loaded identity. A registry alias may point to a newer model during a partial rollout. The runtime stores and reports the immutable identity that the process actually loaded.
 
-## Define Typed Request And Response Models
+### Define Typed Request And Response Models
 <!-- section-summary: Pydantic request and response models make the public decision contract executable and keep internal model data away from callers. -->
 
 FastAPI uses Pydantic models to turn JSON documents into typed Python values. Invalid requests fail before the route body runs. FastAPI also adds the generated JSON Schemas to OpenAPI, giving clients a machine-readable description of the boundary.
@@ -216,7 +211,7 @@ The API creates `request_id` at the network boundary and returns it for correlat
 
 The `response_model` parameter makes FastAPI validate and filter returned fields through the response schema. This protects the boundary from an internal object that contains raw features, debug state, or sensitive model details. Domain and authorization rules still run inside the service layer because types alone lack that context.
 
-## Use Dependency Injection For Testing And Replacement
+### Use Dependency Injection For Testing And Replacement
 <!-- section-summary: FastAPI dependencies provide authenticated callers and runtime collaborators, allowing tests to replace external systems without changing route logic. -->
 
 **Dependency injection** means a function receives the collaborator it needs from a provider. The route asks for an authenticated caller and a prediction service. Identity clients, feature-store clients, and model runtimes are constructed at stable lifecycle boundaries and supplied through those providers.
@@ -286,7 +281,7 @@ flowchart TD
     class C,D,E,F,G,H,I process
 ```
 
-## Bound Concurrency And Apply Backpressure
+### Bound Concurrency And Apply Backpressure
 <!-- section-summary: A serving service limits admitted inference work, keeps queues short, and rejects overload early enough for the caller's fallback. -->
 
 Every model has a saturation point. Beyond it, extra concurrency increases queueing while throughput stays flat. A CPU model may saturate its cores. A GPU model may reach its effective batch size and device memory. A feature dependency may allow only a fixed number of concurrent lookups.
@@ -344,7 +339,11 @@ async def readyz(request: Request) -> dict[str, str]:
 
 The readiness endpoint should read a cheap local readiness state. Running a full prediction on every probe can consume serving capacity, and synchronously calling every dependency can spread one outage into fleet-wide unready status. Startup runs a reviewed prediction fixture once; background checks can update dependency readiness between probes.
 
-## Define Errors And Fallbacks In The API Contract
+![FastAPI application lifecycle loading and verifying a model before readiness, alongside a separate request-capacity path with bounded workers and overload responses.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/lifecycle-capacity-controls.png)
+
+*Startup, readiness, and liveness govern whether a replica may serve; concurrency and backpressure govern how much prediction work an already-ready replica may admit.*
+
+### Define Errors And Fallbacks In The API Contract
 <!-- section-summary: The API distinguishes caller repair, authentication, overload, dependency failure, model failure, abstention, and approved fallback routes. -->
 
 A production endpoint needs stable outcomes for failure as well as success. The caller should know whether to repair its payload, refresh credentials, slow down, retry within a deadline, or continue with a product fallback.
@@ -375,7 +374,7 @@ flowchart TD
 
 Retries require an explicit policy. A transient model-server timeout may allow one retry if enough product deadline remains and another healthy replica has capacity. Schema errors and authorization failures need repair. Repeating expensive inference against the same saturated pool increases overload.
 
-## Return The Model Version And Decision Evidence
+### Return The Model Version And Decision Evidence
 <!-- section-summary: Responses and decision records identify the model, features, policy, release, and execution route that actually produced the action. -->
 
 The service should report the runtime identity that actually produced the result. A candidate pod may load an older cached artifact after a registry alias changes. A rollout may update policy before every model replica moves. Desired state alone provides incomplete evidence for the resulting decision.
@@ -439,7 +438,7 @@ flowchart TD
     class B,C,D,E,F,G process
 ```
 
-## Secure The API Boundary
+### Secure The API Boundary
 <!-- section-summary: Identity, authorization, transport protection, resource limits, artifact verification, and data minimization surround the typed FastAPI route. -->
 
 Pydantic validation protects document shape. The wider boundary also establishes caller identity and permission. A gateway or service mesh may validate an OIDC token, while a FastAPI dependency enforces the route's required scope and checks access to the referenced account or tenant.
@@ -508,7 +507,7 @@ CPU limits need their own review because throttling can create latency spikes. S
 
 Uvicorn's graceful-shutdown timeout and Kubernetes termination grace must agree. The platform removes a terminating pod from normal traffic, Uvicorn stops accepting new work, and bounded in-flight requests get time to finish. The Kubernetes grace period should exceed the server's drain budget so forced termination remains the final step.
 
-## Test More Than The Happy Prediction
+### Test More Than The Happy Prediction
 <!-- section-summary: Tests cover the typed contract, lifespan, dependency seams, packaged model fixture, overload, probes, telemetry, and shutdown behavior. -->
 
 The smallest unit tests exercise preprocessing, model adapters, calibration, and policy as ordinary Python. They should cover the exact feature order, missing-value behavior, score transformation, threshold boundaries, abstention, and fallback rules.
@@ -545,7 +544,7 @@ Failure tests deserve equal weight. Force model loading to fail and verify the a
 
 Load tests use representative payload sizes and the real process topology. They measure queue wait, service time, throughput, memory, CPU, native thread count, and fallback behavior. A single-request benchmark provides little evidence about tail latency under concurrent work.
 
-## Roll Out And Roll Back The Exact Model And Runtime
+### Roll Out And Roll Back The Exact Model And Runtime
 <!-- section-summary: A release pins the application, model, preprocessing, feature contract, policy, and runtime configuration that passed together. -->
 
 A FastAPI image and a model artifact form one tested serving combination. The release record should also pin preprocessing, feature contract, policy, dependency versions, and runtime configuration. Startup verifies the expected artifact, while every decision records the identity actually loaded.
@@ -582,6 +581,10 @@ FastAPI makes the network boundary concrete. Pydantic models define requests and
 Production quality comes from the surrounding design. The service chooses an execution boundary, matches async and process topology to the workload, limits in-flight work, separates probe meanings, records actual release evidence, and instruments each prediction stage. Security and data-minimization controls protect the same path.
 
 A container release pins the application and model system that passed together. Startup proof, shadow comparison, canary evidence, complete rollback, and graceful drain carry that combination safely through production change.
+
+![Six production boundaries for a FastAPI model service: contract, lifecycle, execution, evidence, security, and release, joined by one tested request path and release gate.](/content-assets/articles/article-mlops-model-serving-serving-model-with-fastapi/fastapi-production-summary.png)
+
+*A production FastAPI service is complete only when the same tested request path connects its public contract to lifecycle, capacity, evidence, security, and recoverable release controls.*
 
 ## References
 

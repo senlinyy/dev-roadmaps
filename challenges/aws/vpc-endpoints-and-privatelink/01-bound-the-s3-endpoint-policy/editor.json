@@ -1,0 +1,86 @@
+{
+  "language": "json",
+  "filename": "endpoint-policy.json",
+  "completionProfile": "aws-iam-policy",
+  "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"ListExportBucket\",\n      \"Effect\": \"Allow\",\n      \"Principal\": \"*\",\n      \"Action\": [],\n      \"Resource\": \"\"\n    },\n    {\n      \"Sid\": \"ReadWriteExportPrefix\",\n      \"Effect\": \"Allow\",\n      \"Principal\": \"*\",\n      \"Action\": [],\n      \"Resource\": \"\"\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "Statement"
+        ],
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "bucket and object statements"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Action"
+        ],
+        "includes": "s3:ListBucket",
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "bucket listing only"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Resource"
+        ],
+        "equals": "arn:aws:s3:::devpolaris-exports-prod",
+        "label": "export bucket"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Action"
+        ],
+        "includes": "s3:GetObject",
+        "label": "object reads"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Action"
+        ],
+        "includes": "s3:PutObject",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "bounded object actions"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Action"
+        ],
+        "excludes": "s3:DeleteObject",
+        "label": "no object deletion"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Action"
+        ],
+        "excludes": "s3:*",
+        "label": "no wildcard S3 action"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Resource"
+        ],
+        "equals": "arn:aws:s3:::devpolaris-exports-prod/exports/*",
+        "label": "export object prefix"
+      }
+    ]
+  }
+}

@@ -142,6 +142,24 @@ links** connect the record to impact assessments, model evaluations, data
 reviews, security findings, approvals, deployment manifests, exceptions,
 monitoring, incidents, and retirement proof.
 
+```mermaid
+flowchart TB
+    U["AI Use Case<br/>(one stable record for one purpose)"] --> T["Technical Context<br/>(components, deployments, data, and suppliers)"]
+    U --> D["Decision Context<br/>(people, action, authority, and approved scope)"]
+    T --> C["Component Records<br/>(models, prompts, rules, APIs, and interfaces)"]
+    T --> P["Production Placements<br/>(regions, versions, traffic, and configuration)"]
+    D --> A["Affected People And Action<br/>(who experiences which consequence)"]
+    D --> E["Owners, Status, And Evidence<br/>(who decides and why the use may operate)"]
+
+    class U system
+    class T,D group
+    class C,P,A,E record
+```
+
+The technical side explains what is running. The decision side explains why it
+exists and what authority it has. Both sides belong to the same use-case record,
+which is why a model registry alone cannot serve as the enterprise AI inventory.
+
 ### Why A Model Registry Cannot Replace The AI Inventory
 
 MLflow Model Registry, Models in Unity Catalog, SageMaker AI Model Registry, and
@@ -155,6 +173,10 @@ also connects vendor dependencies, approved scope, legal or policy context,
 active deployments, the impact decision, and the withdrawal route. A registry
 version therefore links to an inventory record as a component. It should not
 silently stand in for the whole use case.
+
+![A support-priority use case links incoming requests and recent account events to an internal urgency model, a vendor summary API, a routing rule, a queue, a trained support agent, and the customer response, while the model registry identifies only one component.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-inventory-impact-assessments-third-party-risk/complete-use-case-inventory.png)
+
+*The inventory governs the full decision workflow and its accountable scope; a model registry supplies technical identity for one component inside that record.*
 
 ## Update The Inventory Through The Whole Lifecycle
 
@@ -308,6 +330,10 @@ slower queue because confidence is lower. The model output is uncertainty, the
 workflow action is queue placement, and the experienced harm is delayed support
 for a language group. A global accuracy score would miss that pathway. Queue
 delay by language, escalation outcomes, and complaint evidence test it directly.
+
+![Six-stage impact path from the intended use of support prioritization through lower confidence for a non-English message, the routing rule, a slower queue, delayed support, and language-specific outcome evidence, with review and control points.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-inventory-impact-assessments-third-party-risk/support-impact-path.png)
+
+*Impact assessment traces the full causal path to the affected group, then uses workflow-specific evidence and accountable decisions instead of relying on an aggregate model metric.*
 
 ### Describe Harms As Scenarios
 
@@ -697,6 +723,10 @@ service catalogs, CMDBs, data lineage, supplier systems, approval workflows,
 deployment manifests, and operational evidence. Discovery, reconciliation,
 material-change review, periodic review, exceptions, retention, and retirement
 keep that record aligned with reality.
+
+![A stable AI use-case ID links the governance record to service, model, data, supplier, workflow, and operational systems, while discovery, reconciliation, release checks, review, reassessment, and a verified three-step retirement process maintain the record.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-inventory-impact-assessments-third-party-risk/system-id-lifecycle-summary.png)
+
+*The stable system ID connects specialized records through the active lifecycle and remains as retired history only after the organization removes every live path and verifies the withdrawal.*
 
 ## References
 

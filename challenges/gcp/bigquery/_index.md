@@ -4,6 +4,6 @@ description: "Practice BigQuery analytics shape through datasets, tables, loadin
 articleId: article-cloud-providers-gcp-storage-databases-bigquery-analytics-data-warehousing
 articleSlug: bigquery
 difficulty: medium
-order: 22
+order: 23
 tags: ["gcp", "bigquery", "analytics", "sql"]
 ---

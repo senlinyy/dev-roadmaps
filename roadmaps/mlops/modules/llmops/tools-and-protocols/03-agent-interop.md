@@ -22,7 +22,7 @@ id: "article-mlops-llmops-agent-interop"
 11. [Evaluate The Complete Agent Collaboration](#evaluate-the-complete-agent-collaboration)
 12. [References](#references)
 
-At a high level, **agent interoperability** is the ability of one agent system to give meaningful work to another agent system. The two systems may use different models, frameworks, memory stores, and tools. They can still collaborate if they agree on how to describe the work, exchange evidence, report progress, return results, and prove who was allowed to do what.
+Two agent systems may use different models and frameworks, yet a workflow may still need one to delegate work to the other. **Agent interoperability** is their ability to exchange that work meaningfully. The systems need a shared task description and evidence format. They also need a way to report progress and results and to prove who authorized the work.
 
 This matters once an agent crosses an ownership boundary. Calling a helper inside one application is ordinary software orchestration. Asking a separately deployed agent, perhaps owned by another team or vendor, to accept a task creates a distributed-system boundary. The caller no longer controls the remote runtime. The remote team can change how the agent reasons and which tools it uses. It can also change retry behaviour and stored state independently, so the interaction needs a dependable contract.
 
@@ -40,22 +40,9 @@ The remote agent accepts the work as a durable task. During its review, it disco
 
 The coordinator validates the report schema, checks that every high-risk conclusion cites evidence, and confirms that the task reached a successful terminal state. A human reviewer then decides whether onboarding may continue. The remote agent prepared a recommendation; the system that owns the procurement policy kept control of the final action.
 
-```mermaid
-sequenceDiagram
-    participant C as Local coordinator
-    participant D as Trusted discovery
-    participant R as Remote compliance agent
-    participant H as Human reviewer
-    C->>D: Find capability and compatible interface
-    D-->>C: Verified service details
-    C->>R: Send objective, evidence, and constraints
-    R-->>C: Task accepted
-    R-->>C: Input required: operating jurisdiction
-    C->>R: Send approved missing evidence
-    R-->>C: Completed task with risk-report artifact
-    C->>C: Validate schema, citations, and status
-    C->>H: Present recommendation for decision
-```
+![A supplier review moving through trusted discovery, a structured handoff, one durable remote task, input-required recovery, a risk-report artifact, local validation, and a final human onboarding decision](/content-assets/articles/article-mlops-llmops-agent-interop/supplier-review-agent-handoff.png)
+
+*The remote compliance agent owns the accepted review task. The local coordinator retains evidence-disclosure and artifact-acceptance authority, while procurement policy and the human reviewer retain the onboarding decision.*
 
 This interaction contains the whole subject in miniature. Discovery answers who can do the work. The handoff packet explains what the work means. The task records its lifecycle. Messages carry questions and answers. The artifact contains the deliverable. Identity and authorization control access. Validation and human review protect the final decision.
 
@@ -250,6 +237,10 @@ Constraints define the authority boundary. The remote agent may draft a recommen
 
 The handoff packet can be a structured Part inside an A2A message. The same packet could also travel through a typed API or queue, which is why it deserves its own schema and version. Protocol conformance confirms that the systems can communicate. Packet validation confirms that they understand the same business request.
 
+![The supplier-review.v2 packet separating objective, governed evidence, constraints, acceptance criteria, and continuity identifiers from delegated and retained authority](/content-assets/articles/article-mlops-llmops-agent-interop/supplier-review-handoff-packet.png)
+
+*The packet gives the remote agent enough meaning to perform one bounded review. Additional data disclosure still returns to local policy and delegated-token checks.*
+
 ## Separate Service Identity From Delegated Authority
 
 <!-- section-summary: The remote service must know which system is calling, whose authority it represents, and exactly which capability and data that authority permits. -->
@@ -326,6 +317,10 @@ The supplier review provides a useful end-to-end case. Remove the jurisdiction a
 Measure protocol conformance and product outcomes separately. Conformance tests show whether messages, tasks, updates, and bindings follow A2A. Product evaluations measure completion rate, artifact validity, evidence coverage, policy violations, human correction rate, latency, cost, and audit completeness.
 
 The main design lesson is boundary ownership. Use local orchestration for collaborators inside one agent system, workflow engines for durable known processes, typed APIs for stable operations, MCP for tool and context access, and A2A for independent agents that own a task. Around every remote-agent call, keep a versioned business packet, bounded authority, durable task identity, traceable evidence, and tested recovery paths.
+
+![A summary of governed remote-agent collaboration from trusted establishment and versioned transfer through durable observation, result validation, trace and audit continuity, failure recovery, evaluation, canary release, and boundary selection](/content-assets/articles/article-mlops-llmops-agent-interop/governed-agent-collaboration-summary.png)
+
+*Remote collaboration is a distributed workflow with independent change and failure. The caller retains collaborator choice, disclosure, acceptance, local side effects, and the recovery path when remote truth is uncertain.*
 
 ## References
 

@@ -4,6 +4,6 @@ description: "Practice pairing Azure cost shapes with failure promises before ch
 articleId: article-cloud-providers-azure-cost-resilience-mental-model
 articleSlug: what-is-cost-and-resilience
 difficulty: easy
-order: 39
+order: 30
 tags: ["azure", "cost", "resilience", "tradeoffs", "operations"]
 ---

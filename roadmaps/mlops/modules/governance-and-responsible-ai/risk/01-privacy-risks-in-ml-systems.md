@@ -31,7 +31,7 @@ id: "article-mlops-governance-and-responsible-ai-privacy-risks-in-ml-systems"
 ## Where Privacy Risk Appears In An ML System
 <!-- section-summary: ML privacy risk concerns the problems people can experience because a system collects, derives, uses, exposes, or retains information about them. -->
 
-Privacy risk can appear wherever an ML system collects, derives, copies, uses, or retains information about people. At a high level, **privacy risk** is the possibility that this data processing creates unwanted exposure, surveillance, loss of control, unfair treatment, embarrassment, financial harm, or use outside the expected purpose.
+Privacy risk can appear wherever an ML system collects, derives, copies, uses, or retains information about people. **Privacy risk is the possibility that this processing creates unwanted exposure, surveillance, loss of control, unfair treatment, embarrassment, financial harm, or use outside the expected purpose.**
 
 Security and privacy overlap, although they ask different questions. Security asks whether an unauthorised actor can reach the data or system. Privacy also asks whether an authorised system should collect the data, whether it uses the data for the stated purpose, and whether people can exercise the organisation's promised choices. A perfectly encrypted dataset can still create privacy harm if it contains unnecessary information or powers an unexpected decision.
 
@@ -68,7 +68,7 @@ The map should include third parties and managed services. A hosted experiment t
 
 Record the processor and region. Add its retention, training-use policy, deletion mechanism, and contract owner.
 
-A useful map shows boundaries as well as assets. The restricted raw-data zone, curated ML zone, training runtime, production serving account, observability system, and reviewer workspace usually have different owners and access policies. Privacy failures often occur at the transfer between them.
+The map needs boundaries as well as assets. The restricted raw-data zone, curated ML zone, training runtime, production serving account, observability system, and reviewer workspace usually have different owners and access policies. Privacy failures often occur at the transfer between them.
 
 ## Limit Collection To An Approved Purpose
 <!-- section-summary: Purpose limitation states the allowed use before data enters the ML workflow and prevents useful data from quietly serving unrelated decisions. -->
@@ -121,6 +121,10 @@ Feature stores and materialised tables can multiply derived copies. Give each fe
 Restrict online features to the serving identities that use them. A feature catalogue entry should identify whether a value is approved for training, serving, monitoring, or only one of those contexts.
 
 Synthetic data can reduce some direct disclosure risks, yet synthetic rows can still resemble training records or preserve rare combinations. Evaluate similarity, memorisation, attribute disclosure, and downstream bias. Treat the generator and its training data as sensitive assets.
+
+![A support-routing example showing raw personal details kept in a governed source while only topic and urgency reach the training snapshot and routing model](/content-assets/articles/article-mlops-governance-and-responsible-ai-privacy-risks-in-ml-systems/purpose-minimised-support-routing.png)
+
+*Purpose minimisation keeps raw personal details behind a restricted boundary and sends only the fields required for support routing into the ML path.*
 
 ## Understand What Models Can Reveal
 <!-- section-summary: A trained model can leak information through membership signals, reconstructed attributes, memorised content, or copied model behaviour. -->
@@ -237,6 +241,10 @@ Removing a training row does not reliably remove its influence from an existing 
 
 The decision depends on the model and the privacy risk. Promised data rights and applicable obligations also shape it. A low-risk aggregate model may continue until scheduled retraining under an approved policy. A model trained on data collected without authority may require immediate containment and rebuild. Record the choice, owner, affected versions, and verification evidence.
 
+![A deletion request branching through feature tables, vector indexes, caches, processor copies, and restricted evidence before a model impact review determines whether to close, restrict, retrain, or retire](/content-assets/articles/article-mlops-governance-and-responsible-ai-privacy-risks-in-ml-systems/deletion-lineage-model-review.png)
+
+*Deletion follows every derived copy, then checks whether an active model must be restricted, retrained, or retired before the request can close.*
+
 ```mermaid
 flowchart TD
     A["Deletion Request<br/>(verified subject and governed scope)"] --> B["Lineage Search<br/>(source and derived asset inventory)"]
@@ -250,7 +258,7 @@ flowchart TD
 ## Choose Privacy Techniques For A Specific Threat
 <!-- section-summary: Privacy-enhancing technologies solve specific threat models and require explicit guarantees, parameters, and utility evaluation. -->
 
-Some privacy threats need specialised mathematical or infrastructure controls. **Privacy-enhancing technologies**, often shortened to **PETs**, include differential privacy, secure aggregation, federated learning, trusted execution environments, and cryptographic computation methods. Each addresses a particular boundary, so the team chooses one only after defining the threat and required guarantee.
+Some privacy threats need specialised mathematical or infrastructure controls. **Privacy-enhancing technologies**, often shortened to **PETs**, include differential privacy, secure aggregation, federated learning, trusted execution environments, and cryptographic computation methods. Each addresses a particular boundary. The defined threat and required guarantee determine which technique fits.
 
 **Differential privacy** provides a mathematical way to bound how much an output changes because one person's data is included. In private training, implementations commonly clip each example's gradient and add calibrated noise before updating the model. The privacy budget is often expressed with epsilon and delta. Smaller epsilon generally represents a stronger bound, but the complete guarantee depends on adjacency, accounting, clipping, sampling, and implementation details.
 
@@ -349,6 +357,10 @@ Start with a clear purpose and a complete threat-surface map. Minimise data and 
 
 The production standard is evidence. A team should be able to show what data the release used, why each use was permitted, what privacy attacks and system paths were tested, which residual risks remain, who accepted them, and how the system will contain and prove recovery from an incident.
 
+![Seven privacy control stages from purpose and data through model, API, telemetry, retention, and operations converging on an approve, limit-scope, or block release decision](/content-assets/articles/article-mlops-governance-and-responsible-ai-privacy-risks-in-ml-systems/privacy-controls-summary.png)
+
+*A privacy release decision joins purpose, data, model, API, telemetry, retention, and operational evidence, then reopens the controls when production signals or deletion requests arrive.*
+
 ## References
 
 - [NIST Privacy Framework 1.0](https://www.nist.gov/system/files/documents/2020/01/16/NIST%20Privacy%20Framework_V1.0.pdf)
@@ -356,7 +368,7 @@ The production standard is evidence. A team should be able to show what data the
 - [NIST Privacy Risk Assessment Methodology](https://www.nist.gov/privacy-framework/nist-pram)
 - [NIST SP 800-226: Guidelines for Evaluating Differential Privacy Guarantees](https://csrc.nist.gov/pubs/sp/800/226/final)
 - [NIST Adversarial Machine Learning Taxonomy](https://csrc.nist.gov/pubs/ai/100/2/e2025/final)
-- [OWASP Machine Learning Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Machine_Learning_Security_Cheat_Sheet.html)
+- [OWASP Secure AI/ML Model Ops Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secure_AI_Model_Ops_Cheat_Sheet.html)
 - [OWASP RAG Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/RAG_Security_Cheat_Sheet.html)
 - [OpenTelemetry data collection security guidance](https://opentelemetry.io/docs/security/handling-sensitive-data/)
 - [Opacus Privacy Engine](https://opacus.ai/api/privacy_engine.html)

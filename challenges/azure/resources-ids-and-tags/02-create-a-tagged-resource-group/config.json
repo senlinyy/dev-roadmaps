@@ -38,6 +38,9 @@
         ]
       }
     },
+    "requireCommandPatterns": [
+      "^az\\s+group\\s+create\\b"
+    ],
     "requireCommands": [
       "az"
     ],

@@ -313,6 +313,11 @@
       "DenyPublicByDefault"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+sql\\s+server\\s+show\\b",
+      "^az\\s+sql\\s+db\\s+show\\b",
+      "^az\\s+sql\\s+server\\s+firewall-rule\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

@@ -46,6 +46,9 @@
         ]
       }
     },
+    "requireCommandPatterns": [
+      "^gcloud\\s+storage\\s+buckets\\s+create\\b"
+    ],
     "requireCommands": [
       "gcloud"
     ],

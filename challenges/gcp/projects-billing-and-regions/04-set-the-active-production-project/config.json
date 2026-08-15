@@ -39,6 +39,10 @@
         "projectId": "dp-orders-prod"
       }
     },
+    "requireCommandPatterns": [
+      "^gcloud\\s+config\\s+set\\s+project\\b",
+      "^gcloud\\s+config\\s+get-value\\s+project\\b"
+    ],
     "requireCommands": [
       "gcloud"
     ],

@@ -27,7 +27,7 @@ id: "article-mlops-llmops-quality-and-cost"
 16. [Operate A Continuous Quality-Cost Loop](#operate-a-continuous-quality-cost-loop)
 17. [References](#references)
 
-At a high level, **quality and cost observability** tells a team whether an LLM application is producing acceptable results and how much work the system performs to produce them.
+A successful API call may still produce an unacceptable answer or consume far more model and tool work than the outcome justifies. **Quality and cost observability** connects those two questions: whether the application produces acceptable results and how much work it performs to produce them.
 
 The two ideas belong in the same operating view. A low-cost answer has little value if it is incorrect, unsafe, or rejected by the user. An excellent answer may still be impractical if a routine task triggers several model calls and repeated searches. Unnecessary tools and manual review add further expense.
 
@@ -47,6 +47,10 @@ Consider a workflow that drafts a response to a support request. A fluent answer
 The practical aim is **value efficiency**: produce more acceptable outcomes from the resources available while preserving safety and user experience. Cost cutting is only one possible action. A team may deliberately spend more on a high-risk task because stronger verification reduces harmful errors. It may also route a simple classification to a smaller model because evaluation shows no meaningful quality loss.
 
 Quality and cost are properties of a system configuration. A configuration includes the model, prompt, tools, retrieval settings, orchestration rules, safety controls, and release version. Comparing model names without the rest of that configuration gives an incomplete result.
+
+![One logical support task containing retrieval, two model attempts, validation, approval, a tool, and a response, joined to immediate and delayed outcomes, with a quality scorecard and all contributors to complete task cost.](/content-assets/articles/article-mlops-llmops-quality-and-cost/task-quality-and-complete-cost.png)
+
+*The useful unit is the user task, not an individual API request. Every attempt contributes to the same outcome and complete cost, including evaluation and human correction.*
 
 ## Start With A User Task And An Acceptable Outcome
 <!-- section-summary: A logical task connects every attempt and step to the result the user ultimately receives. -->
@@ -144,6 +148,20 @@ Slices deserve the same care. A global average can look healthy while one langua
 <!-- section-summary: Deterministic checks, evaluators, human judgement, and product outcomes answer different quality questions. -->
 
 Quality is partly latent: the system cannot directly observe whether every answer is genuinely useful and correct. Teams estimate it from several forms of evidence, each with strengths and limitations.
+
+The evidence sources cover one another's blind spots. Exact checks prove narrow properties but cannot judge nuanced usefulness. Human reviewers can judge nuance but cannot inspect every production request. Product outcomes connect responses to real behaviour, although outside events can distort them. Automated evaluators scale judgement after calibration against trusted examples. A quality decision states which source supports each claim and where uncertainty remains.
+
+```mermaid
+flowchart TD
+    Task["User task<br/>(what acceptable success means)"] --> Checks["Deterministic checks<br/>(properties software can prove)"]
+    Task --> Review["Human review<br/>(correctness, nuance, and policy)"]
+    Task --> Outcomes["Product outcomes<br/>(what happened after the response)"]
+    Task --> Judges["Automated evaluators<br/>(scalable estimates of quality)"]
+    Checks --> Decision["Quality decision<br/>(combined evidence with known limits)"]
+    Review --> Decision
+    Outcomes --> Decision
+    Judges --> Decision
+```
 
 ### Deterministic checks
 
@@ -273,6 +291,10 @@ GROUP BY workflow, release_version;
 ```
 
 The left join keeps every attempted task in the denominator even if its delayed outcome is still missing. Missing-outcome coverage should appear beside the unit-cost result so operators can distinguish a real quality change from a delayed or broken outcome feed. Segment the result by task family, risk tier, language, and route. Comparing unrelated task mixes can make a release appear more or less efficient than it truly is.
+
+![A comparison of two 1,000-document extraction configurations showing that total cost can rise from 200 to 220 currency units while successful outcomes rise from 800 to 950 and cost per success falls from 0.25 to about 0.23.](/content-assets/articles/article-mlops-llmops-quality-and-cost/cost-per-success-example.png)
+
+*The new configuration costs more in total and less per successful extraction. Aggregate step attempts to one task before joining its final outcome, and display missing-outcome coverage beside the unit-cost result.*
 
 ## Record Usage Separately From Changing Prices
 <!-- section-summary: Telemetry preserves raw usage and joins it to a versioned price catalogue for reproducible cost calculation. -->
@@ -483,6 +505,25 @@ Suppose a knowledge assistant costs more after a release. The changed slice cont
 
 Waste means resource consumption that does not contribute enough to the acceptable outcome. The solution depends on the location of that waste.
 
+Optimization starts by comparing an expensive task with a healthy control that achieved the same user outcome. The trace and usage record locate the additional work in context, workflow steps, retrieval, caching, routing, or evaluation. Each source has a different repair. Removing input tokens cannot fix repeated tool calls, and lowering a retry limit cannot fix stale retrieval. The team verifies the focused change against the original quality scorecard and complete task cost.
+
+```mermaid
+flowchart TD
+    Spend["Unexpected task cost<br/>(compare with a healthy control)"] --> Locate{"Cost Location<br/>(where did extra work occur?)"}
+    Locate --> Context["Context<br/>(duplicate or low-value input)"]
+    Locate --> Loop["Workflow<br/>(retries or repeated steps)"]
+    Locate --> Retrieval["Retrieval<br/>(queries that add little evidence)"]
+    Locate --> Cache["Cache<br/>(stale or low-value reuse)"]
+    Locate --> Route["Model route<br/>(more capacity than the task needs)"]
+    Locate --> Eval["Evaluation<br/>(expensive scoring without sampling)"]
+    Context --> Verify["Verify the repair<br/>(same quality scorecard and task cost)"]
+    Loop --> Verify
+    Retrieval --> Verify
+    Cache --> Verify
+    Route --> Verify
+    Eval --> Verify
+```
+
 ### Stop Unbounded Context Growth
 
 Repeated instructions, full conversation history, overly broad retrieval, and duplicated tool output can inflate input usage and latency.
@@ -612,7 +653,11 @@ Quality-cost observability is an operating practice rather than a one-time dashb
 9. prove the tradeoff through paired evaluation and gradual release;
 10. turn incidents and reviewed failures into durable regression cases.
 
-In essence, quality and cost observability gives the team a disciplined way to spend resources on work that improves the user’s outcome. The strongest systems can explain both sides of every production decision: what became better for the user, and which work the application added or removed to achieve it.
+Quality and cost observability gives the team a disciplined way to spend resources on work that improves the user’s outcome. The strongest systems can explain both sides of every production decision: what became better for the user, and which work the application added or removed to achieve it.
+
+![An eight-stage continuous quality-cost operating loop from task definition and scorecards through instrumentation, raw usage, joined evidence, joint monitoring, investigation, paired candidate testing, guarded release, and production feedback.](/content-assets/articles/article-mlops-llmops-quality-and-cost/quality-cost-operating-loop.png)
+
+*Quality, cost, latency, evidence coverage, and important segments travel through the same operating loop. A candidate expands only when its guardrails and objectives hold for the relevant tasks and release configuration.*
 
 ## References
 

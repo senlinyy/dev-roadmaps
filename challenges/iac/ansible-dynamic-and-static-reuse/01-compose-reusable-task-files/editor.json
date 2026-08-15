@@ -1,0 +1,123 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Deploy orders web\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Everything inline\n      ansible.builtin.debug:\n        msg: deploy\n"
+    },
+    {
+      "filename": "tasks/install.yml",
+      "initialValue": "---\n[]\n"
+    },
+    {
+      "filename": "tasks/verify.yml",
+      "initialValue": "---\n[]\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "import_tasks"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.import_tasks"
+            ],
+            "equals": "tasks/install.yml"
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "includes": "install"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "include_tasks"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.include_tasks"
+            ],
+            "equals": "tasks/verify.yml"
+          },
+          {
+            "path": [
+              "when"
+            ],
+            "contains": "orders_verify"
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "includes": "verify"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "tasks/install.yml",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "state"
+            ],
+            "equals": "present"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "tasks/verify.yml",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "import_tasks"
+        },
+        "argumentPath": [
+          "ansible.builtin.import_tasks"
+        ],
+        "targetFile": "tasks/install.yml"
+      },
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "include_tasks"
+        },
+        "argumentPath": [
+          "ansible.builtin.include_tasks"
+        ],
+        "targetFile": "tasks/verify.yml"
+      }
+    ]
+  }
+}

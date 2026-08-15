@@ -29,7 +29,7 @@ id: "article-mlops-model-serving-gpu-inference-basics"
 ## What GPU Inference Means
 <!-- section-summary: GPU inference runs the numerical part of prediction on a processor built to perform many similar calculations in parallel. -->
 
-At a high level, **GPU inference** means using a graphics processing unit to run the numerical operations inside a trained model. The name comes from graphics, yet the same hardware is well suited to the matrix multiplications, convolutions, and attention operations used by many neural networks.
+A large neural model may miss its latency target on a CPU because its prediction requires many parallel numerical operations. **GPU inference** uses a graphics processing unit to run those operations. The name comes from graphics, yet the same hardware is well suited to the matrix multiplications, convolutions, and attention operations used by many neural networks.
 
 A central processing unit, or **CPU**, has a smaller number of powerful cores. It handles operating-system work, application logic, branching code, parsing, and many small tasks very well. A GPU has many more execution units and very fast local memory. It can apply the same mathematical operation across a large tensor at the same time. A **tensor** is simply a multidimensional array: a batch of images, a sequence of token vectors, or a block of model weights.
 
@@ -95,6 +95,10 @@ flowchart TD
 Suppose p99 latency rises from 80 to 220 milliseconds after clients start uploading larger images. GPU execution remains at 30 milliseconds. Tracing shows image decoding at 100 milliseconds and input transfer at 45 milliseconds. More GPU instances would add memory pressure without repairing either bottleneck. An input-size limit, more efficient decoder, pinned transfer buffers, or preprocessing workers may address the actual delay.
 
 Synchronization can also hide time. CPU code sometimes waits for a GPU operation to finish before launching the next stage. Repeated small operations create repeated launch overhead and waiting. Profilers from the framework and accelerator vendor help separate CPU activity, transfers, kernels, and idle gaps. The first investigation should establish where time is spent before changing batch size or hardware.
+
+![Seven stages in an end-to-end GPU inference request, separating CPU preparation, host-device transfers, GPU kernels, and response policy, with a small-model CPU-versus-GPU latency comparison.](/content-assets/articles/article-mlops-model-serving-gpu-inference-basics/gpu-prediction-path.png)
+
+*The user waits for the complete path, so a faster kernel changes the product only when queueing, CPU preparation, transfers, and response logic leave enough latency to recover.*
 
 ## Keep The Driver, CUDA, Runtime, Framework, And Model Compatible
 <!-- section-summary: Successful GPU execution depends on an aligned chain from physical hardware through drivers, container access, runtime libraries, serving code, and the model artifact. -->
@@ -272,6 +276,10 @@ The numbers are experiment inputs. Use Triton Performance Analyzer to generate c
 An online image endpoint might gain 35% throughput from an 800-microsecond delay while remaining below its p99 target. A low-traffic endpoint might gain no useful batch at all and simply add 800 microseconds. A background embedding job can accept a much longer wait and prioritize device saturation.
 
 LLM serving adds sequence length and KV cache to the operating point. Continuous batching allows the scheduler to fill a freed slot as an individual sequence finishes, even while longer generations continue. vLLM is a common runtime for this pattern. Capacity tests should reproduce prompt lengths, output lengths, cancellation, and concurrent sequences seen in production.
+
+![GPU device-memory budget showing weights, active requests, runtime workspace, sequence cache, model copies, operating headroom, and how batch size, concurrency, and model instances affect distinct components.](/content-assets/articles/article-mlops-model-serving-gpu-inference-basics/gpu-memory-tuning.png)
+
+*Batch size, concurrency, and instance count consume different parts of the same device-memory budget; test their combination against latency, quality, memory, and error limits on representative shapes.*
 
 ## Schedule GPU Workloads On Kubernetes
 <!-- section-summary: Kubernetes allocates GPU resources advertised by device plugins, while node pools, placement rules, probes, and warm capacity shape the service around that allocation. -->
@@ -478,6 +486,10 @@ During an incident, shift traffic to the known-safe route, stop rollout expansio
 GPU inference is the production path that supplies suitable model work to an accelerator and turns its output into an accepted result. The device can accelerate parallel mathematics, while CPU preparation, transfers, memory, runtime compatibility, scheduling, and queueing still determine the user experience.
 
 Choose a GPU from measured workload fit. Account for weights, activations, workspace, cache, and model copies. Treat precision, batching, instance count, hardware sharing, and autoscaling as evidence-driven operating choices. Connect service telemetry to DCGM and node evidence. Release the artifact, software stack, hardware eligibility, and recovery path together.
+
+![Complete GPU serving release from Kubernetes allocation through hardware, driver, container access, backend, artifact, tuning, readiness, seven gates, fleet-representative canary, expansion, or hardware-specific safe-route recovery.](/content-assets/articles/article-mlops-model-serving-gpu-inference-basics/gpu-serving-stack-summary.png)
+
+*A GPU candidate is releasable only when its artifact, software stack, hardware profiles, scheduling policy, operating point, telemetry, and compatible recovery route have passed as one system.*
 
 ## References
 

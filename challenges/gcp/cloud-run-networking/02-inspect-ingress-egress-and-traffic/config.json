@@ -1,0 +1,41 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "cloudRunServices": [
+        {
+          "name": "orders-api",
+          "projectId": "devpolaris-prod",
+          "region": "europe-west2",
+          "url": "https://orders-api-ew2.a.run.app",
+          "ingress": "internal-and-cloud-load-balancing",
+          "serviceAccount": "orders-runtime@devpolaris-prod.iam.gserviceaccount.com",
+          "latestReadyRevision": "orders-api-00042-p9x",
+          "vpcConnector": "orders-egress",
+          "vpcEgress": "private-ranges-only",
+          "traffic": [
+            { "revision": "orders-api-00042-p9x", "percent": 90 },
+            { "revision": "orders-api-00041-m7q", "percent": 10, "tag": "previous" }
+          ]
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-api", "internal-and-cloud-load-balancing", "orders-runtime@devpolaris-prod.iam.gserviceaccount.com", "orders-egress", "private-ranges-only", "orders-api-00042-p9x", "90", "orders-api-00041-m7q", "10"],
+    "requireCommandPatterns": [
+      "^gcloud\\s+run\\s+services\\s+describe\\b",
+      "^gcloud\\s+run\\s+revisions\\s+list\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

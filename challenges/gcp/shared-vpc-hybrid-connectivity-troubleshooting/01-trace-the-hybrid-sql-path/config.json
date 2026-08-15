@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-network-host",
+      "region": "europe-west2",
+      "connectivityTests": [
+        {
+          "name": "orders-to-sql",
+          "projectId": "devpolaris-network-host",
+          "source": "10.42.18.24:5432",
+          "destination": "172.20.8.15:5432",
+          "result": "UNREACHABLE",
+          "details": "Cloud VPN tunnel is established, but firewall rule deny-hybrid-sql at priority 800 denies tcp:5432"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-to-sql", "10.42.18.24:5432", "172.20.8.15:5432", "UNREACHABLE", "deny-hybrid-sql", "priority 800", "tcp:5432"],
+    "requireCommandPatterns": [
+      "^gcloud\\s+network-management\\s+connectivity-tests\\s+describe\\b",
+      "^gcloud\\s+network-management\\s+connectivity-tests\\s+run\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

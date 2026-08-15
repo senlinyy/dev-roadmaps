@@ -1,6 +1,7 @@
 ---
-title: "Idempotency"
-order: 3
+title: "Review a Second Run"
+order: 2
+revision: 2
 ---
 
-Use repeat-run evidence and task behavior to decide whether an Ansible playbook reports state truthfully.
+Interpret changed and ok results to find tasks that do not converge.

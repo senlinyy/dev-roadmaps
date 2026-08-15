@@ -1,0 +1,101 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "storage.tf",
+  "files": [
+    {
+      "filename": "storage.tf",
+      "initialValue": "# Build the orders archive resources.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "storage.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "orders_archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "valueEquals": "dp-orders-archive-prod"
+          },
+          {
+            "path": [
+              "tags",
+              "Service"
+            ],
+            "valueEquals": "orders"
+          },
+          {
+            "path": [
+              "tags",
+              "Environment"
+            ],
+            "valueEquals": "prod"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "storage.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_versioning",
+                "orders_archive"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "aws_s3_bucket.orders_archive.id"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "storage.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_versioning",
+                "orders_archive"
+              ]
+            },
+            {
+              "type": "versioning_configuration"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "status"
+            ],
+            "valueEquals": "Enabled"
+          }
+        ]
+      }
+    ]
+  }
+}

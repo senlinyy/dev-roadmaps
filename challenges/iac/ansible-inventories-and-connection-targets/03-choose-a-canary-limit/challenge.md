@@ -1,6 +1,7 @@
 ---
-title: "Inventories"
+title: "Choose a Canary Limit"
 order: 3
+revision: 2
 ---
 
-Use inventory, connection, and target evidence to decide whether an Ansible run has a safe host map.
+Review inventory targeting decisions before using a production limit.

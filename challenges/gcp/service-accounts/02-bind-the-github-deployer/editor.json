@@ -1,0 +1,14 @@
+{
+  "language": "json",
+  "filename": "service-account-policy.json",
+  "completionProfile": "gcp-json",
+  "initialValue": "{\n  \"version\": 1,\n  \"bindings\": []\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["version"], "equals": 3 },
+      { "path": ["bindings"], "minItems": 1, "maxItems": 1 },
+      { "path": ["bindings"], "containsObject": { "role": "roles/iam.workloadIdentityUser", "members": ["principalSet://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github/attribute.repository/devpolaris/orders-api"] } }
+    ]
+  }
+}

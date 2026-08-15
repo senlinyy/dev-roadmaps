@@ -1,0 +1,47 @@
+{
+  "cwd": "/workspace/ansible",
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/ansible": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "ansible"
+  ],
+  "ansible": {
+    "hosts": [
+      {
+        "name": "web-01",
+        "reachable": true
+      }
+    ],
+    "groups": [
+      {
+        "name": "production",
+        "hosts": [
+          "web-01"
+        ]
+      }
+    ],
+    "playbooks": [],
+    "vaultFiles": {
+      "group_vars/production/vault.yml": "orders_api_token: production-token-reference\norders_db_password: production-password-reference\n"
+    }
+  },
+  "grader": {
+    "strategy": "ansible-state",
+    "requireCommands": [
+      "ansible-vault"
+    ],
+    "expectedAnsible": {
+      "includesActions": [
+        "vault-view",
+        "vault-rekey"
+      ],
+      "lastVaultFile": "group_vars/production/vault.yml"
+    }
+  }
+}

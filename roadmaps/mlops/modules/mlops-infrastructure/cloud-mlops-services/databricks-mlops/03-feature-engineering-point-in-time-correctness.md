@@ -24,7 +24,7 @@ id: "article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-
 ## What Feature Engineering And Point-In-Time Correctness Mean
 <!-- section-summary: Feature engineering decides what a model should know, while point-in-time correctness limits each historical example to information that was genuinely available at its prediction time. -->
 
-At a high level, **feature engineering is the work of turning raw business activity into meaningful inputs for a model. Point-in-time correctness makes sure those inputs tell an honest historical story.**
+A model cannot learn directly from a stream of transactions, balance updates, and support events. **Feature engineering turns that raw activity into meaningful model inputs, while point-in-time correctness keeps each historical input limited to information that was available at the time.** Together, they give the model a useful and honest view of the past.
 
 Suppose a model estimates whether an account will miss a payment during the next thirty days. The source systems contain transactions, balances, repayment events, account changes, and support conversations. The model cannot use those records directly as one tidy input. It needs values such as:
 
@@ -45,10 +45,6 @@ The two ideas belong together:
 
 - feature engineering decides **what the model should know**;
 - point-in-time correctness decides **which historical version of that knowledge the model may use**.
-
-![A feature system converts governed source events into historical feature values, point-in-time training sets, and current values for inference](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/feature-system-two-paths.png)
-
-*The historical path reconstructs what was known before past decisions. The current path provides the latest published value for new predictions. Both paths share the feature meaning and entity keys, while each path enforces its own time policy.*
 
 Databricks Feature Store helps connect these paths. Historical feature values live in governed Delta tables in Unity Catalog. `FeatureEngineeringClient` joins those values to training observations and can preserve the lookup rules with the trained model. Batch inference can replay the recorded point-in-time rule. Online inference uses the same feature identities and entity keys to retrieve the latest published values, while freshness and fallback controls protect the live request.
 
@@ -84,7 +80,7 @@ Consider a column named `transactions_30d`. The name suggests a count, although 
 
 Two pipelines can answer those questions differently and still produce a valid integer. The model would receive two different meanings under the same name.
 
-A production feature definition records the entity, formula, eligible events, window boundary, timestamp source, null and default behaviour, update schedule, owner, and sensitive-data classification. In essence, the feature is a maintained data product whose output happens to feed models.
+A production feature definition records the entity, formula, eligible events, window boundary, timestamp source, null and default behaviour, update schedule, owner, and sensitive-data classification. The feature is a maintained data product whose output feeds models.
 
 ### Record Each Historical Prediction Opportunity
 
@@ -135,6 +131,16 @@ In Databricks, a Unity Catalog Delta table can hold the feature history, a `Feat
 Time-based leakage often starts with a reasonable-looking timestamp. An event happened before the prediction, so the training pipeline treats it as known. That assumption fails whenever the event reached the production system later.
 
 To reconstruct a past prediction honestly, the team needs to distinguish several clocks.
+
+```mermaid
+flowchart TD
+    Event["Event time<br/>(when the business action happened)"] --> Arrival["Arrival time<br/>(when production could first use it)"]
+    Arrival --> Feature["Feature time<br/>(historical state represented by the feature row)"]
+    Feature --> Prediction{"Prediction cutoff<br/>(was this value available yet?)"}
+    Prediction -->|Yes| Eligible["Eligible feature value<br/>(safe for this historical row)"]
+    Prediction -->|No| Future["Future information<br/>(exclude from training input)"]
+    Prediction --> Label["Label window<br/>(outcome observed after the prediction)"]
+```
 
 ### Separate When An Event Happened From When It Arrived
 
@@ -214,9 +220,9 @@ For the 10:00 observation, the join discards 11:30 and 13:00 because both belong
 
 For the 12:00 observation, the join can use 09:00 or 11:30. It selects 11:30 because that is the most recent eligible state.
 
-![A point-in-time join gives each historical prediction the latest feature value that existed before its prediction time](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/point-in-time-join-timeline.png)
+![Two historical observations select the latest feature snapshot that existed before each prediction time](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/point-in-time-selection.png)
 
-*Each observation searches backward through the feature history of the same entity. A later update never crosses an earlier prediction boundary.*
+*The 10:00 observation selects the 09:00 snapshot, while the 12:00 observation selects 11:30. The 13:00 update remains future information for both rows.*
 
 A latest-value join would give both observations the 13:00 row. The code would run, the columns would have the expected types, and the model might report stronger validation metrics. The training set would still be false because both rows received future behaviour.
 
@@ -439,9 +445,9 @@ Training and live prediction ask different questions of the same feature. Traini
 
 These access patterns share a feature meaning, although their storage and operating requirements differ. The historical path optimizes for correct reconstruction. The online path optimizes for fast current lookup. The on-demand path optimizes for small calculations over request-specific data.
 
-![Offline feature history supports training, the online store supplies recent values, and on-demand functions combine stored data with the current request](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/offline-online-on-demand-features.png)
+![A shared feature contract supports offline history, an online store, and on-demand request-time calculations](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/feature-retrieval-paths.png)
 
-*The three paths serve different access patterns. A shared definition connects them, while each path keeps its own freshness, latency, and failure controls.*
+*Offline history supports training and replay. The online store serves the latest published value, while on-demand functions combine current request data at prediction time.*
 
 ### Use Offline Features To Preserve History
 
@@ -605,9 +611,9 @@ Observation rows identify past prediction opportunities and mature labels. `Feat
 
 Batch inference can reuse the offline lookup. Low-latency services can read current values published to Databricks Online Feature Store. On-demand functions can combine governed data with request-time inputs. Each serving path measures freshness, coverage, latency, defaults, parity, and fallback use.
 
-![The complete feature path defines meaning, stores historical values, builds point-in-time training data, publishes current values, and verifies both paths](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/complete-feature-correctness-path.png)
+![Eight stages carry one governed feature definition from design through historical training, current inference, monitoring, and recovery](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-feature-engineering-point-in-time/trustworthy-feature-lifecycle.png)
 
-*Feature correctness travels through meaning, keys, clocks, historical selection, model metadata, publication, and operational evidence.*
+*A trustworthy feature keeps the same meaning while its keys, clocks, history, lookup rules, published values, monitoring, and recovery controls move through the lifecycle.*
 
 A trustworthy feature has four properties:
 

@@ -1,0 +1,65 @@
+{
+  "language": "ini",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "inventory.ini",
+  "files": [
+    {
+      "filename": "inventory.ini",
+      "initialValue": "[orders_web]\nweb-01\nweb-02\n\n[orders_db]\ndb-01\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "inventory.ini",
+        "kind": "inventory",
+        "paths": [
+          {
+            "path": [
+              "orders_web",
+              "hosts",
+              "web-01",
+              "ansible_host"
+            ],
+            "equals": "192.0.2.10"
+          },
+          {
+            "path": [
+              "orders_web",
+              "hosts",
+              "web-02",
+              "ansible_host"
+            ],
+            "equals": "192.0.2.11"
+          },
+          {
+            "path": [
+              "orders_db",
+              "hosts",
+              "db-01",
+              "ansible_host"
+            ],
+            "equals": "192.0.2.20"
+          },
+          {
+            "path": [
+              "production",
+              "children",
+              "orders_web"
+            ],
+            "exists": true
+          },
+          {
+            "path": [
+              "production",
+              "children",
+              "orders_db"
+            ],
+            "exists": true
+          }
+        ]
+      }
+    ]
+  }
+}

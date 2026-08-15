@@ -285,6 +285,10 @@
       "10.30.40.7"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+network\\s+private-endpoint\\s+show\\b",
+      "^az\\s+network\\s+private-dns\\s+record-set\\s+a\\s+show\\b"
+    ],
     "requireCommands": [
       "az"
     ],

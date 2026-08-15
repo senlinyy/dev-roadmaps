@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "who-called-api",
+      "type": "single",
+      "scenario": "A security group suddenly allows SSH from the internet. Which service answers who called AuthorizeSecurityGroupIngress, when, and from which identity?",
+      "options": [
+        {
+          "id": "a",
+          "text": "AWS CloudTrail."
+        },
+        {
+          "id": "b",
+          "text": "AWS Config only."
+        },
+        {
+          "id": "c",
+          "text": "CloudWatch RUM."
+        },
+        {
+          "id": "d",
+          "text": "Amazon EFS."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "CloudTrail records AWS API activity and caller context. Learn more in the [CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)."
+    },
+    {
+      "id": "resource-before-after",
+      "type": "single",
+      "scenario": "The incident team needs the security group configuration before and after the change. Which service owns that history?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Amazon SNS."
+        },
+        {
+          "id": "a",
+          "text": "AWS Config."
+        },
+        {
+          "id": "c",
+          "text": "AWS Step Functions."
+        },
+        {
+          "id": "d",
+          "text": "Route 53 Resolver."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "AWS Config records resource configuration state and relationships over time for supported resource types. Learn more in [What is AWS Config](https://docs.aws.amazon.com/config/latest/developerguide/WhatIsConfig.html)."
+    },
+    {
+      "id": "data-events",
+      "type": "single",
+      "scenario": "A management-event trail exists, but investigators need object-level GetObject and DeleteObject evidence for a sensitive bucket. What must be enabled?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A larger NAT gateway."
+        },
+        {
+          "id": "c",
+          "text": "VPC DNS hostnames."
+        },
+        {
+          "id": "a",
+          "text": "S3 data events for the relevant bucket or selectors."
+        },
+        {
+          "id": "d",
+          "text": "An IAM group."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "S3 object API activity is a CloudTrail data-event category and requires explicit selection. Learn more in the [CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)."
+    },
+    {
+      "id": "durable-trail",
+      "type": "single",
+      "scenario": "A team relies only on the default 90-day Event history view. What is missing for durable organization-wide evidence and analysis?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A public S3 bucket."
+        },
+        {
+          "id": "c",
+          "text": "An EC2 key pair."
+        },
+        {
+          "id": "d",
+          "text": "A VPC peering connection."
+        },
+        {
+          "id": "a",
+          "text": "A trail or CloudTrail Lake event data store with appropriate selectors, encryption, retention, and central ownership."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Durable and organization-wide collection requires an intentionally configured trail or event data store. Learn more in the [CloudTrail User Guide](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)."
+    },
+    {
+      "id": "change-investigation",
+      "type": "multiple",
+      "scenario": "An exposure alarm fires shortly after an unknown infrastructure change. Which sequence supports a strong What changed investigation?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use Config history to identify the changed resource state and time window."
+        },
+        {
+          "id": "d",
+          "text": "Treat a missing Config snapshot as proof that no API call occurred."
+        },
+        {
+          "id": "b",
+          "text": "Use CloudTrail to identify the API call and principal."
+        },
+        {
+          "id": "e",
+          "text": "Make the affected resource public so configuration changes are easier to see."
+        },
+        {
+          "id": "c",
+          "text": "Correlate the change with deployment and alarm evidence."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Config and CloudTrail answer complementary questions, and operational evidence ties the change to impact. Missing evidence in one source is not proof of absence. Learn more in [AWS Config](https://docs.aws.amazon.com/config/latest/developerguide/WhatIsConfig.html) and [CloudTrail](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html)."
+    }
+  ]
+}

@@ -27,9 +27,9 @@ id: "article-mlops-mlops-infrastructure-databricks-mlops-platform-map"
 ## What Databricks MLOps Actually Means
 <!-- section-summary: Databricks MLOps carries code, data, and models from experimentation into a controlled production system and then learns from production results. -->
 
-At a high level, **Databricks MLOps is the way a team takes a machine-learning idea and turns it into a repeatable, controlled production system.** The model is one result of that work. The lifecycle also preserves how the team produced and evaluated that model. After release, it records where the model runs, what it predicts, and what happens in the real world.
+A promising model in a notebook still needs a dependable path into real use. **Databricks MLOps is the controlled lifecycle around that result.** It makes data preparation and training repeatable, preserves the evaluation and release decision, and connects production predictions to later outcomes.
 
-Imagine that a data scientist trains a model in a notebook and gets an accuracy score of 94 percent. That result sounds promising, although it leaves many practical questions unanswered. Which rows trained the model? Which version of the feature logic created those rows? Would the code still work as an automated job? Did the model perform well for the important customer groups? Which version should an application call? What will the team do after production behaviour changes?
+An accuracy score of 94 percent makes the unanswered work visible. Which rows trained the model? Which version of the feature logic created those rows? Would the code still work as an automated job? Did the model perform well for the important customer groups? Which version should an application call? What will the team do after production behaviour changes?
 
 Databricks gives each part of that journey a home:
 
@@ -114,9 +114,9 @@ Second, follow the **environments** from development to staging to production. E
 
 Third, look for the **durable records** that remain after a job finishes. Delta tables keep data and predictions. MLflow keeps runs, models, metrics, and artifacts. Unity Catalog keeps governed names, versions, permissions, and lineage. Git keeps the source history. These records allow another person to understand an old release without depending on one notebook session.
 
-![The Databricks MLOps platform map shows how data, governance, training, orchestration, delivery, serving, and operations connect](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-mlops-platform-map.png)
+![The Databricks MLOps platform map connects governed data, development, tracked learning, reviewed release, serving, orchestration, and production monitoring](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-mlops-platform-map.png)
 
-*The top row follows the work from data to operation. Unity Catalog applies governance across the path. Cloud identity, networking, object storage, and encryption support the Databricks platform underneath it.*
+*Unity Catalog spans the lifecycle through governed names, access, lineage, and audit. Lakeflow Jobs coordinates the repeatable work that moves assets between the data, development, learning, release, and operating stages.*
 
 The three environments have different goals.
 
@@ -165,9 +165,9 @@ Lineage shows observed technical relationships. Business meaning still needs a h
 
 These histories connect into one evidence chain:
 
-![A governed model evidence chain connects one Delta table version to an MLflow model, a Unity Catalog version, a serving endpoint, and a production prediction](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-governed-model-evidence.png)
+![A Databricks model evidence chain connects an exact Delta table version, the MLflow run, a model in Unity Catalog, the serving endpoint, and the production prediction record](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-evidence-chain.png)
 
-*A production prediction leads back through its endpoint and governed model version to MLflow evidence and the exact training-table state.*
+*The creation path moves from training data to a prediction. Stable identities let an investigator follow that chain in reverse to find the data, approval evidence, and release that produced the result.*
 
 Consider a poor prediction with ID `pred_82a`. The decision record points to endpoint `churn-risk-prod` and model version 18. Unity Catalog identifies the governed candidate. MLflow identifies the run, metrics, dataset, code revision, signature, and Logged Model. Delta identifies the training table at version 128. The team now has a concrete path to investigate.
 
@@ -228,6 +228,19 @@ Development ends with repeatable project code and explicit evaluation rules. The
 <!-- section-summary: Staging runs reviewed code in a controlled environment to check software behaviour, pipeline integration, and model acceptance logic. -->
 
 Staging answers a practical question: can the complete system run from start to finish under conditions that resemble production? It uses controlled data, production-like permissions, and temporary resources to expose broken connections safely. A notebook result gives evidence about an idea. Staging gives evidence about the automated implementation and the records that implementation will create.
+
+The checks build on one another. Unit tests protect individual feature and policy rules. Integration tests follow one small dataset through training and registration, then load the model behind a temporary endpoint. They also verify that the prediction reaches monitoring with the correct model identity. Model validation asks whether the resulting candidate meets the use case's quality and risk thresholds. Promotion requires all three because a good metric cannot repair a broken artifact path, and correct software cannot turn a weak model into an acceptable release.
+
+```mermaid
+flowchart TD
+    PR["Pull request<br/>(reviewed code and configuration)"] --> Unit["Unit tests<br/>(feature and policy rules)"]
+    Unit --> Integration["Integration test<br/>(data, training, registry, and temporary endpoint)"]
+    Integration --> Validate["Model validation<br/>(quality, safety, latency, and governance)"]
+    Validate --> Evidence{"Evidence Check<br/>(is the complete path intact?)"}
+    Evidence -->|No| Repair["Repair the owning component<br/>(keep production unchanged)"]
+    Evidence -->|Yes| Promote["Production candidate<br/>(same reviewed identities and contracts)"]
+    Repair --> Unit
+```
 
 The process normally starts with a pull request. CI runs unit tests on small pieces of logic. A feature test can confirm that a payment exactly ten minutes old falls on the correct side of a window. A schema test can confirm that missing device IDs receive the agreed treatment. A time-based split test can prove that future events stay out of historical features.
 
@@ -371,6 +384,19 @@ Rollback follows the type of change. A broken job definition can be repaired by 
 
 After approval, the model needs to deliver a result where the product can use it. The correct delivery path depends on how soon the answer is needed, how much work arrives, and how the consumer reads the result.
 
+Batch inference handles a bounded collection and publishes one complete result for later consumption. Streaming inference handles a continuing event flow and preserves progress through checkpoints. Online serving answers one request through a stable endpoint. Each path can run the same approved model, but it has different completion evidence, retry behaviour, capacity needs, and fallback. The product deadline and workload shape choose the path before the team selects compute.
+
+```mermaid
+flowchart TD
+    Need["Prediction workload<br/>(deadline, volume, and consumer)"] --> Deadline{"Delivery Deadline<br/>(how soon is the result needed?)"}
+    Deadline -->|Scheduled set| Batch["Batch inference<br/>(complete governed result table)"]
+    Deadline -->|Continuing events| Stream["Streaming inference<br/>(checkpointed and idempotent event flow)"]
+    Deadline -->|Immediate request| Online["Online serving<br/>(stable endpoint and served model version)"]
+    Batch --> Evidence["Decision evidence<br/>(input, model, completeness, and outcome)"]
+    Stream --> Evidence
+    Online --> Evidence
+```
+
 An overnight retention process can wait for one large table of scores. A payment authorization needs one answer in a fraction of a second. A fraud-event stream sits between those cases because it processes continuing events without waiting for a daily batch. Databricks supports all three patterns, and each one has a different way to measure completeness, recover from failure, and control cost.
 
 ### Use Batch Inference For Large Scheduled Work
@@ -438,9 +464,9 @@ If evidence integrity remains healthy and version 18 performs worse for represen
 
 Data profiling can calculate statistics over time for features and predictions. Alerts can start an investigation after distributions or quality metrics cross a useful threshold. Automatic retraining deserves caution because an upstream data error can train a new model on corrupted rows. Databricks recommends starting with scheduled retraining and adding triggered workflows after the team understands the evidence and controls.
 
-![The Databricks MLOps operating loop summarizes the team-owned decisions and platform-owned records from data to production learning](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-mlops-operating-loop.png)
+![The Databricks MLOps operating loop connects governed data, tracked training, candidate evaluation, registration, prediction delivery, and outcome monitoring](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlops-platform-map/databricks-operating-loop.png)
 
-*Production evidence returns to the team and supports the next decision. The response may promote a candidate, pause a release, repair data, improve the model, or keep the current version.*
+*Platform records preserve versions, jobs, lineage, and metrics. The team uses that evidence to decide what the data means, whether the candidate may ship, and how production should recover.*
 
 ## Decide Which Responsibilities Databricks Should Own
 <!-- section-summary: Databricks fits best as the governed data and ML lifecycle platform while cloud foundations, CI, product behaviour, and enterprise controls keep clear owners. -->
@@ -450,6 +476,16 @@ Databricks has a strong fit for teams whose data engineering and ML work already
 A mixed architecture is common. GitHub Actions, GitLab CI, or Jenkins may run CI. Terraform or OpenTofu may provision the workspaces and cloud foundation. A production application may run on Kubernetes, a serverless platform, or a managed application service. Databricks can still own the ML lifecycle inside that wider system.
 
 The boundary should follow ownership and failure recovery. Each team needs enough control to repair the layer it operates, and the release path needs a named decision owner.
+
+```mermaid
+flowchart TD
+    Cloud["Cloud platform team<br/>(accounts, network, storage, and encryption)"] --> DataML["Data and ML platform team<br/>(Unity Catalog, compute policy, MLflow, and job patterns)"]
+    DataML --> Model["Model team<br/>(features, training, evaluation, and thresholds)"]
+    Model --> App["Application team<br/>(request contract, decision policy, and fallback)"]
+    App --> Release["Release owner<br/>(accept model and product risk)"]
+    Release --> Automation["Release automation<br/>(apply the approved decision)"]
+    Automation --> Evidence["Shared evidence<br/>(version, deployment, prediction, and outcome)"]
+```
 
 The **cloud platform team** usually owns the account and network foundation. It also manages shared storage, encryption, private connectivity, and base workspace provisioning because these controls protect many projects.
 

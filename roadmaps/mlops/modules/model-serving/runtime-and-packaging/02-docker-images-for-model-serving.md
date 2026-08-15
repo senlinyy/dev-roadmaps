@@ -1,7 +1,7 @@
 ---
 title: "Docker Images for Model Serving"
 description: "Package a model-serving process as a reproducible, secure OCI image, then test and deploy the complete release by immutable identity."
-overview: "A production image gives every replica the same files and startup command. This article builds the idea from image and container fundamentals through model placement, process lifecycle, health checks, runtime security, supply-chain evidence, smoke testing, deployment, and rollback."
+overview: "A production image gives every replica the same files and startup command, with explicit model placement, process lifecycle, health checks, runtime security, supply-chain evidence, smoke testing, deployment, and rollback."
 tags: ["MLOps", "production", "containers"]
 order: 2
 id: "article-mlops-model-serving-docker-images-for-model-serving"
@@ -27,11 +27,7 @@ id: "article-mlops-model-serving-docker-images-for-model-serving"
 ## What A Serving Image Solves
 <!-- section-summary: An image fixes the files and startup command for a model service, while the container runtime supplies the environment around each running process. -->
 
-At a high level, a **container image** is a packaged filesystem with instructions for starting
-an application. It can contain the Python runtime, native libraries, installed packages, serving
-code, and sometimes the model itself. An **OCI image** follows the standard format created by
-the Open Container Initiative, which allows registries and container platforms to exchange the
-same package.
+A model service can work on a developer's laptop and fail on a server because the Python runtime, native libraries, or startup command differ. A **container image** packages that filesystem and the instructions for starting the application. It can contain the runtime, installed packages, serving code, and sometimes the model itself. An **OCI image** follows the standard format created by the Open Container Initiative, allowing registries and container platforms to exchange the same package.
 
 A **container** is a running instance of that image. The container runtime adds the parts that
 vary between deployments: environment variables, workload identity, CPU and memory limits,
@@ -80,6 +76,10 @@ the release never begins.
 A **multi-stage build** supports this separation. The builder stage includes packaging tools and
 creates the application environment. The runtime stage copies only the finished environment and
 the files required for inference.
+
+![Build inputs become an immutable OCI image during CI, then a container verifies and warms the model before it becomes ready for traffic.](/content-assets/articles/article-mlops-model-serving-docker-images-for-model-serving/build-to-ready-service.png)
+
+*CI fixes the runtime before deployment; startup uses that tested image to load the approved model and prove readiness without installing new packages.*
 
 ```mermaid
 flowchart TD
@@ -171,6 +171,10 @@ The external design requires an immutable model reference. Suppose a Deployment 
 `MODEL_URI=s3://ml-production/risk-model/current/model.onnx`. One replica loaded the object
 yesterday. A replacement replica starts today after `current` has been overwritten. Both
 replicas run the same image and can return different predictions.
+
+![Model-in-image and external-model delivery compared by release identity, startup behavior, and required controls.](/content-assets/articles/article-mlops-model-serving-docker-images-for-model-serving/model-delivery-strategies.png)
+
+*Baking the model into the image creates one artifact identity, while external delivery keeps promotion independent and therefore requires a verified model digest in the release record.*
 
 The repair has three parts. Store the model under a versioned object path. Record its digest in
 the release. Verify the downloaded bytes before `/readyz` returns success. A simple release
@@ -642,6 +646,10 @@ image through its real interface.
 Production deploys the accepted digest and binds it to the exact model, contracts,
 configuration, and evaluation evidence. That complete identity gives operators something precise
 to inspect, promote, and restore.
+
+![Five-stage production model image path from locked inputs through build evidence, constrained runtime, canary release, and complete rollback.](/content-assets/articles/article-mlops-model-serving-docker-images-for-model-serving/production-image-release-path.png)
+
+*A reliable serving image is the result of one connected release path: lock the inputs, build once, prove the artifact, run it under explicit controls, and promote or restore the same immutable identity.*
 
 ## References
 

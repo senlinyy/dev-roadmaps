@@ -26,7 +26,7 @@ id: "article-mlops-llmops-agent-skills"
 ## What An Agent Skill Does
 <!-- section-summary: A skill packages the operating knowledge that turns a broad agent capability into a repeatable way of performing one class of work. -->
 
-At a high level, an **agent skill** is a reusable package that teaches an agent how to perform a recognizable kind of work. The agent already knows how to reason, read files, and call tools. The skill supplies the procedure, local rules, supporting material, and checks that make those abilities useful for a particular job.
+An agent may know how to read files and call tools without knowing the team's required procedure for a security review or roadmap rewrite. An **agent skill** packages that repeatable procedure, its local rules, supporting material, and checks for a recognizable kind of work.
 
 Consider a request to review a Kubernetes deployment change. A general coding agent can read YAML and explain what a Deployment is. A production review also needs to answer more specific questions:
 
@@ -56,6 +56,10 @@ flowchart TD
 Each stage owns a different failure. A vague description can prevent discovery. Weak instructions can omit a safety check. A stale reference can teach an obsolete rule. A script can fail in the current runtime. Missing permission can block the required tool. A validator can reject an incomplete result.
 
 This makes a skill more substantial than a prompt fragment. It is a maintained capability artifact with an owner, a contract, a version, and evidence that it still works.
+
+![A Kubernetes deployment-review request discovers a review-only skill, follows its core SKILL.md procedure, loads focused resources and a validator on demand, and returns a verified report without production apply permission.](/content-assets/articles/article-mlops-llmops-agent-skills/deployment-review-skill.png)
+
+*The skill supplies the operating procedure and focused resources, while the runtime controls which tools and effects are permitted.*
 
 ## Where Skills Fit In Agent Architecture
 <!-- section-summary: Prompts, skills, tools, plugins, agents, and workflows solve different problems and connect through explicit boundaries. -->
@@ -346,6 +350,10 @@ Local file operations need similar care. A report generator can write to a run-s
 
 Skills that only read and report may need very little durable state. A skill that sends a message or updates a record needs to remember the operation identity and outcome. Deployments and approval pauses also need an orchestrator or application state store. The skill defines the procedure and operation identities; the workflow runtime owns transitions, retries, and checkpoints.
 
+![A change-ticket proposal passes through the runtime permission gate before the authoritative service, while timeout reconciliation distinguishes committed, absent, and pending outcomes before any retry.](/content-assets/articles/article-mlops-llmops-agent-skills/skill-permission-retry-boundary.png)
+
+*Permission precedes the external effect, and an uncertain response is reconciled by the same operation key before the runtime retries or updates committed workflow state.*
+
 ## Version Skills For Reproducible Behaviour
 <!-- section-summary: Immutable skill versions connect every run to a known package, dependency set, output contract, and rollback path. -->
 
@@ -359,10 +367,11 @@ stateDiagram-v2
     Draft --> Reviewed: package and security review
     Reviewed --> Candidate: validation passes
     Candidate --> Pilot: selection and execution evals pass
-    Pilot --> Default: rollout gates pass
-    Default --> Superseded: newer default promoted
+    state "Default Version" as DefaultVersion
+    Pilot --> DefaultVersion: rollout gates pass
+    DefaultVersion --> Superseded: newer default promoted
     Pilot --> Rejected: regression found
-    Default --> Revoked: security or safety issue
+    DefaultVersion --> Revoked: security or safety issue
     Superseded --> Retired: retention period ends
     Revoked --> Retired: affected runs reviewed
 ```
@@ -386,7 +395,7 @@ Removing a vulnerable package needs more than deleting the file. Disable discove
 ## Evaluate Skill Selection And Execution
 <!-- section-summary: Skill quality depends on choosing the right capability, performing its procedure correctly, respecting policy, and delivering a useful result. -->
 
-At a high level, skill evaluation checks whether the right capability was chosen and whether it performed the job correctly. Those are separate problems. An excellent procedure provides no value if the runtime selects it for the wrong request, and perfect routing cannot rescue a procedure that produces incomplete work. Safety and recovery form a third layer because a useful result can still be unacceptable if it bypassed approval or repeated a side effect.
+A skill can fail because the runtime selected the wrong capability or because the selected capability performed its job poorly. Skill evaluation tests those problems separately. Safety and recovery form a third layer because an otherwise useful result can still be unacceptable if it bypassed approval or repeated a side effect.
 
 **Selection evaluation** asks whether the right skill activated. Begin with direct requests, paraphrases, and explicit invocations that should select it. Add near misses, overlapping capabilities, and tasks that should use no skill. Useful measures include missed-trigger rate, false-trigger rate, and conflict rate.
 
@@ -487,6 +496,10 @@ The smallest coherent skill usually performs one expert job. Splitting every che
 
 A mature skill gives an agent a maintained way to perform work. Discovery brings it into the right task. Progressive loading controls context. The package separates procedure from deeper resources and deterministic helpers. Runtime permissions protect tools and data. State and idempotency protect retries. Versions, evaluations, traces, ownership, and rollback keep the capability reliable after release.
 
+![Production agent-skill lifecycle spanning reusable-job design, a central SKILL.md package with on-demand resources, five release-evidence gates, immutable promotion, monitoring, rollback, revocation, and maintenance.](/content-assets/articles/article-mlops-llmops-agent-skills/production-skill-lifecycle-summary.png)
+
+*A production skill moves through design, packaging, release evidence, and controlled operation with explicit ownership, versioning, and recovery.*
+
 ## References
 
 - [OpenAI: Build skills](https://learn.chatgpt.com/docs/build-skills)
@@ -494,6 +507,6 @@ A mature skill gives an agent a maintained way to perform work. Discovery brings
 - [OpenAI: Skills in plugins](https://developers.openai.com/plugins/concepts/skills)
 - [OpenAI: Plugin architecture](https://developers.openai.com/plugins/concepts/plugins)
 - [Agent Skills specification](https://agentskills.io/specification)
-- [Model Context Protocol: Tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+- [Model Context Protocol: Tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 - [OpenAI: Agent evaluations](https://developers.openai.com/api/docs/guides/agent-evals)
 - [OWASP Top 10 for LLM applications](https://genai.owasp.org/llm-top-10/)

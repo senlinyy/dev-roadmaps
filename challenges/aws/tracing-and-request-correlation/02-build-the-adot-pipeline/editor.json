@@ -1,0 +1,167 @@
+{
+  "language": "yaml",
+  "filename": "adot-collector.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "receivers:\\n  otlp:\\n    protocols: {}\\nprocessors: {}\\nexporters: {}\\nservice:\\n  pipelines: {}\\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "receivers",
+          "otlp",
+          "protocols",
+          "grpc",
+          "endpoint"
+        ],
+        "equals": "0.0.0.0:4317",
+        "label": "OTLP gRPC receiver"
+      },
+      {
+        "path": [
+          "receivers",
+          "otlp",
+          "protocols",
+          "http",
+          "endpoint"
+        ],
+        "equals": "0.0.0.0:4318",
+        "label": "OTLP HTTP receiver"
+      },
+      {
+        "path": [
+          "processors",
+          "memory_limiter",
+          "check_interval"
+        ],
+        "equals": "1s",
+        "label": "memory check interval"
+      },
+      {
+        "path": [
+          "processors",
+          "memory_limiter",
+          "limit_mib"
+        ],
+        "equals": 256,
+        "label": "collector memory bound"
+      },
+      {
+        "path": [
+          "processors",
+          "batch",
+          "timeout"
+        ],
+        "equals": "5s",
+        "label": "batch timeout"
+      },
+      {
+        "path": [
+          "exporters",
+          "awsxray",
+          "region"
+        ],
+        "equals": "eu-west-2",
+        "label": "X-Ray exporter"
+      },
+      {
+        "path": [
+          "exporters",
+          "awscloudwatchlogs",
+          "region"
+        ],
+        "equals": "eu-west-2",
+        "label": "CloudWatch Logs exporter"
+      },
+      {
+        "path": [
+          "exporters",
+          "awscloudwatchlogs",
+          "log_group_name"
+        ],
+        "equals": "/adot/orders-api",
+        "label": "collector log group"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "receivers"
+        ],
+        "includes": "otlp",
+        "label": "trace receiver"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "processors"
+        ],
+        "includes": "memory_limiter",
+        "label": "trace memory protection"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "processors"
+        ],
+        "includes": "batch",
+        "label": "trace batching"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "traces",
+          "exporters"
+        ],
+        "includes": "awsxray",
+        "label": "trace export"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "logs",
+          "receivers"
+        ],
+        "includes": "otlp",
+        "label": "log receiver"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "logs",
+          "processors"
+        ],
+        "includes": "memory_limiter",
+        "label": "log memory protection"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "logs",
+          "processors"
+        ],
+        "includes": "batch",
+        "label": "log batching"
+      },
+      {
+        "path": [
+          "service",
+          "pipelines",
+          "logs",
+          "exporters"
+        ],
+        "includes": "awscloudwatchlogs",
+        "label": "log export"
+      }
+    ]
+  }
+}

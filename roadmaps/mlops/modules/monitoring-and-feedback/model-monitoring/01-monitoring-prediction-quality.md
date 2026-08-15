@@ -36,13 +36,7 @@ This quiet gap between a successful response and a useful prediction is why pred
 
 Quality can also fall because a feature pipeline serves stale values. A new threshold may change the product action, or the outcome data may stop joining correctly. A useful monitor separates these causes. Retraining is one possible response among several; a broken label join, stale feature, or policy change needs a different repair.
 
-At a high level, the job follows one loop:
-
-![Prediction quality loop from model output through product action, mature outcome, identity matching, cohort measurement, and response](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/prediction-quality-loop.png)
-
-*Prediction-quality monitoring forms a continuous loop. Preserve the prediction, observe the later outcome, measure comparable cases, and feed the evidence into the next safe decision.*
-
-Each arrow answers a beginner-friendly question. What did the model predict? What did the product do with that prediction? What actually happened? Are we comparing the same kind of cases? Is the difference large enough to matter? What should the team change? The rest of the article builds that loop one part at a time.
+The job therefore follows a loop from one prediction to its later outcome, comparable measurement, and a controlled response. What did the model predict? What did the product do with that prediction? What actually happened? Are we comparing the same kind of cases? Is the difference large enough to matter? What should the team change? The rest of the article builds that loop one part at a time.
 
 ## Record Every Important Prediction
 <!-- section-summary: A prediction record preserves enough information to explain which model produced an output and how the product used it. -->
@@ -75,7 +69,7 @@ Store this row in a governed decision table. Metric labels are too small for req
 
 Before computing quality, the monitoring job checks the selected prediction IDs for uniqueness and required versions. It verifies the outcome key and reconciles receipt coverage with the complete service-level prediction count. If the capture feed is incomplete, the job publishes a data-quality incident and withholds the quality claim. This protects later calculations from producing precise metrics over an untrustworthy population.
 
-In essence, the receipt is the stable left side of the outcome join. The remaining work decides whether the right side is mature and which predictions belong in the same cohort. It then asks whether the evidence is strong enough to change production.
+The receipt forms the stable left side of the outcome join. The remaining work decides whether the right side is mature and which predictions belong in the same cohort. It then asks whether the evidence is strong enough to change production.
 
 ## Wait For Real Outcomes Before Calculating Final Quality
 <!-- section-summary: Outcomes turn predictions into measurable evidence, and maturity rules prevent incomplete recent cases from distorting the result. -->
@@ -107,6 +101,10 @@ Teams handle censoring carefully because measurement never justifies exposing us
 The decision service records which cases entered the sample and the probability of selection. Once outcomes mature, the measurement owner checks whether the observed sample matches the intended design and whether important segments received enough coverage. If the review queue, loss estimate, or customer impact crosses its approved limit, the sampling policy rolls back immediately. Some outcomes will remain unknowable, and the published metric should say which population it genuinely represents.
 
 For example, a payment team may review a random sample of low-risk approvals because blocking a payment hides the outcome that approval would have produced. The sampling service records eligibility, selection probability, reviewer result, and final dispute status. The monitor reports both the raw result and the weighted estimate for the eligible population, with the sampling assumptions visible. If reviewers fall behind, the sample shrinks before the queue changes which cases receive labels. This keeps the measurement process from creating an operational problem of its own.
+
+![Prediction and outcome timeline separating decision time, event time, observation time, outcome maturity, censoring, and missing evidence](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/outcome-maturity-evidence.png)
+
+*Decision time, event time, and observation time describe different moments. Only a mature outcome enters the final quality result; pending, censored, and missing states remain visible.*
 
 ## Compare Predictions From The Same Time, Release, And Population
 <!-- section-summary: A cohort groups predictions by time, version, policy, and maturity so the resulting quality comparison has a stable meaning. -->
@@ -165,9 +163,9 @@ flowchart TD
 
 In the numeric example, the 300 missing receipts indicate a capture problem and the 800 failed joins indicate an outcome-linking problem. Pending and censored cases have known meanings, so they stay visible outside the final denominator. An unexpected change in any state triggers an evidence investigation before the team interprets MAE, recall, or another model metric.
 
-![Evidence funnel from durable prediction receipts through mature outcomes, joined records, governed cohorts, and a quality result, with missing joins stopping publication](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/trustworthy-quality-metric.png)
+![Cohort evidence accounting that reconciles 600,000 eligible predictions into captured, missing, mature, pending, censored, and failed-join states](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/cohort-evidence-accounting.png)
 
-*A quality metric earns trust through the evidence funnel around it. Maturity, join coverage, cohort identity, sample size, and uncertainty belong in the published result.*
+*The cohort accounts for every eligible prediction. Missing receipts open a capture incident, and failed joins stop metric publication instead of disappearing from the denominator.*
 
 ## Choose a Metric That Matches the Real Mistake
 <!-- section-summary: Quality metrics should reflect the type of prediction, the cost of each error, and the capacity of the process that acts on the result. -->
@@ -270,7 +268,7 @@ The alert policy also accounts for the number of comparisons or requires sustain
 ## How Teams Build the Monitoring Loop
 <!-- section-summary: A practical monitoring stack captures prediction records, joins mature outcomes, computes versioned metrics, publishes results, and checks that the evidence pipeline itself is healthy. -->
 
-At a high level, the production loop has five jobs. It captures each decision, obtains the later outcome, builds a trustworthy cohort, and calculates a task-specific metric. The accepted result then enters an owned alert. Teams often use several tools because each job has a different data shape and time scale.
+A dashboard cannot measure prediction quality until several systems have connected the original decision with its later outcome. The production loop has five jobs: capture each decision, obtain the outcome, build a trustworthy cohort, calculate a task-specific metric, and send accepted results into an owned alert. Teams often use several tools because these jobs operate on different data shapes and time scales.
 
 ### Define The Prediction And Outcome Records First
 
@@ -316,10 +314,6 @@ Managed services remove useful plumbing. The business meaning stays with the app
 
 The quality job records its last successful run, input window, code version, row counts, rejected records, metric revision, and publication time. Serving counts are reconciled with captured prediction IDs. Outcome counts are reconciled with joined labels. The dashboard shows the age of the last accepted result. If the job stops, the stale timestamp and pipeline alert expose the failure even though the previous quality value still looks healthy.
 
-![Production prediction-quality stack from capture through validation, measurement, publication, and owned action](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/prediction-quality-production-stack.png)
-
-*The detailed evidence remains in governed storage while the alerting layer receives small, validated signals. Failed coverage or joins stop publication and open a data incident instead of manufacturing a reassuring quality result.*
-
 ## Respond To Quality Alerts Without Causing More Harm
 <!-- section-summary: A quality alert first verifies the evidence, then locates the failing boundary, limits harm, repairs the cause, and proves recovery. -->
 
@@ -339,16 +333,16 @@ Consider a second case in which join coverage stays at 98%, feature checks pass,
 
 The repair follows the normal release path. The data team builds a point-in-time-correct training snapshot containing the new channel, the training platform produces a candidate, and the registry links the model to its data and code versions. Offline evaluation checks global and mobile results. Shadow traffic verifies execution and feature parity, followed by a small canary with explicit recall, latency, action-rate, and queue limits. Any breach returns the segment to version 17. Promotion continues only after the immediate signals and the first mature outcome window support the same conclusion.
 
-![Quality alert response branches into evidence-pipeline repair or decision-system containment, evaluation, canary release, and mature confirmation](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/quality-alert-response.png)
-
-*The first check decides which system needs repair. Broken coverage freezes publication and promotion; trustworthy evidence with a real regression sends the affected decision through containment and a controlled release path.*
-
 ## How The Complete Quality-Monitoring Loop Works
 <!-- section-summary: Prediction-quality monitoring connects live predictions to trustworthy outcomes and turns that evidence into a controlled production response. -->
 
 Prediction quality answers a direct question: do the model's live predictions still agree with reality well enough for the decision they support? Answering it requires more than a metric chart. The team needs a receipt for each prediction, an honest rule for when outcomes are ready, a fair group of cases to compare, a metric tied to real harm, and enough segment and sample context to judge the result.
 
 That evidence also has to lead somewhere. A broken label join calls for data repair. A policy change calls for policy analysis. Stale features call for feature-path recovery. A model-specific decline can justify containment, evaluation, and a controlled release. A strong prediction-quality monitor identifies the responsible part of the system and supplies the evidence required to prove recovery.
+
+![Prediction-quality response summary that verifies evidence before branching to measurement repair or model-decline containment, evaluation, controlled release, and mature confirmation](/content-assets/articles/article-mlops-monitoring-and-feedback-monitoring-prediction-quality/prediction-quality-response-summary.png)
+
+*A quality alert first tests the evidence path. Broken measurement is repaired and revised; a real model decline enters containment, comparison, shadowing, canary release, and mature confirmation.*
 
 ## References
 

@@ -25,7 +25,7 @@ aliases: ["tool-runtime-design"]
 ## Why Tool Calls Need An Execution Runtime
 <!-- section-summary: A tool runtime turns a model proposal into a controlled operation by supplying trusted identity, policy, execution rules, and a durable result. -->
 
-At a high level, **a tool runtime is the application layer that decides whether a model-requested action may run, performs the approved operation, and reports exactly what happened**. The model sees a useful capability such as “look up an order.” The runtime connects that capability to the real order service under the correct identity and policy.
+A model-generated tool call only proposes an action; trusted software must still authorize any change to an external system. **A tool runtime is the application layer that authorizes the proposed action, performs the approved operation, and reports what happened.** The model may see a capability such as “look up an order”; the runtime connects it to the real order service under the correct identity and policy.
 
 Suppose a user asks, “Where is my order?” The model can recognise that an order-status tool would help. It can also extract an order number from the conversation. Those are useful language tasks. The model still cannot prove which account is signed in, decide whether that account owns the order, or establish that the order service returned a genuine record.
 
@@ -56,26 +56,9 @@ The runtime records a successful outcome and updates run state with the call ID.
 
 The sequence diagram shows these ownership boundaries. The authenticated application supplies identity, the model supplies a proposal, policy supplies authorization, and the order service supplies the domain fact.
 
-```mermaid
-sequenceDiagram
-    participant App as Authenticated application
-    participant Model
-    participant Runtime as Tool runtime
-    participant Policy as Authorization policy
-    participant Orders as Order service
-    participant State as Run state
+![An order-status tool call showing the separate responsibilities of the application, model, runtime, policy, order service, and run state](/content-assets/articles/article-mlops-llmops-tool-runtime-design/order-status-tool-runtime-owners.png)
 
-    App->>Runtime: Eligible tools for usr_17
-    Runtime-->>Model: orders.get_status schema
-    Model-->>Runtime: Propose order_id = ord_482
-    Runtime->>Runtime: Validate arguments and create call ID
-    Runtime->>Policy: Can usr_17 read ord_482?
-    Policy-->>Runtime: Allow
-    Runtime->>Orders: Read status with service identity
-    Orders-->>Runtime: in_transit, latest event
-    Runtime->>State: Record succeeded outcome
-    Runtime-->>Model: Safe structured result
-```
+*The runtime carries one proposed `orders.get_status` call through eligibility, validation, trusted identity, authorization, service execution, and a recorded result.*
 
 A real runtime may distribute these steps across several services. Their order still matters. Eligibility limits the model's choices before generation, while authorization makes the final decision immediately before execution.
 
@@ -127,6 +110,17 @@ A small agent can receive three tool definitions in every model call. A producti
 **Discovery** answers, “Which tools exist?” Local function registration is the simplest implementation. The Model Context Protocol, known as **MCP**, gives clients a standard way to discover remote tools through `tools/list` and invoke one through `tools/call`. Each definition includes a name, description, and JSON Schema for its arguments. JSON Schema is a machine-readable description of the fields and value shapes a request may contain.
 
 Discovery only finds candidates.
+
+```mermaid
+flowchart TD
+    Registry["Tool registry or MCP server<br/>(all discoverable capabilities)"] --> Discover["Discovery<br/>(load current definitions)"]
+    Discover --> Eligible["Eligibility<br/>(role, state, environment, and policy)"]
+    Eligible --> Context["Model-visible allowlist<br/>(only tools relevant to this step)"]
+    Context --> Proposal["Tool proposal<br/>(name and structured arguments)"]
+    Proposal --> Repeat["Execution-time check<br/>(repeat eligibility and authorization)"]
+    Repeat -->|Allowed| Execute["Trusted executor<br/>(call the owning service)"]
+    Repeat -->|Denied| Stop["Typed denial<br/>(no external effect)"]
+```
 
 ### Create A Per-Step Tool Allowlist
 
@@ -238,21 +232,9 @@ Writes require an **idempotency key**. This key identifies one intended effect a
 
 Consider a refund request with key `refund:case_814:proposal_3`. The payment service commits refund `re_901`, but the response is lost. The runtime must query by the same key or repeat the request under the same key. A new key could create a second refund.
 
-```mermaid
-sequenceDiagram
-    participant Runtime as Tool runtime
-    participant Payments as Payment service
-    participant State as Run state
+![A refund that commits before its response is lost, followed by outcome_unknown, lookup with the same idempotency key, and safe reconciliation](/content-assets/articles/article-mlops-llmops-tool-runtime-design/refund-idempotency-reconciliation.png)
 
-    Runtime->>State: Save effect key K before execution
-    Runtime->>Payments: Create refund with K
-    Payments->>Payments: Commit refund re_901 for K
-    Payments--xRuntime: Response is lost
-    Runtime->>State: Mark outcome_unknown
-    Runtime->>Payments: Look up K
-    Payments-->>Runtime: K committed as re_901
-    Runtime->>State: Save re_901 and mark succeeded
-```
+*The stable effect key preserves one intended refund. Reconciliation asks the payment service for the real outcome before software considers any retry.*
 
 The lookup is **reconciliation**. It asks the owning service whether the effect committed. A confirmed effect moves the run forward. A confirmed absence may allow a retry under the same key. An unresolved result remains in a recovery state for an operator or scheduled reconciliation job.
 
@@ -345,6 +327,10 @@ Across these shapes, keep one stable internal contract:
 - trace identity and recovery evidence.
 
 That contract lets the team replace an SDK wrapper, move a tool behind MCP, or run an adapter as a workflow activity without moving domain authority into the model. Reliable tool execution comes from preserving the boundary from proposal to verified effect.
+
+![A summary of the ten runtime jobs that carry a model proposal through controlled execution, typed results, state transition, observability, and recovery](/content-assets/articles/article-mlops-llmops-tool-runtime-design/production-tool-runtime-summary.png)
+
+*A production runtime controls model choices, protects external effects, preserves result meaning, and gives the orchestrator a recoverable next state.*
 
 ## References
 

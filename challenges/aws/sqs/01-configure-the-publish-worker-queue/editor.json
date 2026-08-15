@@ -1,0 +1,53 @@
+{
+  "language": "json",
+  "filename": "queue-attributes.json",
+  "completionProfile": "aws-json",
+  "initialValue": "{\n  \"VisibilityTimeout\": \"30\",\n  \"MessageRetentionPeriod\": \"86400\",\n  \"ReceiveMessageWaitTimeSeconds\": \"0\",\n  \"SqsManagedSseEnabled\": \"false\",\n  \"RedrivePolicy\": \"{}\"\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "VisibilityTimeout"
+        ],
+        "equals": "120",
+        "label": "visibility timeout"
+      },
+      {
+        "path": [
+          "MessageRetentionPeriod"
+        ],
+        "equals": "345600",
+        "label": "four-day retention"
+      },
+      {
+        "path": [
+          "ReceiveMessageWaitTimeSeconds"
+        ],
+        "equals": "20",
+        "label": "long polling"
+      },
+      {
+        "path": [
+          "SqsManagedSseEnabled"
+        ],
+        "equals": "true",
+        "label": "SQS-managed encryption"
+      },
+      {
+        "path": [
+          "RedrivePolicy"
+        ],
+        "contains": "\"deadLetterTargetArn\":\"arn:aws:sqs:eu-west-2:123456789012:lesson-publish-dlq\"",
+        "label": "DLQ ARN"
+      },
+      {
+        "path": [
+          "RedrivePolicy"
+        ],
+        "contains": "\"maxReceiveCount\":\"5\"",
+        "label": "five receive attempts"
+      }
+    ]
+  }
+}

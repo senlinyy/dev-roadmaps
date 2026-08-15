@@ -1,0 +1,123 @@
+{
+  "language": "yaml",
+  "filename": "publish-api.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "openapi: 3.0.1\\ninfo:\\n  title: Northstar Publish API\\n  version: 1.0.0\\npaths:\\n  /lessons/{lessonId}/publish:\\n    post:\\n      operationId: publishLesson\\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      {
+        "path": [
+          "openapi"
+        ],
+        "equals": "3.0.1",
+        "label": "OpenAPI version"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "parameters"
+        ],
+        "containsObject": {
+          "name": "lessonId",
+          "in": "path",
+          "required": true
+        },
+        "label": "required lessonId path parameter"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "requestBody",
+          "required"
+        ],
+        "equals": true,
+        "label": "required request body"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "requestBody",
+          "content",
+          "application/json",
+          "schema",
+          "required"
+        ],
+        "includes": "publishedBy",
+        "label": "publishedBy requirement"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "responses",
+          "202"
+        ],
+        "type": "object",
+        "label": "accepted response"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "responses",
+          "400"
+        ],
+        "type": "object",
+        "label": "invalid request response"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "x-amazon-apigateway-integration",
+          "type"
+        ],
+        "equals": "aws_proxy",
+        "label": "Lambda proxy integration"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "x-amazon-apigateway-integration",
+          "httpMethod"
+        ],
+        "equals": "POST",
+        "label": "Lambda invocation method"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "x-amazon-apigateway-integration",
+          "payloadFormatVersion"
+        ],
+        "equals": "2.0",
+        "label": "HTTP API payload format"
+      },
+      {
+        "path": [
+          "paths",
+          "/lessons/{lessonId}/publish",
+          "post",
+          "x-amazon-apigateway-integration",
+          "uri"
+        ],
+        "equals": "arn:aws:apigateway:eu-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:eu-west-2:123456789012:function:publish-lesson/invocations",
+        "label": "Lambda invocation URI"
+      }
+    ]
+  }
+}

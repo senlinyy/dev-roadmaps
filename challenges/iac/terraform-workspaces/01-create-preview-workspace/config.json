@@ -1,0 +1,50 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/main.tf": {
+      "type": "file",
+      "content": "locals { environment = terraform.workspace }\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "initialized": true,
+    "workspaces": [
+      "staging",
+      "production"
+    ]
+  },
+  "grader": {
+    "strategy": "terraform-state",
+    "source": "all-stdout",
+    "expected": [
+      "production",
+      "staging",
+      "preview-pr-482"
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+workspace\\s+list$",
+      "^terraform\\s+workspace\\s+new\\s+preview-pr-482$",
+      "^terraform\\s+workspace\\s+show$"
+    ],
+    "expectedTerraform": {
+      "currentWorkspace": "preview-pr-482",
+      "includesWorkspaces": [
+        "default",
+        "staging",
+        "production",
+        "preview-pr-482"
+      ],
+      "lastAction": "workspace-new:preview-pr-482"
+    }
+  }
+}

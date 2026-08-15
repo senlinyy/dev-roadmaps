@@ -51,9 +51,9 @@ flowchart TD
 A sound study defines the decision and fair-comparison rules before an optimizer proposes configurations. This keeps the search focused on a stable question instead of letting attractive trial results reshape the evaluation.
 
 ## Decide What The Experiment Must Prove
-<!-- section-summary: A useful experiment centers on the decision its evidence must support and the consequence of a wrong choice. -->
+<!-- section-summary: An experiment begins with the decision its evidence must support and the consequence of a wrong choice. -->
 
-At a high level, an experiment turns an uncertain modeling idea into evidence for a specific action. “Find the best model” is too vague because *best* could refer to accuracy, latency, memory, fairness, cost, or several of them together.
+A team may believe that a different model family will improve recall without exceeding the serving budget. An experiment turns that uncertain idea into evidence for a specific action. “Find the best model” is too vague because *best* could refer to accuracy, latency, memory, fairness, cost, or several of them together.
 
 ### Connect One Experiment Question To One Decision
 
@@ -86,7 +86,7 @@ The contract leaves the winning parameter values open. It defines the rules unde
 ## Compare One Controlled Change With A Baseline
 <!-- section-summary: A fair experiment compares a declared change with a meaningful baseline while holding the remaining conditions steady. -->
 
-At a high level, this part of the design separates the idea being tested from the reference it must beat. That separation lets the team explain what the result actually supports.
+Suppose the team proposes a new loss function. The experiment must state what change that proposal should cause and which accepted model or simple heuristic it must beat. Separating the hypothesis from the baseline lets the team explain what the result actually supports.
 
 ### State Why The Change Should Beat The Baseline
 
@@ -109,10 +109,14 @@ flowchart TD
 
 Consider a churn model review. The ML engineer wants to learn whether a new feature family helps before the monthly retraining run. The fair comparison trains the baseline and candidate on the same customer snapshot and tunes both under equal budgets. If the candidate alone receives five times more trials, the result mixes feature value with extra search effort. The product owner may approve an expensive feature pipeline for an improvement that actually came from unequal tuning.
 
+![Baseline and candidate runs sharing data, split, metrics, and search budget while differing only in one planned setting](/content-assets/articles/article-mlops-experiments-and-reproducibility-experiment-design-and-hyperparameter-optimization/fair-experiment-conditions.png)
+
+*A fair result isolates one planned change. If the data, split, metric rules, or search budget also change, the team reruns both approaches on shared evidence.*
+
 ## Give Training, Validation, and Test Data Different Jobs
 <!-- section-summary: Training fits model parameters, validation guides choices, and protected test data estimates the locked candidate's performance. -->
 
-At a high level, the three data partitions create boundaries between learning, choosing, and confirming. Those boundaries prevent evidence used to tune a model from also pretending to be an unbiased final check.
+If the same rows guide training choices and certify the final model, the reported score overstates performance on unseen data. Train, validation, and test partitions separate learning, choosing, and confirming so tuning evidence does not pretend to be an unbiased final check.
 
 ### Use Training Data To Fit The Model
 
@@ -144,7 +148,7 @@ For a small medical-image dataset, one fixed validation partition may waste too 
 ## Choose a Split That Matches Production
 <!-- section-summary: The split policy should reproduce the separation the model will face after deployment and keep future or related evidence out of training. -->
 
-At a high level, a split simulates the separation between the evidence available during development and the cases the deployed model will face later. The best policy mirrors the boundary that exists in the real product.
+A random split can look convincing while placing future events, related users, or duplicate records on both sides. A split should simulate the boundary between evidence available during development and cases the deployed model will face later. The policy should mirror the real product boundary.
 
 ### Random and Stratified Splits
 
@@ -167,7 +171,7 @@ Here is a concrete failure pattern. Before a quarterly risk-model review, a data
 ## Decide What The Search Should Improve And Protect
 <!-- section-summary: The objective ranks trials, while guardrails keep an attractive score from hiding an unacceptable product or system regression. -->
 
-At a high level, the objective tells the optimizer what to pursue, while guardrails define outcomes the organization refuses to sacrifice. Reading both together prevents the search from optimizing a narrow metric at the product's expense.
+An optimizer will pursue exactly the signal it receives, even if that improves one metric by harming latency or an important user segment. The objective names what to improve, while guardrails define outcomes the organization refuses to sacrifice.
 
 ### Choose The Main Optimization Metric
 
@@ -214,7 +218,7 @@ Search ranges should fail validation if the training code ignores a field or the
 ## Choose The Search Strategy And Compute Budget
 <!-- section-summary: Search algorithms propose configurations, while schedulers and pruners decide how much resource each trial receives. -->
 
-At a high level, every HPO study has two allocation decisions. The search algorithm chooses the next configuration, and the resource policy chooses how long that trial may continue.
+An HPO study has a finite compute budget and many possible configurations. It therefore makes two allocation decisions: the search algorithm chooses the next configuration, and the resource policy chooses how long that trial may continue.
 
 ### Choose Between Grid, Random, And Bayesian Search
 
@@ -243,7 +247,7 @@ flowchart TD
 ## Understand The Difference Between Early Stopping And Trial Pruning
 <!-- section-summary: Training early stopping controls one model's fitting process, while HPO pruning abandons an entire configuration so the study can spend resources elsewhere. -->
 
-At a high level, both mechanisms save compute by ending work early. Training early stopping judges progress inside one model, while HPO pruning judges whether an entire configuration deserves more of the study budget.
+Some training runs stop improving long before their maximum epoch, while some configurations fall behind promising alternatives. Training early stopping ends work inside one model; HPO pruning ends an entire configuration's claim on the study budget.
 
 ### Stop One Model's Training Early
 
@@ -265,6 +269,10 @@ flowchart TD
 ```
 
 Both rules need a warmup. Some models improve slowly at the start, and noisy early metrics can remove a configuration that would later perform well. The study should preserve completed, pruned, and failed statuses. A pruned trial represents an intentional budget decision; a failed trial represents an execution or configuration error.
+
+![Hyperparameter search narrowing many short trials into fewer promoted trials and finalists while distinguishing early stopping from trial pruning](/content-assets/articles/article-mlops-experiments-and-reproducibility-experiment-design-and-hyperparameter-optimization/hpo-budget-allocation.png)
+
+*The search algorithm proposes settings, each trial trains one configuration, and the resource policy moves a fixed budget toward stronger evidence. Early stopping acts inside one trial; pruning ends a trial so the study can spend elsewhere.*
 
 ## Run Hyperparameter Search With Optuna And MLflow
 <!-- section-summary: Optuna can suggest and prune trials while MLflow records the parameters, metrics, lineage, and outcomes needed for review. -->
@@ -385,7 +393,7 @@ Managed HPO services can reduce infrastructure ownership. SageMaker Automatic Mo
 ## Record Which Model Was Chosen And Why
 <!-- section-summary: A decision record connects the experiment evidence to the action the team approved and preserves reasons for future reviewers. -->
 
-The final artifact is a decision record. In essence, it connects the technical evidence to the action that an accountable owner approved. It links the contract, baseline, study, chosen trial, rejected alternatives, seed reruns, protected test report, guardrails, cost, limitations, approvers, and next action.
+The final artifact is a decision record that connects the technical evidence to the action an accountable owner approved. It links the contract, baseline, study, chosen trial, rejected alternatives, seed reruns, protected test report, guardrails, cost, limitations, approvers, and next action.
 
 ```yaml
 decision: advance candidate to shadow evaluation
@@ -415,6 +423,10 @@ Experiment design turns a modeling idea into a decision that evidence can suppor
 HPO then explores a bounded search space. Search algorithms propose configurations. Schedulers and pruners allocate resource. Tracking systems preserve the lineage of every completed, pruned, and failed trial. Repeated seeds test stability, and protected test data confirms one locked candidate after selection is complete.
 
 A large study cannot rescue an unfair comparison. A modest, well-designed study can provide evidence that a model owner, platform engineer, reviewer, and release team can understand and act on.
+
+![Experiment evidence progressing from a written contract through a production-shaped split, bounded search, guardrails, seed reruns, protected testing, and a recorded decision](/content-assets/articles/article-mlops-experiments-and-reproducibility-experiment-design-and-hyperparameter-optimization/trustworthy-candidate-path.png)
+
+*A trustworthy candidate comes from a connected evidence path. Each stage removes a different source of false confidence before the team advances, rejects, or revises the candidate.*
 
 ## References
 

@@ -27,7 +27,7 @@ id: "article-mlops-monitoring-and-feedback-retraining-from-production-feedback"
 ## What Retraining From Production Feedback Means
 <!-- section-summary: Retraining from production feedback turns governed production outcomes into a reproducible candidate and gives that candidate production authority only after comparative evaluation and a controlled release. -->
 
-At a high level, **retraining from production feedback is the controlled process that uses real outcomes to develop the next model version.** The process selects suitable production evidence, freezes a reproducible dataset, trains a proposed model called a **candidate**, compares it with the model already serving users, and releases it under a limited blast radius.
+Production outcomes may reveal a repeated error that the original training data barely represented. **Retraining from production feedback is the controlled process that uses those real outcomes to develop the next model version.** The process selects suitable evidence, freezes a reproducible dataset, trains a proposed model called a **candidate**, compares it with the model already serving users, and releases it under a limited blast radius.
 
 Consider a support-routing model that chooses which specialist queue should receive each new case. Several weeks after deployment, the operations team sees a rise in billing disputes that were sent to the general-support queue. Resolved cases contain useful evidence about the correct destination. The team still cannot pour those recent outcomes straight into a training job.
 
@@ -54,7 +54,7 @@ flowchart TD
 
 Each stage produces evidence for the next one. No stage grants authority by itself. A large label table proves that outcomes were collected; it says nothing about point-in-time correctness. A successful training job proves that an artifact was produced; it says nothing about product value. A registry entry gives the artifact a durable identity; the release system still decides whether that version receives traffic.
 
-In essence, this is a learning loop with deliberate checkpoints. The checkpoints preserve the meaning of the data and keep one promising offline result from silently replacing a production decision system.
+This learning loop uses deliberate checkpoints. They preserve the meaning of the data and keep one promising offline result from silently replacing a production decision system.
 
 ## Why Production Feedback Must Be Checked Before Retraining
 <!-- section-summary: The deployed model and its surrounding policy influence which outcomes are observed, so production feedback carries the history of the system that collected it. -->
@@ -101,6 +101,10 @@ Some missing outcomes describe a world that never happened. A rejected loan reve
 These are **counterfactual** questions: what would have happened under another action? Ordinary supervised retraining cannot recover the answer from the observed label alone. Approved experiments, expert audits, causal methods, or separate policy evaluation may add evidence. If those paths are unavailable, the limitation belongs in the evaluation report rather than being hidden through a guessed label.
 
 The first gate therefore asks whether each row represents an observable, correctly attributed outcome. More data cannot repair a broken observation rule.
+
+![Production-feedback selection showing how the current model and policy shape observed outcomes and how admission gates separate pending, censored, missing, and training-eligible rows](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/production-feedback-selection.png)
+
+*The current model and policy determine which outcomes production reveals. Dataset-admission gates keep pending, censored, and missing outcomes distinct from rows eligible for supervised training.*
 
 ## Collect Approved Feedback Before Building The Training Dataset
 <!-- section-summary: Training admission starts from the full population of prediction receipts and attaches outcomes under an explicit eligibility and use policy. -->
@@ -273,6 +277,10 @@ flowchart TD
 
 The trigger record travels into the training run and evaluation report. Reviewers can then ask whether the candidate solved the problem that justified its cost and risk.
 
+![Retraining-trigger triage that checks evidence health and plausible model cause before creating a training hypothesis](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/retraining-trigger-triage.png)
+
+*A retraining trigger begins an investigation. Healthy evidence and a plausible model cause are required before the team creates a training hypothesis and reproducible candidate.*
+
 ## Run Reproducible Training
 <!-- section-summary: Reproducible training pins the snapshot, code, environment, parameters, and outputs so a retry or investigation follows the same path. -->
 
@@ -282,7 +290,7 @@ The training pipeline converts the approved snapshot into a candidate model. Rep
 
 A retraining run contains dependent steps: validate the snapshot, train the model, evaluate it, and publish the approved outputs. A workflow tool starts those steps in the required order, records their status, and retries work according to an explicit policy. This coordinating role is called **orchestration**, and the workflow tool is often called an **orchestrator**.
 
-Airflow, Dagster, Prefect, or a managed ML pipeline commonly coordinates the cycle. Airflow fits organisations with an established task-orchestration estate and explicit data intervals. Dagster fits asset-oriented systems that treat snapshots, models, and reports as partitioned data products. SageMaker AI Pipelines, Vertex AI Pipelines, Azure Machine Learning pipelines, and Lakeflow Jobs reduce platform integration inside their respective environments.
+Airflow, Dagster, Prefect, or a managed ML pipeline commonly coordinates the cycle. Airflow fits organisations with an established task-orchestration estate and explicit data intervals. Dagster fits asset-oriented systems that treat snapshots, models, and reports as partitioned data products. SageMaker AI Pipelines, Gemini Enterprise Agent Platform Pipelines, Azure Machine Learning pipelines, and Lakeflow Jobs reduce platform integration inside their respective environments.
 
 The orchestrator owns run order, retries, parameters, and status. The warehouse or lakehouse owns the data rows. The training service owns compute. MLflow or a managed tracker owns experiment and model evidence. Keeping those boundaries clear prevents the orchestrator database from turning into an accidental artifact store.
 
@@ -344,7 +352,7 @@ A trained artifact needs a stable identity before another system can review or d
 
 The version points back to the source run and model signature. Tags and descriptions carry reviewed facts such as the problem type and validation status. Aliases give consumers a movable name for a selected version, while evaluation artifacts preserve the evidence behind that selection.
 
-MLflow Model Registry is a common independent choice. Managed registries in SageMaker AI, Vertex AI, Azure Machine Learning, and Unity Catalog serve the same responsibility inside their platforms. Current MLflow workflows favor model versions, aliases, and tags; fixed lifecycle stages are deprecated.
+MLflow Model Registry is a common independent choice. Managed registries in SageMaker AI, Gemini Enterprise Agent Platform, Azure Machine Learning, and Unity Catalog serve the same responsibility inside their platforms. Current MLflow workflows favor model versions, aliases, and tags; fixed lifecycle stages are deprecated.
 
 Registration records which model passed evaluation. Production authority comes from a separate release decision. An alias such as `candidate` or `champion` helps software find a version. The release record preserves the approval, deployment target, traffic plan, evidence links, owner, and rollback version. A mutable alias alone would lose that history after reassignment.
 
@@ -433,6 +441,10 @@ A reliable retraining process preserves both stories. It admits eligible mature 
 
 That is the difference between repeatedly fitting fresh data and operating a production learning system.
 
+![Governed retraining loop from production decisions through feedback admission, reproducible training, paired evaluation, controlled release, and outcome confirmation](/content-assets/articles/article-mlops-monitoring-and-feedback-retraining-from-production-feedback/governed-retraining-loop.png)
+
+*The learning loop preserves the policy that shaped its evidence. Failed evaluation returns the candidate to repair, while a fast-signal breach restores the last approved release.*
+
 ## References
 
 - [Google Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
@@ -443,6 +455,8 @@ That is the difference between repeatedly fitting fresh data and operating a pro
 - [dbt data tests](https://docs.getdbt.com/docs/build/data-tests)
 - [Apache Airflow timetables](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html)
 - [Dagster partitioning assets](https://docs.dagster.io/guides/build/partitions-and-backfills/partitioning-assets)
+- [Gemini Enterprise Agent Platform Pipelines](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/introduction)
+- [Gemini Enterprise Agent Platform Model Registry](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/model-registry/introduction)
 - [MLflow Experiment Tracking](https://mlflow.org/docs/latest/ml/tracking/)
 - [MLflow Model Evaluation](https://mlflow.org/docs/latest/ml/evaluation/)
 - [MLflow Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/)

@@ -1,0 +1,104 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "locals.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"environment\" {\n  type = string\n}\n\nvariable \"extra_tags\" {\n  type    = map(string)\n  default = {}\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n  environment = var.environment\n}\n"
+    },
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"orders\" {\n  bucket = \"replace-me\"\n  tags   = {}\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "locals.tf",
+          "path": [
+            {
+              "type": "locals"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "environment"
+            ],
+            "references": [
+              "var.environment"
+            ],
+            "expressionContains": [
+              "lower(",
+              "trimspace("
+            ]
+          },
+          {
+            "path": [
+              "bucket_name"
+            ],
+            "references": [
+              "local.environment"
+            ],
+            "expressionContains": [
+              "substr(",
+              "format(",
+              "63"
+            ]
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "references": [
+              "local.environment",
+              "var.extra_tags"
+            ],
+            "expressionContains": [
+              "merge(",
+              "Service",
+              "Environment"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "expressionEquals": "local.bucket_name"
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "expressionEquals": "local.tags"
+          }
+        ]
+      }
+    ]
+  }
+}

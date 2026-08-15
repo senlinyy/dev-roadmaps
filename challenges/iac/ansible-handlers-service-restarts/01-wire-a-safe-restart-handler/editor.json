@@ -1,0 +1,90 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Render orders configuration\n      ansible.builtin.template:\n        src: orders.conf.j2\n        dest: /etc/orders/orders.conf\n\n    - name: Restart orders\n      ansible.builtin.command: systemctl restart orders\n"
+    },
+    {
+      "filename": "templates/orders.conf.j2",
+      "initialValue": "listen={{ orders_port }}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "task",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.template",
+              "validate"
+            ],
+            "contains": "%s"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "handler",
+          "module": "service",
+          "name": "Restart orders"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "name"
+            ],
+            "equals": "orders"
+          },
+          {
+            "path": [
+              "ansible.builtin.service",
+              "state"
+            ],
+            "equals": "restarted"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "notify-handler",
+        "source": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "handler": {
+          "file": "site.yml",
+          "name": "Restart orders"
+        },
+        "topic": "Restart orders"
+      },
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "templates/orders.conf.j2"
+      }
+    ],
+    "forbiddenModules": [
+      "command",
+      "shell"
+    ]
+  }
+}

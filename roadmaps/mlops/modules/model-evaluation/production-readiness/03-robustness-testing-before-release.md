@@ -1,7 +1,7 @@
 ---
 title: "Robustness Testing"
 description: "Test whether an ML system preserves the right behaviour across realistic variation, stress, dependency failures, and unfamiliar inputs."
-overview: "Robustness testing defines which changes a model should ignore, which changes should alter its output, how performance may degrade, and which fallback should protect unsupported cases. This article builds a production test strategy from perturbations, metamorphic relations, corruption severity, operational faults, OOD handling, adversarial threats, and reproducible release evidence."
+overview: "Robustness testing defines which changes a model should ignore, which changes should alter its output, how performance may degrade, and which fallback should protect unsupported cases through perturbations, metamorphic relations, corruption severity, operational faults, OOD handling, adversarial threats, and reproducible release evidence."
 tags: ["MLOps", "production", "readiness"]
 order: 3
 id: "article-mlops-model-evaluation-robustness-testing-before-release"
@@ -29,7 +29,7 @@ id: "article-mlops-model-evaluation-robustness-testing-before-release"
 ## What Robustness Means Beyond Ordinary Accuracy
 <!-- section-summary: Robustness describes whether an ML system keeps acceptable behaviour under specified variations and failures inside its intended operating conditions. -->
 
-At a high level, **robustness testing asks whether an ML system keeps doing the right thing after realistic conditions become less tidy**.
+A model tested on clean, complete examples may receive blurred images, missing fields, delayed dependencies, or unfamiliar phrasing in production. **Robustness testing asks whether an ML system keeps doing the right thing after realistic conditions become less tidy.**
 The change might affect the input, an upstream dependency, traffic load, available compute, or the way a user expresses the same intent.
 
 Suppose an image classifier reaches 96 percent accuracy on a clean holdout set.
@@ -176,6 +176,10 @@ The expected relationship acts as the test oracle.
 An **oracle** is the rule that decides whether the result is acceptable.
 It may be an exact label, a numeric tolerance, a ranking constraint, a schema guarantee, a monotonic relationship, or a required fallback route.
 
+![Three robustness behaviours show harmless changes ending in a stable result, meaningful changes producing a new result, and worsening input quality reaching a fallback boundary](/content-assets/articles/article-mlops-model-evaluation-robustness-testing-before-release/robustness-expected-behaviour.png)
+
+*The expected relationship comes first: ignore harmless variation, follow meaningful evidence, and withstand deterioration only until the reviewed fallback boundary.*
+
 ## Build the Test Plan From Production Risk
 <!-- section-summary: A robustness plan maps realistic failure sources to an oracle, severity range, metric, owner, and release action. -->
 
@@ -234,6 +238,10 @@ Security owns the adversarial threat model with the ML team.
 The plan also records what the suite leaves untested.
 A text classifier tested for typos and paraphrases has supplied no evidence about prompt injection, training-data poisoning, or another language.
 Explicit gaps prevent a narrow test from creating a broad robustness claim.
+
+![A concrete robustness test board connects a support-message change, a feature-service timeout, and a compressed scan to expected results and release actions](/content-assets/articles/article-mlops-model-evaluation-robustness-testing-before-release/robustness-test-rules.png)
+
+*A production risk provides useful release evidence only after the team defines the controlled change, expected result, owner, and action for a failed rule.*
 
 ## Test Realistic Changes To Inputs And Dependencies
 <!-- section-summary: Perturbation tests reproduce plausible changes from the real data-generating process and preserve the task meaning under an approved oracle. -->
@@ -461,7 +469,7 @@ For a training pipeline, a supplier may control a small part of the incoming dat
 These situations lead to different tests.
 
 NIST’s adversarial-ML taxonomy covers attack families such as evasion, poisoning, extraction, inference, and generative-system misuse.
-This article uses that taxonomy to scope release evidence.
+That taxonomy helps the team choose the attack families that belong in its release evidence.
 Secure development, red teaming, privacy attacks, and incident response require their own deeper security controls.
 
 ```mermaid
@@ -816,6 +824,10 @@ The versioned suite connects them through source cases, transformations, oracles
 
 A robust release claim is bounded and enforceable.
 It names the tested conditions, failed or untested areas, degradation limits, fallback, and production signals that keep those assumptions visible.
+
+![Five-stage robustness loop maps risks, defines behavioural rules, runs one versioned suite, grants a bounded release scope, and monitors unsupported inputs and recurring failures](/content-assets/articles/article-mlops-model-evaluation-robustness-testing-before-release/robustness-release-summary.png)
+
+*Tested conditions define where the model may run. Production failures return to the risk map as regression cases for the next release.*
 
 ## References
 

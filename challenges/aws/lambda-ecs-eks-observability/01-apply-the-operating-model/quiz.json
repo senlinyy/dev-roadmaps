@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "lambda-signal",
+      "type": "single",
+      "scenario": "Lambda duration and errors rose after a release, while concurrency is at the configured maximum and throttles appear. Which evidence best tests downstream protection and capacity?",
+      "options": [
+        {
+          "id": "a",
+          "text": "ConcurrentExecutions, Throttles, duration, and the event-source retry or age metrics."
+        },
+        {
+          "id": "b",
+          "text": "Only EC2 CPU utilization."
+        },
+        {
+          "id": "c",
+          "text": "S3 bucket tags."
+        },
+        {
+          "id": "d",
+          "text": "Transit Gateway routes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Lambda concurrency, throttles, duration, and source-specific backlog or age metrics explain pressure and retry behavior. Learn more in [Monitoring Lambda](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-functions.html)."
+    },
+    {
+      "id": "ecs-insights",
+      "type": "single",
+      "scenario": "An ECS service has enough tasks, but one task repeatedly exhausts memory. Which telemetry feature adds task and container-level utilization rather than only service desired and running counts?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Route 53 Resolver query logs."
+        },
+        {
+          "id": "a",
+          "text": "CloudWatch Container Insights for ECS."
+        },
+        {
+          "id": "c",
+          "text": "AWS Budgets."
+        },
+        {
+          "id": "d",
+          "text": "IAM Access Analyzer."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Container Insights adds container and task telemetry that exposes uneven resource pressure. Learn more in [Container Insights for ECS](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/deploy-container-insights-ECS.html)."
+    },
+    {
+      "id": "eks-agents",
+      "type": "single",
+      "scenario": "An EKS cluster needs node, Pod, container, and control-plane observability. What architectural fact matters?",
+      "options": [
+        {
+          "id": "a",
+          "text": "EKS automatically ships every application log and trace without agents or configuration."
+        },
+        {
+          "id": "c",
+          "text": "Only the Kubernetes API server can emit metrics."
+        },
+        {
+          "id": "b",
+          "text": "Telemetry collection requires supported add-ons or agents plus application instrumentation and log routing."
+        },
+        {
+          "id": "d",
+          "text": "CloudWatch cannot observe EKS."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "EKS observability combines cluster add-ons or agents with workload instrumentation and log collection. Learn more in [Container Insights for EKS](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Container-Insights-setup-EKS-addon.html)."
+    },
+    {
+      "id": "cross-runtime-trace",
+      "type": "single",
+      "scenario": "A request moves from API Gateway to Lambda, SQS, and an ECS worker. Which practice makes one investigation cross those boundaries?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Use a different request ID at every hop."
+        },
+        {
+          "id": "c",
+          "text": "Disable sampling."
+        },
+        {
+          "id": "d",
+          "text": "Rely on task names only."
+        },
+        {
+          "id": "a",
+          "text": "Propagate trace context and a stable correlation identifier through messages and structured logs."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Trace context and stable correlation fields connect asynchronous and synchronous telemetry across runtimes. Learn more in [Monitoring Lambda](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-functions.html)."
+    },
+    {
+      "id": "runtime-baseline",
+      "type": "multiple",
+      "scenario": "A platform team supports applications on Lambda, ECS, and EKS and wants a common incident baseline. Which controls apply across all three compute shapes?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Structured logs with stable request and workload fields."
+        },
+        {
+          "id": "d",
+          "text": "One dashboard without alarms or ownership."
+        },
+        {
+          "id": "b",
+          "text": "Metrics for traffic, errors, latency, saturation, and backlog where applicable."
+        },
+        {
+          "id": "e",
+          "text": "Disable correlation fields to reduce telemetry volume."
+        },
+        {
+          "id": "c",
+          "text": "Traces or correlation across service boundaries."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The collection mechanism differs, but correlated logs, metrics, traces, and change evidence remain common operational needs. Learn more in [CloudWatch Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html)."
+    }
+  ]
+}

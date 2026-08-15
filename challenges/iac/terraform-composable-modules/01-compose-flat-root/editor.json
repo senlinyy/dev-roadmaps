@@ -1,0 +1,109 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "live/prod/main.tf",
+  "files": [
+    {
+      "filename": "live/prod/main.tf",
+      "initialValue": "module \"network\" {\n}\n\nmodule \"service\" {\n}\n\nmodule \"monitoring\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "network"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/network"
+          },
+          {
+            "path": [
+              "cidr"
+            ],
+            "valueEquals": "10.42.0.0/16"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "service"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/service"
+          },
+          {
+            "path": [
+              "vpc_id"
+            ],
+            "references": [
+              "module.network.vpc_id"
+            ]
+          },
+          {
+            "path": [
+              "private_subnet_ids"
+            ],
+            "references": [
+              "module.network.private_subnet_ids"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "monitoring"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/monitoring"
+          },
+          {
+            "path": [
+              "endpoint"
+            ],
+            "references": [
+              "module.service.endpoint"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

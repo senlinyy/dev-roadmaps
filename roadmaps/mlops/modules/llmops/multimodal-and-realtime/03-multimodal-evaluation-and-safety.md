@@ -28,7 +28,7 @@ id: "article-mlops-llmops-multimodal-evaluation-safety"
 17. [How The Complete Evaluation System Fits Together](#how-the-complete-evaluation-system-fits-together)
 18. [References](#references)
 
-At a high level, **multimodal evaluation** asks whether an application can use images, documents, audio, or video to complete a real task safely. The media expands what the system can perceive, but it also creates new ways to fail. A correct-looking answer may come from the wrong page, the wrong chart series, a mistranscribed number, a missed video frame, or an instruction hidden inside an uploaded image.
+A correct-looking answer may come from the wrong page, the wrong chart series, a mistranscribed number, a missed video frame, or an instruction hidden inside an uploaded image. **Multimodal evaluation** tests whether an application can use images, documents, audio, or video to complete the real task safely and from the right evidence.
 
 This means the model is only one part of the evaluation target. The media decoder, OCR engine, frame sampler, prompt, model, tools, output renderer, and user interface all shape the final result. A model benchmark can compare general capability. A production evaluation must prove that the complete application meets its own task contract under the conditions its users will encounter.
 
@@ -59,11 +59,15 @@ This view creates three levels of evaluation:
 
 A release report needs all three. End-to-end success without component evidence is hard to debug. Strong component scores without a safe outcome can approve the wrong product.
 
+![A five-stage invoice-total example showing exact source bytes, media processing, a model claim, grounded page evidence, and the delivered outcome, with component, cross-modal, and end-to-end evaluation bands.](/content-assets/articles/article-mlops-llmops-multimodal-evaluation-safety/three-level-multimodal-evaluation.png)
+
+*A plausible amount is not enough: the release evidence must prove that the pipeline preserved the media, the claim points to the right page and region, and the user received a usable result.*
+
 ## Define The Expected Task And Failure Types
 
 <!-- section-summary: A task contract states the supported inputs, required evidence, allowed outputs, abstention behavior, and harms that can block release. -->
 
-Before collecting examples, define exactly what the feature promises. This is the **task contract**. In essence, it describes what the application may accept, what evidence it must use, what it may return, and how it behaves if the evidence is weak or conflicting.
+Before collecting examples, define exactly what the feature promises. This is the **task contract**: what the application may accept, what evidence it must use, what it may return, and how it behaves if the evidence is weak or conflicting.
 
 Consider a document assistant that extracts a payment total. The contract may support typed invoices in selected languages and require the page number plus a bounding box around the amount. Handwritten invoices may route to human review. A tax estimate that is absent from the document is outside the task. These boundaries make “correct” testable.
 
@@ -427,6 +431,10 @@ The scorer is intentionally small. Media decoding and region normalization happe
 
 Treat judge-model output as another measurement. Isolate untrusted candidate text from the rubric, disable tools, require structured output, and test whether injected media or responses can manipulate the judge. A model should never grade its own unsupported claim solely by reading the prose it generated.
 
+![Four grader types—deterministic code, reference metrics, bounded model judges, and human or domain review—feeding per-case evidence, slice metrics, safety blockers, and a named release decision.](/content-assets/articles/article-mlops-llmops-multimodal-evaluation-safety/multimodal-grader-selection.png)
+
+*Choose the grader from the claim being tested: exact fields and evidence coordinates belong in code, while bounded judgement and expert context require calibrated model or human review.*
+
 ## Measure Evaluation Uncertainty And Grader Quality
 
 <!-- section-summary: Release evidence includes sample size, repeated-run variation, confidence intervals, slice performance, reviewer agreement, and judge calibration. -->
@@ -459,6 +467,21 @@ The candidate improved the aggregate score in this example. The release stays bl
 <!-- section-summary: Current platforms can run datasets, rubrics, human review, safety filters, traces, and custom scorers, while the product still owns media ground truth and release policy. -->
 
 Industrial tools reduce the work needed to schedule evaluations, compare runs, collect feedback, and apply safety filters. They execute parts of the framework described above. The application still owns the task contract, exact media assets, evidence labels, slice design, and release decision.
+
+Choose evaluation tools from the claim the test must support. A managed judge can compare response quality, while a deterministic scorer may be the only reliable check for an invoice total, bounding box, speaker label, or video interval. Safety services also cover specific modalities and policies rather than every possible media risk. Human review supplies reference judgements for ambiguous and high-impact cases. The release report combines these layers instead of treating one platform score as complete evidence.
+
+```mermaid
+flowchart TD
+    Contract["Product-owned evaluation contract<br/>(media, evidence labels, slices, and release rules)"] --> Platform["Evaluation platform<br/>(datasets, runs, rubrics, and comparisons)"]
+    Contract --> Exact["Deterministic media checks<br/>(fields, regions, speakers, and timestamps)"]
+    Contract --> Safety["Safety services<br/>(supported text and media controls)"]
+    Contract --> Human["Human review<br/>(ambiguous and high-impact cases)"]
+    Platform --> Report["Combined evaluation report<br/>(coverage, quality, safety, and uncertainty)"]
+    Exact --> Report
+    Safety --> Report
+    Human --> Report
+    Report --> Decision["Named release decision<br/>(accept, limit, or reject)"]
+```
 
 ### OpenAI
 
@@ -572,6 +595,10 @@ Component checks prove that the media pipeline preserved pages, pixels, audio, f
 Managed evaluation platforms, safety services, and MLflow can run and observe parts of this system. Their boundaries matter: text or image support does not imply audio or video coverage, and a response judge cannot see evidence it never receives. Production monitoring closes the loop through user corrections, delayed labels, safety actions, and incident regressions.
 
 The release decision can then answer a concrete question: does this exact application bundle complete its supported multimodal tasks for its supported users and conditions? The answer must account for required evidence, safety controls, accessibility, and recovery behavior. That is the standard a production system needs.
+
+![A seven-stage multimodal evaluation and release loop from task contract and bound media through pipeline proof, evidence graders, safety and accessibility, release gates, controlled operation, and separate regression and material-change feedback paths.](/content-assets/articles/article-mlops-llmops-multimodal-evaluation-safety/multimodal-evaluation-release-loop.png)
+
+*The release gate evaluates the complete application bundle. Hard blockers stop release, while confirmed production failures become privacy-reviewed regressions and material changes reopen the task contract.*
 
 ## References
 

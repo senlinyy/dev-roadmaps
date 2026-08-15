@@ -1,0 +1,96 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Prepare orders paths\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Create paths\n      ansible.builtin.shell: mkdir -p /etc/orders /var/lib/orders\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "file",
+          "name": "Create configuration directory"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.file",
+              "path"
+            ],
+            "equals": "/etc/orders"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "mode"
+            ],
+            "equals": "0750"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "file",
+          "name": "Create data directory"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.file",
+              "owner"
+            ],
+            "equals": "orders"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "mode"
+            ],
+            "equals": "0750"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "file",
+          "name": "Create managed environment file"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.file",
+              "state"
+            ],
+            "equals": "touch"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "mode"
+            ],
+            "equals": "0640"
+          },
+          {
+            "path": [
+              "ansible.builtin.file",
+              "modification_time"
+            ],
+            "equals": "preserve"
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "shell",
+      "command"
+    ]
+  }
+}

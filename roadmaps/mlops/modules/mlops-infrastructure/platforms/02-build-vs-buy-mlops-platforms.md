@@ -48,6 +48,10 @@ flowchart TD
 
 The choice therefore comes after the required work is understood. Starting from a vendor comparison encourages feature shopping. Starting from operating responsibilities reveals which capabilities matter, who can own them, and how the decision can be tested.
 
+![Required ML platform capabilities can be delivered through a managed platform, composable stack, internal product layer, or hybrid operating boundary](/content-assets/articles/article-mlops-mlops-infrastructure-build-vs-buy-mlops-platforms/platform-operating-boundaries.png)
+
+*The organization can place a different operating boundary around training, evidence, serving, governance, and operations. The four delivery models describe common ownership patterns rather than one universal answer.*
+
 ## List The ML Workloads The Platform Must Support
 <!-- section-summary: A workload inventory and capability map describe real user journeys, constraints, evidence, and service expectations before products enter the discussion. -->
 
@@ -298,6 +302,10 @@ Define pass criteria before running the options. A private path passes only afte
 
 Record raw timings, logs, resource identities, support interactions, duplicate side effects, and manual steps. Feature checkmarks cannot show how much integration or operational work the organization inherits.
 
+![Two platform options receive the same baseline and pass through matched journey, evidence, failure, operations, and exit tests](/content-assets/articles/article-mlops-mlops-infrastructure-build-vs-buy-mlops-platforms/fair-platform-pilot.png)
+
+*A fair pilot gives both options the same workload, data, constraints, targets, and team budget. Decision evidence is collected only after both options complete the same five checks.*
+
 ## Define Who Owns And Operates The Platform
 <!-- section-summary: The final decision records scope, ownership, evidence, exceptions, costs, exit triggers, and review dates so the commitment can be operated. -->
 
@@ -359,6 +367,10 @@ Review the operating boundary on a regular cadence and after major triggers. Wor
 Build versus buy has no single answer for the whole ML platform. The organization chooses an operating boundary for each capability. Required workloads and evidence define the problem. Differentiation, constraints, team capacity, total cost, integration seams, compliance, and exit cost shape the plausible options.
 
 A matched pilot then tests the risky claims through real work, failure, recovery, operation, and export. The final decision names who owns each responsibility and stages adoption around complete user journeys. This approach produces a platform the organization can operate, rather than a collection of products it has purchased or installed.
+
+![Seven connected steps move an ML platform decision from workload inventory through a matched pilot, total-cost comparison, ownership, exit triggers, and staged adoption](/content-assets/articles/article-mlops-mlops-infrastructure-build-vs-buy-mlops-platforms/build-vs-buy-decision-path.png)
+
+*The decision process identifies the required work, assigns a practical boundary, tests it through a matched pilot, compares total cost, records ownership and exit triggers, and expands only after one complete path works.*
 
 ## References
 

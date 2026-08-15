@@ -1,0 +1,140 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "During a production run, the play recap shows `web-02 : ok=0 changed=0 unreachable=1 failed=0`, while another host completed tasks. What failed first for web-02? The rest of the fleet is waiting for the operator to classify this result before retrying.",
+      "options": [
+        {
+          "id": "a",
+          "text": "The SSH or transport connection to web-02."
+        },
+        {
+          "id": "b",
+          "text": "A module changed the wrong configuration file."
+        },
+        {
+          "id": "c",
+          "text": "A handler failed after all tasks completed."
+        },
+        {
+          "id": "d",
+          "text": "The playbook YAML parser rejected the file."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An unreachable result means Ansible could not establish the connection needed to execute tasks on that host. It is different from a task failure after connection. See [Ansible error handling](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "An orders configuration template reports `changed`, then the validation task fails with `unknown directive upstream`. Which evidence should the operator inspect first? The service must not restart until the team understands whether the candidate configuration is valid.",
+      "options": [
+        {
+          "id": "b",
+          "text": "The fork count on the control node."
+        },
+        {
+          "id": "a",
+          "text": "The rendered diff and the validator stderr."
+        },
+        {
+          "id": "c",
+          "text": "The inventory group order."
+        },
+        {
+          "id": "d",
+          "text": "The number of successful hosts only."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The proposed template change and validation error are the most direct evidence about the failure. Increasing concurrency or ignoring the task would not repair the invalid candidate. See [Ansible error handling](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "After an initial deployment changed several resources, the next successful run reports `ok=7 changed=0` on every host. What does that second result support? The team wants to distinguish useful convergence evidence from application-health evidence.",
+      "options": [
+        {
+          "id": "b",
+          "text": "No managed host was contacted."
+        },
+        {
+          "id": "c",
+          "text": "Every external dependency is healthy."
+        },
+        {
+          "id": "a",
+          "text": "The play has converged for the managed state it checked."
+        },
+        {
+          "id": "d",
+          "text": "The play can never fail in production."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A quiet second run is useful evidence of idempotent convergence. It does not replace runtime health checks or prove future runs cannot fail. See [Ansible playbook introduction](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_intro.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A Red Hat-only package task is reported as `skipped` on a Debian host, and its condition checks `ansible_facts.os_family == \"RedHat\"`. What is the expected interpretation? The same play also contains a Debian-specific task that runs successfully on this host.",
+      "options": [
+        {
+          "id": "b",
+          "text": "The host was unreachable."
+        },
+        {
+          "id": "c",
+          "text": "The task changed state but hid the result."
+        },
+        {
+          "id": "d",
+          "text": "A handler already performed the task."
+        },
+        {
+          "id": "a",
+          "text": "The condition evaluated false for that host."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The condition excludes the task on hosts whose gathered operating-system family is not RedHat. Skipped is an execution decision, not a connection failure. See [Ansible error handling](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The play recap shows one failed task on web-01 and summarizes the counts for every host. Why should the operator also read the failed task result? The operator must choose the next investigation without rerunning the entire fleet blindly.",
+      "options": [
+        {
+          "id": "c",
+          "text": "The recap is printed before tasks execute."
+        },
+        {
+          "id": "a",
+          "text": "The task result contains the module message and failure context."
+        },
+        {
+          "id": "b",
+          "text": "The recap never contains host names."
+        },
+        {
+          "id": "d",
+          "text": "Only task output contains changed counts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The recap summarizes per-host counts. The failed task result carries the module return data needed to diagnose the problem. See [Ansible playbook output control](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/default_callback.html)."
+    }
+  ]
+}

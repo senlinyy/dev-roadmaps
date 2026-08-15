@@ -83,6 +83,11 @@
       "com.amazonaws.us-east-1.secretsmanager",
       "vpce-logs"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ec2\\\\s+describe-route-tables\\\\b",
+      "^aws\\\\s+ec2\\\\s+describe-nat-gateways\\\\b",
+      "^aws\\\\s+ec2\\\\s+describe-vpc-endpoints\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

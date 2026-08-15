@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "copy-paste-boundary",
+      "type": "single",
+      "scenario": "Three environments each contain independent copies of an orders Deployment and Service. A security label was added to production but missed in staging, while image tags and replica counts are the only fields that should differ. Which refactor best addresses the operational problem without hiding the Kubernetes objects from review?",
+      "options": [
+        { "id": "a", "text": "Keep three full copies and add a checklist reminding reviewers to compare every line manually." },
+        { "id": "b", "text": "Create shared resource structure with explicit environment inputs or small overlays, then render each environment for review." },
+        { "id": "c", "text": "Move every Kubernetes field into environment variables so no manifest structure remains in source control." },
+        { "id": "d", "text": "Apply the production copy to every environment and patch live objects by hand after deployment." }
+      ],
+      "correct": ["b"],
+      "explanation": "Shared structure removes copy-paste drift, while explicit inputs or small overlays retain the differences that genuinely belong to each environment. Rendering keeps the final Kubernetes objects visible to reviewers before they reach the API server."
+    },
+    {
+      "id": "rendered-evidence",
+      "type": "multiple",
+      "scenario": "A pull request changes a Helm value from image tag `2026.08.1` to `2026.08.2`. The chart also contains helper templates and conditional resources. Which two review artifacts most directly prove what Kubernetes will receive?",
+      "options": [
+        { "id": "a", "text": "The changed values file by itself, because values completely describe the rendered resource graph." },
+        { "id": "b", "text": "A rendered manifest diff showing the resulting image, labels, selectors, ports, and resource set." },
+        { "id": "c", "text": "A successful render or validation result tied to the exact chart and production values revision." },
+        { "id": "d", "text": "The chart repository star count, because popular charts are safe to apply without inspecting output." }
+      ],
+      "correct": ["b", "c"],
+      "explanation": "The values change is an input, not the final object set. A rendered diff exposes the Kubernetes result and a validation record proves the package rendered successfully from the reviewed sources."
+    },
+    {
+      "id": "ownership-contract",
+      "type": "single",
+      "scenario": "A platform team publishes one HTTP API chart for twelve service teams. Each service team owns image tags and capacity inputs, while the platform team owns probes, standard labels, and policy integration. Which ownership model is clearest during an incident?",
+      "options": [
+        { "id": "a", "text": "The platform team owns the chart contract and rendering behavior; service teams own their documented values and application evidence." },
+        { "id": "b", "text": "Every service team may edit shared templates directly, and no team owns compatibility between chart versions." },
+        { "id": "c", "text": "The cluster administrator owns every application value because Kubernetes stores the rendered objects." },
+        { "id": "d", "text": "Ownership is unnecessary once templates remove duplicated YAML." }
+      ],
+      "correct": ["a"],
+      "explanation": "Packaging is an interface with owners on both sides. The platform team supports the reusable chart behavior and documents the values contract, while service teams remain responsible for the inputs and application health evidence they supply."
+    },
+    {
+      "id": "packaging-pressure",
+      "type": "single",
+      "scenario": "A small internal tool has one namespace, one Deployment, and one Service. Its manifests are short, app-owned, and have not been copied or parameterized. A reviewer proposes a large chart with thirty values solely because the workload runs on Kubernetes. What is the better design response?",
+      "options": [
+        { "id": "a", "text": "Adopt the large chart immediately because every Kubernetes workload requires templating." },
+        { "id": "b", "text": "Keep the explicit manifests until reuse, environment variation, or drift creates a real packaging need." },
+        { "id": "c", "text": "Remove the manifests from source control and recreate them manually after each cluster restart." },
+        { "id": "d", "text": "Expose every field as a value now so future users never need to change a template." }
+      ],
+      "correct": ["b"],
+      "explanation": "Packaging should solve an observed structure, reuse, or environment-management problem. A large parameter surface before those pressures exist adds an interface the team must document and support without reducing meaningful drift."
+    },
+    {
+      "id": "render-review-boundaries",
+      "type": "multiple",
+      "scenario": "A production package renders successfully after a refactor. Reviewers now need evidence that the refactor preserved workload ownership and traffic wiring. Which two rendered relationships deserve explicit comparison?",
+      "options": [
+        { "id": "a", "text": "The Deployment selector still matches the Pod template labels." },
+        { "id": "b", "text": "The template source contains the same number of lines as before." },
+        { "id": "c", "text": "The Service selector and target port still resolve to the intended workload contract." },
+        { "id": "d", "text": "The package tool printed no informational messages during startup." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Selector and port relationships determine controller ownership and request routing in the final Kubernetes objects. Source line count and quiet tool output do not prove those operational relationships survived rendering."
+    }
+  ]
+}

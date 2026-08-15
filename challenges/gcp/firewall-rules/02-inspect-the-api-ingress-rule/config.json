@@ -1,0 +1,36 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "firewallRules": [
+        {
+          "name": "allow-lb-to-orders-api",
+          "projectId": "devpolaris-prod",
+          "network": "orders-prod",
+          "direction": "INGRESS",
+          "priority": 900,
+          "action": "ALLOW",
+          "sourceRanges": ["35.191.0.0/16", "130.211.0.0/22"],
+          "targetServiceAccounts": ["orders-runtime@devpolaris-prod.iam.gserviceaccount.com"],
+          "protocol": "tcp",
+          "ports": ["8080"],
+          "disabled": false
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["allow-lb-to-orders-api", "orders-prod", "INGRESS", "900", "ALLOW", "35.191.0.0/16", "130.211.0.0/22", "orders-runtime@devpolaris-prod.iam.gserviceaccount.com", "tcp", "8080"],
+    "requireCommandPatterns": ["^gcloud\\s+compute\\s+firewall-rules\\s+describe\\b"],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

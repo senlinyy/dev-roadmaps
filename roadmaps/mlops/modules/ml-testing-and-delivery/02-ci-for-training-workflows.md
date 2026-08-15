@@ -29,7 +29,7 @@ aliases:
 ## What Training CI Can Prove
 <!-- section-summary: Training CI proves that a change is mechanically sound and decides which costly or privileged checks should follow. -->
 
-At a high level, **training continuous integration (CI)** is the automated review system for changes to an ML training pipeline. A pull request may alter Python code, a feature definition, a dependency lockfile, a container image, or a training configuration. CI checks the change before it reaches a shared training environment.
+A pull request may alter Python code, a feature definition, a dependency lockfile, a container image, or a training configuration. Sending every unreviewed change directly to an expensive shared training environment wastes compute and can publish misleading evidence. **Training continuous integration (CI)** is the automated review system that checks those changes before they reach that environment.
 
 The unusual part is cost. A web application can often build and run its main test suite in minutes. A training pipeline may need several hours of accelerator time, a large governed dataset, and permission to write model artifacts. Running that entire process for every edit would make feedback slow, expensive, and risky.
 
@@ -48,12 +48,16 @@ flowchart TD; A["Pull Request<br/>(untrusted change under review)"] --> B["Chang
 
 The stages answer progressively larger questions. A failure near the top should be cheap and quick to repair. A job near the bottom receives more compute, data access, and responsibility.
 
+![Four training CI tiers add cost and authority from fast pull-request checks through full training](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/training-ci-tiers.png)
+
+*Training CI spends more compute and grants more authority only when the change requires evidence from the next tier.*
+
 ## Choose CI Checks Based On What Changed
 <!-- section-summary: A small classification job maps changed files to the CI stages that can answer the relevant risk. -->
 
 A training repository contains files with very different consequences. Editing a README should not launch a GPU job. Changing a CUDA base image may deserve image validation and a scheduled accelerator test. Changing a feature transformation may require contract tests, a pipeline smoke run, and a fresh candidate evaluation.
 
-**Change classification** is the small first job that turns those differences into an explicit plan. In essence, it answers: *what could this pull request break?* Later jobs read the result, which removes informal guesses from scattered workflow conditions.
+**Change classification** is the small first job that turns those differences into an explicit plan. It answers one question: *what could this pull request break?* Later jobs read the result, which removes informal guesses from scattered workflow conditions.
 
 ```mermaid
 flowchart TD; A["Changed Files<br/>(paths in the pull request)"] --> B{"Change Class<br/>(which responsibility moved?)"}; B -->|Documentation| C["Policy Result<br/>(no training work required)"]; B -->|Python Or Config| D["Fast Training Checks<br/>(contracts and smoke run)"]; B -->|Docker Or Lockfile| E["Image Build<br/>(dependency and entrypoint check)"]; B -->|Features Or Evaluation| F["Candidate Validation<br/>(protected data and quality evidence)"]
@@ -169,6 +173,10 @@ A useful integration test stays narrow. A warehouse check can read table metadat
 Older CI systems often stored a cloud access key as a repository secret. That key was a standing credential: it remained valid between runs and required manual rotation. Modern cloud integrations commonly use **OpenID Connect (OIDC)** federation instead.
 
 OIDC gives the cloud provider a signed statement about the workflow job. GitHub issues a JSON Web Token containing claims such as the repository, ref, workflow, environment, and audience. The cloud trust policy evaluates those claims. A matching job receives temporary credentials for a narrowly scoped role.
+
+![Trusted and untrusted CI lanes show how OIDC grants a temporary sandbox role without exposing cloud credentials to fork code](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/short-lived-identity-boundary.png)
+
+*The trust policy grants short-lived sandbox access to a reviewed workflow. Fork code remains in a restricted runner with no route to cloud credentials.*
 
 ```mermaid
 flowchart TD; A["Protected Job<br/>(reviewed workflow requests identity)"] --> B["GitHub OIDC Token<br/>(signed repository and job claims)"]; B --> C["Cloud Trust Policy<br/>(allowed repository, ref, and environment)"]; C --> D["Temporary Role<br/>(short lifetime and least privilege)"]; D --> E["Sandbox Integration<br/>(bounded read and write checks)"]
@@ -319,6 +327,10 @@ Automatic retries are suitable for bounded transient failures such as a temporar
 Training CI organizes work along two rising curves: cost and authority. A pull request receives restricted, hermetic checks first. Reviewed source produces an immutable image and configuration identity. Protected jobs use short-lived credentials for narrow integration checks. Full training runs from a trusted trigger and returns model evidence to the commit and release record.
 
 This structure gives beginners a practical way to reason about any CI step. Ask what question the step answers, which code it executes, which identity it receives, how much it can cost, and what evidence it leaves behind. A step that has no clear answer to those questions probably belongs in a different tier or needs a stronger contract.
+
+![The training CI journey links changed paths and fast checks to immutable inputs managed training and a reproducible release record](/content-assets/articles/article-mlops-mlops-infrastructure-ci-for-training-workflows/training-ci-evidence-summary.png)
+
+*A durable evidence chain ties the release decision to the reviewed commit, exact image and configuration, data snapshot, training job, and model identity. A controlled rerun starts from that same manifest.*
 
 ## References
 

@@ -1,0 +1,74 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "lambda.tf",
+  "files": [
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n  function_name = \"orders-worker\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "lambda.tf",
+      "initialValue": "resource \"aws_iam_role\" \"orders_runtime\" {\n  name = \"orders-runtime\"\n}\n\nresource \"aws_lambda_function\" \"orders\" {\n  function_name = \"replace-me\"\n  role          = \"arn:aws:iam::123456789012:role/orders-runtime\"\n  filename      = \"function.zip\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenBlocks": [
+      {
+        "file": "lambda.tf",
+        "path": [
+          {
+            "type": "resource",
+            "labels": [
+              "aws_lambda_function",
+              "orders"
+            ]
+          },
+          {
+            "type": "depends_on"
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "lambda.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_lambda_function",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "function_name"
+            ],
+            "expressionEquals": "local.function_name"
+          },
+          {
+            "path": [
+              "role"
+            ],
+            "references": [
+              "aws_iam_role.orders_runtime.arn"
+            ]
+          },
+          {
+            "path": [
+              "depends_on"
+            ],
+            "exists": false
+          }
+        ]
+      }
+    ]
+  }
+}

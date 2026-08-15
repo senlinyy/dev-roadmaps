@@ -4,6 +4,6 @@ description: "Practice diagnostic settings, workspaces, tables, KQL, retention, 
 articleId: article-cloud-providers-azure-observability-azure-monitor-log-analytics
 articleSlug: logs-and-workspaces
 difficulty: medium
-order: 32
+order: 24
 tags: ["azure", "monitor", "log-analytics", "diagnostic-settings", "kql"]
 ---

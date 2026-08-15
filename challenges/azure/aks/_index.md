@@ -4,6 +4,6 @@ description: "Practice deciding when Kubernetes is the right Azure operating mod
 articleId: article-cloud-providers-azure-compute-application-hosting-aks
 articleSlug: aks
 difficulty: medium
-order: 23
+order: 17
 tags: ["azure","aks","kubernetes","containers"]
 ---

@@ -4,6 +4,6 @@ description: "Practice using project IDs, names, labels, tags, and resource path
 articleId: article-cloud-providers-gcp-foundations-resource-names-labels-resource-paths
 articleSlug: resources-names-and-labels
 difficulty: easy
-order: 3
+order: 2
 tags: ["gcp", "resources", "labels", "names"]
 ---

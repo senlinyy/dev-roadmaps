@@ -28,7 +28,7 @@ id: "article-mlops-llmops-prompt-injection"
 ## What Prompt Injection Means
 <!-- section-summary: Prompt injection occurs when untrusted content changes an LLM application's behaviour beyond the purpose assigned by the application. -->
 
-At a high level, **prompt injection** is an attempt to make untrusted content control an LLM application. The content may tell the model to ignore its assigned task, reveal protected information, choose an unrelated tool, or take an action the user never requested.
+A retrieved webpage or uploaded document can contain instructions aimed at the model rather than information for the user. **Prompt injection** is an attempt to make that untrusted content control the LLM application. It may tell the model to ignore its assigned task, reveal protected information, choose an unrelated tool, or take an action the user never requested.
 
 The simplest way to understand the risk is to separate **content** from **authority**. An assistant may read a document because the document contains useful facts. Reading the document gives its text influence over the model. The document should gain no authority to change the user’s goal, open a new data source, or approve an external action.
 
@@ -52,6 +52,10 @@ flowchart TD
 ```
 
 Prompt injection can change an answer without touching another system. Its impact grows sharply once the model can search private data, call APIs, send messages, edit files, run code, or remember information for future sessions. Security therefore focuses on both the chance of model manipulation and the authority available after manipulation.
+
+![A webpage-summary example showing useful facts and a hidden upload instruction treated as untrusted evidence, evaluated by an application security gate, and routed either to a bounded summary or a blocked outcome, with direct and indirect injection entry paths and source roles.](/content-assets/articles/article-mlops-llmops-prompt-injection/content-influence-not-authority.png)
+
+*Direct and indirect injections enter through different sources, but both remain lower-trust content. The model may be influenced by that content while trusted application controls decide what it can do.*
 
 ## Understand Direct And Indirect Prompt Injection
 <!-- section-summary: Direct injection arrives through the person using the system, while indirect injection arrives through content the system reads on someone's behalf. -->
@@ -276,6 +280,10 @@ Imagine an email assistant that reads a hostile message and proposes forwarding 
 
 OpenAI’s current Agents SDK supports input, output, and tool guardrails, plus durable human approval for sensitive tool calls. Equivalent orchestration layers can implement the same pause-and-resume contract. The durable security property is exact-action approval and server-side authorization, regardless of framework.
 
+![A complete prompt-injection path from untrusted source to protected effect with independent controls at source, context, tool, authorization, sandbox, egress, and downstream-service boundaries, plus a concrete email forwarding action gate.](/content-assets/articles/article-mlops-llmops-prompt-injection/layered-injection-containment.png)
+
+*Defence in depth limits influence, then authority, then the effect itself. The model proposes an action; trusted code authorizes the exact request; the downstream service checks it again.*
+
 ## Add Managed Injection Detection As One Layer
 <!-- section-summary: Managed prompt-attack services can screen inputs and outputs, while application policy decides how detections affect routing, review, and authorization. -->
 
@@ -422,7 +430,11 @@ Prompt injection starts with untrusted content that tries to redirect an LLM app
 
 Defence in depth limits the path from content to impact. Source provenance and narrow retrieval reduce exposure. Structured handoffs reduce instruction flow. Least-privilege tools and sandboxes reduce capability. Deterministic authorization, destination controls, and exact-action approval protect side effects. Managed detectors stop many common attempts. System-level tests, monitoring, and incident response expose the failures that remain.
 
-In essence, the model may read untrusted text, while the application decides what that text is allowed to influence.
+The model may read untrusted text, while trusted application controls decide what that text is allowed to influence.
+
+![Four prompt-injection source types feeding an end-to-end containment ladder from pre-model blocking through model resistance, policy denial, downstream denial, and escaped impact, followed by test invariants and a five-stage production incident response.](/content-assets/articles/article-mlops-llmops-prompt-injection/prompt-injection-testing-response.png)
+
+*Security testing records the furthest boundary reached. An unsafe proposal denied by policy is a model failure with a held boundary; protected data or a completed unauthorized effect is a release blocker and incident.*
 
 ## References
 

@@ -27,7 +27,7 @@ id: "article-mlops-llmops-structured-outputs"
 
 <!-- section-summary: Structured output turns a model response into a defined data object that application code can inspect, validate, and pass to another system. -->
 
-At a high level, **structured output** asks a language model to answer with a specific data shape. A person can read a paragraph and work out what it means. Software needs something more dependable: known field names, known value types, and a clear way to represent missing information.
+A person can read a paragraph and work out what it means, while software needs known fields and value types before it can route or store the result. **Structured output** asks the model to answer with that specific data shape, including an explicit way to represent missing information.
 
 Imagine a customer writes, “My parcel never arrived. Tracking stopped after it reached the local depot.”
 
@@ -44,7 +44,7 @@ A structured response gives the workflow an object such as:
 }
 ```
 
-The workflow can now route `investigate` to the right queue, display `user_message`, and ask the carrier system for `carrier_scan`. In essence, the model translates flexible human language into a small software contract.
+The workflow can now route `investigate` to the right queue, display `user_message`, and ask the carrier system for `carrier_scan`. The model has translated flexible human language into a small software contract.
 
 The object is still a model-generated interpretation. It may have the right keys and the wrong decision. Structured output solves the **shape problem**; the application must still solve the **meaning and safety problems**.
 
@@ -321,6 +321,10 @@ Every field can satisfy the schema. The object may still be wrong. Perhaps the t
 
 That leads to three checks after schema validation.
 
+![Two schema-valid support decisions compared against different trusted delivery facts, where meaning, policy, and authority checks accept one candidate and reject the contradicted candidate.](/content-assets/articles/article-mlops-llmops-structured-outputs/same-shape-different-truth.png)
+
+*Both cases begin with the same machine-readable object. Trusted facts determine whether its reason is true, current policy determines whether the proposed route is allowed, and authority determines what the workflow may do next.*
+
 ### Semantic validation checks the claim
 
 **Semantic validation** asks whether the values make sense together and whether trusted evidence supports them. In plain language, it checks the content rather than the container.
@@ -465,19 +469,9 @@ Manage the contract as a coordinated release:
 
 For a compatible addition, an optional field can be introduced if absence has a clear meaning and older consumers ignore it safely. Use a new major contract version for renamed fields, new required fields, changed enum meaning, or changed units.
 
-```mermaid
-sequenceDiagram
-    participant C as Consumers
-    participant P as Producer
-    participant S as Stored objects
-    C->>C: Add support for v1 and v2
-    P->>P: Start producing v2
-    P->>S: Store object with schema_version v2
-    C->>S: Read v1 and v2 during migration
-    C->>C: Measure remaining v1 use
-    C->>P: Confirm v1 retirement
-    C->>C: Remove v1 after the support window
-```
+![A six-stage structured-output migration in which consumers read versions 1 and 2 before the producer switches, stored objects retain their schema identity, and remaining version 1 use controls retirement.](/content-assets/articles/article-mlops-llmops-structured-outputs/structured-output-contract-migration.png)
+
+*Upgrade consumers before switching the producer. Persist the contract identity with each object, measure remaining use of the old version, and retire it only after every supported consumer can proceed without it.*
 
 Store `schema_version` beside every object, along with the model-system version and validation result. Historical records then retain their original meaning. A support decision produced under `v1` can be interpreted correctly after the live service moves to `v2`.
 
@@ -552,6 +546,10 @@ Define one object with one clear job. Explain every field in domain language. Us
 Then check what the schema cannot prove: factual support, cross-field meaning, current business policy, and caller authority. Keep returned data separate from tool calls that propose side effects. Give each failure class a bounded recovery path, version the contract with its consumers, and evaluate realistic cases from provider response through product outcome.
 
 The schema makes the model’s answer machine-readable. The surrounding engineering makes that answer safe and useful.
+
+![A seven-layer structured-output boundary covering provider response state, constrained generation, application validation, meaning and authority, consumer compatibility, recovery policy, and evaluation.](/content-assets/articles/article-mlops-llmops-structured-outputs/structured-output-production-boundary.png)
+
+*A candidate reaches canary only after the complete boundary passes. The provider produced a usable value, application and authority checks accepted it, consumers understand the version, every failure class has a deliberate recovery policy, and realistic evaluations met the release criteria.*
 
 ## References
 

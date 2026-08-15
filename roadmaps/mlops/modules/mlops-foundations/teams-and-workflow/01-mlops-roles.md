@@ -124,6 +124,23 @@ The platform team should provide a **paved road**: a supported route for routine
 
 Suppose an online model needs a new GPU runtime. The platform owner verifies that its images come from an approved source and that enough capacity is available. Load tests then reveal its scaling behavior and fallback compatibility. The model owner compares predictions from the old and new runtimes. Both responsibilities matter because a numerically valid model can still fail through memory pressure, queueing, dependency mismatch, or an incompatible request schema.
 
+```mermaid
+mindmap
+  root((ML System Ownership))
+    product["Product And Domain<br/>(purpose, guardrails, and fallback)"]
+    data["Data<br/>(meaning, quality, access, and delivery)"]
+    model["Model Development<br/>(training, evaluation, and limitations)"]
+    production["Production Operation<br/>(release, reliability, monitoring, and recovery)"]
+```
+
+These areas describe responsibilities, not mandatory job titles. A small team
+can combine them, while a higher-risk system may separate them to create
+independent review and clearer authority.
+
+![Product, data, model, and production ownership organized around one product decision](/content-assets/articles/article-mlops-mlops-foundations-mlops-roles/four-areas-of-ownership.png)
+
+*Each ownership area answers a different question about the same ML system. Their evidence joins at the product decision rather than disappearing into separate team queues.*
+
 ## Assign Review And Approval Rights For Sensitive Changes
 <!-- section-summary: Security and governance set cross-cutting boundaries, while release approval makes an explicit decision about the evidence and residual risk for one change. -->
 
@@ -228,6 +245,10 @@ The incident commander keeps these actions in one response. Strong coordination 
 
 A **runbook** is the short operational guide responders follow. For an ML service, it should identify the active release, recent data changes, feature freshness, model and policy versions, service telemetry, prediction distribution, delayed outcome health, business fallback, rollback action, and escalation owners. A post-incident review should then improve the control that failed: a data contract, release check, monitor, permission boundary, or runbook step.
 
+![Incident coordinator connected to mitigation, technical, product, communication, and risk responsibilities](/content-assets/articles/article-mlops-mlops-foundations-mlops-roles/ml-incident-roles.png)
+
+*The incident coordinator keeps one response coherent while specialists and decision owners handle distinct responsibilities. A small team may combine roles without hiding their authority.*
+
 ## Combine Roles in a Small Team
 <!-- section-summary: A small team can combine several roles in one person, provided that decision rights, evidence, access, and independent review remain visible. -->
 
@@ -265,7 +286,7 @@ Start with source control. `CODEOWNERS` routes changes to responsible teams. Pro
 
 Next, connect identity to the lifecycle. Development jobs may read approved training data and write candidate artifacts. Validation identities can read candidates and attach review evidence. Production deployment identities can promote only approved versions. Human administrators should use audited, time-limited elevation for exceptional actions. This turns a responsibility map into enforceable access.
 
-Model registries should connect each model version to its identity and evidence. Current MLflow workflows use immutable model versions plus tags and aliases; fixed registry stages are deprecated. A validation process can attach a `validation_status` tag, while the deployment system moves an environment alias only after the release gate passes.
+Model registries should connect each model version to its identity and evidence. Current MLflow workflows use immutable model versions plus tags and aliases; fixed registry stages are deprecated. A validation process can attach a `validation_status` tag. The release gate must pass before the deployment system moves an environment alias.
 
 ```python
 from mlflow import MlflowClient
@@ -301,6 +322,10 @@ The organization chart can change without breaking this model. A small team comb
 
 That is the practical purpose of MLOps roles. They keep technical capability, product authority, and operational response connected throughout the model’s life.
 
+![Decision ownership from defining the use through publishing data, approving a model, releasing it, and operating the service](/content-assets/articles/article-mlops-mlops-foundations-mlops-roles/ownership-decision-summary.png)
+
+*Ownership follows lifecycle decisions. Every important transition names who decides, which evidence they review, and how the team responds if the change fails.*
+
 ## References
 
 - [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) - Defines continuous governance, documented roles, multidisciplinary perspectives, human oversight, and executive accountability for AI risk.
@@ -308,6 +333,6 @@ That is the practical purpose of MLOps roles. They keep technical capability, pr
 - [Google Cloud: MLOps continuous delivery and automation pipelines in machine learning](https://docs.cloud.google.com/architecture/mlops-continuous-delivery-and-automation-pipelines-in-machine-learning) - Describes the integrated data, training, validation, delivery, and monitoring work around production ML.
 - [Google SRE Workbook: Incident response](https://sre.google/workbook/incident-response/) - Defines incident commander, operations lead, and communications lead responsibilities.
 - [GitHub Docs: About code owners](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners) - Documents ownership-based review routing.
-- [GitHub Docs: About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges/managing-protected-branches/about-protected-branches) - Documents required reviews, status checks, and code-owner approval.
+- [GitHub Docs: About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) - Documents required reviews, status checks, and code-owner approval.
 - [GitHub Docs: Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) - Documents required deployment reviewers and prevention of self-review.
 - [MLflow: Model Registry workflows](https://mlflow.org/docs/latest/ml/model-registry/workflow/) - Documents model versions, tags, aliases, and the move away from fixed model stages.

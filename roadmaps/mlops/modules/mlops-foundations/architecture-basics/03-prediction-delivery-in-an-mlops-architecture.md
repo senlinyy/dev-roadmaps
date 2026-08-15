@@ -33,15 +33,14 @@ product faces a larger problem. It has to collect the facts available at the
 decision moment, run the approved model, interpret the output, act before the
 answer loses value, and handle every failure along that path.
 
-At a high level, **prediction delivery is the complete production path from a
-trigger to a product action and the evidence that explains that action**.
-
 Consider a payment risk check. The model may return a probability such as
 `0.82`. The payment service needs an action such as approve the payment, request
 another identity check, or send the case to review. Before the score exists, the
 system has to validate the payment details and retrieve recent account
 behaviour. After the score exists, policy decides which action is permitted. The
-whole path has to finish before the payment flow times out.
+whole path has to finish before the payment flow times out. **Prediction
+delivery is this complete path from a trigger to a product action and the
+evidence that explains that action.**
 
 A daily inventory forecast uses the same responsibilities with a different
 clock. A scheduled job reads a complete sales snapshot, creates features, runs
@@ -141,7 +140,7 @@ table, an event, a callback, a stored result, or a local device action. A
 complete handoff includes enough status and provenance to distinguish a normal
 result from a degraded one.
 
-Delivery finishes only after the product receives or applies that result. A
+Delivery ends with the product receiving or applying that result. A
 model endpoint returning a score while the calling service has already timed out
 has completed computation and failed delivery.
 
@@ -158,6 +157,10 @@ Evidence and feedback extend the path beyond the completed action. Evidence
 explains the execution immediately. Feedback arrives later and shows whether the
 action helped. Those two records serve different questions, so both need their
 own design.
+
+![Complete prediction-delivery path from a production trigger through input checks, features, model execution, product policy, action, and later outcome](/content-assets/articles/article-mlops-mlops-foundations-batch-online-streaming-systems/trigger-to-product-action.png)
+
+*The model call sits inside a longer product path. Deadlines, evidence, and fallbacks apply from the initial trigger through the action and later outcome.*
 
 ## Check The Data Before Running The Model
 
@@ -594,6 +597,10 @@ behaviour in a stream and make the payment decision online. An edge device can
 act locally and upload evidence in batches. The shared contracts keep each
 boundary identifiable across the combined path.
 
+![Online, asynchronous, batch, streaming, and edge prediction delivery compared by deadline and work shape](/content-assets/articles/article-mlops-mlops-foundations-batch-online-streaming-systems/delivery-modes-by-deadline.png)
+
+*Delivery modes organize the same responsibilities around different deadlines, input shapes, and connectivity. The product's action deadline is the first selection question.*
+
 ## Choose Who Runs The Model In Production
 
 <!-- section-summary: Managed endpoints, application APIs, provider model APIs, and specialized serving platforms divide runtime responsibility in different ways. -->
@@ -740,6 +747,10 @@ real-world effect. It can also move backward from a failed action to the exact
 input, feature status, release, policy, runtime, and fallback that produced it.
 That traceable path is what turns model inference into an operable product
 capability.
+
+![Safe prediction delivery connecting trusted input, an approved release, model output, product action, prediction evidence, and real outcomes](/content-assets/articles/article-mlops-mlops-foundations-batch-online-streaming-systems/safe-prediction-delivery-summary.png)
+
+*Safe delivery combines a complete execution loop with explicit deadlines, fallbacks, and ownership. The resulting evidence supports explanation, learning, and recovery.*
 
 ## References
 

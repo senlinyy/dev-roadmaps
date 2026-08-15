@@ -248,6 +248,10 @@ can help teams implement risk practices. Those mappings remain implementation
 choices. An auditor or reviewer still evaluates the requirements and scope of
 the source that matters to the decision.
 
+![ISO IEC 42001, ISO IEC 23894, NIST AI RMF 1.0, ISO IEC 5338, and the ISO IEC 5259 family surround one production AI system with distinct management, risk, lifecycle, and data-quality responsibilities.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/standards-responsibility-map.png)
+
+*The five sources overlap around one system, but each contributes a different kind of requirement, guidance, process, outcome, or data-quality discipline.*
+
 ## How The Standards Work Together In One ML System
 
 <!-- section-summary: A control crosswalk connects policy, risk decisions, lifecycle gates, data measures, and operating evidence without collapsing their different purposes. -->
@@ -343,6 +347,10 @@ decides whether the treatment reduces the risk enough for the intended use. CI
 can enforce the numeric threshold, while it cannot grant itself authority to
 accept the residual risk. That separation keeps automation fast and the
 consequential decision accountable.
+
+![Lending control DQ-CREDIT-014 applies a 0.995 join-coverage threshold to one governed dataset and maps the resulting evidence to five distinct standards purposes while naming what the test cannot prove.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/lending-control-crosswalk.png)
+
+*A control crosswalk can reuse one concrete test result across several mappings without treating leadership review, residual-risk acceptance, or retirement planning as outputs of that test.*
 
 ## See the Layers in a Lending Decision
 
@@ -869,6 +877,10 @@ This structure prevents two common errors. The first is treating standards as
 interchangeable checklists. The second is assuming a tool or certificate proves
 every property of an AI system. A credible programme keeps each source's purpose
 intact and traces its decisions to the exact system operating in production.
+
+![Policy objectives, risk decisions, lifecycle controls, technical checks, accountable outcomes, production evidence, and review form one traceable governance loop, with approved and limited scope entering production while rejected decisions terminate.](/content-assets/articles/article-mlops-governance-and-responsible-ai-ai-management-risk-lifecycle-data-quality-standards/standards-evidence-chain-summary.png)
+
+*Standards become operational when their distinct responsibilities connect through stable identifiers to an accountable release decision, live evidence, and a feedback loop that changes the control system.*
 
 ## References
 

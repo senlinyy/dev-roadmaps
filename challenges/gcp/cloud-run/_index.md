@@ -4,6 +4,6 @@ description: "Practice Cloud Run container contracts, services, revisions, traff
 articleId: article-cloud-providers-gcp-compute-application-hosting-cloud-run-services-backend-apis
 articleSlug: cloud-run
 difficulty: medium
-order: 14
+order: 15
 tags: ["gcp", "cloud-run", "containers", "revisions"]
 ---

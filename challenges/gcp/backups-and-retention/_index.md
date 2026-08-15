@@ -4,6 +4,6 @@ description: "Practice recovery points, service-specific restore options, retent
 articleId: article-cloud-providers-gcp-storage-databases-backups-retention
 articleSlug: backups-and-retention
 difficulty: medium
-order: 24
+order: 25
 tags: ["gcp", "backups", "retention", "recovery"]
 ---

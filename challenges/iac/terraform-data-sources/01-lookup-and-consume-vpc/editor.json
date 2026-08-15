@@ -1,0 +1,83 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "network.tf",
+  "files": [
+    {
+      "filename": "network.tf",
+      "initialValue": "# The platform VPC already exists. Add a lookup and the orders subnet.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenBlocks": [
+      {
+        "file": "network.tf",
+        "path": [
+          {
+            "type": "resource",
+            "labels": [
+              "aws_vpc",
+              "platform"
+            ]
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "network.tf",
+          "path": [
+            {
+              "type": "data",
+              "labels": [
+                "aws_vpc",
+                "platform"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "tags",
+              "Name"
+            ],
+            "valueEquals": "platform-prod"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "network.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_subnet",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "vpc_id"
+            ],
+            "references": [
+              "data.aws_vpc.platform.id"
+            ]
+          },
+          {
+            "path": [
+              "cidr_block"
+            ],
+            "valueEquals": "10.42.20.0/24"
+          }
+        ]
+      }
+    ]
+  }
+}

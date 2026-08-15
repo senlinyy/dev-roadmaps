@@ -1,0 +1,62 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "audit.tf",
+  "files": [
+    {
+      "filename": "audit.tf",
+      "initialValue": "# Bring the existing audit bucket under Terraform ownership.\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "audit.tf",
+          "path": [
+            {
+              "type": "import"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "to"
+            ],
+            "expressionEquals": "aws_s3_bucket.audit"
+          },
+          {
+            "path": [
+              "id"
+            ],
+            "valueEquals": "dp-security-audit-prod"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "audit.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "audit"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "valueEquals": "dp-security-audit-prod"
+          }
+        ]
+      }
+    ]
+  }
+}

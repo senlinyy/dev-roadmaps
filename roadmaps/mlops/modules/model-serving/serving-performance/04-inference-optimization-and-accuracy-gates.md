@@ -6,8 +6,8 @@ description:
   quality."
 overview:
   "Inference optimization changes some part of the path from an incoming request
-  to a returned prediction. This article explains the optimization layers, model
-  export, graph partitioning, reduced precision, representative benchmarks,
+  to a returned prediction, including the optimization layers, model export,
+  graph partitioning, reduced precision, representative benchmarks,
   accuracy gates, and safe production release."
 tags: ["MLOps", "advanced", "performance"]
 order: 4
@@ -37,10 +37,7 @@ id: "article-mlops-model-serving-inference-optimization-accuracy-gates"
 
 <!-- section-summary: Inference optimization changes request handling, model representation, numerical precision, runtime execution, or hardware to improve a measured production constraint. -->
 
-At a high level, **inference optimization** means making a deployed model serve
-predictions with less delay, more capacity, less memory, or lower cost. The work
-can happen before the model runs, inside the model, inside the serving runtime,
-or on the hardware that executes it.
+An accurate model may still be too slow, memory-hungry, or expensive for its production deadline. **Inference optimization** changes the serving path so the model delivers predictions with less delay, more capacity, less memory, or lower cost. The work can happen before the model runs, inside the model, inside the serving runtime, or on the hardware that executes it.
 
 Consider an image classifier behind an API. One request may wait in a queue,
 download an image, decode it, resize it, copy a tensor to a GPU, run the neural
@@ -109,6 +106,10 @@ flowchart TD
 
 A candidate earns further work only if its chosen layer can materially improve
 the stated constraint.
+
+![A 140-millisecond p95 inference profile split into authentication and network, image preprocessing, GPU execution, queueing, and postprocessing, comparing a faster kernel with a change to the largest stage.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimize-measured-bottleneck.png)
+
+*The profile gives optimization a finish line: target the stage with enough measured budget to change the product constraint, then reprofile the complete path rather than assuming the bottleneck stayed put.*
 
 ## Profile The Complete Request Path
 
@@ -695,6 +696,10 @@ For ranking and generation systems, the corresponding product gate may compare
 reordered items, tool choices, safety routes, refusal decisions, or human-review
 outcomes. The exact gate follows the action produced by the model.
 
+![An exported and optimized model becoming a versioned executable candidate, then passing compatibility, numerical, model-quality, and product-decision gates before benchmarking, with a threshold-crossing example.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimized-candidate-gates.png)
+
+*Export, provider placement, compilation, and reduced precision create a new executable candidate; even a small paired-score difference must pass the product-action gate before faster execution can advance.*
+
 ## Release The Optimized Model Through Shadow, Canary, And Rollback Stages
 
 <!-- section-summary: Shadow and canary stages expose the optimized candidate to current traffic while a complete baseline release remains ready for recovery. -->
@@ -816,6 +821,10 @@ model contract, hardware, workload, and product decision. A production-ready
 candidate carries enough evidence to explain the improvement, the accepted
 numerical difference, the live stop signals, and the exact baseline release used
 for recovery.
+
+![Production optimization workflow from a measurable constraint and full profile through a targeted immutable candidate, representative open and closed load tests, quality gates, shadow and canary release, expansion, or complete rollback.](/content-assets/articles/article-mlops-model-serving-inference-optimization-accuracy-gates/optimization-release-summary.png)
+
+*Optimization is released as one measured production change: representative performance and behaviour gates travel with the candidate, and a breached limit restores the complete baseline model, runtime, policy, batching, and cache combination.*
 
 ## References
 

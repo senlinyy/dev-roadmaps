@@ -118,6 +118,10 @@ Failed attempts, Spot interruptions, repeated data downloads, and work since the
 
 Queue time has a different treatment. A queued job usually has no allocated compute charge, although it delays the result. Warm pools, persistent resources, and reservations may continue billing while the workload waits elsewhere. Completion metrics and financial metrics therefore need separate clocks.
 
+![A training lifecycle separates queue-inclusive time to result from a full cost boundary containing accelerators, CPU and memory, storage and network, shared idle capacity, failed attempts, and recovery work, then divides that cost by accepted models.](/content-assets/articles/article-mlops-training-pipelines-training-cost-and-quotas/full-cost-of-accepted-model.png)
+
+*Time to result follows the complete submission-to-acceptance path. Cost per useful result includes every allocated and supporting resource used across successful, interrupted, failed, and recovered attempts.*
+
 ## Understand Quota, Capacity, Allocation, Queue, And Budget
 <!-- section-summary: Five different controls determine whether a job is permitted, physically available, assigned, waiting, and financially approved. -->
 
@@ -149,6 +153,10 @@ flowchart TD
 
 Increasing namespace quota cannot create a missing cloud GPU. Purchasing a capacity reservation cannot bypass an account service quota. Raising a budget cannot fix an impossible node selector. Each control has a distinct owner and source of evidence.
 
+![Five distinct controls lead from a resource request to a useful result: quota grants permission, capacity supplies hardware, queue policy admits the workload, allocation assigns billable resources, and budget policy applies a financial decision.](/content-assets/articles/article-mlops-training-pipelines-training-cost-and-quotas/five-training-capacity-controls.png)
+
+*Quota, capacity, queue admission, allocation, and budget action describe different states. An incident response should inspect the evidence attached to the state where progress stopped.*
+
 ## Measure Waiting Time, Training Time, And Accelerator Use
 <!-- section-summary: Time to result includes waiting and recovery, while accelerator-hours measure the allocated devices consumed during running attempts. -->
 
@@ -174,7 +182,7 @@ Suppose an eight-GPU job waits two hours and then runs for five allocated hours.
 
 Break training steps into input wait, forward compute, backward compute, collective communication, optimizer work, and checkpoint time. Low accelerator utilization can mean insufficient CPU, slow storage, uneven data, or synchronization stalls. It does not automatically justify a cheaper GPU.
 
-For managed services, also record pending and provisioning states. SageMaker, Vertex AI, Azure Machine Learning, and Databricks use different status names. Map them to a shared lifecycle in the platform's run record: submitted, queued, provisioning, running, recovering, evaluating, and completed.
+For managed services, also record pending and provisioning states. SageMaker AI, Gemini Enterprise Agent Platform, Azure Machine Learning, and Databricks use different status names. Map them to a shared lifecycle in the platform's run record: submitted, queued, provisioning, running, recovering, evaluating, and completed.
 
 ## Choose Resources, Precision, and Parallelism
 <!-- section-summary: The lowest-cost configuration fits the workload, feeds the accelerator, reaches the quality target, and finishes within the objective. -->
@@ -225,7 +233,7 @@ Reservations are useful for release-critical training, planned large-scale pretr
 
 AWS provides EC2 Capacity Blocks for ML and SageMaker training plans for scheduled accelerated capacity. A SageMaker training plan can terminate a workload near the end of its reserved block. The reservation plan therefore needs enough time for a final checkpoint and orderly recovery.
 
-Google Compute Engine reservations provide zonal capacity assurance. Vertex AI support for consuming GPU reservations in custom training is generally available. Vertex persistent resources keep a training cluster available across jobs and bill provisioned replicas even during idle periods.
+Google Compute Engine reservations provide zonal capacity assurance. Gemini Enterprise Agent Platform serverless training can consume supported GPU reservations. Agent Platform persistent resources keep a training cluster available across jobs and bill provisioned replicas even during idle periods.
 
 Azure on-demand capacity reservations secure matching VM capacity in a region or zone. Azure Reserved VM Instances and savings plans provide billing discounts and do not by themselves guarantee capacity.
 
@@ -271,7 +279,7 @@ A large distributed checkpoint may not finish inside those windows. Use periodic
 
 After an interruption, the orchestrator should locate the latest complete checkpoint, acquire a supported worker topology, restore, and verify the next step. Record the previous attempt's allocated hours and the new attempt number under the same logical run ID.
 
-Set a maximum wait and retry count. SageMaker Managed Spot Training exposes `MaxWaitTimeInSeconds` and can sync checkpoints between a local path and S3. Vertex AI Spot training can retry stockout failures, but the training application still needs checkpoints to preserve progress. Azure Machine Learning low-priority nodes can be preempted and require restartable training.
+Set a maximum wait and retry count. SageMaker Managed Spot Training exposes `MaxWaitTimeInSeconds` and can sync checkpoints between a local path and S3. Gemini Enterprise Agent Platform Spot training can retry stockout failures, but the training application still needs checkpoints to preserve progress. Azure Machine Learning low-priority nodes can be preempted and require restartable training.
 
 Test the interruption path before assigning routine work to Spot. Trigger a controlled termination, restore on a replacement worker group, and compare several steps with an uninterrupted baseline.
 
@@ -284,7 +292,7 @@ Capacity governance needs controls at both the provider and cluster layers. The 
 
 SageMaker training quotas are regional and specific to training instance types. Reserved capacity in SageMaker training plans has additional quotas, and the training job or HyperPod quota still needs to cover the planned instance count.
 
-Vertex AI custom-training accelerator quotas are project-and-region scoped and separate from Compute Engine quotas. Quota approval still leaves a capacity check. Reservations or persistent resources can provide stronger assurance for supported training patterns.
+Gemini Enterprise Agent Platform serverless-training accelerator quotas are project-and-region scoped and separate from Compute Engine quotas. Quota approval still leaves a capacity check. Reservations or persistent resources can provide stronger assurance for supported training patterns.
 
 Azure Machine Learning compute quota is regional and divided by VM family, with subscription and optional workspace-level controls. Microsoft states that quota is a credit limit, not a capacity guarantee. Low-priority cores also use a separate quota.
 
@@ -508,6 +516,10 @@ Commitments reduce rates for predictable demand, reservations protect scarce cap
 
 A mature platform can explain what every training run produced and how long the result took. It can also identify the capacity controls, reconstruct the complete cost, and prove whether interruption recovery succeeded.
 
+![A six-step operating loop defines the useful result, estimates the full cost boundary, secures capacity, runs with limits, checkpoints and recovers, then reconciles attempts and billed cost into a reusable decision record.](/content-assets/articles/article-mlops-training-pipelines-training-cost-and-quotas/operate-training-cost-and-capacity.png)
+
+*Training economics connects the useful result to a capacity path, explicit runtime limits, tested recovery, and final cost reconciliation. The decision record retains time to result, accelerator-hours by device, full cost, and cost per useful result.*
+
 ## References
 
 - [PyTorch Automatic Mixed Precision](https://docs.pytorch.org/docs/stable/accelerator/amp.html)
@@ -532,8 +544,8 @@ A mature platform can explain what every training run produced and how long the 
 - [Google Compute Engine quotas](https://docs.cloud.google.com/compute/resource-usage)
 - [Google Compute Engine reservations](https://docs.cloud.google.com/compute/docs/instances/reservations-overview)
 - [Google Cloud Spot VMs](https://docs.cloud.google.com/compute/docs/instances/spot)
-- [Vertex AI reservations for training](https://cloud.google.com/vertex-ai/docs/training/use-reservations)
-- [Vertex AI Spot training](https://cloud.google.com/vertex-ai/docs/training/use-spot-vms)
+- [Gemini Enterprise Agent Platform reservations for training](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/use-reservations)
+- [Gemini Enterprise Agent Platform Spot training](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/use-spot-vms)
 - [Google Cloud billing export to BigQuery](https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery-setup)
 - [Google Cloud spend cap budgets](https://docs.cloud.google.com/billing/docs/how-to/budgets-spend-caps)
 - [Azure Machine Learning quotas](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-manage-quotas)

@@ -1,0 +1,187 @@
+{
+  "language": "json",
+  "filename": "table-input.json",
+  "completionProfile": "aws-json",
+  "initialValue": "{\n  \"TableName\": \"orders\",\n  \"BillingMode\": \"PROVISIONED\",\n  \"AttributeDefinitions\": [],\n  \"KeySchema\": [],\n  \"GlobalSecondaryIndexes\": [],\n  \"SSESpecification\": {\n    \"Enabled\": false\n  }\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "TableName"
+        ],
+        "equals": "orders",
+        "label": "orders table name"
+      },
+      {
+        "path": [
+          "BillingMode"
+        ],
+        "equals": "PAY_PER_REQUEST",
+        "label": "on-demand billing"
+      },
+      {
+        "path": [
+          "AttributeDefinitions"
+        ],
+        "containsObject": {
+          "AttributeName": "pk",
+          "AttributeType": "S"
+        },
+        "label": "partition-key definition"
+      },
+      {
+        "path": [
+          "AttributeDefinitions"
+        ],
+        "containsObject": {
+          "AttributeName": "sk",
+          "AttributeType": "S"
+        },
+        "label": "sort-key definition"
+      },
+      {
+        "path": [
+          "AttributeDefinitions"
+        ],
+        "containsObject": {
+          "AttributeName": "gsi1pk",
+          "AttributeType": "S"
+        },
+        "label": "customer index partition key"
+      },
+      {
+        "path": [
+          "AttributeDefinitions"
+        ],
+        "containsObject": {
+          "AttributeName": "gsi1sk",
+          "AttributeType": "S"
+        },
+        "label": "customer index sort key"
+      },
+      {
+        "path": [
+          "AttributeDefinitions"
+        ],
+        "containsObject": {
+          "AttributeName": "idempotencyKey",
+          "AttributeType": "S"
+        },
+        "minItems": 5,
+        "maxItems": 5,
+        "label": "only key attributes"
+      },
+      {
+        "path": [
+          "KeySchema"
+        ],
+        "containsObject": {
+          "AttributeName": "pk",
+          "KeyType": "HASH"
+        },
+        "label": "table partition key"
+      },
+      {
+        "path": [
+          "KeySchema"
+        ],
+        "containsObject": {
+          "AttributeName": "sk",
+          "KeyType": "RANGE"
+        },
+        "label": "table sort key"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          0,
+          "IndexName"
+        ],
+        "equals": "customer-status-created-index",
+        "label": "customer access index"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          0,
+          "KeySchema"
+        ],
+        "containsObject": {
+          "AttributeName": "gsi1pk",
+          "KeyType": "HASH"
+        },
+        "label": "customer index partition key"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          0,
+          "KeySchema"
+        ],
+        "containsObject": {
+          "AttributeName": "gsi1sk",
+          "KeyType": "RANGE"
+        },
+        "label": "customer index sort key"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          0,
+          "Projection",
+          "ProjectionType"
+        ],
+        "equals": "ALL",
+        "label": "customer index projection"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          1,
+          "IndexName"
+        ],
+        "equals": "idempotency-index",
+        "label": "idempotency index"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          1,
+          "KeySchema"
+        ],
+        "containsObject": {
+          "AttributeName": "idempotencyKey",
+          "KeyType": "HASH"
+        },
+        "label": "idempotency lookup key"
+      },
+      {
+        "path": [
+          "GlobalSecondaryIndexes",
+          1,
+          "Projection",
+          "ProjectionType"
+        ],
+        "equals": "KEYS_ONLY",
+        "label": "bounded idempotency projection"
+      },
+      {
+        "path": [
+          "SSESpecification",
+          "Enabled"
+        ],
+        "equals": true,
+        "label": "server-side encryption"
+      },
+      {
+        "path": [
+          "SSESpecification",
+          "SSEType"
+        ],
+        "equals": "AES256",
+        "label": "AWS-owned key encryption"
+      }
+    ]
+  }
+}

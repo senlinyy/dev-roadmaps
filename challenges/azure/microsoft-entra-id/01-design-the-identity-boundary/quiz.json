@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "support-workforce",
+      "type": "single",
+      "scenario": "A support team of 18 employees needs access to the production dashboard. Membership changes weekly, and access reviews must show why each person can sign in. Which identity design gives the cleanest operating boundary?",
+      "options": [
+        { "id": "a", "text": "Create one shared cloud-only user and distribute its password through the support lead." },
+        { "id": "b", "text": "Create individual human identities, place them in a governed support group, and assign the application access to that group." },
+        { "id": "c", "text": "Register every employee as a separate application and assign each application an owner." },
+        { "id": "d", "text": "Give the dashboard managed identity permission to authenticate the support staff." }
+      ],
+      "correct": ["b"],
+      "explanation": "Individual identities preserve accountability and a group makes membership reviewable. A shared account destroys attribution, application registrations represent software rather than employees, and managed identities authenticate Azure workloads. See [Microsoft Entra identity fundamentals](https://learn.microsoft.com/en-us/entra/fundamentals/whatis)."
+    },
+    {
+      "id": "tenant-subscription",
+      "type": "single",
+      "scenario": "The company creates a second Azure subscription for production but keeps the same Microsoft Entra tenant. An engineer claims every employee must receive a new sign-in identity. What is the most accurate review comment?",
+      "options": [
+        { "id": "a", "text": "The engineer is correct because identities are created separately inside every subscription." },
+        { "id": "b", "text": "The existing tenant identities can be authorized in the new subscription through Azure RBAC assignments." },
+        { "id": "c", "text": "The production subscription automatically grants all tenant members Owner access." },
+        { "id": "d", "text": "The subscription must be converted into a new tenant before any resource can be deployed." }
+      ],
+      "correct": ["b"],
+      "explanation": "The tenant is the identity boundary, while subscriptions are Azure resource and governance boundaries associated with a tenant. Existing principals can receive scoped RBAC assignments in the new subscription. Association does not grant automatic Owner access. See [Azure subscriptions and Microsoft Entra ID](https://learn.microsoft.com/en-us/azure/active-directory/fundamentals/how-subscriptions-associated-directory)."
+    },
+    {
+      "id": "app-object",
+      "type": "single",
+      "scenario": "A SaaS dashboard is registered once in the engineering tenant and then consented to in a customer tenant. The team needs to distinguish the reusable application definition from the tenant-local security identity. Which statement is correct?",
+      "options": [
+        { "id": "b", "text": "The service principal is the reusable global definition, while the application object exists once per user." },
+        { "id": "c", "text": "Both objects are Azure subscriptions with different billing owners." },
+        { "id": "a", "text": "The application object is the reusable definition, while each tenant receives a service principal that represents the application locally." },
+        { "id": "d", "text": "The two objects are interchangeable records and always share the same object ID." }
+      ],
+      "correct": ["a"],
+      "explanation": "The application object is the home-tenant definition. A service principal is created in each tenant where the application is used and receives local assignments and consent. The objects have different identities and object IDs. See [application and service principal objects](https://learn.microsoft.com/en-us/entra/identity-platform/app-objects-and-service-principals)."
+    },
+    {
+      "id": "runtime-secret",
+      "type": "single",
+      "scenario": "An Azure Container App needs to read one Key Vault secret. The platform team wants no client secret in source control, CI variables, or the container environment. Which identity should the runtime use?",
+      "options": [
+        { "id": "d", "text": "A Conditional Access policy that turns the Key Vault secret into an access token." },
+        { "id": "c", "text": "A shared service principal password embedded into the container image." },
+        { "id": "b", "text": "The personal account of the engineer who created the Container App." },
+        { "id": "a", "text": "A managed identity assigned to the Container App, with only the required Key Vault data permission." }
+      ],
+      "correct": ["a"],
+      "explanation": "Managed identities let Azure workloads obtain tokens without carrying an application credential. The identity still needs a least-privilege data-plane assignment. Human accounts and embedded passwords create lifecycle risk, while Conditional Access does not transform secrets into tokens. See [managed identities for Azure resources](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)."
+    },
+    {
+      "id": "signin-controls",
+      "type": "multiple",
+      "scenario": "A production access review finds that support users can sign in from unmanaged devices with only a password, and audit records do not show which group granted dashboard access. Which two changes directly address those findings?",
+      "options": [
+        { "id": "c", "text": "Increase the production subscription spending limit so failed sign-ins are retained longer." },
+        { "id": "a", "text": "Apply a Conditional Access policy requiring multifactor authentication and an approved device condition for the support application." },
+        { "id": "d", "text": "Move the dashboard to another Azure region without changing the tenant configuration." },
+        { "id": "b", "text": "Record access through a named support group and review its membership and application assignment." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "Conditional Access evaluates sign-in conditions and can require stronger authentication or compliant devices. Group-based assignment makes the authorization path reviewable. Subscription spend and regional placement do not correct the identity findings. See [Conditional Access overview](https://learn.microsoft.com/en-us/entra/identity/conditional-access/overview) and [group-based assignment](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)."
+    }
+  ]
+}

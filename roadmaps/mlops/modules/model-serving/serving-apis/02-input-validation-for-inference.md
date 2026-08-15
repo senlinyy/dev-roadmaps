@@ -1,7 +1,7 @@
 ---
 title: "Input Validation"
 description: "Validate inference inputs before model execution with resource limits, strict schemas, semantic and temporal rules, operating-domain checks, safe outcomes, and observable rollout controls."
-overview: "Input validation is the layered safety boundary between an inference caller and a model. This article explains how production teams validate transport, structure, meaning, time, feature readiness, model operating limits, compatibility, and failure behavior."
+overview: "Input validation is the layered safety boundary between an inference caller and a model, covering transport, structure, meaning, time, feature readiness, model operating limits, compatibility, and failure behavior."
 tags: ["MLOps", "core", "api"]
 order: 2
 id: "article-mlops-model-serving-input-validation-for-inference"
@@ -14,25 +14,16 @@ aliases:
 
 1. [Valid JSON Can Still Be Unsafe For A Model](#valid-json-can-still-be-unsafe-for-a-model)
 2. [Validate Input At Several Boundaries](#validate-input-at-several-boundaries)
-3. [Stop Unsafe Bodies Before Expensive Processing](#stop-unsafe-bodies-before-expensive-processing)
-4. [Use A Strict Schema For Values Supplied By The Caller](#use-a-strict-schema-for-values-supplied-by-the-caller)
-5. [Validate Meaning, Units, And Relationships](#validate-meaning-units-and-relationships)
-6. [Validate Timestamps And Data Freshness](#validate-timestamps-and-data-freshness)
-7. [Reject Inputs Outside The Model's Supported Domain](#reject-inputs-outside-the-models-supported-domain)
-8. [Control Type Coercion And Compatibility](#control-type-coercion-and-compatibility)
-9. [Choose A Response For Each Validation Failure](#choose-a-response-for-each-validation-failure)
-10. [Use Stable Error Categories](#use-stable-error-categories)
-11. [Apply Security Controls Before And During Validation](#apply-security-controls-before-and-during-validation)
-12. [Monitor Validation Without Storing Raw Payloads](#monitor-validation-without-storing-raw-payloads)
-13. [Introduce New Validation Rules Gradually](#introduce-new-validation-rules-gradually)
-14. [Test The Validation Contract And Incident Paths](#test-the-validation-contract-and-incident-paths)
-15. [The Main Idea](#the-main-idea)
-16. [References](#references)
+3. [Choose A Response For Each Validation Failure](#choose-a-response-for-each-validation-failure)
+4. [Apply Security Controls Before And During Validation](#apply-security-controls-before-and-during-validation)
+5. [Introduce New Validation Rules Gradually](#introduce-new-validation-rules-gradually)
+6. [The Main Idea](#the-main-idea)
+7. [References](#references)
 
 ## Valid JSON Can Still Be Unsafe For A Model
 <!-- section-summary: Inference validation checks whether a request is safe to interpret, within the supported operating domain, and affordable to process before the model runs. -->
 
-At a high level, **input validation for inference** is the process of deciding whether a production request is safe for the model system to interpret. The check starts with bytes and JSON shape, then continues through units, timestamps, feature freshness, and the conditions under which the model was approved to operate.
+A request can contain valid JSON and still express an impossible age, a stale sensor reading, or a value in the wrong unit. **Input validation for inference** decides whether a production request is safe for the model system to interpret. The checks start with bytes and JSON shape, then continue through units, timestamps, feature freshness, and the conditions under which the model was approved to operate.
 
 This matters because an ML service can accept a request, return `200 OK`, and still make a meaningless prediction. A field called `amount` may contain `1200`, with one caller intending cents and another intending dollars. Both values are valid integers. The model receives a value one hundred times larger than intended and produces a perfectly formatted response.
 
@@ -80,7 +71,11 @@ A practical request path uses this order:
 
 The service should stop at the first layer that produces a definitive result. Later checks often require database, feature-store, or model work, so an early rejection protects both latency and capacity.
 
-## Stop Unsafe Bodies Before Expensive Processing
+![Six inference validation gates ordered from resource and schema checks through meaning, time, model-domain coverage, and controlled routing, with example failures mapped to the gate that catches them.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/layered-validation-gates.png)
+
+*The validation path rejects each unsafe condition at the cheapest boundary that owns the evidence, keeping malformed, stale, or unsupported inputs away from expensive model work.*
+
+### Stop Unsafe Bodies Before Expensive Processing
 <!-- section-summary: Gateways and streaming readers enforce media type, byte, batch, image, and deadline limits before application validation allocates costly resources. -->
 
 Transport validation deals with the physical request: headers, bytes, compression, media type, and the amount of work represented by the body. This layer belongs before ordinary model validation because a framework often needs to read and decode JSON before it can construct a Pydantic object.
@@ -108,7 +103,7 @@ flowchart TD
     class F reject
 ```
 
-## Use A Strict Schema For Values Supplied By The Caller
+### Use A Strict Schema For Values Supplied By The Caller
 <!-- section-summary: A typed allowlist defines required fields, controlled values, lengths, ranges, and unknown-property behavior for the public request boundary. -->
 
 After the body is safe to parse, **structural validation** checks its document shape. It answers concrete questions: Is the root value an object? Are required fields present? Are identifiers bounded strings? Is the currency drawn from an approved vocabulary? Is the batch an array with a declared maximum length?
@@ -148,10 +143,10 @@ class RiskDecisionRequest(BaseModel):
 
 Ranges deserve product review. The upper amount bound should reflect the endpoint's supported decision workflow and abuse model. Copying the maximum observed training value would reject every legitimate future record above that historical sample. A range should express a documented business or system limit, with an explicit route for cases outside it.
 
-## Validate Meaning, Units, And Relationships
+### Validate Meaning, Units, And Relationships
 <!-- section-summary: Semantic validation gives typed values a documented unit and checks relationships that determine whether the event makes sense. -->
 
-Structural validation proves that `amount_minor` is an integer. **Semantic validation** proves that the integer has the unit and relationship expected by the decision. In essence, this layer checks the story told by the fields, beyond each field in isolation.
+Structural validation proves that `amount_minor` is an integer. **Semantic validation** proves that the integer has the unit and relationship expected by the decision. This layer checks the story told by the fields, beyond each field in isolation.
 
 Clear names carry part of the solution. `amount_minor` paired with `currency` is safer than `amount`. `temperature_celsius` is safer than `temperature`. `forecast_horizon_hours` is safer than `horizon`. The OpenAPI field description should define any remaining assumptions, including rounding, inclusive bounds, and category meaning.
 
@@ -174,7 +169,7 @@ flowchart TD
     class B,C,D,E process
 ```
 
-## Validate Timestamps And Data Freshness
+### Validate Timestamps And Data Freshness
 <!-- section-summary: Temporal validation distinguishes event time, request time, feature time, and model time so production decisions use evidence available at the intended moment. -->
 
 ML requests usually contain several clocks. **Event time** describes the business event being scored. **Request time** describes arrival at the serving boundary. **Feature time** describes the latest evidence included in a feature row. **Model time** records the model and policy state used during scoring.
@@ -198,7 +193,7 @@ flowchart TD
     class B,C,D,E process
 ```
 
-## Reject Inputs Outside The Model's Supported Domain
+### Reject Inputs Outside The Model's Supported Domain
 <!-- section-summary: Model preconditions check feature readiness, supported modalities, and approved coverage before policy chooses prediction, fallback, or review. -->
 
 A request can satisfy the public API contract and still fall outside the conditions approved for automated prediction. This boundary is the **model operating domain**: the data conditions, populations, modalities, and feature availability under which evaluation supports use of the model.
@@ -231,7 +226,7 @@ flowchart TD
     class H fail
 ```
 
-## Control Type Coercion And Compatibility
+### Control Type Coercion And Compatibility
 <!-- section-summary: Strict fields expose accidental type changes, while explicit schema versions and adapters give consumers a controlled migration path. -->
 
 Validation libraries often coerce values for developer convenience. Pydantic's default behavior can convert the string `"123"` into the integer `123`. That behavior fits query parameters and environment variables, which naturally arrive as text. At an ML request boundary, silent conversion can hide a client release that changed serialization or units.
@@ -259,7 +254,11 @@ A **service error** means the platform failed to fulfil a valid request and no a
 
 These categories keep model uncertainty, invalid input, and infrastructure failure visible as separate operational signals. Combining them into a generic `validation_failed` counter would obscure ownership and encourage unsafe retries.
 
-## Use Stable Error Categories
+![Four controlled outcomes from a failed inference check: caller repair, review, approved fallback, or service error, each with a distinct response contract.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/validation-outcome-routing.png)
+
+*A failed check should reveal who can act next: the caller repairs its request, policy chooses review or a tested fallback, or the service reports an unavailable safe path with bounded retry guidance.*
+
+### Use Stable Error Categories
 <!-- section-summary: Stable status codes, domain codes, rule identifiers, field paths, and retry guidance let callers recover without parsing prose. -->
 
 An error contract serves two audiences. The HTTP status guides generic transport behavior, while a domain `error_code` guides the product client. A `rule_id` identifies the exact validation rule, and a field path locates the failing value without copying it into the response.
@@ -308,7 +307,7 @@ URLs in an inference request create a server-side fetch capability. A controlled
 
 Rich text and prompts require domain-specific controls because grammar checks provide little protection against harmful meaning. Content policy, moderation, prompt isolation, output controls, and human review belong to that wider safety design.
 
-## Monitor Validation Without Storing Raw Payloads
+### Monitor Validation Without Storing Raw Payloads
 <!-- section-summary: Bounded metrics, traces, and redacted logs reveal validation drift while keeping personal data and high-cardinality values out of telemetry. -->
 
 Validation failures often reveal a broken client release before model-quality metrics move. The service needs enough telemetry to answer which rule failed, which contract version was used, and which registered caller is affected.
@@ -362,7 +361,7 @@ flowchart TD
     class E gate
 ```
 
-## Test The Validation Contract And Incident Paths
+### Test The Validation Contract And Incident Paths
 <!-- section-summary: Boundary tests prove documented rules, while incident diagnosis separates telemetry integrity, caller changes, rule releases, feature readiness, and model behavior. -->
 
 Contract tests should exercise the public boundary through the same parser and exception handler used in production. Positive cases prove accepted requests. Negative cases cover every stable error family: missing fields, unknown fields, strict numeric types, enum values, string and list bounds, cross-field relationships, timezone requirements, body and batch limits, deprecated schema versions, and authorization checks.
@@ -406,6 +405,10 @@ Input validation is a layered production safety boundary. Gateways protect bytes
 The boundary also needs deliberate outcomes. Caller mistakes receive stable repair guidance. Valid cases outside automated coverage receive review or abstention. Approved fallbacks remain visible in prediction evidence. Platform failures produce bounded retry guidance.
 
 Strict Pydantic v2 models, FastAPI-generated OpenAPI, gateway limits, OpenTelemetry signals, contract tests, and observe-to-enforce rollout controls provide an industrial implementation path. Their value comes from a shared validation policy that names every rule, owner, outcome, and recovery action.
+
+![Validation-rule rollout from proposal and observe mode through client repair, canary enforcement, full enforcement, and rollback to observation when impact exceeds limits.](/content-assets/articles/article-mlops-model-serving-input-validation-for-inference/validation-rollout-summary.png)
+
+*New compatibility rules move from observation to targeted enforcement with bounded telemetry and a retained adapter, so healthy clients are identified and repaired before the boundary tightens for everyone.*
 
 ## References
 

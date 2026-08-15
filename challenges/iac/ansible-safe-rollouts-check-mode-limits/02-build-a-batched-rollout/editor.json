@@ -1,0 +1,165 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Deploy orders web\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Install release\n      ansible.builtin.apt:\n        name: orders\n        state: latest\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "plays": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "serial"
+            ],
+            "equals": 2
+          },
+          {
+            "path": [
+              "max_fail_percentage"
+            ],
+            "equals": 0
+          },
+          {
+            "path": [
+              "any_errors_fatal"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "pre_task",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "delegate_to"
+            ],
+            "equals": "localhost"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "task",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "contains": "orders_release"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "module": "uri",
+          "name": "Verify local orders health"
+        },
+        "paths": [
+          {
+            "path": [
+              "retries"
+            ],
+            "equals": 6
+          },
+          {
+            "path": [
+              "until"
+            ],
+            "contains": "orders_health.status"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "module": "uri",
+          "name": "Return current batch to service"
+        },
+        "paths": [
+          {
+            "path": [
+              "delegate_to"
+            ],
+            "equals": "localhost"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "handler",
+          "module": "service"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "state"
+            ],
+            "equals": "restarted"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "notify-handler",
+        "source": {
+          "file": "deploy.yml",
+          "module": "apt"
+        },
+        "handler": {
+          "file": "deploy.yml",
+          "name": "Restart orders"
+        },
+        "topic": "Restart orders"
+      },
+      {
+        "type": "register-used",
+        "producer": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "name": "Verify local orders health"
+        },
+        "consumer": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "name": "Verify local orders health"
+        },
+        "fields": [
+          "status"
+        ]
+      }
+    ]
+  }
+}

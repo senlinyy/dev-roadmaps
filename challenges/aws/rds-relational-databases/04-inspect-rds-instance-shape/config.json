@@ -55,6 +55,9 @@
       "\"StorageEncrypted\": true",
       "\"BackupRetentionPeriod\": 7"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+rds\\\\s+describe-db-instances\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

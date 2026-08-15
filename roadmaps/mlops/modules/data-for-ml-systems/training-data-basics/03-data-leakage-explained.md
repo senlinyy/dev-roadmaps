@@ -30,9 +30,9 @@ id: "article-mlops-data-for-ml-systems-data-leakage-explained"
 ## What Data Leakage Means
 <!-- section-summary: Leakage gives model development information that the real decision could not legitimately use, creating an evaluation advantage that disappears in production. -->
 
-At a human level, **data leakage** means the model gets an unfair look at information during development. The real decision would have no legitimate access to that information, yet training, tuning, or evaluation receives it anyway.
-
 Imagine a model that predicts whether a payment will later be confirmed as fraud. During development, one input says whether the transaction was refunded. Refunds often happen after investigators confirm fraud. The model appears highly accurate because the organization has already reacted to the outcome. At authorization time, that reaction has not happened.
+
+**Data leakage** means the model gets an unfair look at information during development. The real decision would have no legitimate access to that information, yet training, tuning, or evaluation receives it anyway.
 
 Leakage creates a false evaluation. The score measures performance in a privileged development environment instead of the production decision. Deployment removes the privilege, and the model loses the relationship it depended on.
 
@@ -78,6 +78,10 @@ flowchart TD
 ```
 
 The causal direction matters as much as the timestamps. If the outcome or a response to the outcome creates the feature, the value usually belongs outside the input boundary. A timestamp check can miss that relationship where systems backfill a late field with an earlier date.
+
+![Allowed and forbidden signals separated by the real-world prediction moment](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/information-boundary.png)
+
+*The information boundary blocks future events, final outcomes, and post-decision fields from flowing backward into an earlier prediction.*
 
 ## Seven Ways Information Leaks Into Model Development
 <!-- section-summary: Seven recurring leakage paths cross feature, time, split, fitting, process, and similarity boundaries in different ways. -->
@@ -324,6 +328,10 @@ Run exact and near-duplicate overlap reports. Measure entity, household, device,
 
 Follow the dataset lineage from raw tables through transformations, feature tables, split assignments, training runs, and model versions. Inspect SQL and pipeline changes behind sudden metric improvements. Lineage turns a vague concern into a concrete source expression and affected release set.
 
+![Three questions about time, cause, and data history used to investigate a suspicious feature](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/leakage-diagnostic-questions.png)
+
+*Tracing availability, causal order, and field creation reveals whether a feature carried knowledge that the live model could never possess.*
+
 ## Prevent Leakage While Building Data And Training
 <!-- section-summary: A reliable data path enforces the prediction contract through reviewed sources, point-in-time retrieval, split-aware fitting, immutable identities, and release evidence. -->
 
@@ -446,6 +454,10 @@ Data leakage gives model development an information advantage that the real deci
 The prediction contract is the foundation. It defines the entity, decision time, available information, target window, action, and population. Point-in-time joins enforce the time boundary. Group and similarity-aware splits enforce independence. Pipelines enforce fitting scope. Causal feature review finds outcome-derived proxies. Lineage and immutable dataset identities make every claim traceable.
 
 The strongest release evidence reconstructs the complete information path for representative decisions. It shows what production knew, how the feature was computed, which data fitted each transformation, which examples remained independent, and which protected evidence guided model choice. A model can then earn trust from a realistic evaluation instead of a privileged development shortcut.
+
+![Prevention, detection, and recovery controls for keeping data leakage out of a model release](/content-assets/articles/article-mlops-data-for-ml-systems-data-leakage-explained/leakage-prevent-detect-recover.png)
+
+*Leakage control spans time-aware data construction, realistic splits, train-only preprocessing, suspicious-result review, containment, rebuild, and re-evaluation.*
 
 ## References
 

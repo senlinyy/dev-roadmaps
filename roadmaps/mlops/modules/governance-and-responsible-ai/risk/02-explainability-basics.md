@@ -38,9 +38,9 @@ id: "article-mlops-governance-and-responsible-ai-explainability-basics"
 <!-- section-summary: An explanation names its audience, answers their defined question, and supports a concrete action or decision. -->
 
 The intended reader and decision determine which explanation the system should
-produce. At a high level, **explainability** means producing understandable
-evidence about how a model behaves or how it reached a particular output.
-Different people therefore need different versions of “why?”
+produce. **Explainability** means producing understandable evidence about how a
+model behaves or how it reached a particular output. A developer, affected
+person, operator, and auditor ask different versions of “why?”
 
 A developer debugging a model may ask, “Did it learn an accidental shortcut?” A
 model validator may ask, “Does the model rely on stable and acceptable factors
@@ -82,6 +82,10 @@ flowchart TD
 
 The question determines the scope, method, validation, language, and access
 controls that follow.
+
+![Five explanation audiences showing the different questions developers, validators, operators, affected people, and auditors need answered before they can act](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/audience-question-action.png)
+
+*Explanation design starts with the audience's question and the action that follows, because one chart cannot serve every decision.*
 
 ## Compare Global And Local Explanations
 
@@ -233,6 +237,10 @@ comparing several reasonable dependence assumptions, reporting uncertainty, and
 testing the stability of top reasons. If the distinction matters to a
 customer-facing explanation, redesigning the feature set or decision component
 may be safer than claiming that one correlated input uniquely drove the result.
+
+![The same model prediction explained with two background samples, where debt-to-income ratio and monthly debt swap rank because they carry overlapping information](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/correlated-feature-attribution.png)
+
+*Correlated inputs can leave the prediction stable while changing the principal reason, so teams group related features, compare assumptions, and test explanation stability.*
 
 ```mermaid
 flowchart TD
@@ -635,6 +643,10 @@ safe recourse by themselves.
 The intended person can use the explanation to understand the actual
 model-plus-policy process, recognize uncertainty, and choose the appropriate
 next step.
+
+![An explainability release path connecting audience, scope, method, explanation identity, and four validation gates to a controlled release and production feedback loop](/content-assets/articles/article-mlops-governance-and-responsible-ai-explainability-basics/explainability-release-summary.png)
+
+*A controlled explanation release binds the approved audience to a versioned method, validates faithfulness and stability, and reopens review when production behaviour changes.*
 
 ## References
 

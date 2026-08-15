@@ -88,6 +88,10 @@ A support report is a symptom. A trace event is an observation. A difference fro
 
 Use language that matches the evidence. “The candidate prompt caused the error” is too strong if the only evidence is one failed trace. “Failures occur only on the candidate prompt cohort, and replay recovers after restoring the accepted prompt” is a defensible causal statement.
 
+![A six-stage agent-run debugging framework from symptom containment through exact run identity, trace and state reconstruction, first divergence, controlled proof, and permanent regression learning, with a calendar-timeout example and evidence-strength ladder.](/content-assets/articles/article-mlops-llmops-debugging-runs/six-stage-run-debugging.png)
+
+*A falsifiable product symptom anchors the investigation, which then moves through progressively stronger evidence. A timeout remains indeterminate until the authoritative service is reconciled.*
+
 ## Stage One: Define the Symptom and Contain the Risk
 
 <!-- section-summary: A precise symptom states actual behavior, expected behavior, impact, and safe containment before internal evidence shapes the investigation. -->
@@ -258,6 +262,10 @@ A tool response may remain schema-valid while its meaning changes. Adding a new 
 
 Industrial contract testing covers field meaning and evolution. Producers publish versioned contracts and representative fixtures. Consumers test known and unknown enum behavior. Unknown states route to a bounded fallback or human review. They never silently map to success.
 
+![A concrete agent-loop timeline showing a valid new tool status, the consumer state reducer dropping it as the first meaningful divergence, repeated lookup, loop-guard containment, and the correct contract and state repair.](/content-assets/articles/article-mlops-llmops-debugging-runs/first-divergence-example.png)
+
+*The loop guard is the loudest visible failure, but the state reducer’s inability to preserve the new status is the earliest behavior-changing divergence and therefore identifies the owning layer.*
+
 ## Compare The Failed Run With A Healthy Control And The Fleet
 
 <!-- section-summary: A nearby healthy run narrows the difference set, while fleet metrics reveal whether the same mechanism affects one case, cohort, release, or dependency. -->
@@ -364,6 +372,24 @@ Semantic decisions can vary across model calls. Run several trials with the same
 <!-- section-summary: Wrong answers, false success, loops, unsafe actions, and slow runs each leave different evidence and belong to different system owners. -->
 
 Agent incidents often share a surface symptom while requiring very different repairs. The trace and state timeline separate these mechanisms. The scenarios below illustrate how industrial teams move from evidence to the owning layer.
+
+Start from the exact run and its release rather than a general error message. Operators read the trace in order and locate the first state, input, or result that differs from a healthy control. That first divergence points to an owner: context assembly, a tool boundary, orchestration, policy, or a dependency. A controlled replay then tests the suspected mechanism before the team changes production behaviour.
+
+```mermaid
+flowchart TD
+    Symptom["Observed symptom<br/>(wrong, slow, unsafe, or looping run)"] --> Exact["Identify exact run<br/>(release, state, and trace)"]
+    Exact --> Divergence["Find first divergence<br/>(earliest unexpected state or result)"]
+    Divergence --> Owner{"Failure Owner<br/>(which layer produced the divergence?)"}
+    Owner --> Context["Context or retrieval<br/>(wrong or missing evidence)"]
+    Owner --> Tool["Tool or effect state<br/>(timeout, duplicate, or false success)"]
+    Owner --> Flow["Orchestration<br/>(loop, handoff, or ignored guardrail)"]
+    Owner --> Capacity["Dependency or capacity<br/>(queue, latency, or saturation)"]
+    Context --> Prove["Controlled replay<br/>(prove the suspected mechanism)"]
+    Tool --> Prove
+    Flow --> Prove
+    Capacity --> Prove
+    Prove --> Regression["Repair and regression case<br/>(verify the owning layer)"]
+```
 
 ### Investigate An Answer Grounded In The Wrong Source
 
@@ -506,6 +532,10 @@ Agent debugging is causal reconstruction. Start with the user-visible outcome an
 A healthy control narrows the difference set. Fleet signals reveal scope. Controlled replay tests one causal hypothesis under safe, versioned conditions. The proven cause determines the owner and repair. Case, system, rollout, and fleet verification establish recovery.
 
 The final result is more than a fixed prompt or code path. It is a regression case, clearer evidence contract, and faster route from the next symptom to its cause.
+
+![A controlled-replay and repair-verification system that compares an affected release with a one-change candidate in a sandbox, then requires case, system, rollout, and fleet recovery before feeding confirmed failures back into regression evaluation.](/content-assets/articles/article-mlops-llmops-debugging-runs/replay-and-recovery-summary.png)
+
+*A safe replay isolates the suspected cause without repeating production effects. Recovery is accepted only after the fixture, surrounding contracts, staged cohort, and fleet outcomes all support the repair.*
 
 ## References
 

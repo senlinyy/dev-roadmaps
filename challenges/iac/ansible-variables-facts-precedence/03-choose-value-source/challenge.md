@@ -1,6 +1,7 @@
 ---
-title: "Variable Precedence"
-order: 3
+title: "Choose a Value Source"
+order: 2
+revision: 2
 ---
 
-Use host, inventory, and runtime evidence to decide where Ansible values belong and which source wins.
+Choose the least surprising variable scope and diagnose common precedence mistakes.

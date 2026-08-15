@@ -28,7 +28,7 @@ aliases:
 ## What Operational Readiness Means
 <!-- section-summary: Operational readiness connects a documented legal scope decision to controls, evidence, release authority, production monitoring, and corrective action. -->
 
-At a high level, **EU AI Act operational readiness** means identifying the AI system an organization provides or uses. The organization must also record its legal role, determine which duties apply to that use, and preserve proof that the required work happened.
+The same model can support a low-risk internal task or become part of a regulated high-risk system. The organization must identify the actual AI system and use, record its legal role, determine which duties apply, and preserve proof that the required work happened. **EU AI Act operational readiness is the operating process that keeps those decisions and records connected throughout the system lifecycle.**
 
 The proof matters to MLOps teams. A policy may say that a high-risk system requires human oversight. Production records must then show who received that authority, what the interface allowed them to do, how they were trained, and what happened during real decisions.
 
@@ -73,6 +73,10 @@ The recruitment example might state: "Rank applications for advertised software-
 The last reuse requires a fresh analysis because employment purpose and affected people changed. The same underlying model used for grammar suggestions in an internal document has a different system purpose and risk profile. Classification follows the system and use, while separate general-purpose AI duties may continue to apply to the provider of the underlying model.
 
 An applicability record should preserve the facts that counsel or compliance used. At minimum, it needs a stable system identifier; system boundary; intended purpose; prohibited uses; markets; affected groups; provider, deployer, importer, and distributor candidates; supplier components; current release; legal sources; assumptions; decision owner; and reassessment triggers. The record links to live systems of record. It avoids duplicating every artifact in one document.
+
+![Studio Light diagram showing a recruitment-system supply chain with likely provider, importer, distributor, deployer, and Article 25 role-reassessment triggers](/content-assets/articles/article-mlops-governance-and-responsible-ai-eu-ai-act-operational-readiness/recruitment-system-role-map.png)
+
+*The role analysis follows the real development, branding, supply, modification, and use of the complete recruitment system—not a generic vendor or customer label.*
 
 ## How To Classify The AI System And Its Use
 <!-- section-summary: Classification evaluates prohibited practices, both high-risk routes, transparency duties, general-purpose model duties, and lower-risk uses as separate questions. -->
@@ -340,6 +344,24 @@ OpenTelemetry attributes should contain approved identifiers and low-risk operat
 
 PagerDuty or equivalent paging, plus ServiceNow, Jira, or another governed case system, can coordinate incident ownership and corrective actions. The incident record should link to immutable release and evidence identifiers. Screenshots from transient dashboards can disappear and rarely prove artifact identity.
 
+```mermaid
+flowchart TB
+    A["Governance Record<br/>(system purpose, operator role, classification, and owner)"] --> B["Data Catalog And Lineage<br/>(datasets, permissions, quality, and history)"]
+    B --> C["Training And Registry Evidence<br/>(runs, model versions, evaluations, and limitations)"]
+    C --> D["Approved Release Record<br/>(artifact digests, decision, scope, and conditions)"]
+    D --> E["Production Evidence<br/>(runtime identity, monitoring, incidents, and corrective action)"]
+    E --> A
+
+    class A governance
+    class B,C evidence
+    class D gate
+    class E operation
+```
+
+The identifiers form a chain around one governed AI system. Each platform owns
+the facts it can preserve well, while the governance record connects those facts
+to the legal role, approved use, and accountable decision.
+
 ## How The Rules Change For Different AI Systems
 <!-- section-summary: A recruitment ranking and a support chatbot show how intended purpose changes the legal route and the required operating evidence. -->
 
@@ -364,6 +386,10 @@ Article 50 can still require the provider to design the interaction so people kn
 The release evidence is smaller than the recruitment system's high-risk dossier because the high-risk duty family does not apply to this purpose. It still records the system boundary, role, classification rationale, transparency decision, model and prompt versions, evaluation, disclosure version, supplier, monitoring, and incident owner.
 
 A later feature that recommends whether a person qualifies for an essential public service changes the purpose and potential impact. The inventory trigger reopens classification before that feature reaches production. A UI update alone may look small to engineering while changing the legal use substantially.
+
+![Studio Light comparison of recruitment ranking and a support chatbot built on one shared language-model capability, with separate classification and evidence routes](/content-assets/articles/article-mlops-governance-and-responsible-ai-eu-ai-act-operational-readiness/intended-purpose-classification.png)
+
+*The underlying model endpoint can stay the same while intended purpose, decision effect, affected people, and operator role produce different classification work.*
 
 ## What To Do After Incidents, Supplier Changes, Or Major System Changes
 <!-- section-summary: Operations must contain harm, preserve evidence, complete reporting assessments, implement corrective action, and reopen scope after significant change. -->
@@ -472,6 +498,10 @@ EU AI Act readiness starts with the complete system, its intended purpose, each 
 For high-risk systems, legal requirements map to operating mechanisms: continuous risk management, governed data, technical documentation, logs, deployer instructions, human oversight, declared performance, robustness, cybersecurity, quality management, conformity work, monitoring, incident response, and corrective action. Current MLOps tools can preserve identity, lineage, tests, telemetry, approvals, and retention. Accountable legal, compliance, product, and risk owners remain responsible for interpretation and release authority.
 
 The organization should be able to move in both directions through the evidence chain. A reviewer can start with a legal duty and find its control in production. An incident responder can start with an affected decision and recover the released system, evidence, owner, and corrective-action path. That traceability creates an operational capability. A one-time documentation project cannot preserve the chain through releases, incidents, and legal change.
+
+![Studio Light summary of the EU AI Act readiness chain from system definition and role recording through release decisions, production evidence, and reassessment](/content-assets/articles/article-mlops-governance-and-responsible-ai-eu-ai-act-operational-readiness/eu-ai-act-readiness-summary.png)
+
+*Readiness links the approved purpose and legal analysis to the exact release, limits production to approved scope, and reopens review after an incident or material change.*
 
 ## References
 

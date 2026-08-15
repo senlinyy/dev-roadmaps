@@ -1,7 +1,7 @@
 ---
 title: "Operating Batch and Online Inference"
 description: "Operate batch jobs and online APIs through shared model identity, freshness, contracts, capacity, failure recovery, and dual-path consistency."
-overview: "After choosing a serving pattern, teams need to operate its data contracts, runtime, outputs, recovery, and model identity. This article explains batch and online paths, including products that need both."
+overview: "Batch and online inference give prediction systems different timing, data, scaling, output, and recovery contracts, while many products deliberately combine both paths."
 tags: ["MLOps", "core", "inference"]
 order: 2
 id: "article-mlops-model-serving-batch-vs-online-inference"
@@ -29,7 +29,7 @@ aliases:
 ## Start With The Inference Deadline
 <!-- section-summary: Batch and online inference are two ways to deliver a prediction, separated by the latest moment at which the prediction still helps a real decision. -->
 
-At a high level, **batch inference** prepares predictions for a known collection of records, then publishes those predictions for later use. **Online inference** calculates a prediction inside a live request, while a person or another service is waiting for the answer. The deciding factor is the **inference deadline**: the latest moment at which the prediction can still influence the decision.
+A monthly outreach list can wait for predictions prepared overnight. A payment-risk check must return before the service approves or rejects the transaction. **Batch inference** prepares predictions for a known collection of records and publishes them for later use. **Online inference** calculates a prediction while a live request waits. The **inference deadline** is the latest moment at which that prediction can still influence the decision.
 
 Consider two ordinary situations. A risk operations team reviews a list of accounts every morning. A scoring job can process all eligible accounts overnight and publish the list before the reviewers start work. A prediction that arrives in a few seconds offers no extra value; a complete, reviewed result set before the morning cutoff matters far more. That is a batch problem.
 
@@ -52,6 +52,10 @@ flowchart TD
 ```
 
 The deadline creates an operating promise. A batch team promises that a complete generation of scores will be ready by a business cutoff. An online team promises that each accepted request will receive a valid response inside a latency target. Those promises deserve separate designs even if both paths load the same registered model version.
+
+![One approved model version follows a fixed snapshot, partitioned scoring, validation, and publication for batch while a live request follows current features, ready capacity, and a latency deadline for online inference](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-two-promises.png)
+
+*Batch protects a complete publication before a business cutoff. Online protects a caller that is waiting for a valid response inside the request deadline.*
 
 ## How Batch Inference Produces Scheduled Results
 <!-- section-summary: A reliable batch run fixes its input snapshot, model identity, partitions, and publication boundary so retries produce one complete generation of predictions. -->
@@ -184,6 +188,10 @@ flowchart TD
 ```
 
 A useful service contract names all relevant limits: source data age, score age, request latency, and the consequence of crossing each limit. The resulting controls are concrete. A stale feature can route to review, an old cached score can be rejected, a slow endpoint can use a fallback, and a late batch generation can keep the previous approved output active.
+
+![A 30-millisecond online response still uses a six-hour-old account balance, while a 20-minute batch can meet daily planning freshness with prior-day finalized stock counts](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-freshness-latency.png)
+
+*Data freshness, prediction freshness, and response latency are separate clocks. Each needs a limit tied to the product decision.*
 
 ## How Throughput, Cost, And Failure Affect Architecture
 <!-- section-summary: Batch and online systems spend capacity differently and expose different failure scopes, even at the same daily prediction volume. -->
@@ -416,6 +424,10 @@ flowchart TD
 Batch inference and online inference deliver the same kind of model output under different operating promises. Batch fixes a population and data snapshot, scores partitions, validates the complete generation, and publishes it before a business cutoff. Online inference validates an arriving request, retrieves current evidence, uses ready capacity, and returns a result inside a latency deadline.
 
 A strong design starts with the product action, actor, deadline, acceptable staleness, and fallback. That description leads naturally to a warehouse or lakehouse job, a managed batch service, an ordinary API, a managed endpoint, KServe, Triton, or a deliberate hybrid. Tool choice comes after the decision contract.
+
+![Hybrid recommendation path precomputes candidates in batch, publishes the current approved generation to a versioned store, and re-ranks it with current context inside the page deadline](/content-assets/articles/article-mlops-model-serving-batch-vs-online-inference/batch-online-hybrid-summary.png)
+
+*A hybrid design gives stable catalogue work to batch and deadline-bound context to online inference while preserving shared model, feature, score, and fallback meaning.*
 
 ## References
 

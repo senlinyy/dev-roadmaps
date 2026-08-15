@@ -29,11 +29,11 @@ id: "article-mlops-mlops-foundations-what-is-mlops"
 ## A Good Model Is Only the Starting Point
 <!-- section-summary: MLOps closes the gap between a promising model experiment and a dependable production system. -->
 
-At a high level, **MLOps**, short for **machine learning operations**, is the engineering and operating practice used to build, release, run, and improve machine-learning systems in a controlled way.
-
 A model can score well in a notebook and still fail as a product. The production service may receive a feature with a different meaning. A daily data job may stop updating one input. A new model may use a library that is missing from the serving image. An endpoint may stay online while its predictions slowly lose accuracy. Several weeks later, the team may discover that it cannot identify which model produced a disputed decision.
 
 These are system failures. Improving the algorithm alone will not resolve them.
+
+**MLOps**, short for **machine learning operations**, is the engineering and operating practice that controls this wider system: how teams build, release, run, investigate, and improve machine-learning products.
 
 MLOps gives the surrounding system a repeatable shape. The team can trace where data came from, recreate a training run, compare a candidate with the current production model, release it gradually, observe its behaviour, restore a safe version, and learn from later outcomes. Automation supports these tasks, while evidence and ownership make the automation trustworthy.
 
@@ -46,7 +46,7 @@ Consider a fraud model that approves or reviews card payments. Its offline preci
 - How does an investigator connect a later chargeback to the original prediction?
 - Who can stop the rollout or return traffic to the previous model?
 
-MLOps organizes those questions into one operating system for the ML product. In essence, it connects the model-development work with the data platform, software-delivery process, production service, monitoring, feedback, security, and human decisions around it.
+MLOps organizes those questions into one operating system for the ML product. It connects the model-development work with the data platform, software-delivery process, production service, monitoring, feedback, security, and human decisions around it.
 
 ```mermaid
 flowchart TD
@@ -89,20 +89,9 @@ The **operating loop** keeps the production service and its model behavior healt
 
 A credit-risk endpoint can return successful HTTP responses while approval quality deteriorates in one region. Service metrics alone would miss that failure. The operating loop joins technical health with model and product health.
 
-```mermaid
-flowchart TD
-    P["Product Loop<br/>(define the decision and desired outcome)"] --> L["Learning Loop<br/>(turn governed data into candidate evidence)"]
-    L --> C["Candidate<br/>(identify one model and its evidence)"]
-    C --> R["Release Loop<br/>(approve and roll out a recoverable change)"]
-    R --> O["Operating Loop<br/>(observe service, data, quality, and outcomes)"]
-    O --> F["Feedback<br/>(connect production results to future learning)"]
-    F --> P
-    F --> L
-    G["Governance<br/>(set access, policy, ownership, and accountability)"] -.-> P
-    G -.-> L
-    G -.-> R
-    G -.-> O
-```
+![The product, learning, release, and operating loops connected by feedback and governed controls](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/four-mlops-loops.png)
+
+*The four loops answer different questions, while governance and feedback connect them into one operating system.*
 
 Governance crosses all four loops. It determines who can read data, run training, approve a candidate, change production traffic, inspect sensitive records, and retire an old model. It also preserves the evidence needed to review those actions.
 
@@ -148,6 +137,10 @@ Automated checks, releases, and retraining cover different parts of the ML lifec
 **Continuous delivery**, or **CD**, prepares a reviewed change for safe release. The deployable change may include feature logic, a training pipeline, an inference image, monitoring rules, and infrastructure alongside the model.
 
 **Continuous training**, or **CT**, runs a versioned training pipeline after an approved trigger such as new labels, a schedule, code changes, or a quality investigation. CT produces a candidate. Evaluation and release controls still decide whether that candidate receives production traffic.
+
+![Four properties that make machine-learning operations different from ordinary software delivery, with the roles of CI, CD, and CT](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/why-ml-needs-mlops.png)
+
+*Machine learning adds changing data, statistical quality, delayed outcomes, and feedback effects to the normal software-delivery problem.*
 
 ## Decide The Model's Purpose And Boundaries
 <!-- section-summary: A product contract states the prediction, timing, action, quality bar, and fallback that give model metrics their meaning. -->
@@ -292,7 +285,7 @@ Initial production exposure should stay small enough for the team to contain a b
 
 Suppose a recommendation candidate passes offline evaluation but its feature lookups add 150 milliseconds at peak load. A canary exposes the latency problem to a small traffic share. The release system freezes expansion and directs traffic back to the previous version while engineers investigate.
 
-A rollback is useful only after the team tests it. The previous model, runtime, features, and configuration must still be available and compatible. For some failures, a rules-based fallback is safer than an older model.
+Test the rollback before an incident. The previous model, runtime, features, and configuration must still be available and compatible. For some failures, a rules-based fallback is safer than an older model.
 
 Managed endpoints cover much of this operational work and are a practical default for many teams. Amazon SageMaker AI provides real-time inference endpoints, while Gemini Enterprise Agent Platform (formerly Vertex AI) provides online inference endpoints. Azure Machine Learning offers managed online endpoints, and Databricks provides Model Serving endpoints.
 
@@ -476,7 +469,7 @@ Test the delayed feedback join with missing, duplicated, and revised outcomes. V
 
 Finally, retire a test model. Remove active traffic and aliases, revoke unused access, stop obsolete jobs, and retain only the evidence required by policy.
 
-These exercises reveal gaps that architecture diagrams often hide. A platform counts as operational only after the team can trace, decide, recover, and learn through the full path.
+These exercises reveal gaps that architecture diagrams often hide. Operational proof comes from tracing, deciding, recovering, and learning through the full path.
 
 ## Main Idea
 <!-- section-summary: MLOps is the production discipline that connects a model-powered decision to repeatable learning, safe release, reliable operation, and accountable feedback. -->
@@ -486,6 +479,10 @@ MLOps gives machine learning a dependable route from an idea to a production out
 The product loop defines the decision and acceptable risk. The learning loop creates a candidate with evidence. The release loop validates and introduces one exact change. The operating loop watches the live system and returns outcomes to future work. Versioning, lineage, governance, and ownership connect them.
 
 Tools implement parts of this system. The framework explains why those parts exist and how they work together. A strong MLOps practice can identify what is running, explain how it was created, show why it was released, detect a loss of value, recover safely, and use production evidence to guide the next change.
+
+![The complete MLOps production path from a product question to governed data, evaluation, release, operation, observed results, and feedback](/content-assets/articles/article-mlops-mlops-foundations-what-is-mlops/mlops-complete-system-summary.png)
+
+*A complete MLOps path connects product intent to governed evidence, a controlled release, live outcomes, and a tested recovery route.*
 
 ## References
 

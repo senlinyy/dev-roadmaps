@@ -26,15 +26,13 @@ aliases:
 12. [The Full ML System Lifecycle](#the-full-ml-system-lifecycle)
 13. [References](#references)
 
-At a high level, the **ML system lifecycle** is the controlled path that carries a model-powered decision from definition to production, then carries production evidence back into improvement or retirement.
-
-Learning, release, and operating loops describe the work that repeats over time. The lifecycle view describes the approved states within that work, the evidence that allowed entry, and the decisions that move the system elsewhere.
-
 Imagine a delivery-time model that has served the same artifact for several weeks. Its endpoint stays healthy. During those weeks, restaurant workflows change, feature data arrives later, a dependency receives an update, and labels continue to mature. The artifact stayed fixed while the system around it moved.
+
+The **ML system lifecycle** is the controlled path that carries this model-powered decision from definition to production, then uses production evidence to improve or retire it. Learning, release, and operating loops describe the work that repeats over time. The lifecycle view describes the approved states within that work, the evidence that allowed entry, and the decisions that move the system elsewhere.
 
 A lifecycle gives those changes a place to go. A new dataset cannot quietly replace the one used for an approved model. A successful training job cannot place its output into production by itself. A failing canary has a recorded return path. A retired endpoint cannot leave active credentials and scheduled jobs behind.
 
-In essence, the lifecycle turns continuous change into explicit states, evidence, decisions, and recovery.
+The lifecycle turns continuous change into explicit states, evidence, decisions, and recovery.
 
 ## Why An ML System Needs A Lifecycle
 <!-- section-summary: The lifecycle controls changes in product meaning, data, labels, code, infrastructure, models, and real-world outcomes. -->
@@ -74,6 +72,10 @@ flowchart TD
 
 This distinction prevents a common mistake. Replacing a model version is one possible response to production evidence. A label-pipeline repair, feature change, threshold update, product-policy change, capacity adjustment, or full system retirement may fit the evidence better.
 
+![Candidate and approved states separated by an evidence-gated lifecycle transition](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/state-versus-transition.png)
+
+*A state describes an approved condition. A transition records the reviewed change, its subject, evidence, policy, owner, and return path.*
+
 ## The Stages An ML System Moves Through
 <!-- section-summary: A state describes the approved condition of an ML asset, while a transition records the decision and evidence that changes that condition. -->
 
@@ -84,7 +86,7 @@ dataset release, a model candidate, or a production release.
 
 A **transition** is the recorded decision that changes that condition. For example, a model candidate moves to `approved_for_canary` after its evaluation and integration evidence passes the release policy.
 
-The difference matters because work can run without changing state. A training job may fail and retry while the latest approved dataset remains `data_ready`. A shadow deployment may collect evidence while the current production release remains active. State changes only after the authority for that transition accepts the required evidence.
+The difference matters because work can run without changing state. A training job may fail and retry while the latest approved dataset remains `data_ready`. A shadow deployment may collect evidence while the current production release remains active. The transition authority accepts the required evidence before changing state.
 
 ### Pipeline Steps And Lifecycle Stages Answer Different Questions
 
@@ -316,6 +318,10 @@ Rollback is itself a lifecycle transition. It identifies the release leaving tra
 
 Managed endpoints provide much of the traffic mechanism for teams using a cloud ML platform. Kubernetes platforms may use KServe with compatible traffic management. A standard API service behind a load balancer can support a small workload. Each implementation still needs the same state evidence and recovery record.
 
+![Shadow, canary, progressive, and full rollout stages compared by production exposure and evidence questions](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/controlled-rollout-stages.png)
+
+*Controlled rollout increases exposure in stages. Every stage has an evidence question and an explicit stop or rollback path.*
+
 ## Use Production Results To Choose The Right Fix
 <!-- section-summary: The feedback transition verifies operational and outcome evidence, identifies the changed assumption, and creates one owned change request. -->
 
@@ -323,7 +329,7 @@ Production results should point the team toward a specific fix instead of trigge
 
 A prediction record connects the two clocks. It identifies the release, model, event time, governed entity references, output, product action, and fallback. The later label or outcome uses the same join key or an approved mapping.
 
-Feedback creates a lifecycle transition only after the evidence is trustworthy. The first review checks monitoring freshness, schema versions, label volume, join coverage, and policy versions. The next review compares segments, features, actions, releases, and representative records.
+Verify the evidence before feedback creates a lifecycle transition. The first review checks monitoring freshness, schema versions, label volume, join coverage, and policy versions. The next review compares segments, features, actions, releases, and representative records.
 
 Suppose label-based quality drops sharply while outcome join coverage falls from 96% to 51%. The correct change request is “repair and backfill the outcome join.” Retraining from the partial labels would hide the evidence failure and create a questionable dataset.
 
@@ -456,6 +462,10 @@ Transitions provide the control points. Entry evidence shows what already passed
 Production feedback creates a specific change request after evidence integrity is confirmed. The request may affect data, code, model behaviour, release infrastructure, product policy, or the whole capability. Retirement closes the path after active use, access, retention, and rollback obligations end.
 
 This framework gives automation firm boundaries and gives people an honest history. A production prediction can lead backward to every decision that enabled it and forward to the outcome that justifies the next controlled transition.
+
+![Full ML system lifecycle from definition through data, candidate, approval, release, operation, learning, repair, and retirement](/content-assets/articles/article-mlops-mlops-foundations-ml-system-lifecycle/full-lifecycle-summary.png)
+
+*Gated transitions move work forward with proof. Production evidence can send work back to the earliest invalid assumption, while retirement closes the active path deliberately.*
 
 ## References
 

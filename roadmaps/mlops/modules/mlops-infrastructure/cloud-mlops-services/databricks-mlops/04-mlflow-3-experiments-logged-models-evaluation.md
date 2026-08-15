@@ -24,7 +24,7 @@ id: "article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluati
 ## What MLflow 3 Experiments, Logged Models, And Evaluation Mean
 <!-- section-summary: MLflow records the path from a model-development question to a specific trained artifact and the evidence used to judge it. -->
 
-At a high level, **MLflow records the history of model development**. It keeps the settings, results, data references, and trained model from each attempt so the team can inspect and compare them later.
+A notebook can print a score and save a model, yet those outputs say little about how the result was produced. **MLflow records the history of model development:** the settings, results, data references, and trained model from each attempt. The team can then inspect and compare those attempts later.
 
 Start with a small classification task. The Iris dataset contains measurements from three flower species. A logistic-regression model learns from four measurements and predicts the species. Without tracking, the notebook can train the model and print an accuracy score, yet the result remains attached to that notebook session.
 
@@ -69,9 +69,9 @@ A production project records more context. It needs governed dataset versions an
 
 MLflow divides that evidence into connected records and activities. **An experiment groups related attempts. A run records one execution. A Logged Model identifies one trained model. A dataset describes the evidence source. Evaluation applies the model to agreed data and writes its metrics and artifacts into a run.**
 
-![MLflow connects a model-development question to experiments, runs, Logged Models, datasets, and evaluation evidence](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/mlflow-evidence-objects.png)
+![Five kinds of MLflow evidence connect an experiment, its runs, a selected Logged Model, its dataset, and evaluation results](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/mlflow-evidence-records.png)
 
-*The experiment gives related work a home. Runs preserve individual executions. Logged Models give trained artifacts their own identities, while dataset-aware evaluation explains what each result was measured against.*
+*The experiment groups related runs. One selected run produces the shown Logged Model, and its evaluation records metrics against an identified dataset.*
 
 MLflow 3 makes the model identity especially important. Earlier workflows often treated the model as a file tucked inside a run. A run might train several checkpoints, and later evaluation might happen in a different run. Following one model through that history could become awkward.
 
@@ -103,6 +103,16 @@ MLflow provides the structure that lets a team record model-development decision
 The Iris example already contains several kinds of evidence: a place that groups the work, one recorded execution, one fitted model, training data, and a held-out test result. MLflow separates these responsibilities because they have different lifetimes and answer different questions.
 
 Experiments, runs, Logged Models, and datasets are tracked records. Evaluation works slightly differently. It is the activity that tests a model; its durable metrics, plots, dataset references, and policy tags live in an evaluation run. The Python `EvaluationResult` returned by MLflow is a convenient in-memory view of those results rather than a separately identified lifecycle object.
+
+```mermaid
+flowchart TD
+    Experiment["Experiment<br/>(related attempts for one question)"] --> Run["Run<br/>(one execution of code)"]
+    Run --> Model["Logged Model<br/>(one exact trained artifact and model ID)"]
+    Data["Dataset record<br/>(source, version, schema, and digest)"] --> Run
+    Data --> Eval["Evaluation<br/>(test policy, metrics, and diagnostics)"]
+    Model --> Eval
+    Eval --> Evidence["Candidate evidence<br/>(which model, data, test, and result?)"]
+```
 
 ### Group Related Model-Development Runs In An Experiment
 
@@ -356,7 +366,7 @@ That limitation changes the evidence design for Spark MLlib models. The run can 
 ## Compare Models On The Same Data And Evaluation Rules
 <!-- section-summary: A model metric becomes comparable only after the team fixes the evaluation dataset, label policy, split, time period, and calculation rules. -->
 
-At a high level, **a fair model comparison asks two candidates the same question**. The evaluation dataset and policy define that question: which population, time period, labels, prediction threshold, and metric calculation are being used.
+Two model scores are comparable only if both models faced the same test. The evaluation dataset and policy define that test: which population, time period, labels, prediction threshold, and metric calculation are being used.
 
 Two scores may look comparable even though one of those conditions has changed.
 
@@ -369,9 +379,9 @@ Suppose model A has an F1 score of `0.76` and model B has an F1 score of `0.81`.
 
 The numerical comparison has collapsed. The models were tested under different conditions.
 
-![Fair model comparison uses the same evaluation dataset and policy, while different datasets can make a weaker model appear stronger](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/fair-model-comparison.png)
+![Two models receive one evaluation contract and are compared through overall and segment-level F1 scores](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/fair-model-comparison.png)
 
-*Models become comparable after they share the evaluation population, source version, label policy, split, prediction threshold, and metric calculation. A larger score from a less demanding dataset can mislead a reviewer.*
+*The shared dataset, label policy, split seed, and threshold make the scores comparable. Any changed evaluation input invalidates the direct comparison.*
 
 ### Record The Exact Evaluation Dataset
 
@@ -440,11 +450,11 @@ A biased or leaky validation set can be tracked perfectly. Dataset appropriatene
 ## Evaluate How The Model Will Support A Real Decision
 <!-- section-summary: Production evaluation tests the model under the threshold, population, costs, segments, and operating constraints of the real decision. -->
 
-At a high level, **model evaluation asks whether a candidate can support an acceptable real-world decision**. Algorithm metrics describe part of that answer. The production evaluation also brings in the decision threshold, error costs, capacity, important segments, and operating limits.
+A model enters production to support a decision, such as which payments need review or how much stock to order. **Model evaluation asks whether a candidate can support that decision at an acceptable level of risk and cost.** Algorithm metrics describe part of the answer. The production evaluation also tests the chosen threshold and error costs. It checks whether review capacity, segment behaviour, and operating limits fit the real workflow.
 
 A fraud classifier may rank risky transactions well and still overwhelm investigators after its threshold produces too many alerts. A demand forecast may have a reasonable average error while consistently underestimating a high-value product category. A churn model may improve overall recall while losing recall for new customers.
 
-In essence, **the evaluation should recreate the decision the model will support, not merely score the mathematical function in isolation**.
+**The evaluation should recreate the decision the model will support, including the constraints that shape that decision.**
 
 ### Start With The Task And The Cost Of Mistakes
 
@@ -557,7 +567,7 @@ Classic metric objects receive predictions and targets in the classic evaluator.
 ## Gather The Information Needed To Review A Trained Model
 <!-- section-summary: A candidate evidence packet gathers the model identity, data lineage, environment, evaluation results, limitations, and ownership needed for an informed next decision. -->
 
-At a high level, **a candidate evidence packet is the handoff record for a trained model**. It gathers the information that would otherwise remain scattered across a notebook, run page, data catalog, Git repository, and review conversation.
+A reviewer cannot approve a trained model from one metric and a file name. The supporting information usually sits across a notebook, run page, data catalog, Git repository, and review conversation. A **candidate evidence packet** gathers those records into the handoff for that trained model.
 
 The packet should give another engineer enough evidence to understand, reproduce, challenge, and continue with the candidate. It is a conceptual bundle rather than one special MLflow object. MLflow, Unity Catalog, Git, and the delivery system each preserve part of it.
 
@@ -613,7 +623,7 @@ This separation is healthy. Development can produce many Logged Models. Only can
 ## Correct Faulty Evaluation Evidence Without Rewriting History
 <!-- section-summary: After an evaluation defect is found, preserve the original record, mark its status, create corrected evidence, and trace any decisions that depended on it. -->
 
-At a high level, **evidence repair corrects a faulty model claim while preserving the history of how the claim was produced**. This matters because an evaluation defect may already have influenced a candidate review, a registry action, or a production release.
+Suppose a team discovers that the validation query included rows from the training period. Deleting the old score would hide a claim that may already have influenced a review, registry action, or production release. **Evidence repair creates a corrected model claim while preserving how the faulty claim was produced and used.**
 
 Experiment evidence can be wrong even though the code ran successfully.
 
@@ -759,7 +769,7 @@ A second tool should solve a clear collaboration, governance, or evaluation need
 ## Follow The Complete MLflow Evidence Path
 <!-- section-summary: Trustworthy model development moves from a stable question through recorded attempts and model identities to dataset-aware evaluation and a reviewable candidate. -->
 
-At a high level, the complete path turns exploratory model development into a connected evidence trail. It starts with a clear decision question and ends with a candidate another engineer can understand, reproduce, and challenge.
+Exploratory model development produces trustworthy evidence only if every step remains connected. The path starts with a clear decision question and ends with a candidate another engineer can understand, reproduce, and challenge.
 
 The question sets the target, prediction moment, population, baseline, and practical constraints. A workspace experiment then gives that continuing investigation a stable home. Each run records one attempt to answer it, including the code identity, parameters, data inputs, and execution result.
 
@@ -769,9 +779,9 @@ Evaluation reconnects the artifact to the original decision. Overall metrics, im
 
 If part of the evidence later proves faulty, the original run remains available. A corrected training or evaluation run supersedes the bad claim and links back to it. That repair path preserves trust because the history explains both the mistake and the correction.
 
-![The complete MLflow 3 evidence path moves from a model question through experiments, runs, Logged Models, dataset-aware evaluation, and a candidate evidence packet](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/complete-mlflow-evidence-path.png)
+![Seven stages turn a model-development question into connected MLflow run, model, dataset, evaluation, and review evidence](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-mlflow-3-experiments-evaluation/mlflow-evidence-path.png)
 
-*A reviewer can assess the candidate after its question, execution, artifact identity, data, evaluation policy, diagnostics, and limitations form one connected evidence trail.*
+*The evidence path ends with a reviewable candidate record. Registry approval and deployment begin at the next lifecycle boundary.*
 
 This is the handoff from model exploration to production engineering. The candidate now has a durable identity, an explainable evaluation, and enough evidence for an automated training workflow and later release review to continue safely.
 

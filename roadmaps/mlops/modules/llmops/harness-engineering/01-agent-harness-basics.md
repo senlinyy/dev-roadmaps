@@ -25,7 +25,7 @@ aliases: ["agent-harness-basics"]
 ## What An Agent Harness Does
 <!-- section-summary: An agent harness supplies the system responsibilities that let a model inspect an environment, propose actions, preserve progress, and produce verifiable results. -->
 
-At a high level, **an agent harness is the engineered system around a model that lets it perform useful work safely and reliably**. The model contributes language understanding and flexible judgement. The harness supplies the workspace, information, tools, state, permissions, control flow, and evidence needed to turn that judgement into a real outcome.
+A model can propose a plan, yet it cannot safely manage a workspace, credentials, tools, retries, and recovery by itself. **An agent harness is the engineered system around the model that supplies those operating capabilities.** The model contributes language understanding and flexible judgement; the harness supplies information, state, permissions, control flow, and evidence needed to turn that judgement into a real outcome.
 
 Consider a small coding task. A model receives a bug report saying that an order total is sometimes wrong. Producing a plausible patch is only one part of the job. The agent first needs the correct source revision and a runtime that can execute the application. It needs architecture guidance and focused ways to search and edit the repository. It also needs a test that reproduces the bug and a record of the checks that passed. If the process stops halfway through, another worker may need to continue from the same files and plan.
 
@@ -34,6 +34,10 @@ The model cannot create those conditions through reasoning alone. Installing dep
 The same distinction appears outside software development. A support agent may judge that a refund request deserves investigation. The harness establishes the authenticated customer, retrieves the correct order, limits the available actions, checks the refund policy, records any approval, executes the payment operation once, and verifies the committed result. The model helps interpret the situation; application services remain responsible for identity and money.
 
 This division explains why harness engineering matters even with a strong model. Better reasoning can improve the proposed plan. It cannot repair an invisible environment, a stale policy source, an overpowered credential, or a missing recovery path.
+
+![A customer refund request moving from an incoming request through authentication, context building, model judgement, harness controls, authoritative services, and recorded evidence](/content-assets/articles/article-mlops-llmops-agent-harness-basics/refund-harness-responsibility-boundary.png)
+
+*The model interprets the request and proposes a next step. The harness establishes identity, controls authority and execution, and records the authoritative service result.*
 
 ## Understand The Parts Before Choosing Products
 <!-- section-summary: The harness framework separates environment, context, orchestration, state, tools, authority, controls, and evidence so each responsibility has a clear owner. -->
@@ -225,6 +229,10 @@ Conversation history belongs beside these concepts, yet it serves another purpos
 
 Consider a travel agent that requested a booking before its worker crashed. The transcript contains the request and tool call. Run state records the stable booking operation ID and the fact that the outcome needs reconciliation. The airline system holds the committed reservation. Long-term memory may contain the traveler's seating preference. Each store answers a different question.
 
+![Four stores answering different recovery questions after a travel-booking worker crashes](/content-assets/articles/article-mlops-llmops-agent-harness-basics/booking-crash-state-and-memory.png)
+
+*The transcript, durable run state, airline system, and long-term memory hold different kinds of truth. Recovery starts by asking the store that owns each fact.*
+
 Good checkpoints keep durable facts compact and refer to large artifacts by ID. During resumption, the orchestrator first loads the latest checkpoint. It reconciles any external effect whose result is uncertain. It then verifies that the current workflow version can interpret the saved state before choosing a permitted transition.
 
 A memory record needs a source and a clear reason to exist. Its policy should define who can read it and how long it remains useful. People also need a way to correct or delete it. Persisting every transcript or model summary creates a noisy data store and can turn an earlier mistake into future context. A deliberate memory policy selects only information that has clear value beyond the current run.
@@ -252,6 +260,16 @@ Organizations that operate their own multi-tenant execution layer commonly run e
 
 The principle stays the same across implementations: the model sees a useful capability; the runtime enforces its real boundary.
 
+```mermaid
+flowchart TD
+    Proposal["Model proposal<br/>(tool name and arguments)"] --> Contract["Tool contract<br/>(shape, result, and recovery rules)"]
+    Contract --> Authority["Identity and policy<br/>(who may perform this action?)"]
+    Authority --> Effect["Effect protection<br/>(approval, idempotency, and reconciliation)"]
+    Effect --> Isolation["Execution isolation<br/>(process, filesystem, network, and resources)"]
+    Isolation --> Service["Owning service<br/>(authoritative result)"]
+    Service --> Evidence["Recorded outcome<br/>(state, audit, and trace references)"]
+```
+
 ## Use Hooks, Traces, And Evals To Detect And Improve Failures
 <!-- section-summary: Hooks attach cross-cutting controls to lifecycle events, traces explain one run, and evaluations judge whether the harness produced acceptable behavior. -->
 
@@ -277,6 +295,16 @@ The three mechanisms answer different questions:
 - traces reconstruct what happened in one run;
 - evals decide whether that behavior is acceptable across a release.
 
+```mermaid
+flowchart TD
+    Event["Harness lifecycle event<br/>(model, tool, handoff, or checkpoint)"] --> Hook["Hook<br/>(apply a declared control or observation)"]
+    Hook --> Trace["Trace<br/>(record what happened in this run)"]
+    Trace --> Eval["Evaluation<br/>(judge behaviour across representative cases)"]
+    Eval --> Finding{"Failure Owner<br/>(which layer caused the failure?)"}
+    Finding --> Repair["Focused repair<br/>(environment, state, tool, policy, or instruction)"]
+    Repair --> Regression["Regression case<br/>(prove the behaviour before release)"]
+```
+
 Production failures should improve the harness layer that caused them. Missing evidence may require environment or retrieval work. Repeated effects point to state and tool semantics. An invisible UI state points to better environment feedback. An unsafe authorized call points to policy and permission design. Another prompt paragraph is useful only if the failure truly came from instructions.
 
 ## Choose A Simple Harness That Can Recover
@@ -300,9 +328,25 @@ Five dimensions guide the choice:
 | Environment | one API or small document set | repositories, shells, browsers, services, and runtime evidence |
 | Assurance | answer can be reviewed afterward | completion requires tests, approval, trace evidence, or recovery proof |
 
+```mermaid
+flowchart TD
+    Task["Task boundary<br/>(duration, impact, flow, environment, and assurance)"] --> Short{"Recovery Need<br/>(can a failed run restart safely?)"}
+    Short -->|Yes| Runner["SDK runner<br/>(bounded tools, limits, and traces)"]
+    Short -->|No| Resume["Durable orchestration<br/>(checkpoints, pauses, and recovery)"]
+    Runner --> Execute{"Isolation Need<br/>(does the task run untrusted code?)"}
+    Resume --> Execute
+    Execute -->|Yes| Sandbox["Isolated workspace<br/>(scoped identity and network)"]
+    Execute -->|No| Verify["Completion evidence<br/>(tests, outcomes, and trace)"]
+    Sandbox --> Verify
+```
+
 Before adding a framework, name the responsibility it will absorb. LangGraph can make graph transitions explicit and persist graph state through checkpoints. Its interrupts support a governed pause inside an agent-centered flow. Temporal can retain cross-service workflow history and restore long-running work after worker failure. Its timers and signals support events that arrive later. A managed container can absorb part of workspace provisioning and isolation. OpenTelemetry can standardize how traces are created and exported.
 
 The same test works in reverse during an incident. First identify which harness responsibility failed. Then repair that boundary and prove recovery. Mature harness engineering gives every important fact an owner. It does the same for actions and state transitions. The model remains responsible for decisions that benefit from model judgement, while the surrounding system carries authority and evidence.
+
+![A summary for choosing agent-harness depth from task duration, impact, control flow, environment, assurance, and recovery needs](/content-assets/articles/article-mlops-llmops-agent-harness-basics/choose-agent-harness-depth-summary.png)
+
+*Harness depth follows the failures the system must recover from. Every production design still needs bounded tools, trusted authority, durable evidence, and a verified completion condition.*
 
 ## References
 

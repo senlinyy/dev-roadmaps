@@ -1,0 +1,99 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "roles/orders_web/meta/argument_specs.yml",
+  "files": [
+    {
+      "filename": "roles/orders_web/meta/argument_specs.yml",
+      "initialValue": "---\nargument_specs:\n  main:\n    options: {}\n"
+    },
+    {
+      "filename": "roles/orders_web/defaults/main.yml",
+      "initialValue": "---\norders_port: 8080\n"
+    },
+    {
+      "filename": "roles/orders_web/tasks/main.yml",
+      "initialValue": "- name: Configure orders\n  ansible.builtin.debug:\n    msg: configuring orders\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "roles/orders_web/meta/argument_specs.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "argument_specs",
+              "main",
+              "options",
+              "orders_upstream_url",
+              "type"
+            ],
+            "equals": "str"
+          },
+          {
+            "path": [
+              "argument_specs",
+              "main",
+              "options",
+              "orders_upstream_url",
+              "required"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "argument_specs",
+              "main",
+              "options",
+              "orders_port",
+              "type"
+            ],
+            "equals": "int"
+          },
+          {
+            "path": [
+              "argument_specs",
+              "main",
+              "options",
+              "orders_port",
+              "default"
+            ],
+            "equals": 8080
+          }
+        ]
+      },
+      {
+        "file": "roles/orders_web/defaults/main.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_port"
+            ],
+            "equals": 8080
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "role": "orders_web",
+          "module": "assert"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.assert",
+              "that"
+            ],
+            "minItems": 2
+          }
+        ]
+      }
+    ]
+  }
+}

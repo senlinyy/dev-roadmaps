@@ -1,0 +1,45 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/main.tf": {
+      "type": "file",
+      "content": "resource \"aws_s3_bucket\" \"orders\" {\n  bucket = \"dp-orders-training\"\n}\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "plan": {
+      "add": 1,
+      "change": 0,
+      "destroy": 0
+    }
+  },
+  "grader": {
+    "strategy": "terraform-state",
+    "source": "all-stdout",
+    "expected": [
+      "Plan: 1 to add, 0 to change, 0 to destroy."
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+init(?:\\s|$)",
+      "^terraform\\s+plan(?:\\s|$)"
+    ],
+    "forbidCommandPatterns": [
+      "^terraform\\s+apply(?:\\s|$)",
+      "^terraform\\s+destroy(?:\\s|$)"
+    ],
+    "expectedTerraform": {
+      "initialized": true,
+      "lastAction": "plan"
+    }
+  }
+}

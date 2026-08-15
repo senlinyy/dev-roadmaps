@@ -1,0 +1,140 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request changes an Ansible role used by production and staging. Which evidence should its automated review workflow produce before a person approves it? The workflow must give reviewers useful evidence without receiving production mutation credentials.",
+      "options": [
+        {
+          "id": "a",
+          "text": "Syntax validation, resolved host scope, and a supported check-mode diff."
+        },
+        {
+          "id": "b",
+          "text": "A direct production run against every host."
+        },
+        {
+          "id": "c",
+          "text": "Only YAML formatting output."
+        },
+        {
+          "id": "d",
+          "text": "A Vault password rotation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "These gates catch syntax, targeting, and proposed-change problems without starting a normal production mutation. See [Ansible check and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A protected CI release needs SSH access to production hosts and a Vault credential for encrypted variables. Where should those credentials be supplied? Pull-request jobs are untrusted, while the release environment has approval and audit controls.",
+      "options": [
+        {
+          "id": "b",
+          "text": "Inside the collection requirements file."
+        },
+        {
+          "id": "a",
+          "text": "Through the protected deployment environment and its secret mechanism."
+        },
+        {
+          "id": "c",
+          "text": "In the pull request description."
+        },
+        {
+          "id": "d",
+          "text": "As defaults in a reusable role."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Release credentials belong at a protected, audited boundary with restricted access. They should not be committed to project content or exposed to untrusted pull-request jobs. See [Ansible playbook best practices](https://docs.ansible.com/projects/ansible/latest/tips_tricks/ansible_tips_tricks.html)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "The deployment project depends on community collections whose module behavior can change between releases. Why should their versions be pinned in CI? The team wants validation and production release to use the same reviewed dependency behavior.",
+      "options": [
+        {
+          "id": "b",
+          "text": "To disable host key checking."
+        },
+        {
+          "id": "c",
+          "text": "To make every task execute on localhost."
+        },
+        {
+          "id": "a",
+          "text": "To make validation and release use a reproducible module set."
+        },
+        {
+          "id": "d",
+          "text": "To replace syntax validation."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Pinned collections prevent an unreviewed dependency change from altering behavior between validation and release. See [Installing collections](https://docs.ansible.com/projects/ansible/latest/collections_guide/collections_installing.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "A protected release playbook installs the orders application package after approval. What input should CI require so the installed artifact matches the reviewed release? The team also needs a clear path to verify and roll back the deployed version.",
+      "options": [
+        {
+          "id": "b",
+          "text": "The package state `latest`."
+        },
+        {
+          "id": "c",
+          "text": "A plaintext database password."
+        },
+        {
+          "id": "d",
+          "text": "An unrestricted host pattern."
+        },
+        {
+          "id": "a",
+          "text": "An immutable, reviewed release identifier."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "An immutable identifier connects the reviewed artifact to the deployed version and makes later verification or rollback meaningful. See [Ansible playbook best practices](https://docs.ansible.com/projects/ansible/latest/tips_tricks/ansible_tips_tricks.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "The team wants fast pull-request feedback without giving untrusted jobs production mutation credentials. What is the safest relationship between preview and release jobs? The protected release job should mutate production only after reviewed evidence and explicit approval.",
+      "options": [
+        {
+          "id": "c",
+          "text": "Release skips validation because preview passed once."
+        },
+        {
+          "id": "a",
+          "text": "Preview is automatic; release is protected and reuses the reviewed project and explicit inputs."
+        },
+        {
+          "id": "b",
+          "text": "Both mutate all production hosts automatically."
+        },
+        {
+          "id": "d",
+          "text": "Preview prints long-lived credentials for debugging."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Automatic preview supplies review evidence, while a protected release boundary controls credentials, approval, and production mutation. See [Ansible playbook best practices](https://docs.ansible.com/projects/ansible/latest/tips_tricks/ansible_tips_tricks.html)."
+    }
+  ]
+}

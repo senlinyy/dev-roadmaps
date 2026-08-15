@@ -30,7 +30,7 @@ The team has useful evidence and a serious boundary. It keeps the candidate out 
 
 That is a complete no-ship outcome. The team makes a precise decision, preserves safe learning, and keeps production authority with the current system.
 
-At a high level, **a model should stay out of the requested production scope if its intended use, evidence, behaviour, operating controls, or accountable approval cannot support that scope**. These are independent conditions:
+A strong offline score cannot justify a release whose intended use is unclear, whose critical failures remain untested, or whose operators cannot contain a bad outcome. **A model should stay out of the requested production scope if its intended use, evidence, behaviour, operating controls, or accountable approval cannot support that scope.** These are independent conditions:
 
 1. **Defined use:** the decision, population, automation level, and release scope are stable.
 2. **Valid evidence:** the data, labels, comparison, and release identity represent that use.
@@ -58,10 +58,6 @@ flowchart TD
 ```
 
 The flow preserves the reason for the block. Invalid evidence returns to the evaluation protocol. Unacceptable behaviour returns to data, modelling, product policy, or scope. Missing controls return to platform work. Missing authority returns to the owner of that risk.
-
-![Five independent release conditions that can each hold a model out of production](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/five-reasons-to-hold.png)
-
-*Defined use, valid evidence, acceptable behaviour, operating control, and accountable authority each have the power to hold production influence.*
 
 ## Choose Reject, Defer, Shadow, or Restricted Release Deliberately
 <!-- section-summary: Different evidence failures lead to different release outcomes, and each outcome grants a distinct level of authority. -->
@@ -96,6 +92,10 @@ These outcomes grant different levels of authority. Shadow traffic can be the co
 Consider a multilingual support classifier with strong English evidence and sparse evidence for two other languages. An English-only shadow may be reasonable if language routing is reliable and copied predictions create no side effects. An English-only automated release needs stronger product and operating evidence because its predictions now change a queue. A broad release remains unsupported.
 
 The decision should always state the requested authority and the granted authority. This prevents “approved for shadow” from being read later as “approved.”
+
+![Decision tree separates rejection, deferral, shadow-only authority, restricted release, and broad-release review according to the evidence available for one exact production use](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-outcome-tree.png)
+
+*A no-ship outcome is precise: each branch states what work may continue and which production authority remains closed.*
 
 ## Block a Release With an Unclear or Expanding Use
 <!-- section-summary: Evaluation can authorize only the decision, population, automation level, data use, and environment that reviewers actually assessed. -->
@@ -219,6 +219,10 @@ Prometheus with Grafana can provide service metrics and alerts. OpenTelemetry ca
 
 Managed endpoints can reduce the amount of custom control code. SageMaker AI deployment guardrails can use canary traffic shifting and CloudWatch alarms to return traffic to the previous fleet. Azure Machine Learning supports blue-green deployments behind one endpoint with explicit traffic allocation. Kubernetes platforms can use Argo Rollouts analysis to pause or abort a canary. The team must test the chosen path with the exact release and dependencies.
 
+![Control-plane alias change is insufficient rollback evidence until workers are rerouted or restarted and a traceable new request reports the retained model version](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-data-plane-recovery.png)
+
+*Recovery is proved in the data path: new traffic must identify the retained release that actually handled it.*
+
 ## Block a Release Without Accountable Authority
 <!-- section-summary: Named owners accept residual risk within their decision rights, and a missing required approval keeps the requested production authority closed. -->
 
@@ -292,10 +296,6 @@ External adoption is also weak local evidence. A technique used by another organ
 
 The block should remain material and testable. Vague discomfort can create endless review. A strong finding identifies the possible harm, evidence, denied scope, owner, and next test.
 
-![No-ship record connects exact release findings and owners to allowed and blocked authority](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-scoped-authority.png)
-
-*A no-ship record can preserve offline and isolated-shadow work while denying every authority that changes production decisions.*
-
 ## Run The Full Review Again After Repair
 <!-- section-summary: Re-entry uses a new release identity and fresh evidence, repeats every gate, and proves the original failure plus adjacent risks are controlled. -->
 
@@ -333,10 +333,6 @@ Provider tools can reflect the outcome without owning the whole decision. An MLf
 
 After approval, production monitoring keeps the original failure visible. The repaired language segment gets its own label-volume, join-coverage, quality, and workload view. Teams add the rollback drill to the repeatable release suite. A later regression can revoke authority and restore the retained release.
 
-![Clear no-ship decision preserves evidence, assigns repair work, creates a new candidate, and reruns the full review](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/clear-block-next-safe-test.png)
-
-*The path back to release creates a new candidate, repeats the failed evidence and adjacent checks, and grants authority through a new decision.*
-
 ## The Main Idea
 <!-- section-summary: A no-ship decision protects users by denying unsupported authority and helps the team progress through precise findings, owners, safe work, and repeatable re-entry tests. -->
 
@@ -345,6 +341,10 @@ A candidate stays out of production if the proposed use is unclear, the evidence
 The outcome should be precise. Rejection closes the current candidate. Deferral waits for material evidence. Shadow-only authority permits isolated runtime learning. Restricted release grants an enforceable subset. None of these outcomes quietly grants broader production influence.
 
 A strong block pins the release identity, states the denied authority, preserves the evidence, assigns production-depth repair work, and names the tests required for reconsideration. A new candidate then returns through the complete review and proves both the original fix and the surrounding system.
+
+![Six-step no-ship recovery path preserves the blocked record, states allowed and denied authority, assigns repair, creates a new candidate, repeats the full review, and makes a new scoped decision](/content-assets/articles/article-mlops-model-evaluation-when-not-to-ship-a-model/no-ship-reentry-summary.png)
+
+*The old blocked record remains blocked. A repaired release returns with a new identity and earns a separate decision from complete evidence.*
 
 ## References
 

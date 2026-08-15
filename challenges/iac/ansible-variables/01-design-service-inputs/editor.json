@@ -1,0 +1,107 @@
+{
+  "language": "jinja2",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "templates/orders.conf.j2",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Render orders configuration\n      ansible.builtin.template:\n        src: orders.conf.j2\n        dest: /etc/orders/orders.conf\n"
+    },
+    {
+      "filename": "group_vars/all.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "group_vars/production.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "templates/orders.conf.j2",
+      "initialValue": "listen=8080\nworkers=2\napi_url=https://orders.example.invalid\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "group_vars/all.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_port"
+            ],
+            "equals": 8080
+          },
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 2
+          }
+        ]
+      },
+      {
+        "file": "group_vars/production.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 6
+          },
+          {
+            "path": [
+              "orders_api_url"
+            ],
+            "equals": "https://orders.internal.example"
+          }
+        ]
+      },
+      {
+        "file": "templates/orders.conf.j2",
+        "kind": "template",
+        "contains": [
+          "{{ orders_port }}",
+          "{{ orders_workers }}",
+          "orders_api_url | mandatory"
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.template",
+              "mode"
+            ],
+            "equals": "0640"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "templates/orders.conf.j2"
+      }
+    ],
+    "forbiddenText": [
+      "orders-secret"
+    ]
+  }
+}

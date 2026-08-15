@@ -368,6 +368,12 @@
       "stripe-webhook-secret"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+containerapp\\s+show\\b",
+      "^az\\s+containerapp\\s+revision\\s+list\\b",
+      "^az\\s+containerapp\\s+ingress\\s+show\\b",
+      "^az\\s+containerapp\\s+secret\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

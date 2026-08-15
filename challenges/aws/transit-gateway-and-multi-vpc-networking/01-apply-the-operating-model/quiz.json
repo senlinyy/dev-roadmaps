@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "peering-fit",
+      "type": "single",
+      "scenario": "Two VPCs need a simple private connection and there is no expected third VPC or central inspection requirement. Which option has the least routing machinery?",
+      "options": [
+        {
+          "id": "b",
+          "text": "VPC peering with nonoverlapping CIDRs and routes on both sides."
+        },
+        {
+          "id": "a",
+          "text": "A full Transit Gateway hub."
+        },
+        {
+          "id": "c",
+          "text": "A public internet gateway on both VPCs."
+        },
+        {
+          "id": "d",
+          "text": "An S3 gateway endpoint."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "VPC peering can fit a small point-to-point topology. Transit Gateway becomes valuable as connectivity and policy centralization grow. Learn more in [Transit Gateway architecture](https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html)."
+    },
+    {
+      "id": "tgw-scale",
+      "type": "single",
+      "scenario": "Twenty workload VPCs need shared services and centralized inspection, with separate production and development routing domains. Which design fits?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A full mesh of 190 peering connections."
+        },
+        {
+          "id": "c",
+          "text": "Transit Gateway attachments with separate TGW route-table associations and propagations."
+        },
+        {
+          "id": "b",
+          "text": "One shared subnet for all accounts."
+        },
+        {
+          "id": "d",
+          "text": "Public IPs plus security groups."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Transit Gateway provides a hub and multiple route tables for segmented connectivity at scale. Learn more in [Transit Gateway route tables](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html)."
+    },
+    {
+      "id": "two-route-domains",
+      "type": "single",
+      "scenario": "The production attachment is associated with a production TGW route table, but development routes are propagated into that same table. What is the risk?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Association prevents all propagation."
+        },
+        {
+          "id": "c",
+          "text": "TGW ignores CIDR routes."
+        },
+        {
+          "id": "a",
+          "text": "Propagation can unintentionally make development destinations reachable from production."
+        },
+        {
+          "id": "d",
+          "text": "The VPC local route deletes propagated routes."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Association chooses the table used to route traffic from an attachment, while propagation adds attachment routes to tables. Both must match segmentation intent. Learn more in [Transit Gateway route tables](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html)."
+    },
+    {
+      "id": "end-to-end-routes",
+      "type": "single",
+      "scenario": "App VPC can send packets to a database VPC through TGW, but replies never return. Security groups are correct. What route condition is most likely missing?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A public Route 53 record."
+        },
+        {
+          "id": "c",
+          "text": "An S3 prefix-list route."
+        },
+        {
+          "id": "d",
+          "text": "A second internet gateway."
+        },
+        {
+          "id": "a",
+          "text": "A return route from the database-side VPC and TGW table toward the app CIDR."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "End-to-end reachability requires a valid forward and return route across VPC and TGW route tables. Learn more in [Transit Gateway architecture](https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html)."
+    },
+    {
+      "id": "tgw-review",
+      "type": "multiple",
+      "scenario": "A shared Transit Gateway will connect production, development, inspection, and shared-services VPCs. Which controls reduce the multi-VPC routing blast radius?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Separate TGW route tables for trust domains."
+        },
+        {
+          "id": "d",
+          "text": "Propagate every attachment into every table by default."
+        },
+        {
+          "id": "b",
+          "text": "Explicit association and propagation review."
+        },
+        {
+          "id": "e",
+          "text": "Use public IP addresses to avoid reviewing route propagation."
+        },
+        {
+          "id": "c",
+          "text": "Nonoverlapping, governed CIDR allocation."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "Segmentation, deliberate propagation, and governed address allocation keep the hub from becoming unrestricted transitive connectivity. Learn more in [Transit Gateway route tables](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html)."
+    }
+  ]
+}

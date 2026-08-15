@@ -1,0 +1,16 @@
+{
+  "language": "json",
+  "filename": "audit-sink.json",
+  "completionProfile": "gcp-json",
+  "initialValue": "{\n  \"name\": \"prod-admin-audit\",\n  \"destination\": \"\",\n  \"filter\": \"\",\n  \"uniqueWriterIdentity\": false\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["name"], "equals": "prod-admin-audit" },
+      { "path": ["destination"], "equals": "storage.googleapis.com/devpolaris-prod-audit-logs" },
+      { "path": ["uniqueWriterIdentity"], "equals": true },
+      { "path": ["filter"], "matches": "resource\\.labels\\.project_id\\s*=\\s*\\\"devpolaris-prod\\\"" },
+      { "path": ["filter"], "matches": "cloudaudit\\.googleapis\\.com/activity" }
+    ]
+  }
+}

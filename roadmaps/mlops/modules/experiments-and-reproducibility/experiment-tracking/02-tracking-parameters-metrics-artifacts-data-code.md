@@ -35,7 +35,7 @@ Imagine running a small classifier and writing one line in a notebook: `validati
 
 The score still says how one evaluation ended. It cannot explain what was evaluated or recreate the conditions that produced it.
 
-At a high level, **experiment tracking** gives each execution a durable evidence record. The record connects the training choices, measured behavior, output files, data lineage, source code, and runtime environment. A teammate can use that record to answer three practical questions:
+A metric such as `0.91` has little meaning without the run that produced it. **Experiment tracking gives each execution a durable evidence record** connecting training choices, measured behaviour, output files, data lineage, source code, and runtime environment. A teammate can use that record to answer three practical questions:
 
 - Why did this run produce its result?
 - Is it fair to compare this run with another one?
@@ -75,6 +75,10 @@ flowchart TD
 Each edge carries meaning. A validation metric belongs to a particular validation dataset and metric implementation. A model artifact belongs to the exact run that created it. A signature describes the inputs and outputs expected by that model. A review decision points back to the full chain.
 
 This structure also reveals gaps. A model with no dataset input has weak lineage. A loss curve with no step values hides its training history. A run with a Git commit and a dirty working tree still has uncertain code. Tracking works well once those gaps are visible and testable.
+
+![One tracked run connecting resolved parameters, dataset snapshot, code and runtime, metric history, status, a model ID, signature, artifacts, and review decision](/content-assets/articles/article-mlops-experiments-and-reproducibility-tracking-parameters-metrics-artifacts-data-code/tracked-run-anatomy.png)
+
+*The run ID identifies the execution, while the model ID identifies the trained artifact. Together they connect the recipe and metric history to the exact model, reports, and review outcome.*
 
 ## Record The Choices Given To Each Run
 <!-- section-summary: Parameters preserve the resolved choices supplied to the run, including model settings and data or evaluation rules. -->
@@ -144,7 +148,7 @@ An artifact needs its own integrity information. Object version, checksum, size,
 
 ML behavior depends heavily on data. Two runs with identical code and parameters can produce different models because the rows, labels, or point-in-time joins changed.
 
-A dataset name such as `training_data` gives little evidence. A useful identity names the source and an immutable version: an Iceberg or Delta table version, object manifest, warehouse snapshot, dataset artifact version, or content digest. It should also record the label cutoff, feature-view versions, split rule, and transformation revision needed to construct the model input.
+A dataset name such as `training_data` gives little evidence. The identity needs the source and an immutable version: an Iceberg or Delta table version, object manifest, warehouse snapshot, dataset artifact version, or content digest. It should also record the label cutoff, feature-view versions, split rule, and transformation revision needed to construct the model input.
 
 The **dataset role** explains how the run used the data. Training, validation, test, calibration, and evaluation datasets carry different statistical meaning. Logging the role prevents a test set from quietly appearing as training input and makes comparisons across validation snapshots explicit.
 
@@ -195,11 +199,14 @@ This structure also fits cross-validation if each fold needs its own diagnostics
 ## Track a Small Run With MLflow 3
 <!-- section-summary: A focused MLflow 3 run can connect resolved parameters, metric history, datasets, a model signature, and the logged model identity. -->
 
-The following example trains a small gradient-boosted classifier. It records training and validation datasets, resolved parameters, metrics at each boosting stage, final metrics linked to the logged model and validation dataset, and a model signature.
+The following example trains a small gradient-boosted classifier. The small dataset keeps the tracking relationships visible without turning the section into a training tutorial. `load_wine()` reads data packaged with the installed scikit-learn distribution, so the source record identifies that loader, the package version, and a digest of the complete loaded dataset. It does not claim that the run downloaded data from the UCI website.
+
+The code then splits that source into named training and validation dataset records. Inside one MLflow run, it logs the resolved model parameters, the source identity, both split identities, and metric history across boosting stages. The trained model receives its own Logged Model identity and signature. The final accuracy points to both that `model_id` and the validation dataset. The expected result is one traceable chain from packaged source and split, through training configuration, to the exact model and evaluation evidence.
 
 ```python
 import mlflow
 import mlflow.sklearn
+import sklearn
 from mlflow.models import infer_signature
 from sklearn.datasets import load_wine
 from sklearn.ensemble import GradientBoostingClassifier
@@ -207,17 +214,20 @@ from sklearn.metrics import accuracy_score, log_loss
 from sklearn.model_selection import train_test_split
 
 X, y = load_wine(as_frame=True, return_X_y=True)
+full_frame = X.assign(target=y)
 X_train, X_valid, y_train, y_valid = train_test_split(
     X, y, test_size=0.25, random_state=17, stratify=y
 )
 train_frame = X_train.assign(target=y_train)
 valid_frame = X_valid.assign(target=y_valid)
-source = "https://archive.ics.uci.edu/dataset/109/wine"
+full_data = mlflow.data.from_pandas(
+    full_frame, name="wine-full", targets="target"
+)
 train_data = mlflow.data.from_pandas(
-    train_frame, source=source, name="wine-train", targets="target"
+    train_frame, name="wine-train", targets="target"
 )
 valid_data = mlflow.data.from_pandas(
-    valid_frame, source=source, name="wine-valid", targets="target"
+    valid_frame, name="wine-valid", targets="target"
 )
 
 mlflow.set_experiment("wine-classifier")
@@ -225,8 +235,18 @@ with mlflow.start_run(run_name="gb-small-run", log_system_metrics=True):
     params = {"n_estimators": 30, "learning_rate": 0.05,
               "max_depth": 2, "random_state": 17}
     mlflow.log_params(params)
+    mlflow.log_param("scikit_learn_version", sklearn.__version__)
+    mlflow.log_input(full_data, context="source")
     mlflow.log_input(train_data, context="training")
     mlflow.log_input(valid_data, context="validation")
+    mlflow.log_dict(
+        {
+            "loader": "sklearn.datasets.load_wine",
+            "package_version": sklearn.__version__,
+            "full_dataset_digest": full_data.digest,
+        },
+        "data/wine-source.json",
+    )
 
     model = GradientBoostingClassifier(**params).fit(X_train, y_train)
     for step, probabilities in enumerate(model.staged_predict_proba(X_valid), 1):
@@ -243,7 +263,9 @@ with mlflow.start_run(run_name="gb-small-run", log_system_metrics=True):
     )
 ```
 
-The tracking server now knows the unique run ID and logged model ID. MLflow 3 gives the logged model its own identity, so evaluation metrics can point to that model and dataset directly. The code should also log the Git commit, image digest, resolved config, and review note in a real training job; those values depend on the surrounding CI and execution platform.
+The tracking server now knows the unique run ID and logged model ID. MLflow 3 gives the logged model its own identity, so evaluation metrics can point to that model and dataset directly. A stricter production job can also publish the exact source bytes under an immutable object or table version.
+
+The code should also log the Git commit, image digest, resolved config, and review note in a real training job; those values depend on the surrounding CI and execution platform.
 
 Autologging can capture standard parameters, metrics, and models for supported libraries. Teams should inspect what their integration records and add domain evidence such as dataset snapshot, feature contract, segment report, and decision context.
 
@@ -274,6 +296,10 @@ Use the tracking backend for values people filter, sort, and graph. Use the arti
 ### Keep Inputs And Outputs Long Enough For Reproduction
 
 Retention should follow value and obligation. Promoted models and formal evaluation evidence often need long retention. Failed setup runs, dense metric histories, and disposable checkpoints can expire earlier. A retention job should preserve referential integrity; keeping a run whose required model artifact has vanished creates a misleading record.
+
+![Tracking backend, artifact store, data platform, and source and image registries connected to one run page through immutable references](/content-assets/articles/article-mlops-experiments-and-reproducibility-tracking-parameters-metrics-artifacts-data-code/run-evidence-storage.png)
+
+*The tracker stores searchable run metadata and stable references. Large artifacts stay in object storage, governed datasets stay in the data platform, and code and runtime identities stay in their versioned systems.*
 
 ## Keep Secrets and Sensitive Data Out of Run Metadata
 <!-- section-summary: Run metadata is widely searchable, so credentials, personal data, and sensitive examples require stricter systems and governed references. -->
@@ -346,10 +372,15 @@ MLflow 3 provides a practical implementation through runs, datasets, logged mode
 
 The real quality gate is reconstruction. If another engineer can start from a run ID, restore its inputs and environment, load its model, and reproduce the accepted evaluation, the tracking record is doing useful engineering work.
 
+![Six-step reconstruction path from a run ID to a replay-ready evaluation record or repair of missing evidence](/content-assets/articles/article-mlops-experiments-and-reproducibility-tracking-parameters-metrics-artifacts-data-code/run-reconstruction-check.png)
+
+*A reconstruction exercise verifies the recorded evaluation from the run ID through code, environment, data, model signature, and acceptance checks. Missing or mutable evidence turns into a concrete repair task.*
+
 ## References
 
 - [MLflow: Experiment tracking](https://mlflow.org/docs/latest/ml/tracking/)
 - [MLflow: Dataset tracking](https://mlflow.org/docs/latest/ml/dataset/)
+- [MLflow: Dataset tracking Python APIs](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.data.html)
 - [MLflow: Model signatures and input examples](https://mlflow.org/docs/latest/ml/model/signatures/)
 - [MLflow: Python tracking APIs](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.html)
 - [MLflow: Hyperparameter tuning with child runs](https://mlflow.org/docs/latest/ml/getting-started/hyperparameter-tuning)

@@ -4,6 +4,6 @@ description: "Practice SQL database evidence for order records, private access, 
 articleId: article-cloud-providers-azure-storage-databases-azure-sql-database
 articleSlug: azure-sql-database
 difficulty: medium
-order: 26
+order: 19
 tags: ["azure", "sql", "database", "transactions", "retention"]
 ---

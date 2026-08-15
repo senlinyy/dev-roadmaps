@@ -286,6 +286,10 @@
       "10.30.0.4"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+network\\s+vnet\\s+subnet\\s+show\\b",
+      "^az\\s+network\\s+route-table\\s+route\\s+list\\b"
+    ],
     "requireCommands": [
       "az"
     ],

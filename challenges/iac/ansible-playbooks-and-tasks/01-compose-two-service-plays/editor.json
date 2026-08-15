@@ -1,0 +1,114 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure production\n  hosts: all\n  tasks: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "plays": [
+      {
+        "select": {
+          "file": "site.yml",
+          "hosts": "orders_db"
+        },
+        "paths": [
+          {
+            "path": [
+              "become"
+            ],
+            "equals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "become"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "apt",
+          "nameIncludes": "PostgreSQL"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "equals": "postgresql"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "service",
+          "nameIncludes": "PostgreSQL"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "enabled"
+            ],
+            "equals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "apt",
+          "nameIncludes": "nginx"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "equals": "nginx"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "service",
+          "nameIncludes": "nginx"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "enabled"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "command",
+      "shell"
+    ]
+  }
+}

@@ -35,7 +35,7 @@ The new team receives a deceptively simple request: “Rebuild the same model in
 
 That request contains two different questions. First, can the team reconstruct the original training run closely enough to verify how the existing model was produced? Second, can it migrate the training process to a supported stack while preserving accepted behavior? Losing the original container may make the first goal impossible at the environment level. The second goal may still be achievable through a declared migration study.
 
-At a high level, **reproducing an old run** means recovering historical evidence and executing a controlled replay if that evidence supports one. The final claim must stay within the recovered facts.
+A team may reopen an old run after an incident, audit request, or surprising new result. **Reproducing that run means recovering its historical evidence and executing a controlled replay if the evidence supports one.** The final claim must stay within the recovered facts.
 
 The work resembles archaeology. Start from an object known to have existed in production, follow its identities backward, and preserve every gap or substitution found along the way.
 
@@ -85,6 +85,10 @@ Partial forensic reconstruction is therefore weaker than a replay. It explains t
 A critical identity or artifact is missing. The training data may be overwritten, the source run unresolved, the label query lost, or stable comparison evidence unavailable. Running today’s pipeline could still create a useful new model. That result offers no verification of the historical model.
 
 The correct result is a documented gap. This protects future reviewers from mistaking a plausible reconstruction for evidence.
+
+![Four reproduction outcomes ordered by the strength of the recovered evidence and the claim it can support](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/four-reproduction-outcomes.png)
+
+*Replay, migration, partial reconstruction, and an unreproducible history are all honest outcomes. Each one permits a different claim, so the wording must remain inside the evidence the team recovered.*
 
 ## Start With The Exact Model Used In Production
 <!-- section-summary: Recovery starts from an immutable model or release identity and follows lineage to the source run instead of guessing from current code or familiar names. -->
@@ -149,6 +153,10 @@ recovery_map:
 ```
 
 The map prevents accidental claim inflation. A recreated container built from the old Dockerfile and lockfile is a reconstructed environment. It may be excellent evidence, yet it is distinct from pulling the original image by digest.
+
+![Production model identity connected to the original run record, six required evidence objects, and a replay-or-migration decision](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/recover-evidence-before-compute.png)
+
+*An evidence inventory exposes missing ingredients before the team spends money on training. A missing container digest, for example, forces an explicit choice between an exact rebuild, a documented migration, and a narrower claim.*
 
 ## Verify That The Original Training Data Still Exists
 <!-- section-summary: A table name or object path is historical evidence only if the exact files, snapshot, and transformation rules remain available. -->
@@ -292,7 +300,7 @@ Replay comparison works like fault isolation. It checks the recovered ingredient
 
 First compare **ingredients**: commit, resolved configuration, data snapshots, lockfile, image digest, hardware, worker count, and runtime flags. Then compare **data and preprocessing**: schema, split membership, feature fingerprints, label counts, and known fixtures. Next compare **training behavior**: warnings, step counts, loss curves, checkpoints, and early-stopping choice.
 
-Only after those layers line up should the team compare final metrics, cohort metrics, predictions, and artifacts.
+Compare final metrics, cohort metrics, predictions, and artifacts after those earlier layers line up.
 
 ```mermaid
 flowchart TD
@@ -374,6 +382,10 @@ Reproducing an old run is a recovery decision before it is a training job. Start
 If the original contract survives, replay it. If an old component must change, run a declared migration study. If critical evidence is gone, document the point where trustworthy claims end.
 
 Every attempt receives a new identity and preserves the original history. That discipline lets future engineers distinguish what was replayed, what was migrated, and what can no longer be known.
+
+![Six-stage recovery workflow that preserves the historical run, creates a new replay identity, compares evidence, and limits the final claim](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducing-old-training-run/rebuild-old-run-summary.png)
+
+*The recovery workflow keeps evidence and history separate. The replay receives a new identity, the comparison records every known change, and the final claim reflects the strongest conclusion the evidence can support.*
 
 ## References
 

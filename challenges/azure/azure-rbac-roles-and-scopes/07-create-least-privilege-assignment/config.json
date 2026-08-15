@@ -47,6 +47,9 @@
       "Storage Blob Data Contributor",
       "/subscriptions/sub-devpolaris-training/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Storage/storageAccounts/stdevpolarisexports"
     ],
+    "requireCommandPatterns": [
+      "^az\\s+role\\s+assignment\\s+create\\b"
+    ],
     "requireCommands": [
       "az"
     ],

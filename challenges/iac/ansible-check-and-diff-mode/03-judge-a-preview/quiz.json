@@ -1,0 +1,140 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single",
+      "scenario": "A pull request changes an orders service template, and the reviewer runs `ansible-playbook deploy.yml --check --diff`. What evidence can a supported template task provide? The reviewer needs evidence about the proposed file content without changing a managed host.",
+      "options": [
+        {
+          "id": "a",
+          "text": "A prediction of change plus the candidate content diff."
+        },
+        {
+          "id": "b",
+          "text": "A guarantee that every handler will succeed."
+        },
+        {
+          "id": "c",
+          "text": "A live mutation followed by automatic rollback."
+        },
+        {
+          "id": "d",
+          "text": "A transaction across all managed hosts."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Check mode predicts supported changes and diff mode shows supported before-and-after content without committing it. See [Ansible check and diff mode](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)."
+    },
+    {
+      "id": "q2",
+      "type": "single",
+      "scenario": "A playbook command task calls an external deployment API that cannot safely simulate its side effect. What is the safest behavior when the play runs in check mode? The pull-request job has no production mutation approval and must remain side-effect free.",
+      "options": [
+        {
+          "id": "b",
+          "text": "Force `changed_when: true` during preview."
+        },
+        {
+          "id": "a",
+          "text": "Gate it with `when: not ansible_check_mode` and validate it through another safe path."
+        },
+        {
+          "id": "c",
+          "text": "Run it twice and compare the responses."
+        },
+        {
+          "id": "d",
+          "text": "Ignore every error from the command."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "A task without a safe preview should be excluded from check mode and covered by separate validation. Inventing change output or ignoring failures misrepresents the evidence. See [Command module check-mode support](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/command_module.html#attributes)."
+    },
+    {
+      "id": "q3",
+      "type": "single",
+      "scenario": "A production playbook is reusable across several inventories, and the operator wants to preview a canary change. Why should target inspection happen before the preview? The team wants to avoid producing a convincing preview for an accidentally broad host set.",
+      "options": [
+        {
+          "id": "b",
+          "text": "Diff mode automatically expands host patterns."
+        },
+        {
+          "id": "c",
+          "text": "Syntax check changes inventory membership."
+        },
+        {
+          "id": "a",
+          "text": "A correct diff against the wrong hosts is still unsafe."
+        },
+        {
+          "id": "d",
+          "text": "Check mode cannot use `--limit`."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Scope and content are separate safety properties. Use `--list-hosts` or an equivalent inventory inspection to prove the target set before interpreting the proposed change. See [Ansible inventory patterns](https://docs.ansible.com/projects/ansible/latest/inventory_guide/intro_patterns.html)."
+    },
+    {
+      "id": "q4",
+      "type": "single",
+      "scenario": "An operator proves the production host set and completes a check-mode run without errors. Which limitation of that successful preview is still important? A protected real run is still waiting on approval and post-change verification.",
+      "options": [
+        {
+          "id": "b",
+          "text": "The YAML definitely contains no variables."
+        },
+        {
+          "id": "c",
+          "text": "Every module performed a real change."
+        },
+        {
+          "id": "d",
+          "text": "The inventory contains exactly one host."
+        },
+        {
+          "id": "a",
+          "text": "External side effects and post-change runtime health may still fail."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Check mode is a simulation and support varies by module. It cannot guarantee runtime behavior after the real change. See [Check-mode limitations](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_checkmode.html)."
+    },
+    {
+      "id": "q5",
+      "type": "single",
+      "scenario": "A template task specifies `validate: /usr/local/bin/orders --check-config %s` before writing the service file. What value does Ansible substitute for `%s`? The team wants invalid candidate content rejected before the destination file is replaced.",
+      "options": [
+        {
+          "id": "c",
+          "text": "The current service status."
+        },
+        {
+          "id": "a",
+          "text": "The path to the temporary candidate file validated before replacement."
+        },
+        {
+          "id": "b",
+          "text": "The inventory hostname."
+        },
+        {
+          "id": "d",
+          "text": "The Vault password source."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The template module substitutes the temporary candidate path into the validation command and commits the destination only after validation succeeds. See [ansible.builtin.template](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/template_module.html)."
+    }
+  ]
+}

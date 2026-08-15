@@ -1,0 +1,141 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "repeatable-environments",
+      "type": "single",
+      "scenario": "A team built staging manually over two weeks. Production now needs the same network, database, and access rules, but nobody recorded every console choice. Which change most directly makes the second environment repeatable and reviewable?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Capture the desired infrastructure in version-controlled code and review its proposed changes before creation."
+        },
+        {
+          "id": "b",
+          "text": "Ask the original operator to repeat the console clicks while another engineer takes screenshots."
+        },
+        {
+          "id": "c",
+          "text": "Clone the staging account so production inherits every existing object and permission."
+        },
+        {
+          "id": "d",
+          "text": "Write a runbook that lists service names but leaves values and relationships to the operator."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Version-controlled declarations make the target state repeatable and put proposed changes through review. Screenshots and partial runbooks still depend on human memory, while cloning can carry unintended state and permissions."
+    },
+    {
+      "id": "drift-evidence",
+      "type": "single",
+      "scenario": "An emergency console edit opened a database security rule. The repository still contains the approved restricted rule. What is the strongest reason to run the infrastructure planning workflow before the next release?",
+      "options": [
+        {
+          "id": "b",
+          "text": "It guarantees every manual edit is safe if it was made by an administrator."
+        },
+        {
+          "id": "a",
+          "text": "It can compare declared configuration, recorded state, and provider observations to surface the unreviewed difference."
+        },
+        {
+          "id": "c",
+          "text": "It deletes all manually created infrastructure before reading configuration."
+        },
+        {
+          "id": "d",
+          "text": "It converts the console audit log directly into new source files without review."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Planning exposes drift as a proposed reconciliation. It does not bless manual changes, delete everything, or generate reviewed source automatically."
+    },
+    {
+      "id": "plan-boundary",
+      "type": "single",
+      "scenario": "A pull request changes a production subnet CIDR. The author says code review is enough and no plan is needed because the HCL is valid. What evidence is missing?",
+      "options": [
+        {
+          "id": "b",
+          "text": "A screenshot proving the HCL file opened successfully in an editor."
+        },
+        {
+          "id": "c",
+          "text": "A second copy of the same configuration stored outside version control."
+        },
+        {
+          "id": "a",
+          "text": "A plan tied to the production state and credentials that shows whether the subnet updates in place or is replaced."
+        },
+        {
+          "id": "d",
+          "text": "A list of every Terraform command supported by the installed CLI."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Syntax review cannot reveal provider and state-specific consequences. A target-bound plan shows the actual create, update, replace, and destroy decisions."
+    },
+    {
+      "id": "team-controls",
+      "type": "multiple",
+      "scenario": "Two teams share responsibility for a production stack. Which two practices make infrastructure changes easier to audit and recover?",
+      "options": [
+        {
+          "id": "c",
+          "text": "Let each engineer keep a separate production state file on their laptop."
+        },
+        {
+          "id": "a",
+          "text": "Keep configuration changes in version control with peer review."
+        },
+        {
+          "id": "d",
+          "text": "Apply console changes first and update code only when someone notices drift."
+        },
+        {
+          "id": "b",
+          "text": "Use a shared protected state location with locking for the stack."
+        }
+      ],
+      "correct": [
+        "a",
+        "b"
+      ],
+      "explanation": "Version control records intent and review, while protected shared state gives the team one operational memory and one-writer coordination. Separate state and console-first work create conflicting histories."
+    },
+    {
+      "id": "scripts-versus-iac",
+      "type": "single",
+      "scenario": "A shell script creates a bucket on every run but does not inspect existing settings or record which object it owns. Which limitation matters most compared with a state-aware declarative workflow?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Shell scripts cannot call cloud APIs under any circumstances."
+        },
+        {
+          "id": "c",
+          "text": "Declarative tools never execute provider API requests."
+        },
+        {
+          "id": "d",
+          "text": "The script is unsafe only because it is not written in HCL."
+        },
+        {
+          "id": "a",
+          "text": "The script lacks a durable ownership record and change comparison, so repeated runs need custom logic to avoid duplicates and drift."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "The key difference is the workflow around desired state, ownership, and comparison. Scripts can call APIs and can be safe, but the team must build idempotency and state behavior themselves."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "language": "yaml",
+  "filename": "ordersRuntimeReader.yaml",
+  "completionProfile": "gcp-iam-role",
+  "initialValue": "title: Orders Runtime Reader\ndescription: Inspect the orders runtime during incidents\nstage: ALPHA\nincludedPermissions: []\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["title"], "equals": "Orders Runtime Reader" },
+      { "path": ["stage"], "equals": "GA" },
+      { "path": ["includedPermissions"], "includes": "run.services.get", "minItems": 3, "maxItems": 3 },
+      { "path": ["includedPermissions"], "includes": "run.services.list" },
+      { "path": ["includedPermissions"], "includes": "logging.logEntries.list" },
+      { "path": ["includedPermissions"], "excludes": "resourcemanager.projects.setIamPolicy" },
+      { "path": ["includedPermissions"], "excludes": "run.services.update" },
+      { "path": ["includedPermissions"], "excludes": "secretmanager.versions.access" }
+    ]
+  }
+}

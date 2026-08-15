@@ -1,16 +1,17 @@
 ---
-title: "Repair the Orders Release Role"
+title: "Build a Least-Privilege Release Identity"
 sectionSlug: roles-and-rolebindings
 order: 1
 ---
 
-The orders release service account has an approved Role identity, but its namespace scope and least-privilege rules are missing. Build the complete release authorization contract without granting access to Secrets.
+The delivery controller needs a namespaced Kubernetes identity that can observe Pods and update orders Deployments, but it must not read Secrets or gain cluster-wide access. Build the ServiceAccount, Role, and RoleBinding as three separate reviewable resources.
 
 Your job:
 
-1. **Keep the Role named `orders-release`** and define its namespace scope as `orders`.
-2. **Build one rule for API group `apps`** covering resources `deployments` and `replicasets` with verbs `get`, `list`, `watch`, `patch`, and `update`.
-3. **Build one core API rule** covering only resource `pods` with verbs `get`, `list`, and `watch`.
-4. **Keep Secrets outside the contract** so no rule grants access to resource `secrets`.
+1. **Create ServiceAccount `orders-release`** in namespace `orders` without adding token Secrets.
+2. **Create Role `orders-release`** in the same namespace with one `apps` rule for `deployments` and `replicasets` using `get`, `list`, `watch`, `patch`, and `update`.
+3. **Add one core API rule** for `pods` using only `get`, `list`, and `watch`.
+4. **Create RoleBinding `orders-release`** that binds that exact Role to that exact ServiceAccount in namespace `orders`.
+5. **Do not add ClusterRoles, ClusterRoleBindings, Secrets, wildcard resources, or wildcard verbs.**
 
-The grader checks the exact namespace, resource sets, and verb sets in the parsed Role.
+The grader parses the complete RBAC resource set, checks the exact least-privilege rules, resolves both RoleBinding references, and rejects broader resource kinds.

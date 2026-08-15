@@ -1,0 +1,77 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "inventory.ini",
+      "initialValue": "[orders_web]\nweb-01 ansible_host=192.0.2.10\n"
+    },
+    {
+      "filename": "group_vars/orders_web.yml",
+      "initialValue": "---\nansible_user: root\n"
+    },
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web\n  hosts: orders_web\n  tasks:\n    - name: Install nginx\n      ansible.builtin.apt:\n        name: nginx\n        state: present\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "group_vars/orders_web.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "ansible_user"
+            ],
+            "equals": "deploy"
+          },
+          {
+            "path": [
+              "ansible_ssh_private_key_file"
+            ],
+            "equals": "~/.ssh/orders_deploy"
+          }
+        ],
+        "doesNotContain": [
+          "password"
+        ]
+      }
+    ],
+    "plays": [
+      {
+        "select": {
+          "file": "site.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "become"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "become_method"
+            ],
+            "equals": "sudo"
+          },
+          {
+            "path": [
+              "become_user"
+            ],
+            "equals": "root"
+          }
+        ]
+      }
+    ],
+    "forbiddenText": [
+      "ansible_password",
+      "ansible_become_password"
+    ]
+  }
+}

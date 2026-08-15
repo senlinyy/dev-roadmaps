@@ -36,7 +36,7 @@ The wrong choice has practical consequences. A CPU run may miss the review windo
 
 Success has observable evidence. The job reaches the agreed validation objective and writes a usable checkpoint before the meeting. It stays within budget and produces a profile that explains where time and memory went. That evidence supports future scheduling decisions instead of leaving the team with “GPU was faster” as the only conclusion.
 
-At a high level, CPU-versus-GPU selection is a **bottleneck decision**. A bottleneck is the stage that limits the rate of the whole training job. Faster hardware helps only if it accelerates that limiting stage.
+A slow training job does not automatically need a GPU. The input pipeline may be waiting on storage, preprocessing may use unsupported operations, or the model may be too small to keep an accelerator busy. CPU-versus-GPU selection is therefore a **bottleneck decision**. A bottleneck is the stage that limits the rate of the whole job, and faster hardware helps only if it accelerates that stage.
 
 ```mermaid
 flowchart TD
@@ -83,6 +83,10 @@ flowchart TD
 
 A training job can use both processors heavily. Calling it “GPU training” means the main supported model operations execute on the GPU; CPU work still feeds and coordinates those operations.
 
+![A training step moves stored examples through CPU reading, decoding, batching, host memory, device transfer, GPU memory, parallel tensor computation, and CPU-coordinated logging, evaluation, and checkpointing.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/cpu-gpu-training-step.png)
+
+*CPU and GPU are parts of one training path. The slowest read, transform, transfer, compute, or coordination stage sets end-to-end throughput.*
+
 ## Match The Training Workload To The Hardware
 <!-- section-summary: Model operations, batchability, input work, memory footprint, precision, and framework coverage determine whether acceleration can improve the full job. -->
 
@@ -117,6 +121,10 @@ flowchart TD
 ```
 
 This framework produces candidates for measurement. The benchmark makes the decision.
+
+![CPU candidates suit irregular work, small models, feature preparation, and short runs, while GPU candidates suit dense tensor operations, regular batches, supported operators, and device-memory fit; both feed the same matched benchmark.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/match-workload-to-hardware.png)
+
+*Workload shape suggests CPU or GPU candidates. A matched benchmark compares time to required quality, peak memory, queue-to-artifact time, and full cost before the team selects the operating default.*
 
 ## Use CPU Training for the Work CPUs Handle Well
 <!-- section-summary: CPU training fits classical models, small experiments, feature-heavy pipelines, irregular operations, and baseline runs that finish within the required window. -->
@@ -287,7 +295,7 @@ Managed training jobs remove node administration from the ML team, yet they pres
 
 Amazon SageMaker AI training jobs place instance type and count in the resource configuration. Service quota is checked before the job can run. CloudWatch and SageMaker profiling integrations expose resource behavior, and managed Spot training needs checkpoint configuration for interruption recovery.
 
-Vertex AI `CustomJob` worker-pool specifications select the machine type plus accelerator type and count. Azure Machine Learning command jobs select a compute target and instance count, with the compute target providing the CPU or GPU node class. Both platforms need explicit versioned environments and data references for fair comparisons.
+Gemini Enterprise Agent Platform serverless training uses `CustomJob` worker-pool specifications to select the machine type plus accelerator type and count. Azure Machine Learning command jobs select a compute target and instance count, with the compute target providing the CPU or GPU node class. Both platforms need explicit versioned environments and data references for fair comparisons.
 
 Databricks Runtime for Machine Learning provides established CPU and GPU cluster paths with framework libraries packaged together. Databricks AI Runtime and its serverless GPU interfaces are preview or beta capabilities in current documentation. Teams using those paths should apply organizational preview controls and record the exact environment because APIs and support boundaries can still change.
 
@@ -388,6 +396,10 @@ Choose from workload shape, prove memory fit, benchmark the complete job, and id
 
 Repeat the decision after a material change in model architecture, dataset format, batch shape, or training software. Earlier evidence may no longer describe the current workload.
 
+![A six-step hardware decision moves from the training objective through profiling, hardware fit, bottleneck repair, and matched benchmarking to the smallest reliable operating configuration, with quality, time, cost, and reproducibility evidence kept with the run.](/content-assets/articles/article-mlops-training-pipelines-cpu-vs-gpu-training/choose-training-hardware-evidence.png)
+
+*The hardware choice starts with the training objective, then follows profiling, fit, bottleneck repair, and a matched benchmark. The run record keeps the evidence required to reproduce the decision.*
+
 ## References
 
 - [PyTorch documentation](https://docs.pytorch.org/docs/stable/)
@@ -406,6 +418,6 @@ Repeat the decision after a material change in model architecture, dataset forma
 - [Kubernetes device plugins](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)
 - [Kubernetes Dynamic Resource Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
 - [Amazon SageMaker AI model training](https://docs.aws.amazon.com/sagemaker/latest/dg/train-model.html)
-- [Vertex AI custom training jobs](https://cloud.google.com/vertex-ai/docs/training/create-custom-job)
+- [Gemini Enterprise Agent Platform serverless training jobs](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/create-custom-job)
 - [Azure Machine Learning command job schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-command?view=azureml-api-2)
 - [Databricks: Train AI and ML models](https://docs.databricks.com/aws/en/machine-learning/train-model/)

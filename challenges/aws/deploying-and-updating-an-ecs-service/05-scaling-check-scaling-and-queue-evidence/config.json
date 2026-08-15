@@ -55,6 +55,10 @@
       "devpolaris-orders-export-jobs",
       "\"ApproximateNumberOfMessages\": \"128\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+application-autoscaling\\\\s+describe-scalable-targets\\\\b",
+      "^aws\\\\s+sqs\\\\s+get-queue-attributes\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

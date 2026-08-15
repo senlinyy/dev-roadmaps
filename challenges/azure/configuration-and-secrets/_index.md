@@ -4,6 +4,6 @@ description: "Practice runtime configuration, app settings, secrets, Key Vault r
 articleId: article-cloud-providers-azure-deployment-runtime-operations-runtime-settings-secrets-configuration
 articleSlug: runtime-configuration-and-safe-rollouts
 difficulty: medium
-order: 37
+order: 28
 tags: ["azure", "configuration", "secrets", "key-vault", "identity"]
 ---

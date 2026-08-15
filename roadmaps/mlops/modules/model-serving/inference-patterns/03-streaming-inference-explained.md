@@ -136,6 +136,10 @@ Their differences expose the delay path. `ingested_at - event_time` measures pro
 
 For example, a parcel scan occurs at 14:03 in a depot with poor connectivity. The scanner uploads it at 14:11, and the model scores it at 14:12. The stream processor completed its own work in one minute. The product received a prediction nine minutes after the physical scan. Both facts belong on the operational record.
 
+![Parcel scan timeline separates the eight-minute source or network delay, one-minute queue and processing delay, and nine-minute total product freshness](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-event-time-delays.png)
+
+*Event time places the scan in its real window. Ingestion and scoring timestamps show where the product's total freshness delay accumulated.*
+
 Time semantics become especially important for aggregates. A model may need the number of device errors during the previous five minutes. The processor must decide whether “five minutes” refers to event time or server time, how long to wait for delayed records, and whether a late record should correct an earlier aggregate.
 
 ## Use Schemas To Change Events Safely
@@ -290,6 +294,10 @@ Side effects need a second layer. A prediction record and an instruction to send
 Some effects cannot be undone or deduplicated perfectly. A device command may cause physical movement. A payment may transfer money. Those paths need a domain-level command ID, a receiver that rejects previously completed commands, and a manual reconciliation process for uncertain outcomes.
 
 Idempotency keys also need retention. If the deduplication record expires after seven days while the event log keeps data for thirty days, an old replay can produce duplicates. Retention for source events, checkpoints, outputs, and deduplication ledgers must support the longest approved replay window.
+
+![At-least-once replay returns the same event to a pinned scoring revision while a unique prediction ID, transactional outbox, command ID, and effect ledger prevent duplicate predictions and actions](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-replay-safe-output.png)
+
+*A unique sink protects the prediction fact. External effects need their own durable outbox, command identity, and receiver-side ledger because they sit outside the stream processor's commit boundary.*
 
 ## Use Lag And Backpressure To Detect Capacity Problems
 <!-- section-summary: Lag measures unfinished stream work, while backpressure shows that downstream processing cannot accept work at the arrival rate. -->
@@ -486,6 +494,10 @@ Streaming inference continuously turns domain events into versioned predictions.
 Stateless models can use a simple consumer. Stateful features add windows and keyed state. Checkpoints restore that state after failure, and a late-data policy decides how long old windows remain open. At-least-once delivery is a practical baseline because progress follows durable output. Idempotent sinks and effect ledgers absorb the duplicates that recovery can produce. Exactly-once claims remain limited to the source, engine, and sink that participate in one supported protocol.
 
 Kafka or a managed event service carries the records. Flink, Spark Structured Streaming, Beam, or a focused consumer performs the work. Model and policy versions explain each result. Lag, event delay, checkpoints, quarantine, and replay evidence prove that the system continues to meet its promise.
+
+![Seven-stage streaming inference system carries event identity and time through a durable topic, stateful processor, immutable scoring package, prediction topic, idempotent sink, and effect-ledger action consumer](/content-assets/articles/article-mlops-model-serving-streaming-inference-explained/streaming-system-summary.png)
+
+*Freshness, lag, schema failures, quarantine, checkpoint health, and replay conflicts prove whether the replayable system around the model is still meeting its product promise.*
 
 ## References
 

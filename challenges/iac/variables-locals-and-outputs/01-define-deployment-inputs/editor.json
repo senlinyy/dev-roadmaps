@@ -1,0 +1,173 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "variables.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"environment\" {\n}\n\nvariable \"replica_count\" {\n}\n"
+    },
+    {
+      "filename": "service.tf",
+      "initialValue": "resource \"aws_ecs_service\" \"orders\" {\n  name          = \"replace-me\"\n  desired_count = 0\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "environment"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "string"
+          },
+          {
+            "path": [
+              "default"
+            ],
+            "valueEquals": "dev"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "environment"
+              ]
+            },
+            {
+              "type": "validation"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "condition"
+            ],
+            "references": [
+              "var.environment"
+            ],
+            "expressionContains": [
+              "contains([\"dev\",\"staging\",\"prod\"]"
+            ]
+          },
+          {
+            "path": [
+              "error_message"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "replica_count"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "number"
+          },
+          {
+            "path": [
+              "default"
+            ],
+            "valueEquals": 2
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "replica_count"
+              ]
+            },
+            {
+              "type": "validation"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "condition"
+            ],
+            "references": [
+              "var.replica_count"
+            ],
+            "expressionContains": [
+              ">=1",
+              "<=10"
+            ]
+          },
+          {
+            "path": [
+              "error_message"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "service.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_ecs_service",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "name"
+            ],
+            "references": [
+              "var.environment"
+            ]
+          },
+          {
+            "path": [
+              "desired_count"
+            ],
+            "expressionEquals": "var.replica_count"
+          }
+        ]
+      }
+    ]
+  }
+}

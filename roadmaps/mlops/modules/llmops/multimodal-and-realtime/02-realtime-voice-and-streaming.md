@@ -28,7 +28,7 @@ id: "article-mlops-llmops-realtime-voice-streaming"
 17. [How A Production Voice Runtime Fits Together](#how-a-production-voice-runtime-fits-together)
 18. [References](#references)
 
-At a high level, a realtime voice application keeps listening, reasoning, and speaking inside one live connection. Audio travels in both directions, events keep arriving, and the user may interrupt at any moment. The application has to remember which turn is active, which audio reached the speaker, which transcript is still changing, and whether a tool has already changed the outside world.
+A user may interrupt while the assistant is speaking, correct a request mid-sentence, or wait while a tool runs. A realtime voice application coordinates listening, reasoning, and speaking inside that live connection. It must track the active turn, the audio that reached the speaker, the transcript that is still changing, and any tool action that has already changed the outside world.
 
 This is the central difference from an ordinary API request. A normal request has a clear beginning and end: send one payload, wait, receive one result. A live voice session has many overlapping beginnings and endings. The microphone may capture a new utterance while previous audio is still playing. A tool can finish after the user has changed their mind. A network reconnect can occur after an action succeeded but before the client received confirmation.
 
@@ -142,6 +142,10 @@ flowchart TD
 
 The transport does not decide business authority. WebRTC, WebSocket, and SIP carry media and control events. The application server still owns identity, authorization, tool execution, retention, and transfer policy.
 
+![Studio Light voice-runtime map showing capture, turn, model, playback, and tool loops around authoritative application session state, with WebRTC, WebSocket, SIP, durable-state recovery, and the session lifecycle](/content-assets/articles/article-mlops-llmops-realtime-voice-streaming/voice-session-five-loops.png)
+
+*The five loops run on different clocks, while application session state preserves the authoritative connection epoch, delivered-audio position, confirmed facts, and committed effects.*
+
 ## Move Audio From The Microphone To The Speaker
 
 <!-- section-summary: A stable audio path controls capture, channel layout, sample rate, encoding, resampling, buffering, playback, and device failure. -->
@@ -249,20 +253,9 @@ The runtime must reconcile four pieces of state:
 3. Record how much output the user actually heard.
 4. Remove or mark the unheard portion so later reasoning does not assume delivery.
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant P as Player
-    participant S as Session runtime
-    participant M as Realtime model
-    U->>S: Speech starts during response
-    S->>P: Stop and clear queued audio
-    P-->>S: Played through 1,480 ms
-    S->>M: Cancel active response
-    S->>M: Truncate unplayed output at 1,480 ms
-    S->>S: Mark later words as unheard
-    S-->>U: Listen to the new turn
-```
+![Studio Light interruption sequence showing a user barge-in stopping playback, recording 1,480 milliseconds played, canceling and truncating model output, marking unheard words, and reconciling tool and transcript state](/content-assets/articles/article-mlops-llmops-realtime-voice-streaming/barge-in-state-reconciliation.png)
+
+*Barge-in reconciles what the user actually heard, what later model context must forget, whether transcript text is final, and whether a proposed or committed tool effect needs cancellation, reconciliation, or compensation.*
 
 The played-through position comes from the playback clock. Generated duration and received duration can be larger because audio may still be buffered.
 
@@ -306,21 +299,6 @@ The transcript and model's direct audio understanding can also disagree. Keep th
 A spoken conversation can trigger external work: look up an order, reserve a time, send a message, or transfer a call. The low-latency model should propose that work. The application server decides whether it is allowed.
 
 The server derives identity from the authenticated session rather than spoken claims or model arguments. It validates the complete tool schema, checks authorization and policy, verifies required confirmations, and assigns an **idempotency key**. An idempotency key names one intended operation, allowing a retry to return the earlier result instead of repeating the side effect.
-
-```mermaid
-sequenceDiagram
-    participant M as Realtime model
-    participant C as Server control channel
-    participant P as Policy and identity
-    participant T as Tool service
-    M->>C: Propose tool call with call ID
-    C->>P: Validate identity, schema, consent, policy
-    P-->>C: Approved operation and idempotency key
-    C->>T: Execute or replay by key
-    T-->>C: Durable result
-    C->>M: Tool result linked to call ID
-    M-->>C: Spoken response may describe result
-```
 
 Tool call IDs correlate provider events. Business idempotency keys protect real effects. The two identifiers serve different purposes and both should be recorded.
 
@@ -520,6 +498,23 @@ Release drills should test provider outage, region loss, full operator queue, ol
 
 The portable runtime owns lifecycle, durable facts, tool policy, playback truth, evaluation, and fallback. Provider adapters translate those concepts into current connection and event contracts.
 
+A provider session can retain conversational context, yet it does not become the authoritative record of a payment, booking, or approval. The application runtime keeps those durable facts and uses provider events as inputs to its own state machine. Each adapter therefore converts connection, speech, audio, tool, usage, and interruption events into a small internal vocabulary. Switching providers changes the adapter, not the meaning of a committed business action or delivered audio position.
+
+```mermaid
+flowchart TD
+    Client["Client media session<br/>(WebRTC, WebSocket, or SIP)"] --> Runtime["Portable voice runtime<br/>(session state, tools, playback truth, and fallback)"]
+    Runtime --> Adapter{"Provider Adapter<br/>(which tested event contract applies?)"}
+    Adapter --> OpenAI["OpenAI Realtime<br/>(session and response events)"]
+    Adapter --> AWS["Amazon Nova or Transcribe<br/>(bidirectional or speech events)"]
+    Adapter --> Google["Gemini Live API<br/>(WebSocket session events)"]
+    Adapter --> Microsoft["Microsoft Voice Live<br/>(WebSocket or WebRTC events)"]
+    OpenAI --> Normalize["Normalized runtime events<br/>(turn, transcript, audio, tool, usage, and recovery)"]
+    AWS --> Normalize
+    Google --> Normalize
+    Microsoft --> Normalize
+    Normalize --> Runtime
+```
+
 ### OpenAI Realtime
 
 OpenAI currently describes Realtime sessions as open connections that accept audio or text, emit events, maintain conversation state, and support tool calls. Its documentation recommends WebRTC for browser and mobile clients and WebSocket for server-to-server applications. SIP connects inbound telephone calls.
@@ -570,6 +565,10 @@ A reliable voice runtime keeps one coherent truth across several fast-moving str
 WebRTC, WebSocket, and SIP solve different connection problems. Audio contracts control capture, encoding, resampling, buffering, and playback. VAD and manual controls shape turns. Barge-in cancels speech and removes unheard context. Server-side tools protect identity and side effects. Durable state makes reconnect safe. Consent, accessibility, retention, observability, capacity limits, and fallback complete the operational design.
 
 The system can then answer every important failure with a specific action. Choppy audio adjusts the media or network path. Premature turn endings change VAD or offer push-to-talk. An interrupted response clears unheard audio. An uncertain tool result reconciles by idempotency key. Repeated connection failure moves to text, callback, or a person. This is how a voice feature grows from a fluent demo into an operable service.
+
+![Studio Light summary of a production voice runtime from authenticated transport and audio normalization through turns, playback truth, tool authority, durable state, full latency, capacity, fallback, handoff, and reconnect recovery](/content-assets/articles/article-mlops-llmops-realtime-voice-streaming/production-voice-runtime-summary.png)
+
+*A voice runtime remains operable when it measures the full user wait, plans concurrent-session capacity, keeps honest fallback modes, and separates transient connection state from delivered audio and committed business facts.*
 
 ## References
 

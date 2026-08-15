@@ -26,7 +26,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Vault protects encrypted content at rest. Once decrypted for a run, output, rendered files, diffs, and logs need their own controls. See [Ansible Vault guide](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)."
+      "explanation": "Vault protects encrypted content at rest. Once decrypted for a run, output, rendered files, diffs, and logs need their own controls. See [Ansible Vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)."
     },
     {
       "id": "q2",
@@ -53,7 +53,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Vaulted diffs are process reviews: intent, owner, rotation plan, and verification evidence matter because reviewers cannot inspect the cleartext value. Automatic approval cannot prove ciphertext contains the intended secret, while rejecting every encrypted change blocks safe rotation and pasting plaintext into the pull request defeats the secret boundary."
+      "explanation": "Vaulted diffs are process reviews: intent, owner, rotation plan, and verification evidence matter because reviewers cannot inspect the cleartext value. Automatic approval cannot prove ciphertext contains the intended secret, while rejecting every encrypted change blocks safe rotation and pasting plaintext into the pull request defeats the secret boundary. See [Encrypting Ansible content](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_encrypting_content.html)."
     },
     {
       "id": "q3",
@@ -81,7 +81,7 @@
         "a",
         "b"
       ],
-      "explanation": "`no_log` and disabled diffs directly reduce controller and CI output exposure for the secret-bearing task. Restrictive remote permissions are still required, but they do not redact controller output as the option claims. Keeping the decrypting password beside the ciphertext defeats the at-rest trust boundary."
+      "explanation": "`no_log` and disabled diffs directly reduce controller and CI output exposure for the secret-bearing task. Restrictive remote permissions are still required, but they do not redact controller output as the option claims. Keeping the decrypting password beside the ciphertext defeats the at-rest trust boundary. See [Protecting sensitive data in logs](https://docs.ansible.com/projects/ansible/latest/reference_appendices/logging.html)."
     },
     {
       "id": "q4",
@@ -108,7 +108,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "The encrypted data and its decryption password must not share the same repository trust boundary. Committing or copying the password beside roles makes ciphertext recoverable to anyone with the checkout, and changing the filename does not reduce that access. Keep the password source in a CI secret store, controlled password manager, or secure prompt path."
+      "explanation": "The encrypted data and its decryption password must not share the same repository trust boundary. Committing or copying the password beside roles makes ciphertext recoverable to anyone with the checkout, and changing the filename does not reduce that access. Keep the password source in a CI secret store, controlled password manager, or secure prompt path. See [Managing Vault passwords](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_managing_passwords.html)."
     },
     {
       "id": "safe-vault-workflow-q1",
@@ -135,7 +135,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Application secret rotation and Vault password rotation are different operations. A safe app-token rotation coordinates the service, vaulted value, rollout, and verification."
+      "explanation": "Application secret rotation and Vault password rotation are different operations. A safe app-token rotation coordinates the service, vaulted value, rollout, and verification. See [Rekeying encrypted content](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_encrypting_content.html#rekeying-encrypted-files)."
     },
     {
       "id": "safe-vault-workflow-q2",
@@ -162,7 +162,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "A leaked Vault password compromises the encryption boundary, so the team should rekey affected Vault content and verify the retired password no longer decrypts it. Rotating only the database password leaves the leaked decrypting key valid. Deleting Vault or changing unrelated task logging does not restore that boundary."
+      "explanation": "A leaked Vault password compromises the encryption boundary, so the team should rekey affected Vault content and verify the retired password no longer decrypts it. Rotating only the database password leaves the leaked decrypting key valid. Deleting Vault or changing unrelated task logging does not restore that boundary. See [Vault IDs and password sources](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_managing_passwords.html)."
     },
     {
       "id": "safe-vault-workflow-q4",
@@ -189,7 +189,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Encrypting the current file protects future storage but does not revoke a token already exposed through history, clones, logs, or artifacts. The application token must be rotated and the historical exposure handled under policy. Moving the value or rekeying Vault alone does not invalidate the leaked application credential."
+      "explanation": "Encrypting the current file protects future storage but does not revoke a token already exposed through history, clones, logs, or artifacts. The application token must be rotated and the historical exposure handled under policy. Moving the value or rekeying Vault alone does not invalidate the leaked application credential. See [Ansible Vault security](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)."
     }
   ]
 }

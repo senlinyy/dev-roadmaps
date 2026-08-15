@@ -1,0 +1,90 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "group_vars/orders_web.yml",
+  "files": [
+    {
+      "filename": "inventory.ini",
+      "initialValue": "[orders_web]\nweb-01 ansible_host=192.0.2.10\nweb-02 ansible_host=192.0.2.11\n\n[production:children]\norders_web\n"
+    },
+    {
+      "filename": "group_vars/production.yml",
+      "initialValue": "---\nenvironment: production\n"
+    },
+    {
+      "filename": "group_vars/orders_web.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "host_vars/web-02.yml",
+      "initialValue": "---\n{}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "inventory.ini",
+        "kind": "inventory",
+        "paths": [
+          {
+            "path": [
+              "production",
+              "children",
+              "orders_web"
+            ],
+            "exists": true
+          }
+        ]
+      },
+      {
+        "file": "group_vars/production.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "environment"
+            ],
+            "equals": "production"
+          },
+          {
+            "path": [
+              "monitoring_enabled"
+            ],
+            "equals": true
+          }
+        ]
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_port"
+            ],
+            "equals": 8080
+          },
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 4
+          }
+        ]
+      },
+      {
+        "file": "host_vars/web-02.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_port"
+            ],
+            "equals": 8081
+          }
+        ]
+      }
+    ]
+  }
+}

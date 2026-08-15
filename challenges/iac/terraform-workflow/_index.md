@@ -1,8 +1,8 @@
 ---
-title: "What Is Terraform?"
-description: "Practice repairing a small Terraform root module, reading a first plan, and applying only after review."
+title: "Terraform Core Workflow"
+description: "Initialize a real project boundary and inspect the proposed create operation before any apply."
 articleId: article-iac-terraform-foundations-what-is-terraform
 difficulty: easy
-order: 4
-tags: ["terraform", "workflow", "plan", "apply"]
+order: 2
+tags: ["terraform","init","plan","workflow"]
 ---

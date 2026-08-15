@@ -4,6 +4,6 @@ description: "Practice secret names, versions, IAM access, runtime flow, rotatio
 articleId: article-cloud-providers-gcp-identity-security-secret-manager-encryption-basics
 articleSlug: secret-manager
 difficulty: medium
-order: 7
+order: 6
 tags: ["gcp", "secret-manager", "secrets", "rotation"]
 ---

@@ -30,7 +30,7 @@ aliases:
 ## What Kubernetes Changes for ML Workloads
 <!-- section-summary: Kubernetes gives ML teams a common way to request compute and keep workloads running, while the ML platform still owns data, model, and release meaning. -->
 
-At a high level, **Kubernetes is a system for running containers across a group of machines**. An engineer describes the result they want, such as “run this training program once on a GPU” or “keep three copies of this prediction API available.” Kubernetes decides where the containers can run, starts them, watches their condition, and replaces them after many common infrastructure failures.
+An ML team may need to run one GPU training job and keep several copies of a prediction API available. **Kubernetes is a system for running those containers across a group of machines.** The engineer describes the required result; Kubernetes decides where the containers can run, starts them, watches their condition, and replaces them after many common infrastructure failures.
 
 You can think of a Kubernetes cluster as a pool of computers with a control system in front of it. The pool may contain ordinary CPU machines, memory-heavy machines, several GPU models, and nodes in different availability zones. Instead of signing in to one machine and starting a process manually, a workload submits a structured request to the control system.
 
@@ -74,7 +74,7 @@ This distinction also explains the operational cost. A team that chooses Kuberne
 ## Decide What The ML Workload Must Do
 <!-- section-summary: The workload contract describes the lifecycle, resources, data path, and recovery needs that determine which Kubernetes primitives belong in the design. -->
 
-Before choosing a Kubernetes object or an ML operator, write down the **workload contract**. In essence, this contract states what the workload must accomplish and what conditions it requires from the platform.
+Before choosing a Kubernetes object or an ML operator, write down the **workload contract**. This contract states what the workload must accomplish and what conditions it requires from the platform.
 
 The first question concerns lifecycle: should the work finish, or should it stay available? Model training, feature computation, and batch inference usually have a defined completion point. Online inference and notebook gateways usually remain available until an operator removes them. Kubernetes uses different controllers for those two goals because their failure and scaling behaviour is different.
 
@@ -134,23 +134,9 @@ The important concepts are:
 - A **kubelet** is the node agent that asks the container runtime to run the Pod and reports what happened.
 - A **Node** is a machine that supplies CPU, memory, storage, and possibly devices such as GPUs.
 
-```mermaid
-sequenceDiagram
-    participant E as Engineer or workflow
-    participant A as Kubernetes API
-    participant C as Workload controller
-    participant S as Scheduler
-    participant K as Kubelet on chosen node
+![Kubernetes reconciliation loop from a three-replica Deployment through controller-created replacement Pod, scheduling, kubelet startup, readiness, and renewed observation](/content-assets/articles/article-mlops-mlops-infrastructure-kubernetes-for-ml-workloads/kubernetes-reconciliation-loop.png)
 
-    E->>A: Submit desired workload
-    C->>A: Read desired and current state
-    C->>A: Create a Pod that is still missing
-    S->>A: Select a compatible node
-    K->>A: Observe the assigned Pod
-    K->>K: Start containers and probes
-    K->>A: Report status and conditions
-    C->>A: Reconcile again after any change
-```
+*The controller creates the missing Pod before the scheduler selects a compatible node. Kubernetes restores the declared replica count, while the ML platform separately verifies the model version, prediction quality, and output safety.*
 
 This loop gives Kubernetes its self-healing behaviour, within defined boundaries. A Deployment can replace a crashed serving Pod. A Job can create another Pod after a failed attempt. Kubernetes cannot decide whether retrying would duplicate a batch output, whether a checkpoint is valid, or whether the replacement loaded the correct model. The application and ML platform must supply those semantics.
 
@@ -381,24 +367,9 @@ metadata:
 
 Kueue's webhook manages the Job's suspension. The Job remains admitted to no capacity until the ClusterQueue can reserve a matching flavor and quota. After Kueue admits it, the ordinary Kubernetes scheduler places the Pods on real nodes.
 
-```mermaid
-sequenceDiagram
-    participant U as Training workflow
-    participant L as LocalQueue
-    participant C as ClusterQueue
-    participant K as Kueue
-    participant S as Kubernetes scheduler
+![GPU training job passing from a LocalQueue to ClusterQueue policy and Kueue admission before Kubernetes schedules its Pods](/content-assets/articles/article-mlops-mlops-infrastructure-kubernetes-for-ml-workloads/gpu-queue-admission.png)
 
-    U->>L: Submit Job to team queue
-    L->>C: Refer to shared quota policy
-    K->>C: Check priority, quota, and resource flavor
-    alt Capacity can be reserved
-        K->>U: Admit and unsuspend the workload
-        S->>S: Place each Pod on compatible nodes
-    else Capacity is unavailable
-        K->>U: Keep workload pending with an admission reason
-    end
-```
+*Queue admission decides whether the complete workload may claim scarce capacity. Pod scheduling starts only after admission, so a pending queue decision remains distinct from a node-placement failure.*
 
 Queue admission and Pod placement have separate owners and evidence. A workload with `Admitted=False` is still waiting on queue policy; adding a toleration to its Pod cannot grant quota. After admission, Pending Pods point to scheduling, storage, or device allocation. The status condition directs the operator to the responsible layer instead of one generic “Kubernetes problem.”
 
@@ -627,6 +598,10 @@ Kubernetes gives machine learning workloads a shared compute control plane. Jobs
 The workload contract anchors the dependable design. Define the lifecycle and compute shape first. Then capture the data path, security boundary, retry behaviour, and recovery evidence before selecting a controller or writing YAML. Add higher-level ML controllers only for repeated gaps that Kubernetes primitives do not express well.
 
 Kubernetes can recover infrastructure. The surrounding ML platform must preserve data and model meaning. Production reliability comes from connecting both layers through stable run, model, and release identities.
+
+![Complete Kubernetes operating contract for ML across evidence, specialized controllers, Kubernetes primitives, infrastructure, and recovery steps](/content-assets/articles/article-mlops-mlops-infrastructure-kubernetes-for-ml-workloads/kubernetes-ml-operating-contract.png)
+
+*A dependable Kubernetes ML workload combines a clear lifecycle, declared resources, durable state, queue and placement policy, layer-specific investigation, and evidence-backed recovery. The cluster operates compute; the ML platform preserves the meaning of the data, run, model, and release.*
 
 ## References
 

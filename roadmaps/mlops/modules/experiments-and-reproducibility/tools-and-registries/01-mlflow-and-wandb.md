@@ -29,7 +29,7 @@ id: "article-mlops-experiments-and-reproducibility-mlflow-and-wandb"
 
 A model-review group has forty training runs from two feature branches. The highest recall belongs to a run that used a newer validation snapshot. Another run meets the overall target but fails for card-present transactions. The release reviewer has one hour before the candidate cutoff and must decide which model can advance. Choosing from a screenshot could promote a model evaluated on incomparable evidence; rejecting every run delays a fraud-control improvement.
 
-At a high level, **experiment tracking is the practice of preserving the identity, inputs, measurements, outputs, and relationships of model-development work.** A useful tracker lets the reviewer answer five questions: What did the team try? What exact conditions produced the result? Which model and dataset does each metric describe? Which files support the claim? What decision followed?
+A reviewer looking at yesterday's accuracy score needs to know which data, code, configuration, and model produced it. **Experiment tracking preserves the identity, inputs, measurements, outputs, and relationships of that model-development work.** The record should answer what the team tried, which conditions produced the result, which model and dataset each metric describes, which files support the claim, and what decision followed.
 
 MLflow and **Weights & Biases**, commonly called **W&B**, both support this work. They overlap across runs, metrics, artifacts, lineage, comparison, and model handoff. Their deeper differences appear in the object model, collaboration experience, deployment architecture, and amount of platform operation a team accepts.
 
@@ -65,7 +65,7 @@ This context protects the review group from a false leaderboard. Runs evaluated 
 
 ### Link Files And Their Origins To Each Run
 
-An **artifact** is a durable input or output: a model package, checkpoint, split manifest, prediction table, plot, or evaluation report. A useful artifact has a version or digest, a retention policy, and enough metadata to interpret its contents.
+An **artifact** is a durable input or output: a model package, checkpoint, split manifest, prediction table, plot, or evaluation report. It needs a version or digest, a retention policy, and enough metadata to interpret its contents.
 
 **Lineage** is the set of relationships among those identities. A dataset artifact enters a training run. The run emits a model. An evaluation run consumes that model and a validation snapshot. The review links the selected model to a candidate record. Lineage turns separate files and charts into one traceable result.
 
@@ -97,7 +97,7 @@ import mlflow.sklearn
 
 validation = mlflow.data.from_pandas(
     validation_df,
-    source="warehouse://risk/validation@snapshot-184",
+    source="s3://ml-data/risk/validation/snapshot-184.parquet",
     name="fraud_validation",
 )
 
@@ -121,6 +121,8 @@ with mlflow.start_run(run_name="feature-review"):
 ```
 
 The experiment groups related runs. The run records this execution. The dataset object gives the validation evidence a name, source, and digest. The Logged Model identifies the trained object. `model_id` connects recall to that object, while `dataset=validation` connects it to the evidence used for calculation.
+
+The source field must use a location MLflow knows how to resolve. This example points to a write-once S3 snapshot path. A Spark job reading a Delta table can instead call `from_spark` with the table name and version. A team with another storage scheme needs a registered `DatasetSource` integration; inventing a URI such as `warehouse://...` does not make stock MLflow able to reload it.
 
 MLflow can then search Logged Models through model parameters, metrics, attributes, and dataset conditions. A reviewer can ask for models that clear a recall threshold on one named validation dataset, then inspect the source run and supporting artifacts.
 
@@ -179,6 +181,10 @@ Workspaces organize interactive panels over runs. Reports combine those panels w
 
 Comments and reports support discussion. Approval authority should live in a governed review or registry record with an accountable owner. Editing a report explains the evidence; it should never silently change what the candidate is allowed to do.
 
+![MLflow objects, Weights & Biases objects, and the shared experiment evidence they preserve shown as three independent groups](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/platform-object-map.png)
+
+*Both platforms preserve comparable evidence, although their first-class objects organize that evidence differently.*
+
 ## Decide Where Large Artifacts And Sensitive Data Live
 <!-- section-summary: The choice to upload bytes or reference governed storage determines retention, access, cost, and replay behaviour in either platform. -->
 
@@ -201,6 +207,10 @@ flowchart TD
 Uploading a moderate model package to the artifact system gives the tracker direct retention and checksum control. Copying a sensitive multi-terabyte training table expands cost and governance surface. A governed snapshot reference is usually the stronger choice for that table, provided the data platform guarantees retention, immutable identity, and workload access.
 
 The practical test is reconstruction from a clean worker. Resolve the recorded data identity, download every required model file, verify checksums, and run a small evaluation. A green dashboard with expired artifact bytes cannot support replay or release.
+
+![Experiment metadata and artifact manifests leading to tracker-managed or governed external storage, followed by four replay checks](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/evidence-storage-boundaries.png)
+
+*Storage is part of the evidence contract: an experiment remains reproducible only while its recorded identities still resolve to authorized, intact bytes.*
 
 ## Use Search, Sweeps, Tables, And Reports For Different Tasks
 <!-- section-summary: Search finds comparable evidence, sweeps coordinate trial generation, tables expose examples, and reports preserve the interpretation. -->
@@ -311,7 +321,7 @@ Test the questions the migration is supposed to preserve. Can an engineer start 
 ## Test The Platform With One Complete Model Workflow
 <!-- section-summary: A representative proof of concept exposes developer, reviewer, operator, governance, and migration costs before many projects depend on the platform. -->
 
-A useful proof of concept follows one real model through both success and failure. Track a baseline and candidate on an immutable dataset. Log a metric history, segment evidence, one large model artifact, and the environment record. Run a small sweep or grouped study. Interrupt and resume one trial. Compare only runs that share the evaluation protocol.
+The proof of concept should follow one real model through both success and failure. Track a baseline and candidate on an immutable dataset. Log a metric history, segment evidence, one large model artifact, and the environment record. Run a small sweep or grouped study. Interrupt and resume one trial. Compare runs that share the evaluation protocol.
 
 Then exercise the human workflow. Ask a reviewer to find the strongest candidate, inspect its worst examples, explain the tradeoff, and create the candidate handoff. Ask an operator to trace a failed job to the tracker, restore metadata and artifacts, revoke a user's access, and confirm retention behaviour.
 
@@ -328,12 +338,17 @@ MLflow 3 adds a strong model-centric path through Logged Models, dataset-aware m
 
 The right platform fits the team's evidence contract, review style, existing infrastructure, deployment path, governance boundary, and operating capacity. Coexistence and migration remain possible after every important object has one authoritative identity and every handoff preserves its lineage.
 
+![Six-stage path from defining an experiment comparison through preserving many attempts, reviewing evidence, selecting one immutable model, and handing it to a registry](/content-assets/articles/article-mlops-experiments-and-reproducibility-mlflow-and-wandb/tracking-to-candidate-summary.png)
+
+*Experiment tracking retains the broad decision history; the registry receives the much narrower set of reviewed model candidates.*
+
 ## References
 
 - [MLflow: Experiment tracking](https://mlflow.org/docs/latest/tracking/)
 - [MLflow: MLflow 3 migration and model tracking](https://mlflow.org/docs/latest/ml/mlflow-3/)
 - [MLflow: Search Logged Models](https://mlflow.org/docs/latest/ml/search/search-models/)
 - [MLflow: Dataset tracking](https://mlflow.org/docs/latest/ml/dataset/)
+- [MLflow: Dataset tracking Python APIs](https://mlflow.org/docs/latest/api_reference/python_api/mlflow.data.html)
 - [MLflow: Tracking Server architecture](https://mlflow.org/docs/latest/self-hosting/architecture/tracking-server/)
 - [MLflow: Backend stores](https://mlflow.org/docs/latest/self-hosting/architecture/backend-store/)
 - [MLflow: Artifact stores](https://mlflow.org/docs/latest/self-hosting/architecture/artifact-store/)

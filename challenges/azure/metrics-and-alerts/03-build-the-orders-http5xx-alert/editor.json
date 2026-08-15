@@ -1,0 +1,24 @@
+{
+  "language": "json",
+  "filename": "orders-http5xx-alert.json",
+  "completionProfile": "azure-monitor-alert",
+  "initialValue": "{\n  \"location\": \"global\",\n  \"properties\": {\n    \"description\": \"Page the orders team on sustained server errors\",\n    \"severity\": 3,\n    \"enabled\": false,\n    \"scopes\": [],\n    \"evaluationFrequency\": \"\",\n    \"windowSize\": \"\",\n    \"criteria\": {\n      \"odata.type\": \"Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria\",\n      \"allOf\": []\n    },\n    \"actions\": []\n  }\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["location"], "equals": "global" },
+      { "path": ["properties", "severity"], "equals": 1 },
+      { "path": ["properties", "enabled"], "equals": true },
+      { "path": ["properties", "scopes"], "includes": "/subscriptions/sub-prod/resourceGroups/rg-devpolaris-orders-prod/providers/Microsoft.Web/sites/app-devpolaris-orders-prod", "minItems": 1, "maxItems": 1 },
+      { "path": ["properties", "evaluationFrequency"], "equals": "PT1M" },
+      { "path": ["properties", "windowSize"], "equals": "PT5M" },
+      { "path": ["properties", "criteria", "allOf"], "minItems": 1, "maxItems": 1 },
+      { "path": ["properties", "criteria", "allOf", 0, "metricNamespace"], "equals": "Microsoft.Web/sites" },
+      { "path": ["properties", "criteria", "allOf", 0, "metricName"], "equals": "Http5xx" },
+      { "path": ["properties", "criteria", "allOf", 0, "operator"], "equals": "GreaterThan" },
+      { "path": ["properties", "criteria", "allOf", 0, "threshold"], "equals": 25 },
+      { "path": ["properties", "criteria", "allOf", 0, "timeAggregation"], "equals": "Total" },
+      { "path": ["properties", "actions"], "containsObject": { "actionGroupId": "/subscriptions/sub-prod/resourceGroups/rg-devpolaris-observability-prod/providers/Microsoft.Insights/actionGroups/ag-devpolaris-orders-oncall" }, "minItems": 1, "maxItems": 1 }
+    ]
+  }
+}

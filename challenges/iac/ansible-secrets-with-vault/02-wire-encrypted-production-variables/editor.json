@@ -1,0 +1,81 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Deploy orders\n  hosts: production\n  tasks:\n    - name: Call deployment API\n      ansible.builtin.uri:\n        url: https://deploy.internal.example/orders\n        method: POST\n        headers:\n          Authorization: Bearer plaintext-token\n"
+    },
+    {
+      "filename": "group_vars/production/vault.yml",
+      "initialValue": "orders_api_token: plaintext-token\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "group_vars/production/vault.yml",
+        "kind": "text",
+        "contains": [
+          "$ANSIBLE_VAULT;1.1;AES256"
+        ],
+        "doesNotContain": [
+          "plaintext-token"
+        ]
+      }
+    ],
+    "plays": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "hosts": "production"
+        },
+        "paths": [
+          {
+            "path": [
+              "vars_files"
+            ],
+            "includes": "group_vars/production/vault.yml"
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "headers",
+              "Authorization"
+            ],
+            "contains": "orders_api_token"
+          },
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "status_code"
+            ],
+            "equals": 202
+          },
+          {
+            "path": [
+              "no_log"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "forbiddenText": [
+      "Bearer plaintext-token",
+      "production-token-reference"
+    ]
+  }
+}

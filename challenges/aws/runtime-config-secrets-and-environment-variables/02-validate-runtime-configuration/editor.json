@@ -1,0 +1,34 @@
+{
+  "language": "javascript",
+  "completionProfile": "node-standard",
+  "activeFile": "config.js",
+  "files": [
+    {
+      "filename": "config.js",
+      "initialValue": "export function loadRuntimeConfig(env) {\\n  return { config: { ...env }, summary: { ...env } };\\n}\\n"
+    },
+    {
+      "filename": "config.test.js",
+      "readOnly": true,
+      "initialValue": "import assert from \"node:assert/strict\";\nimport { loadRuntimeConfig } from \"./config.js\";\n\nconst result = loadRuntimeConfig({\n  NODE_ENV: \"production\",\n  PORT: \"3000\",\n  DATABASE_URL: \"postgres://orders-db/orders\",\n  PAYMENTS_API_TOKEN: \"token-do-not-log\",\n});\nassert.deepEqual(result.config, {\n  nodeEnv: \"production\",\n  port: 3000,\n  databaseUrl: \"postgres://orders-db/orders\",\n  paymentsApiToken: \"token-do-not-log\",\n});\nassert.deepEqual(result.summary, {\n  nodeEnv: \"production\",\n  port: 3000,\n  databaseUrlPresent: true,\n  paymentsApiTokenPresent: true,\n});\nassert.equal(JSON.stringify(result.summary).includes(\"token-do-not-log\"), false);\nassert.equal(JSON.stringify(result.summary).includes(\"postgres://\"), false);\nfor (const env of [\n  { NODE_ENV: \"development\", PORT: \"3000\", DATABASE_URL: \"db\", PAYMENTS_API_TOKEN: \"token\" },\n  { NODE_ENV: \"production\", PORT: \"zero\", DATABASE_URL: \"db\", PAYMENTS_API_TOKEN: \"token\" },\n  { NODE_ENV: \"production\", PORT: \"3000\", DATABASE_URL: \"\", PAYMENTS_API_TOKEN: \"token\" },\n  { NODE_ENV: \"production\", PORT: \"3000\", DATABASE_URL: \"db\" },\n]) {\n  assert.throws(() => loadRuntimeConfig(env));\n}\nconsole.log(\"runtime config contract passed\");\n"
+    }
+  ],
+  "executor": {
+    "runtime": "node-22",
+    "entrypoint": "config.test.js",
+    "mode": "run",
+    "runLabel": "Test runtime config"
+  },
+  "grader": {
+    "strategy": "execution",
+    "expectedExitCode": 0,
+    "allowStderr": false,
+    "stdout": [
+      {
+        "match": "contains",
+        "value": "runtime config contract passed",
+        "label": "runtime configuration suite"
+      }
+    ]
+  }
+}

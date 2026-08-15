@@ -128,6 +128,10 @@ release_gates:
 
 This small file gives the workflow an explicit safety contract. It names required controls and release blockers. The application loads the plan by workflow version; the model never chooses which controls apply.
 
+![A subscription-refund control plan connects a credible wrong-refund failure to a safety property, intervention point, trusted enforcement, evidence, failure response, and accountable owner.](/content-assets/articles/article-mlops-llmops-guardrails-and-risk/risk-control-plan.png)
+
+*The refund example shows why runtime guardrails, deterministic policy, human review, and release evals need separate responsibilities inside one control plan.*
+
 ### Choose Deterministic, Model, Or Human Enforcement
 
 Use deterministic checks for facts code can decide exactly: schema validity, allowed tool, authenticated tenant, amount limit, destination, and approval match.
@@ -181,6 +185,10 @@ flowchart TD
 ```
 
 A model grader can estimate groundedness or policy adherence. Its score remains a probabilistic judgment. High-impact claims need source verification or a qualified reviewer. The final delivery service should also confirm that every required control produced a current result.
+
+![An ordered output path parses schema, checks deterministic rules, applies semantic and safety checks, routes uncertain high-impact cases to human review, and rejects failed results; a second lane keeps tool authorization in trusted services.](/content-assets/articles/article-mlops-llmops-guardrails-and-risk/bounded-output-and-tool-gates.png)
+
+*A bounded result reaches delivery only after its required checks pass; model-proposed tool effects still require server-owned identity, policy, approval when needed, and domain enforcement.*
 
 ## Authorize Tool Calls And Side Effects
 <!-- section-summary: Tool guardrails validate model-proposed arguments, while authorization and business policy decide whether the exact action may execute. -->
@@ -377,7 +385,11 @@ Guardrails are the gates around an LLM workflow. Automatic checks inspect inputs
 
 A risk-based control plan connects these layers. It starts with a credible failure, names the safety property, chooses the intervention point and enforcement type, records trusted evidence, and defines the response to failure.
 
-In essence, guardrails work as an accountable system of controls. Their value comes from the real outcomes they prevent, the decisions they make visible, and the evidence they provide throughout development and production.
+Guardrails work as an accountable system of controls. Their value comes from the real outcomes they prevent, the decisions they make visible, and the evidence they provide throughout development and production.
+
+![A complete risk-control system gates an exact candidate through security, sliced safety evaluation, red-team testing, limited rollout, production monitoring, incident containment, repair, and regression testing, with control evidence and residual-risk records.](/content-assets/articles/article-mlops-llmops-guardrails-and-risk/guardrail-risk-control-system.png)
+
+*The lifecycle joins release gates, live control signals, explicit containment and repair, version-bound evidence, and time-bounded governance decisions.*
 
 ## References
 

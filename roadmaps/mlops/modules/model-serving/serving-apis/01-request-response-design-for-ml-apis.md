@@ -1,7 +1,7 @@
 ---
 title: "ML API Request Design"
 description: "Design ML API request and response contracts with stable fields, schema versions, batch support, trace IDs, and predictable output metadata."
-overview: "ML API request design turns a model call into a durable contract. This article explains the contract framework: product semantics, validation, response evidence, versioning, invocation shape, error behavior, and consumer verification."
+overview: "ML API request design turns a model call into a durable contract covering product semantics, validation, response evidence, versioning, invocation shape, error behavior, and consumer verification."
 tags: ["MLOps", "core", "api"]
 order: 1
 id: "article-mlops-model-serving-request-response-design-for-ml-apis"
@@ -14,23 +14,16 @@ aliases:
 
 1. [What An ML API Must Communicate](#what-an-ml-api-must-communicate)
 2. [Define The Product Decision Before Designing JSON](#define-the-product-decision-before-designing-json)
-3. [Give Each Identifier One Purpose](#give-each-identifier-one-purpose)
-4. [Keep The API Schema And Feature Definitions Separate](#keep-the-api-schema-and-feature-definitions-separate)
-5. [Explain The Prediction Meaning In The Response](#explain-the-prediction-meaning-in-the-response)
-6. [Version The API, Model, And Policy Separately](#version-the-api-model-and-policy-separately)
-7. [Choose A Single Request, Small Batch, Or Asynchronous Job](#choose-a-single-request-small-batch-or-asynchronous-job)
-8. [Define Stable Validation And Error Categories](#define-stable-validation-and-error-categories)
-9. [Migrate Clients Without Breaking Existing Requests](#migrate-clients-without-breaking-existing-requests)
-10. [Design The Payload For Privacy, Logging, And Security](#design-the-payload-for-privacy-logging-and-security)
-11. [Use OpenAPI And Contract Tests To Detect Breaking Changes](#use-openapi-and-contract-tests-to-detect-breaking-changes)
-12. [Verify The API Contract During Releases And Incidents](#verify-the-api-contract-during-releases-and-incidents)
-13. [The Main Idea](#the-main-idea)
-14. [References](#references)
+3. [Explain The Prediction Meaning In The Response](#explain-the-prediction-meaning-in-the-response)
+4. [Choose A Single Request, Small Batch, Or Asynchronous Job](#choose-a-single-request-small-batch-or-asynchronous-job)
+5. [Design The Payload For Privacy, Logging, And Security](#design-the-payload-for-privacy-logging-and-security)
+6. [The Main Idea](#the-main-idea)
+7. [References](#references)
 
 ## What An ML API Must Communicate
 <!-- section-summary: An ML API surrounds a model call with defined product meaning, timing, identities, outputs, errors, and operational evidence. -->
 
-At a high level, an **ML API contract** is the agreement between a product service and a prediction service. It defines what decision the caller is asking for, which facts the caller supplies, what the result means, and how both sides behave after uncertainty or failure.
+A product service may ask for a risk decision, while the prediction service needs exact inputs and the caller needs to know how to interpret uncertainty or failure. An **ML API contract** is the agreement between those two services. It defines the requested decision, the facts the caller supplies, the meaning of the result, and the behaviour expected from both sides.
 
 That description reaches beyond JSON types. A number can satisfy a schema and still carry the wrong meaning. Consider a response with `"score": 0.82`. One caller may read it as an 82 percent probability of fraud. The model may actually return the probability of a legitimate transaction. The JSON is valid, the HTTP status is successful, and the product decision is reversed.
 
@@ -39,6 +32,10 @@ Units create the same risk. A request field called `amount` accepts `1200` as a 
 An ML API therefore needs several connected layers. Product semantics define the decision, units, and deadline. Identifiers connect a request to traces, releases, and eventual outcomes. The request schema then validates the facts supplied by the caller.
 
 Inside the service, a feature contract governs derived model inputs. The response explains prediction meaning, uncertainty, abstention, and fallback. Version fields identify each changing layer, while error and compatibility policies tell consumers how to react as the service evolves.
+
+![A concrete risk-decision request passes through feature lookup, model scoring, and policy before returning an action plus separate model, policy, and release identities.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/prediction-api-decision-contract.png)
+
+*The caller sends stable product facts; the service owns derived features and turns the model score into a policy decision whose exact release remains visible in the response.*
 
 ```mermaid
 flowchart TD
@@ -81,7 +78,7 @@ flowchart TD
     class B,C,D,E,F process
 ```
 
-## Give Each Identifier One Purpose
+### Give Each Identifier One Purpose
 <!-- section-summary: Request IDs, trace context, idempotency keys, entity IDs, event IDs, and model identities solve separate correlation and safety problems. -->
 
 Production APIs carry several identifiers because one identifier rarely serves every purpose safely. Giving each identity one job prevents accidental coupling.
@@ -113,7 +110,7 @@ flowchart TD
 
 Trace identifiers should stay out of business idempotency logic. Sampling can remove a trace from the observability backend, while the idempotency record must remain durable for its promised window.
 
-## Keep The API Schema And Feature Definitions Separate
+### Keep The API Schema And Feature Definitions Separate
 <!-- section-summary: The request schema describes stable product facts supplied by a caller, while the feature contract governs derived values produced inside the ML system. -->
 
 A request payload should expose product facts that the caller owns. A feature vector contains model inputs produced by transformations, joins, encoders, and freshness rules. Treating these as the same contract makes every client depend on the internal shape of the current model.
@@ -192,7 +189,7 @@ flowchart TD
     class B,C,D,E process
 ```
 
-## Version The API, Model, And Policy Separately
+### Version The API, Model, And Policy Separately
 <!-- section-summary: API, schema, feature, model, policy, and release versions change for different reasons and should remain independently traceable. -->
 
 Several independently changing parts can alter a production prediction even though the endpoint and request stay the same. Retraining can replace the model weights. A policy update can move the approval threshold. A service release can change preprocessing or timeout behavior. A single `version` value gives an incident responder too little evidence to identify which change affected the decision.
@@ -241,6 +238,10 @@ Batch error behavior needs one declared rule. All-or-nothing validation rejects 
 
 A **durable asynchronous job** fits large payloads or long computation. The initial call returns `202 Accepted` with a job resource and status URL. The caller polls, receives a callback, or reads a result event. The contract defines job states, idempotent creation, retention, cancellation, completion deadline, and terminal errors.
 
+![Single-call, bounded-batch, and asynchronous ML API shapes compared by work size, deadline, identity, and error behavior.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/api-interaction-shapes.png)
+
+*The interaction shape follows the amount of work that can safely finish inside the caller's deadline: one immediate decision, a bounded item set, or a durable job with its own lifecycle.*
+
 ```mermaid
 flowchart TD
     A["Prediction Work<br/>(payload count and duration)"] --> B{"Interaction Boundary<br/>(connection and work size)"}
@@ -258,7 +259,7 @@ flowchart TD
 
 An array with fifty thousand items is an offline data job disguised as an API call. A governed batch pipeline offers stronger snapshot, partition, replay, and publication controls for that scale.
 
-## Define Stable Validation And Error Categories
+### Define Stable Validation And Error Categories
 <!-- section-summary: Validation protects syntax, schema, product rules, and model preconditions, while a stable error taxonomy tells callers whether repair, retry, fallback, or escalation is appropriate. -->
 
 Validation protects the model boundary from inputs that are syntactically valid yet unsafe to interpret. For example, a request may contain valid JSON and a valid integer for `amount_minor`, while the currency is missing or the event timestamp lies outside the supported feature window. Passing that request to the model would create a plausible prediction with unreliable meaning.
@@ -291,7 +292,7 @@ A practical mapping uses `422` for schema or product validation failures, `409` 
 
 `retryable` is a bounded hint under the contract. A caller still applies exponential backoff, jitter, attempt limits, and its remaining product deadline. Validation failures require payload or client repair. A valid abstention belongs in the success response because the policy reached a controlled outcome.
 
-## Migrate Clients Without Breaking Existing Requests
+### Migrate Clients Without Breaking Existing Requests
 <!-- section-summary: Compatibility depends on consumer behavior, so schema changes need impact review, dual support, usage telemetry, deprecation communication, and a tested cutoff. -->
 
 Compatibility describes the effect of an API change on real consumers. Suppose the service adds `manual_review` to a decision enum. The response remains valid JSON, yet a mobile client with an exhaustive switch may crash because it only handles `approve` and `decline`. Field-level syntax provides too little information about this consumer behavior.
@@ -347,7 +348,7 @@ flowchart TD
     class B,C,D,E,F process
 ```
 
-## Use OpenAPI And Contract Tests To Detect Breaking Changes
+### Use OpenAPI And Contract Tests To Detect Breaking Changes
 <!-- section-summary: Generated schemas document the boundary, while provider and consumer tests prove real clients can send, decode, and act on every supported response. -->
 
 OpenAPI describes paths, operations, request bodies, responses, authentication, and reusable schemas. JSON Schema describes the structure and constraints of JSON instances. FastAPI generates these artifacts from Pydantic request and response models, giving teams a machine-readable contract and interactive documentation.
@@ -373,7 +374,7 @@ def test_amount_minor_rejects_string(client):
 
 This focused test protects one contract choice: money arrives as a strict integer in minor units. Similar tests should focus on semantic relationships and response meaning. Framework-level unit tests cover the underlying validation machinery separately.
 
-## Verify The API Contract During Releases And Incidents
+### Verify The API Contract During Releases And Incidents
 <!-- section-summary: Rollout and incident checks follow contract evidence from the caller through schema, feature, model, policy, response, and eventual product outcome. -->
 
 A contract release needs evidence from the real consumer path. Unit tests can pass while an older client sends a deprecated enum, a gateway drops `traceparent`, or a response decoder ignores the new abstention field.
@@ -408,6 +409,10 @@ An ML API is a stable decision contract around a changing model system. It names
 Independent version fields explain changes to the API, schemas, features, model, policy, and deployed release. Single, bounded-batch, and asynchronous contracts match different work sizes. Validation, errors, privacy controls, OpenAPI artifacts, consumer tests, and incident joins keep the contract safe through real product change.
 
 A well-designed contract lets a caller act on a result without learning the model's internal feature order or threshold implementation. It also gives operators enough evidence to distinguish a client migration problem, a feature problem, a model change, a policy change, and a service release. That separation is the foundation of a durable production boundary.
+
+![Five-part ML API contract lifecycle covering product definition, separate version identities, boundary protection, contract proof, and controlled migration.](/content-assets/articles/article-mlops-model-serving-request-response-design-for-ml-apis/durable-api-contract-summary.png)
+
+*A durable contract keeps product meaning stable while schemas, features, models, policies, and releases evolve through tested migrations with a retained fallback.*
 
 ## References
 

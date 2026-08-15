@@ -1,7 +1,7 @@
 ---
 title: "Prediction Logging"
 description: "Learn how production teams record safe, structured, joinable evidence around model predictions for debugging, monitoring, feedback, and audit."
-overview: "Prediction logging gives a deployed model a trustworthy history of the decisions it produced. This article explains what to record, how to connect records across systems, how to protect sensitive data, where current production stacks store the evidence, and how teams test and recover the logging path."
+overview: "Prediction logging gives a deployed model a trustworthy history of the decisions it produced, including what to record, how records connect across systems, how sensitive data stays protected, where production stacks store the evidence, and how teams test and recover the logging path."
 tags: ["MLOps", "core", "observability"]
 order: 2
 id: "article-mlops-monitoring-and-feedback-logging-prediction-requests-responses"
@@ -92,10 +92,6 @@ flowchart LR
     class E,F,G operate
     class H verify
 ```
-
-![The prediction logging framework separating purpose, identity, safe event contract, collection, storage, access, and investigation](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-framework.png)
-
-*A trustworthy prediction record has a clear purpose, stable identity, safe fields, a known destination, and a tested path into real investigations.*
 
 ## Decide What The Team Needs To Explain
 <!-- section-summary: Production questions determine which fields are useful, who owns them, and how long the evidence needs to remain available. -->
@@ -352,9 +348,9 @@ For an endpoint carrying sensitive data, the team may choose custom safe summari
 
 Managed features also have lifecycle and availability constraints. Databricks has retired its legacy inference-table path in favor of AI Gateway-enabled tables. AWS has announced restricted new-customer access for SageMaker Model Monitor, so that path suits existing estates more than a greenfield default. Platform selection includes a check of current support status, regional availability, delivery guarantees, and migration guidance.
 
-![A safe prediction evidence boundary with operational logs and decision records separated from restricted raw payloads](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-data-boundary.png)
+![Prediction evidence surfaces separating operational logs, durable decision records, and restricted source data, with shared identifiers and an approved-access investigation gate](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-surfaces.png)
 
-*Operational systems receive reviewed summaries. Original payloads remain behind the stronger controls of their source or a purpose-built restricted store.*
+*Operational logs, durable decision records, and restricted source data answer different questions. Shared identifiers connect them without copying original payloads into every system.*
 
 ## How Prediction Records Reach Search And Storage
 <!-- section-summary: Production logging separates fast operational search from durable analytical evidence and isolates telemetry failures from inference. -->
@@ -368,23 +364,9 @@ The design sends evidence along two paths:
 
 The records share identifiers, yet they serve different jobs.
 
-```mermaid
-sequenceDiagram
-    participant API as Prediction service
-    participant Agent as Log agent or OTel Collector
-    participant Search as Log search
-    participant Stream as Outbox or event stream
-    participant Lake as Delta, Iceberg, or warehouse
-    participant Monitor as Monitoring job
+![One prediction creating a recent operational-search path and a durable decision-evidence path linked by prediction identity, with bounded outage and replay controls](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-delivery-paths.png)
 
-    API->>API: Produce prediction
-    API->>Agent: Write safe operational JSON
-    Agent->>Search: Send recent searchable event
-    API->>Stream: Publish durable decision event
-    Stream->>Lake: Validate, deduplicate, and store
-    Lake->>Monitor: Supply prediction evidence
-    Monitor->>Monitor: Join outcomes and compute quality
-```
+*One prediction sends a small event to recent search and a durable decision event to governed analytical storage. A bounded outage path protects inference and records enough evidence to replay and reconcile safely.*
 
 ### Send Recent Events To Operational Telemetry
 
@@ -436,10 +418,6 @@ That choice belongs in policy before the incident. The implementation needs:
 - counters for accepted, retried, rejected, and dropped events;
 - a documented degraded mode;
 - a recovery process for replay and deduplication.
-
-![One safe prediction event routed to operational search, durable analytical storage, and restricted source-data access](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-evidence-production-path.png)
-
-*The prediction ID connects recent operational events, long-lived decision records, and approved source review without copying every payload into every system.*
 
 ## Control Volume, Retention, And Access
 <!-- section-summary: Sampling, retention, and access policies preserve valuable evidence while controlling cost and exposure. -->
@@ -548,10 +526,6 @@ The feature owner routes traffic back to the reviewed version. Recovery needs mo
 
 The investigation can reveal a different problem. Request traffic may remain steady while decision-event volume drops by half. Before drawing a conclusion about model behavior, the team checks producer rejection, Collector or stream delivery, consumer lag, table freshness, and schema-version counts. A broken evidence path can make a healthy service look as if traffic disappeared.
 
-![The investigation path connecting an aggregate metric to prediction events, traces, releases, controlled payload review, and recovery](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-investigation-loop.png)
-
-*Metrics locate the affected population. Prediction records identify the route and version. Logs, traces, and release evidence support the cause and recovery decision.*
-
 ## Test That Prediction Logging Works End To End
 <!-- section-summary: Contract, privacy, delivery, reconciliation, and reconstruction tests verify that prediction evidence stays safe and useful. -->
 
@@ -633,6 +607,10 @@ The design starts with questions. Stable identifiers connect the evidence. A ver
 Current production stacks divide the work. Structured application logs and OpenTelemetry-compatible collection support recent debugging. Warehouses, Delta or Iceberg tables, and managed inference tables support durable analysis. dbt or Spark validates and transforms the evidence. IAM, catalog policy, retention, sampling, and deletion keep the data proportionate to its purpose.
 
 The logging path is part of the production system. Teams monitor freshness, rejection, lag, loss, and duplicate delivery. They test privacy boundaries, backend outages, replay, reconciliation, and full decision reconstruction. Those practices turn a pile of log lines into evidence that people can safely trust.
+
+![Prediction-logging investigation summary tracing a fallback increase from affected European traffic through application-v8 feature timeouts to containment and evidence-complete recovery](/content-assets/articles/article-mlops-monitoring-and-feedback-logging-prediction-requests-responses/prediction-logging-investigation-summary.png)
+
+*Joinable evidence traces a fallback increase from the affected population to a timed-out feature version. Recovery requires both service restoration and complete, deduplicated decision evidence.*
 
 ## References
 

@@ -1,6 +1,7 @@
 ---
-title: "Handlers and Restarts"
-order: 3
+title: "Choose Handler Timing"
+order: 2
+revision: 2
 ---
 
-Use change, handler, process, and health evidence to choose the least disruptive service action.
+Decide when handlers run, how notifications deduplicate, and when an explicit flush is justified.

@@ -37,6 +37,11 @@
       "us-east-1",
       "devpolaris-orders-exports-prod"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+sts\\\\s+get-caller-identity\\\\b",
+      "^aws\\\\s+configure\\\\s+get\\\\b",
+      "^aws\\\\s+s3api\\\\s+list-buckets\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

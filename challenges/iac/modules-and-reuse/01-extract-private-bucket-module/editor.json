@@ -1,0 +1,196 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "modules/private-bucket/main.tf",
+  "files": [
+    {
+      "filename": "modules/private-bucket/variables.tf",
+      "initialValue": "variable \"bucket_name\" {\n}\n"
+    },
+    {
+      "filename": "modules/private-bucket/main.tf",
+      "initialValue": "# Own the private bucket here.\n"
+    },
+    {
+      "filename": "modules/private-bucket/outputs.tf",
+      "initialValue": "output \"bucket_id\" {\n}\n"
+    },
+    {
+      "filename": "live/prod/main.tf",
+      "initialValue": "module \"logs\" {\n}\n"
+    },
+    {
+      "filename": "live/prod/outputs.tf",
+      "initialValue": "output \"logs_bucket_id\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "modules/private-bucket/variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "bucket_name"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "string"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "modules/private-bucket/main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "this"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "expressionEquals": "var.bucket_name"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "modules/private-bucket/main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket_public_access_block",
+                "this"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "aws_s3_bucket.this.id"
+            ]
+          },
+          {
+            "path": [
+              "block_public_acls"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "block_public_policy"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "ignore_public_acls"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "restrict_public_buckets"
+            ],
+            "valueEquals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "modules/private-bucket/outputs.tf",
+          "path": [
+            {
+              "type": "output",
+              "labels": [
+                "bucket_id"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "value"
+            ],
+            "references": [
+              "aws_s3_bucket.this.id"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "logs"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/private-bucket"
+          },
+          {
+            "path": [
+              "bucket_name"
+            ],
+            "valueEquals": "dp-orders-logs-prod"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/outputs.tf",
+          "path": [
+            {
+              "type": "output",
+              "labels": [
+                "logs_bucket_id"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "value"
+            ],
+            "references": [
+              "module.logs.bucket_id"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

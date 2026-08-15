@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "sli-slo",
+      "type": "single",
+      "scenario": "Checkout has a business promise that 99.9% of POST /checkout requests succeed over 28 days. Which part is the SLI?",
+      "options": [
+        {
+          "id": "b",
+          "text": "The measured proportion of successful POST /checkout requests."
+        },
+        {
+          "id": "a",
+          "text": "The 99.9% target."
+        },
+        {
+          "id": "c",
+          "text": "The 28-day review meeting."
+        },
+        {
+          "id": "d",
+          "text": "The CloudWatch dashboard title."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The SLI is the measured service behavior. The SLO applies a target and evaluation window to that indicator. Learn more in [CloudWatch SLOs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-ServiceLevelObjectives.html)."
+    },
+    {
+      "id": "latency-objective",
+      "type": "single",
+      "scenario": "A checkout service runs on autoscaled containers, so host utilization changes as capacity changes. The team wants a latency SLO that describes the user-facing operation and can drive an error budget. Which definition is most actionable?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Average CPU below 80%."
+        },
+        {
+          "id": "b",
+          "text": "99% of POST /checkout requests complete within 500 ms over 28 days."
+        },
+        {
+          "id": "c",
+          "text": "No application logs at ERROR."
+        },
+        {
+          "id": "d",
+          "text": "Every instance remains running."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A latency SLO should name the user-facing operation, threshold, success fraction, and evaluation period. Learn more in [CloudWatch SLOs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-ServiceLevelObjectives.html)."
+    },
+    {
+      "id": "error-budget",
+      "type": "single",
+      "scenario": "A 99.9% availability SLO is exhausting its error budget rapidly after a release. What should the signal change operationally?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Continue risky releases because the monthly average may recover."
+        },
+        {
+          "id": "c",
+          "text": "Delete the failed datapoints."
+        },
+        {
+          "id": "b",
+          "text": "Use the burn evidence to slow or stop changes and prioritize reliability work."
+        },
+        {
+          "id": "d",
+          "text": "Increase the SLO target to 100%."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Error-budget consumption is a decision signal that connects reliability evidence to release risk. Learn more in [CloudWatch SLOs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-ServiceLevelObjectives.html)."
+    },
+    {
+      "id": "dependency-view",
+      "type": "single",
+      "scenario": "Checkout latency increased, and Application Signals shows a healthy checkout service but a slow payment dependency operation. What is the best next move?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Restart every checkout task without preserving evidence."
+        },
+        {
+          "id": "c",
+          "text": "Raise the checkout latency SLO threshold."
+        },
+        {
+          "id": "d",
+          "text": "Disable tracing."
+        },
+        {
+          "id": "a",
+          "text": "Inspect the payment dependency operation and correlated telemetry."
+        }
+      ],
+      "correct": [
+        "a"
+      ],
+      "explanation": "Application Signals exposes service operations and dependencies so the investigation can move to the slow hop. Learn more in [CloudWatch Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals.html)."
+    },
+    {
+      "id": "slo-design",
+      "type": "multiple",
+      "scenario": "A checkout team is defining its first production reliability objective. Which choices produce a useful first SLO?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Choose a user-visible operation."
+        },
+        {
+          "id": "d",
+          "text": "Use host uptime alone for every customer journey."
+        },
+        {
+          "id": "b",
+          "text": "Define success or latency from measurable telemetry."
+        },
+        {
+          "id": "e",
+          "text": "Use one host CPU metric as the customer-facing SLI."
+        },
+        {
+          "id": "c",
+          "text": "Set a target and evaluation period."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "A useful SLO is tied to user-visible service behavior and has an explicit indicator, target, and period. Learn more in [CloudWatch SLOs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-ServiceLevelObjectives.html)."
+    }
+  ]
+}

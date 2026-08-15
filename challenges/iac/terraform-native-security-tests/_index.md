@@ -1,8 +1,8 @@
 ---
-title: "Terraform Security Contract Tests"
-description: "Write a native Terraform test that proves production configuration cannot omit its customer-managed KMS key."
+title: "Terraform Native Testing"
+description: "Write a native module contract test, then run the local formatting, validation, and test sequence before provider integration work."
 articleId: article-iac-terraform-automation-testing
 difficulty: hard
-order: 23
-tags: ["terraform", "testing", "security", "kms"]
+order: 28
+tags: ["terraform","testing","assertions","cli"]
 ---

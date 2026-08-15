@@ -1,0 +1,32 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/outputs.tf": {
+      "type": "file",
+      "content": "output \"orders_endpoint\" { value = \"https://orders-prod.eu-west-2.elb.amazonaws.com\" }\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "initialized": true,
+    "outputs": {
+      "orders_endpoint": "https://orders-prod.eu-west-2.elb.amazonaws.com"
+    }
+  },
+  "grader": {
+    "strategy": "exact",
+    "expectedText": "https://orders-prod.eu-west-2.elb.amazonaws.com\n",
+    "requireCommandPatterns": [
+      "^terraform\\s+output\\s+-raw\\s+orders_endpoint$"
+    ]
+  }
+}

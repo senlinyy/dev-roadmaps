@@ -28,7 +28,7 @@ id: "article-mlops-llmops-production-deployment"
 
 <!-- section-summary: An LLM release includes the application, prompts, model route, retrieval, tools, policies, and telemetry that together produce user-visible behaviour. -->
 
-At a high level, **production deployment is the process of moving a complete LLM application into real use with controlled versions, reliable infrastructure, measured exposure, and a tested recovery path**.
+A model endpoint alone does not ship the prompts, retrieval rules, tools, policies, and application code that users depend on. **Production deployment moves that complete LLM application into real use with controlled versions, reliable infrastructure, measured exposure, and a tested recovery path.**
 
 It helps to begin with the word *complete*. An LLM product contains far more than a model call:
 
@@ -126,6 +126,10 @@ Write `release_id` into the service version endpoint, traces, structured logs, d
 
 This contract creates a useful boundary. Teams can change individual components independently during development, then assemble reviewed versions into one candidate for promotion.
 
+![Studio Light diagram of support-assistant-r42 binding the application image, harness, prompt, model route, retrieval, tools, policy, telemetry, and evaluation to one traceable release and rollback target](/content-assets/articles/article-mlops-llmops-production-deployment/complete-llm-release-unit.png)
+
+*The release ID identifies the complete behavior: every component that shapes the request path, the telemetry that records it, and the known-good set operators can restore.*
+
 ## 2. Promote One Release Through Environments
 
 <!-- section-summary: Environment promotion moves the same release candidate through increasingly realistic checks while supplying each environment with its own access and capacity settings. -->
@@ -176,6 +180,18 @@ Every LLM application needs an inference service: the system that loads or acces
 A **managed model API** lets a provider operate the accelerators, model server, scaling, and availability layer. Your team operates the application, prompts, retrieval, tools, policies, evaluation, and provider integration.
 
 A **self-hosted runtime** places model serving inside infrastructure controlled by your organization. Your team now owns model loading, GPU capacity, batching, autoscaling, health checks, upgrades, and serving incidents.
+
+```mermaid
+flowchart TD
+    Need["Inference workload<br/>(quality, latency, traffic, and data rules)"] --> Choice{"Operating Boundary<br/>(which team should run model serving?)"}
+    Choice --> Managed["Managed model API<br/>(provider operates model-serving infrastructure)"]
+    Choice --> Hosted["Self-hosted runtime<br/>(team operates model servers and accelerators)"]
+    Managed --> App["Application-owned work<br/>(prompts, tools, policy, evals, and recovery)"]
+    Hosted --> App
+    Hosted --> Platform["Additional platform work<br/>(capacity, batching, scaling, and upgrades)"]
+    App --> Benchmark["Workload-shaped benchmark<br/>(quality, latency, reliability, and task cost)"]
+    Platform --> Benchmark
+```
 
 ### Managed APIs are the practical default for many teams
 
@@ -303,6 +319,19 @@ This design preserves a clear audit trail: the application identity made the ser
 A **release gate** is a rule that the candidate must satisfy before promotion or traffic expansion. LLM applications need familiar software checks plus tests for probabilistic behaviour.
 
 The most useful gate set covers six areas.
+
+```mermaid
+flowchart TD
+    Candidate["Candidate release<br/>(complete versioned bundle)"] --> Software["Software and contracts<br/>(tests and compatibility)"]
+    Software --> Quality["Task quality<br/>(representative evaluations)"]
+    Quality --> Security["Security and policy<br/>(permissions and misuse cases)"]
+    Security --> Performance["Performance and capacity<br/>(realistic load)"]
+    Performance --> Cost["Task cost<br/>(complete successful outcome)"]
+    Cost --> Recovery["Recovery<br/>(existing target and rollback drill)"]
+    Recovery --> Decision{"Gate Decision<br/>(did every required check pass?)"}
+    Decision -->|Yes| Release["Limited exposure<br/>(shadow or canary)"]
+    Decision -->|No| Stop["Stop promotion<br/>(preserve failure evidence)"]
+```
 
 ### Software and contract checks
 
@@ -445,11 +474,28 @@ The old index should remain available through the rollback window. Overwriting i
 
 If downstream software parses model output, record the schema version and validate every response. During a canary, route each response to a consumer that understands its schema. Fallback and repair logic should also emit visible telemetry because a valid-looking repaired response may hide a model regression.
 
+![Studio Light deployment path from one immutable build through development, integration, production-shaped staging, six release gates, zero traffic, shadow, sticky canary, staged expansion, and layer-specific recovery](/content-assets/articles/article-mlops-llmops-production-deployment/progressive-release-and-recovery.png)
+
+*A reviewed candidate moves through increasingly realistic checks, reaches users through limited exposure, and returns the failed layer to a known-good version when any live gate fails.*
+
 ## 9. Observe Reliability, Quality, and Cost Together
 
 <!-- section-summary: Production telemetry connects each request to its release and shows whether the service is reliable, the output is useful, and the task is economically sustainable. -->
 
 An LLM endpoint can return `200 OK` quickly while giving unsupported advice. It can also produce excellent answers so slowly that users leave. Production decisions therefore need three connected views.
+
+Reliability describes whether the system completed the task within its service boundary. Quality describes whether the completed result helped the user. Cost describes the resources consumed to produce that outcome. These views need the same request, release, route, and outcome identities. Separate dashboards with unrelated identifiers cannot explain whether a costly request was also useful or whether a fast release quietly lowered answer quality.
+
+```mermaid
+flowchart TD
+    Request["One production task<br/>(release and route recorded)"] --> Reliable["Reliability<br/>(did the system deliver?)"]
+    Request --> Quality["Quality<br/>(did the result help?)"]
+    Request --> Cost["Cost<br/>(what resources did success require?)"]
+    Reliable --> Trace["Trace and outcome link<br/>(connect cause to user result)"]
+    Quality --> Trace
+    Cost --> Trace
+    Trace --> Decision["Operating decision<br/>(repair, route, scale, or roll back)"]
+```
 
 ### Measure Whether The System Can Deliver
 
@@ -548,6 +594,10 @@ The strongest production path gives that system one release identity and promote
 Release gates establish evidence before traffic. Shadow and canary releases limit exposure. Versioned schemas and state protect mixed releases. Traces connect reliability, quality, and cost. Tested runbooks restore the affected layer and confirm recovery through fresh requests.
 
 The result is a service whose behaviour can be explained, compared, released gradually, and recovered deliberately.
+
+![Studio Light comparison of managed model APIs and self-hosted inference, showing shifted infrastructure responsibilities, one workload-shaped benchmark, a shared release discipline, and the reliability, quality, and cost decision](/content-assets/articles/article-mlops-llmops-production-deployment/managed-vs-self-hosted-summary.png)
+
+*Managed and self-hosted inference move the model-serving boundary, but both require the same complete release identity, gates, controlled exposure, observability, and recovery discipline.*
 
 ## References
 

@@ -1,0 +1,94 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "queues.tf",
+  "files": [
+    {
+      "filename": "queues.tf",
+      "initialValue": "variable \"event_types\" {\n}\n\nresource \"aws_sqs_queue\" \"events\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "queues.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "event_types"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "set(string)"
+          },
+          {
+            "path": [
+              "default"
+            ],
+            "expressionContains": [
+              "\"created\"",
+              "\"paid\"",
+              "\"failed\""
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "queues.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_sqs_queue",
+                "events"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "for_each"
+            ],
+            "expressionEquals": "var.event_types"
+          },
+          {
+            "path": [
+              "name"
+            ],
+            "references": [
+              "each.key"
+            ],
+            "expressionContains": [
+              "orders-"
+            ]
+          },
+          {
+            "path": [
+              "tags",
+              "Service"
+            ],
+            "valueEquals": "orders"
+          },
+          {
+            "path": [
+              "tags",
+              "EventType"
+            ],
+            "expressionEquals": "each.key"
+          }
+        ]
+      }
+    ]
+  }
+}

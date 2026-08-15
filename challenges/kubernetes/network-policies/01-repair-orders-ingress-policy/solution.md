@@ -4,8 +4,6 @@ kind: NetworkPolicy
 metadata:
   name: allow-checkout-web-to-orders-api
   namespace: orders
-  labels:
-    app.kubernetes.io/part-of: orders
 spec:
   podSelector:
     matchLabels:
@@ -25,5 +23,5 @@ spec:
           port: 8080
 ```
 
-- Both source selectors share one peer item, so the caller must be a checkout web Pod in the checkout namespace.
-- Port `8080` is the destination Pod port evaluated by the policy.
+- Both source selectors share one peer item, so the caller must match the supplied checkout web Deployment and checkout Namespace together.
+- Port `8080` is the destination Pod port declared by the supplied orders API workload.

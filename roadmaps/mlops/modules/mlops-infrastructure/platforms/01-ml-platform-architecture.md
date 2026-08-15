@@ -34,7 +34,7 @@ A production team also needs repeatable data and controlled compute. Evaluation 
 
 The same requirements repeat across projects. Without a shared platform, each team invents its own training job, storage layout, access policy, deployment script, dashboard, and rollback procedure. The organization then spends more time integrating and repairing the surrounding system. A security fix must be repeated in many repositories. A GPU shortage has no shared queue. An incident responder cannot reliably connect a prediction to the model and data that produced it.
 
-An **ML platform** is the internal product that supplies these repeated capabilities through supported interfaces. In essence, it turns production ML from a collection of custom integrations into a set of dependable paths that teams can use and the organization can operate.
+An **ML platform** is the internal product that supplies these repeated capabilities through supported interfaces. It turns production ML from a collection of custom integrations into dependable paths that teams can use and the organization can operate.
 
 Consider a fraud model that has passed evaluation. Releasing it involves much more than copying a model file to a server. The release process identifies the exact artifact and verifies its evaluation evidence. It records the approval, allocates serving capacity, shifts traffic safely, and watches production health. The model team supplies the model-specific meaning. The platform supplies the repeated production machinery.
 
@@ -85,6 +85,10 @@ flowchart TD
 ```
 
 These are architectural responsibilities rather than mandatory services. A managed cloud platform may implement several of them behind one API. A composable stack may assign them to separate products. Keeping the responsibilities visible prevents gaps and unclear ownership in either design.
+
+![Six ML platform responsibilities connect user interfaces, lifecycle control, execution, evidence, governance, and operations](/content-assets/articles/article-mlops-mlops-infrastructure-ml-platform-architecture/six-platform-responsibilities.png)
+
+*Interfaces, control, execution, and evidence form the working lifecycle. Governance and operations span those responsibilities so identity, policy, health, capacity, cost, and recovery remain part of the platform design.*
 
 ## Give Teams Supported Ways To Train And Release Models
 <!-- section-summary: Platform interfaces capture user intent in a stable contract and provide a supported path for common ML work. -->
@@ -145,6 +149,10 @@ For example, a run can remain queued because the GPU quota is exhausted. The con
 The control plane also protects separation of duties. A training process writes a candidate model and evidence. It should not grant itself permission to update production traffic. A release service verifies the policy and approval, then changes the deployment through a narrower identity. This design limits the effect of a compromised or faulty training job.
 
 Control-plane services should keep their own work small. They coordinate long-running jobs instead of performing the training inside an API process. This keeps user compute failures away from the services that admit and track every team’s work.
+
+![A governed training request moves from a model team through validation, policy, execution, durable evidence, and operations feedback](/content-assets/articles/article-mlops-mlops-infrastructure-ml-platform-architecture/training-request-path.png)
+
+*The request carries source, data, and compute intent through five visible stages. Durable status feeds operations, which returns queue, failure, and capacity information to the team.*
 
 ## Run ML Work On Managed Compute
 <!-- section-summary: The execution plane provides distinct runtime profiles for data preparation, training, evaluation, batch inference, and online serving. -->
@@ -339,6 +347,10 @@ An ML platform gives teams a dependable route from model work to production oper
 Managed services and open tools can implement those responsibilities in many combinations. The platform itself is the connected product: users can request work, policy can govern it, compute can execute it, evidence can explain it, and operators can recover it. Product selection follows that framework.
 
 The practical test is a complete journey. A team can submit a governed workload, see why it is waiting, identify the exact output, release it through policy, observe the production version, and reach the correct owner during failure. An architecture that cannot support that journey still has a missing connection, even if every individual service is healthy.
+
+![A complete ML platform connects model and product teams to interfaces, control, execution, evidence, governance, operations, platform owners, and managed providers](/content-assets/articles/article-mlops-mlops-infrastructure-ml-platform-architecture/complete-ml-platform.png)
+
+*Model and product teams enter through supported interfaces. The platform team operates the complete path, providers operate selected managed machinery, and the combined system supports reliable delivery and recovery.*
 
 ## References
 

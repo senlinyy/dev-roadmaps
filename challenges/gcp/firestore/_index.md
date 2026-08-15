@@ -4,6 +4,6 @@ description: "Practice Firestore document modeling through documents, collection
 articleId: article-cloud-providers-gcp-storage-databases-firestore-document-data-models
 articleSlug: firestore
 difficulty: medium
-order: 21
+order: 22
 tags: ["gcp", "firestore", "documents", "indexes"]
 ---

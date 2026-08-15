@@ -29,7 +29,7 @@ id: "article-mlops-llmops-multimodal-inputs-outputs"
 
 **Multimodal** means working with information in more than one form. Text is one modality. Images, audio, and video are other modalities. A document is usually a container that combines several of them: written text, page layout, tables, diagrams, and scanned images.
 
-At a high level, a multimodal application must preserve the meaning of that media from upload to final output. A model may be able to inspect an image or listen to audio, yet the surrounding system still has to answer practical questions. Is the file really the type it claims to be? Which page or time range supports the answer? Can this model process the media? How much will it cost? Who may access the original and every copy derived from it? What should the product do if the recording is silent or the scan is unreadable?
+An uploaded scan or recording passes through storage, preprocessing, a model, and the product interface before the user receives an answer. A multimodal application must preserve the media's meaning across that path. The surrounding system still has to verify the file type, identify the supporting page or time range, choose a capable model, control access and cost, and handle silent recordings or unreadable scans.
 
 These questions explain why adding an image field to a text API changes much more than the request body. The application gains a media pipeline with new security, storage, processing, routing, evaluation, accessibility, and deletion responsibilities.
 
@@ -111,13 +111,17 @@ For a long report, the system can index extracted text and retrieve three releva
 
 The choice follows the task. Use native processing for meaning that depends on the original media. Use specialist processing for deterministic extraction and search. Tools support selective work inside a larger workflow.
 
+![Studio Light comparison of native multimodal, specialist preprocessing, and tool-mediated analysis, with a hybrid long-report flow combining searchable OCR text and page images into page-level evidence](/content-assets/articles/article-mlops-llmops-multimodal-inputs-outputs/media-processing-route-comparison.png)
+
+*The route follows the evidence the task needs: native processing preserves original-media meaning, specialist derivatives support search and precise references, and bounded tools perform selective work.*
+
 ## Represent Inputs As Ordered Content Parts
 
 <!-- section-summary: A normalized content-part envelope gives every provider adapter the same information about media type, location, provenance, alignment, and access policy. -->
 
 Provider APIs use different names for the same core structure. Most multimodal messages contain an ordered list of **content parts**. One part may contain instructions, another an image, and another a short question about that image.
 
-A content part is the application's provider-neutral description of one piece of evidence. In essence, it answers five questions:
+A content part is the application's provider-neutral description of one piece of evidence. It answers five questions:
 
 1. What kind of content is this?
 2. Where are its approved bytes?
@@ -204,6 +208,10 @@ Byte size alone offers weak protection. A small compressed image can expand into
 Consider a photo upload that is only a few megabytes on disk but declares dimensions large enough to require several gigabytes after decoding. The ingestion worker should reject it before generating thumbnails or calling a model. Retrying the model would waste time because the failure belongs to file validation.
 
 The accepted-format list should be narrow and based on a real product need. A service that needs JPEG, PNG, and PDF gains little from accepting every image, archive, and office format. Each additional parser increases the security and operational surface.
+
+![Studio Light path from an authenticated product-label photo through quarantine, real-format verification, sandboxed decoding, approved provenance, ordered content parts, capability routing, and a validated answer with a source region](/content-assets/articles/article-mlops-llmops-multimodal-inputs-outputs/governed-photo-evidence-path.png)
+
+*A governed media request separates trusted instructions from untrusted user content while preserving the original bytes, derivative provenance, part order, access rules, route capability, and source evidence.*
 
 ## Link Original Media To Derived Artifacts
 
@@ -503,9 +511,25 @@ Every job record should identify the exact source and derivative bytes. It also 
 
 ## Use A Common Contract Across Provider APIs
 
-<!-- section-summary: OpenAI, Vertex AI, Amazon Bedrock, and Azure expose different media interfaces, while the application's envelope, capability registry, and lifecycle remain stable. -->
+<!-- section-summary: OpenAI, Google Cloud, Amazon Bedrock, and Azure expose different media interfaces, while the application's envelope, capability registry, and lifecycle remain stable. -->
 
 The neutral content-part envelope gives the application one stable design. A provider adapter translates approved parts into the current API shape and translates the result back into the application output contract.
+
+That adapter is more than a field-name converter. It preserves the order of evidence, resolves governed media references, checks the chosen model's capabilities, and carries page, region, or time pointers back to the application. The portable contract gives downstream code one meaning for those fields even though providers represent images, documents, audio, and video differently. Unsupported combinations fail at the adapter boundary before the request reaches a model.
+
+```mermaid
+flowchart TD
+    Input["Approved media input<br/>(ordered parts and governed object references)"] --> Contract["Application media contract<br/>(type, order, evidence location, and lifecycle)"]
+    Contract --> Route{"Capability registry<br/>(which tested route supports this media?)"}
+    Route --> OpenAI["OpenAI adapter<br/>(typed image and file inputs)"]
+    Route --> Google["Google adapter<br/>(ordered Content Part objects)"]
+    Route --> AWS["Bedrock adapter<br/>(message content blocks)"]
+    Route --> Azure["Azure adapter<br/>(model or specialist content service)"]
+    OpenAI --> Output["Application output contract<br/>(result, evidence pointers, and usage)"]
+    Google --> Output
+    AWS --> Output
+    Azure --> Output
+```
 
 ### OpenAI
 
@@ -513,9 +537,9 @@ The OpenAI Responses API accepts typed image and file inputs. Current image proc
 
 Use the application's route registry to choose a tested model and detail policy. Treat supported formats, payload limits, default detail behavior, and token calculation as changeable provider settings.
 
-### Google Cloud Vertex AI
+### Google Cloud Gemini Enterprise Agent Platform
 
-Vertex AI's Gemini request shape uses ordered content `Part` objects. Media can be supplied through a URI with an **IANA MIME type**, a standard media label such as `image/jpeg`. Inline data is another option, subject to the selected model and API contract. This maps naturally from the provider-neutral ordered-part envelope.
+Gemini on Agent Platform uses ordered content `Part` objects. Readers may still see `Vertex AI` and `aiplatform` in API paths and client types because Google retained those compatibility names. Media can be supplied through a URI with an **IANA MIME type**, a standard media label such as `image/jpeg`. Inline data is another option, subject to the selected model and API contract. This maps naturally from the provider-neutral ordered-part envelope.
 
 For specialist stages, Google Cloud services can create explicit derivatives before the model request. Document AI can support document OCR, while Speech-to-Text can support speech recognition. Cloud Storage plus Pub/Sub or Eventarc can support the asynchronous object-processing path.
 
@@ -553,13 +577,17 @@ It accepts a narrow set of formats through a quarantine boundary. It stores immu
 
 This design assigns each failure to an explicit stage. An unreadable scan belongs to ingestion or preprocessing. An unsupported audio route belongs to capability selection. An invented value belongs to model quality and output validation. A missing transcript deletion belongs to lifecycle control. The model contributes an important inference step, while the system makes that step safe and useful.
 
+![Studio Light summary of the ten-stage multimodal lifecycle, uploaded-object and live-stream contracts, work and evaluation dimensions, complete artifact deletion, and stage-specific recovery](/content-assets/articles/article-mlops-llmops-multimodal-inputs-outputs/multimodal-lifecycle-summary.png)
+
+*The complete media lifecycle carries trust, provenance, alignment, access, accessibility, evaluation, and deletion state from the first untrusted bytes through the final product outcome.*
+
 ## References
 
 - [OpenAI: Images and vision](https://developers.openai.com/api/docs/guides/images-vision)
 - [OpenAI: File inputs](https://developers.openai.com/api/docs/guides/file-inputs)
 - [OpenAI: Audio and speech](https://developers.openai.com/api/docs/guides/audio)
-- [Google Cloud: Generate content from multimodal data in Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-non-stream-multimodality-basic)
-- [Google Cloud: Vertex AI API reference](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/reference/rpc/google.cloud.aiplatform.v1)
+- [Google Cloud: Generate content with the Gemini API](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/inference)
+- [Google Cloud: Agent Platform Content and Part reference](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/v1/Content)
 - [Google Cloud: Cloud Storage signed URLs](https://docs.cloud.google.com/storage/docs/access-control/signed-urls)
 - [AWS: Using the Amazon Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)
 - [AWS: Run model inference](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-api.html)

@@ -38,17 +38,17 @@ aliases:
 
 <!-- section-summary: Governance connects a decision to a named authority, a defined scope, current evidence, and a period of validity. -->
 
-At a high level, **approval authority** is the formally assigned power to decide
-whether an AI system may proceed for a particular use. The authority belongs to
-a role or governing body with a declared scope. It does not arise from
-seniority, repository access, or familiarity with the model.
-
 Imagine a model that prioritizes applications for human review. Its evaluation
 report shows strong overall accuracy, a small performance gap for one segment,
 and a monitoring plan for that gap. Someone must decide whether the remaining
 risk is acceptable. The model developer can explain the evidence. The production
 engineer can deploy the artifact. Neither fact establishes who may accept the
 residual risk for this use.
+
+**Approval authority** is the formally assigned power to decide whether that AI
+system may proceed for the proposed use. The authority belongs to a role or
+governing body with a declared scope. It does not arise from seniority,
+repository access, or familiarity with the model.
 
 **Residual risk** means the risk left after the team applies its controls. An
 approval records that an authorized decision-maker considered that remaining
@@ -139,6 +139,10 @@ flowchart TD
 Avoid one universal `ml-admin` group that can alter policy, approve evidence,
 promote models, and bypass deployment gates. Broad access makes the identity of
 the decision-maker less meaningful.
+
+![Governance authority matrix matching six decisions to their accountable authorities, required evidence, and scope limits, with separate maker, checker, and enforcement roles](/content-assets/articles/article-mlops-governance-and-responsible-ai-who-approved-this-model/governance-authority-matrix.png)
+
+*Data use, model validation, production use, exceptions, emergency action, and retirement are different decisions. Each needs a defined authority, evidence packet, and scope.*
 
 ## Separate The Person Proposing A Change From The Person Approving It
 
@@ -378,7 +382,7 @@ exception:
   approved_by:
     - identity://exception-authority-a
     - identity://exception-authority-b
-  expires_at: 2026-09-14T16:00:00Z
+  expires_at: "${POLICY_COMPUTED_EXPIRY}"
   expiry_action: stop_candidate_traffic
 ```
 
@@ -391,6 +395,10 @@ Repeated exceptions deserve a separate signal. Three requests for the same
 control gap may indicate an unrealistic policy, a missing platform capability,
 or a team avoiding remediation. Escalate the pattern to the policy owner instead
 of treating each request as unrelated.
+
+![Controlled exception lifecycle from scoped request and policy check through independent review, compensating controls, a time-bound record, pre-expiry escalation, and a policy-controlled expiry decision](/content-assets/articles/article-mlops-governance-and-responsible-ai-who-approved-this-model/controlled-exception-lifecycle.png)
+
+*A temporary exception names one applicable control, passes independent review, adds measurable safeguards, and ends through a policy-controlled expiry decision. Waivers, risk acceptance, and emergency authority remain separate decisions.*
 
 ## Review A Live Approval On A Schedule
 
@@ -704,6 +712,10 @@ different parts of the same record.
 Good governance lets a team explain who decided, what they knew, which limits
 applied, how the system was operated, and what would cause the decision to
 change.
+
+![Approval and periodic-review lifecycle in which only approved decisions enter the exact-release gate, live review triggers converge on current evidence, and reassessment continues, restricts, retrains, replaces, suspends, or retires the system](/content-assets/articles/article-mlops-governance-and-responsible-ai-who-approved-this-model/approval-review-lifecycle-summary.png)
+
+*Approved and conditional decisions pass through an exact deployment gate. Scheduled review, material change, and emergency follow-up return live evidence to reassessment, which must produce and verify a new operating state.*
 
 ## References
 

@@ -4,6 +4,6 @@ description: "Practice attached disk and shared file path decisions for VM-shape
 articleId: article-cloud-providers-azure-storage-databases-disks-file-shares
 articleSlug: disks-and-file-shares
 difficulty: medium
-order: 28
+order: 21
 tags: ["azure", "managed-disks", "azure-files", "vm", "file-shares"]
 ---

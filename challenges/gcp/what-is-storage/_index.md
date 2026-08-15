@@ -4,6 +4,6 @@ description: "Practice matching GCP data shapes to objects, relational records, 
 articleId: article-cloud-providers-gcp-storage-databases-gcp-storage-database-mental-model
 articleSlug: what-is-storage
 difficulty: easy
-order: 18
+order: 19
 tags: ["gcp", "storage", "databases", "data-shapes"]
 ---

@@ -27,7 +27,7 @@ aliases: ["hooks-and-sandboxes"]
 
 An agent that can only answer questions stays inside a fairly narrow boundary. An agent that can run tests, install packages, edit files, or launch build scripts crosses into a different kind of system. Its output now causes real processes to execute against real resources.
 
-At a high level, **hooks make important moments in an agent run visible and enforceable, while sandboxes limit what executed code can reach and consume.** These are separate responsibilities. A hook can enforce authorization before a command starts. It can also record evidence after the command finishes.
+Agent-generated code may need a policy check before execution and a strict boundary during execution. **Hooks expose moments such as “before this command” or “after this tool result” so the application can enforce policy and record evidence. Sandboxes limit what the running code can reach and consume.** These responsibilities work together without being interchangeable.
 
 A sandbox controls the command's files and processes. It also bounds network access, credential exposure, resource use, and lifetime.
 
@@ -66,27 +66,9 @@ The base image is read-only. `/workspace` is the only general writable path. The
 
 The executor starts the test and streams bounded output. A successful command produces a structured result containing the exit code, duration, termination reason, and references to approved artifacts such as the test report and patch. A post-execution hook records those facts. Cleanup revokes the credential, copies the approved artifacts to durable storage, and destroys the workspace.
 
-```mermaid
-sequenceDiagram
-    participant O as Orchestrator
-    participant P as Policy and hooks
-    participant S as Sandbox service
-    participant I as Identity broker
-    participant E as Evidence store
+![A focused pricing test moving through request recording, policy admission, sandbox provisioning, scoped identity, bounded execution, evidence, and cleanup](/content-assets/articles/article-mlops-llmops-hooks-and-sandboxes/safe-test-run-lifecycle.png)
 
-    O->>P: Admit task and proposed command
-    P-->>O: Allow under policy version 18
-    O->>S: Create pinned, isolated workspace
-    S-->>O: Sandbox ID and runtime digest
-    O->>I: Request task-scoped repository token
-    I-->>S: Short-lived read token
-    O->>S: Run focused test under limits
-    S-->>O: Exit code, duration, bounded output
-    O->>E: Save result and approved artifacts
-    O->>I: Revoke credential
-    O->>S: Destroy workspace
-    S-->>O: Cleanup confirmed
-```
+*Hooks attach policy and evidence to each transition. The sandbox service contains the test process, and cleanup returns the environment to a verified terminal condition.*
 
 Each failure also has a defined result. A policy outage stops the command before a sandbox receives work. A provisioning error returns `environment_unavailable`. A timeout terminates the full process tree and returns `deadline_exceeded`. A cleanup failure removes network access and credentials, marks the workspace `quarantined`, and schedules another deletion attempt. The user receives a controlled outcome instead of a generic exception.
 
@@ -221,6 +203,10 @@ The threat model therefore describes at least four questions:
 From those answers, the team chooses several layers of control. Isolation limits the process. Authorization limits external authority. Network policy limits destinations. Resource controls limit consumption. Evidence and recovery show whether the controls worked.
 
 No single layer carries the whole promise. A stronger runtime cannot repair an administrator credential inside the guest. A short-lived credential cannot protect a shared host from a kernel escape. A default-deny network policy cannot protect a secret copied into command output. The sandbox is a defence-in-depth system whose layers address different paths.
+
+![Four hostile repository-test attempts passing through shared filesystem, kernel, network, identity, resource, and lifecycle boundaries](/content-assets/articles/article-mlops-llmops-hooks-and-sandboxes/sandbox-defence-in-depth.png)
+
+*Every hostile attempt encounters the complete boundary. Isolation, authorization, network policy, resource limits, and cleanup address different escape paths and failure effects.*
 
 ## Apply Several Kinds Of Isolation
 <!-- section-summary: Filesystem, process, kernel, resource, and lifetime controls combine to contain code execution and preserve only approved results. -->
@@ -453,6 +439,10 @@ New images, runtimes, kernels, network plugins, admission policies, secret deliv
 Autonomy should expand one capability at a time. Reading a repository, editing an isolated workspace, publishing a patch, opening a pull request, merging, and deploying all carry different impact. Evidence from one level informs the next level, while each new authority receives its own policy, isolation, evaluation, and recovery test.
 
 Hooks and sandboxes work well together because they answer complementary questions. The lifecycle boundary decides whether work may start and which evidence must survive. The execution boundary contains the code that performs the work. Durable state and cleanup connect the decision to a verified final condition.
+
+![A summary connecting sandbox risk factors and runtime choices to a controlled lifecycle and a pass-or-fail conformance gate](/content-assets/articles/article-mlops-llmops-hooks-and-sandboxes/isolation-conformance-summary.png)
+
+*Isolation follows the workload threat. Wider traffic and authority arrive only after production-path conformance tests confirm the expected denials and cleanup behavior.*
 
 ## References
 

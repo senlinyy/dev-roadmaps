@@ -1,0 +1,20 @@
+{
+  "language": "yaml",
+  "filename": "access-workbook.yaml",
+  "completionProfile": "yaml",
+  "initialValue": "environment: production\nhumans:\n  group: \n  access: read-only\n  reviewCadence: \nworkloads:\n  orders-api:\n    identityType: \n    role: \n    scope: \npipelines:\n  azure-devops-prod:\n    authentication: \n    clientSecret: present\n",
+  "grader": {
+    "strategy": "yaml-paths",
+    "expected": [
+      { "path": ["environment"], "equals": "production" },
+      { "path": ["humans", "group"], "equals": "support-prod-readers" },
+      { "path": ["humans", "access"], "equals": "read-only" },
+      { "path": ["humans", "reviewCadence"], "equals": "quarterly" },
+      { "path": ["workloads", "orders-api", "identityType"], "equals": "system-assigned-managed-identity" },
+      { "path": ["workloads", "orders-api", "role"], "equals": "Key Vault Secrets User" },
+      { "path": ["workloads", "orders-api", "scope"], "equals": "kv-orders-prod" },
+      { "path": ["pipelines", "azure-devops-prod", "authentication"], "equals": "workload-identity-federation" },
+      { "path": ["pipelines", "azure-devops-prod", "clientSecret"], "equals": "absent" }
+    ]
+  }
+}

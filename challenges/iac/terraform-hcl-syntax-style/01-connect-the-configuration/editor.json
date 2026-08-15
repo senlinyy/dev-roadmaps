@@ -1,0 +1,123 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "variables.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"service_name\" {\n}\n"
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n  bucket_name = \"replace-me\"\n}\n"
+    },
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"assets\" {\n  bucket = \"replace-me\"\n}\n"
+    },
+    {
+      "filename": "outputs.tf",
+      "initialValue": "output \"bucket_id\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "service_name"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "string"
+          },
+          {
+            "path": [
+              "default"
+            ],
+            "valueEquals": "orders"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "locals.tf",
+          "path": [
+            {
+              "type": "locals"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket_name"
+            ],
+            "references": [
+              "var.service_name"
+            ],
+            "expressionContains": [
+              "format("
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "assets"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "expressionEquals": "local.bucket_name"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "outputs.tf",
+          "path": [
+            {
+              "type": "output",
+              "labels": [
+                "bucket_id"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "value"
+            ],
+            "references": [
+              "aws_s3_bucket.assets.id"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

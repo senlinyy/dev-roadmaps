@@ -1,0 +1,59 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "outputs.tf",
+  "files": [
+    {
+      "filename": "load-balancer.tf",
+      "initialValue": "resource \"aws_lb\" \"orders\" {\n  name = \"orders-prod\"\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "outputs.tf",
+      "initialValue": "output \"orders_endpoint\" {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "outputs.tf",
+          "path": [
+            {
+              "type": "output",
+              "labels": [
+                "orders_endpoint"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "description"
+            ],
+            "valueEquals": "HTTPS endpoint for the orders API"
+          },
+          {
+            "path": [
+              "value"
+            ],
+            "references": [
+              "aws_lb.orders.dns_name"
+            ],
+            "expressionContains": [
+              "https://"
+            ]
+          },
+          {
+            "path": [
+              "sensitive"
+            ],
+            "valueEquals": false
+          }
+        ]
+      }
+    ]
+  }
+}

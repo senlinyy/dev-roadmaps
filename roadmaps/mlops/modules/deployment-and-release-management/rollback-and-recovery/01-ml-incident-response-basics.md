@@ -29,7 +29,7 @@ aliases:
 ## A Healthy Service Can Still Produce Harmful Decisions
 <!-- section-summary: An ML incident is a production event in which an ML-enabled system creates unacceptable harm, risk, or loss of trust. -->
 
-At a high level, an **ML incident** is a production event in which an ML-enabled system creates unacceptable harm, risk, or loss of trust. The cause may sit in a model, a feature pipeline, a decision rule, an API, a monitoring job, or a downstream product workflow. The definition starts with impact because users experience the whole decision system, not the component named in a dashboard.
+A customer may receive a harmful decision even though the model endpoint remains available. An **ML incident** is a production event in which the complete ML-enabled system creates unacceptable harm, risk, or loss of trust. The cause may sit in a model, feature pipeline, decision rule, API, monitoring job, or downstream workflow. The definition starts with impact because users experience the whole decision system.
 
 Some incidents look familiar to any software engineer. The prediction API times out, GPU memory is exhausted, or a batch job never finishes. Other incidents remain quiet at the infrastructure layer. The endpoint returns `200 OK`, latency stays below its objective, and containers report healthy. The system still fails because its decisions are stale, unfair to a segment, detached from current behavior, or based on corrupted inputs.
 
@@ -76,6 +76,10 @@ flowchart TD
 Failures travel through these layers. A source delay creates stale features. The model accepts them because their types are valid. Scores shift, a policy converts those scores into extra manual reviews, and the review queue grows until users face long delays. The original fault lives in data freshness, while the largest visible symptom appears in product operations.
 
 The final layer can also create a false incident story. A label job may stop joining outcomes to predictions after a schema change. Reported accuracy collapses because the remaining joined cases are unrepresentative. The model may still be performing normally. That is why evidence integrity leads the investigation.
+
+![An eligibility-model incident traced across seven layers from a healthy service and valid request to stale income features, shifted predictions, harmful decisions, and segment evidence.](/content-assets/articles/article-mlops-deployment-and-release-management-ml-incident-response-basics/healthy-endpoint-harmful-decision.png)
+
+*The first meaningful divergence is stale feature data, even though the loudest product symptom appears later and the service dashboard remains green.*
 
 ## Follow A Clear Incident Response Lifecycle
 <!-- section-summary: The incident lifecycle provides a stable sequence for reducing harm, restoring service, and learning from the event. -->
@@ -158,6 +162,10 @@ flowchart TD
     class G dp-mermaid-tertiary
     class H dp-mermaid-primary
 ```
+
+![A quality alert investigated through freshness, coverage, schema, version identity, and signal agreement, revealing that an identifier change broke the outcome join rather than the model.](/content-assets/articles/article-mlops-deployment-and-release-management-ml-incident-response-basics/validate-incident-evidence.png)
+
+*A broken outcome join can create a false model-quality story; validate the measurement path before introducing another production change.*
 
 ## Declare the Incident and Assign Authority
 <!-- section-summary: A declared incident gives the response clear authority, roles, severity, and one shared record of decisions. -->
@@ -466,6 +474,10 @@ ML incident response protects the full decision system. A healthy endpoint can s
 The seven observable layers locate those possibilities. The lifecycle organizes the work: detect, validate evidence, declare, contain, investigate, recover, verify, communicate, and learn. Clear authority keeps coordination separate from technical investigation. Concrete release and decision identities connect alerts to blast radius and downstream remediation.
 
 Recovery closes only after technical health, input integrity, prediction behavior, product outcomes, and delayed monitoring evidence satisfy written criteria. The post-incident review then converts the causal chain into owned, testable changes and keeps contaminated feedback out of future training data.
+
+![The ML incident response control loop connecting impact detection, evidence validation, declared authority, containment, investigation, remediation, layered recovery gates, and post-incident learning.](/content-assets/articles/article-mlops-deployment-and-release-management-ml-incident-response-basics/ml-incident-response-summary.png)
+
+*Contain the consequence, correct the causal layer, prove every part of the decision path, and preserve remediation and training-data evidence before closure.*
 
 ## References
 

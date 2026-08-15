@@ -1,8 +1,8 @@
 ---
-title: "Terraform in CI/CD"
-description: "Make Terraform changes reviewable in pull requests, add a safe GitHub Actions plan workflow, and choose responsible apply, credential, backend, and lock boundaries."
+title: "Terraform CI Plan Pipeline"
+description: "Build a pull-request pipeline that formats, validates, plans once, and preserves the reviewed plan artifact without applying."
 articleId: article-iac-terraform-automation-cicd
-difficulty: medium
-order: 12
-tags: ["terraform", "ci", "plan", "github-actions"]
+difficulty: hard
+order: 29
+tags: ["terraform","ci","github-actions","plan"]
 ---

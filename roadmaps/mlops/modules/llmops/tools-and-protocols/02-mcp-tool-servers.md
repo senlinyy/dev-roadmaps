@@ -46,28 +46,9 @@ Start with one complete interaction. A developer asks a coding assistant to expl
 
 The developer sees the failed step, its safe error summary, and a link to the authorized check. The server never receives the whole conversation. The model never receives the access token. The repository remains the authority for who may read the check.
 
-```mermaid
-sequenceDiagram
-    participant U as Developer
-    participant H as AI host
-    participant C as MCP client
-    participant S as Repository MCP server
-    participant R as Repository service
+![A failed-CI request moving through MCP discovery, host disclosure, a per-server client, repository-server authorization, the owning repository service, result filtering, and an authorized response](/content-assets/articles/article-mlops-llmops-mcp-tool-servers/failed-ci-mcp-ownership-flow.png)
 
-    U->>H: Explain the latest failed check
-    H->>C: List eligible server tools
-    C->>S: tools/list with identity and protocol metadata
-    S-->>C: get_failed_check definition
-    H->>H: Disclose relevant tool to model
-    H->>C: Approved tool call
-    C->>S: tools/call
-    S->>S: Authorize repository and validate arguments
-    S->>R: Read check using server-held credential
-    R-->>S: Authorized check data
-    S-->>C: Structured safe result
-    C-->>H: Validated result
-    H-->>U: Explanation and authorized link
-```
+*MCP standardizes discovery and calls between the host and server. Context disclosure, tokens, repository authorization, downstream credentials, and domain truth retain separate owners.*
 
 MCP owns the shared language used across the middle of this path. The host still owns model context, consent, tool disclosure, and user experience. The server still owns its domain contract, authorization, downstream credentials, execution, and audit evidence. This separation is the key to understanding the rest of the protocol.
 
@@ -210,6 +191,19 @@ Output schemas improve interoperability for structured results. The server must 
 
 The transport determines which security problems surround the same MCP messages. A local server runs as software on the user's machine. A remote server receives requests across a network and may belong to another organization. Each topology therefore needs its own deployment and identity controls.
 
+Both topologies still expose the same basic capability contract, so schema validation and domain authorization remain necessary in either case. Their surrounding trust boundaries differ. A local process inherits machine access and creates software supply-chain risk. A remote service introduces network identity, delegated authorization, another data processor, and a separate incident boundary. Deployment controls must address the risks created by that location without changing the meaning of the tool.
+
+```mermaid
+flowchart TD
+    Capability["MCP capability<br/>(same protocol messages)"] --> Topology{"Server Topology<br/>(where does the server run?)"}
+    Topology --> Local["Local server<br/>(child process on the user's machine)"]
+    Topology --> Remote["Remote server<br/>(network service and separate operator)"]
+    Local --> LocalControls["Local controls<br/>(pinned binary, file scope, environment, and sandbox)"]
+    Remote --> RemoteControls["Remote controls<br/>(TLS identity, OAuth audience, scope, and data review)"]
+    LocalControls --> Contract["Shared tool contract<br/>(validation, authorization, and stable results)"]
+    RemoteControls --> Contract
+```
+
 ### Protect A Local Server With Machine-Level Controls
 
 A local stdio server often starts as a child process of the host. It may receive a working directory, environment variables, file access, and the operating-system identity of the current user. Even with little network exposure, a compromised package can use every permission granted to that process.
@@ -252,22 +246,9 @@ A stateful application can run over stateless protocol requests. One browser con
 
 Suppose a browser-automation server needs several calls against one browser context. `create_browser` returns an opaque `browser_id`. Later calls such as `open_page` and `capture_page` accept that ID. The server stores the actual browser state and verifies the caller's authorization on every use.
 
-```mermaid
-sequenceDiagram
-    participant H as Host
-    participant S as MCP server
-    participant B as Stateful backend
+![An MCP server creating browser_id br_7f2 and later reauthorizing the handle, caller, lifetime, and approved URL in a new self-contained request](/content-assets/articles/article-mlops-llmops-mcp-tool-servers/browser-handle-self-contained-requests.png)
 
-    H->>S: create_browser
-    S->>B: Allocate isolated browser
-    B-->>S: Internal browser state
-    S-->>H: browser_id = br_7f2
-    H->>S: open_page(browser_id, approved_url)
-    S->>S: Reauthorize handle and validate URL
-    S->>B: Use stored browser state
-    B-->>S: Page result
-    S-->>H: Structured result
-```
+*The opaque handle names browser state stored by the backend. Every later request still authenticates the caller, checks ownership and lifetime, and validates the requested URL before touching that state.*
 
 The handle names a piece of state. Permission still comes from authenticated context and a fresh authorization check. The handle should be opaque, hard to guess, bound to an owner or tenant, and governed by a clear lifetime. An expired handle produces a specific recovery result so the workflow can create a new context or ask the user.
 
@@ -327,6 +308,10 @@ A production MCP integration starts with a trusted server source and an explicit
 The server authenticates the request, authorizes the target resource, validates the tool contract, and executes through server-held credentials. Structured results are validated and filtered before the host adds useful evidence to model context. Explicit handles preserve application state. Optional extensions enter only where both sides need their additional lifecycle.
 
 Operations complete the picture: bounded retries, idempotent effects, traces, redaction, compatibility tests, supply-chain controls, canary releases, and rollback. MCP reduces custom integration work. The reliability and safety of the final system still come from the engineering on both sides of the protocol.
+
+![A production MCP connection moving from trusted server selection and self-contained requests through governed discovery, primitive choice, consent, domain enforcement, result validation, operations, and incident ownership](/content-assets/articles/article-mlops-llmops-mcp-tool-servers/production-mcp-policy-summary.png)
+
+*The protocol connects independently governed systems. Host policy controls disclosure and consent, server policy controls domain execution, and the owning service remains authoritative for its facts.*
 
 ## References
 

@@ -314,6 +314,11 @@
       "stdevpolarisordersprod"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+disk\\s+show\\b",
+      "^az\\s+storage\\s+share-rm\\s+show\\b",
+      "^az\\s+storage\\s+account\\s+show\\b"
+    ],
     "requireCommands": [
       "az"
     ],

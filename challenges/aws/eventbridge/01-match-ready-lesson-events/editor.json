@@ -1,0 +1,65 @@
+{
+  "language": "json",
+  "filename": "event-pattern.json",
+  "completionProfile": "aws-eventbridge-pattern",
+  "initialValue": "{\n  \"source\": [],\n  \"detail-type\": [],\n  \"detail\": {\n    \"tenantId\": [],\n    \"courseLevel\": []\n  }\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "source"
+        ],
+        "includes": "com.northstar.lessons",
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "publisher source"
+      },
+      {
+        "path": [
+          "detail-type"
+        ],
+        "includes": "LessonPublished",
+        "label": "publish event"
+      },
+      {
+        "path": [
+          "detail-type"
+        ],
+        "includes": "LessonRepublished",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "republish event"
+      },
+      {
+        "path": [
+          "detail",
+          "tenantId"
+        ],
+        "includes": "tenant-learning",
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "tenant boundary"
+      },
+      {
+        "path": [
+          "detail",
+          "courseLevel"
+        ],
+        "containsObject": {
+          "anything-but": "internal"
+        },
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "internal-course exclusion"
+      },
+      {
+        "path": [
+          "EventBusName"
+        ],
+        "exists": false,
+        "label": "no bus configuration inside event pattern"
+      }
+    ]
+  }
+}

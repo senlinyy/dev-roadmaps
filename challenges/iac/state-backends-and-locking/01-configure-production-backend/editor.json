@@ -1,0 +1,63 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "backend.tf",
+  "files": [
+    {
+      "filename": "backend.tf",
+      "initialValue": "terraform {\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "forbiddenAttributeNames": [
+      "access_key",
+      "secret_key",
+      "session_token"
+    ],
+    "blocks": [
+      {
+        "select": {
+          "file": "backend.tf",
+          "path": [
+            {
+              "type": "terraform"
+            },
+            {
+              "type": "backend",
+              "labels": [
+                "s3"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "valueEquals": "dp-terraform-state-prod"
+          },
+          {
+            "path": [
+              "key"
+            ],
+            "valueEquals": "orders/prod/terraform.tfstate"
+          },
+          {
+            "path": [
+              "region"
+            ],
+            "valueEquals": "eu-west-2"
+          },
+          {
+            "path": [
+              "use_lockfile"
+            ],
+            "valueEquals": true
+          }
+        ]
+      }
+    ]
+  }
+}

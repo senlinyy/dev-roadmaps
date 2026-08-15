@@ -31,7 +31,7 @@ Start with the object that needs protection: a training dataset. To a data scien
 
 Those parts create two different problems. The files need to form one dependable table state, even while pipelines are updating them. The organisation also needs to know what the table means, who may use it, who owns it, and what depends on it.
 
-At a high level, **Delta Lake makes ML data reliable and reproducible, while Unity Catalog makes that data controlled, discoverable, and traceable.**
+Delta Lake addresses the technical table state: it makes ML data reliable and reproducible. Unity Catalog addresses the organisational boundary around that state: it makes the data controlled, discoverable, and traceable.
 
 Delta Lake answers questions about the table itself:
 
@@ -50,9 +50,9 @@ Unity Catalog answers organisational questions around that table:
 
 In plain language, **Delta Lake is the reliable table layer. Unity Catalog is the governance layer around those tables.** The complete path follows one training dataset through both layers: from its physical files, to a governed table, to a validated release that a training run can recover later.
 
-![Delta Lake provides reliable versioned tables while Unity Catalog surrounds them with names, permissions, ownership, discovery, lineage, and audit](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/delta-lake-unity-catalog-two-layers.png)
+![Delta Lake protects reliable table state while Unity Catalog governs how an exact training dataset is named, authorized, owned, discovered, and traced](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/delta-lake-unity-catalog-two-layers.png)
 
-*Delta Lake protects the technical state of each table. Unity Catalog applies organisational controls across the tables, pipelines, people, and models that use that state.*
+*Delta Lake provides atomic commits, schemas, versions, and retained time travel. Unity Catalog adds names, permissions, ownership, lineage, audit, discovery, and tags around that reliable state.*
 
 Consider a training table called `prod_ml.training.churn_examples`. Delta Lake can identify version `842` as one complete historical state of that table. Unity Catalog can grant a production training service permission to read it, identify the owning team, and trace the table back to its upstream data.
 
@@ -311,21 +311,9 @@ Suppose a production training job asks for `prod_ml.training.churn_examples` at 
 4. Delta Lake identifies the data files that form that complete table state.
 5. The query produces lineage and audit evidence under the authorized identity.
 
-```mermaid
-sequenceDiagram
-    participant J as Training job
-    participant U as Unity Catalog
-    participant D as Delta Lake
-    participant S as Cloud storage
+![A Databricks training job requests an exact table version, passes Unity Catalog authorization, resolves the Delta transaction-log state, reads its retained files, and records governed evidence](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/exact-governed-snapshot.png)
 
-    J->>U: Read governed table at version 842
-    U->>U: Check identity and privileges
-    U->>D: Resolve authorized Delta table
-    D->>D: Resolve transaction-log version 842
-    D->>S: Read the files in that snapshot
-    S-->>J: Return the authorized table state
-    U-->>U: Record lineage and audit context
-```
+*Version `842` identifies the committed table state. Rebuilding that state later also depends on retained data files, the historical feature logic, and the validation evidence attached to the training input.*
 
 The sequence explains the division of responsibility. Unity Catalog decides whether the request may reach the asset. Delta Lake decides which files form the requested table state.
 
@@ -366,10 +354,6 @@ The contract may live partly in catalog comments and tags, partly in reviewed so
 ### Choose A Response For Each Data-Quality Failure
 
 A production pipeline should decide what to do after a rule fails. The consequence to training data guides that decision.
-
-![A data contract failure can be measured, dropped from the main target, preserved through a separate quarantine flow, or used to fail the target flow](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/data-contract-response-path.png)
-
-*Each branch represents a separate response chosen from the risk. A warning keeps the row and measures the problem. A drop protects the main target. A separate quarantine flow preserves rejected records for repair. A failed target flow prevents publication of that candidate.*
 
 An unexpected but valid channel might remain in the table while the team measures its frequency. A row without `customer_id` cannot join to features, so the main target can drop it while another flow writes it to quarantine. An impossible binary label such as `7` suggests a broken mapping and should fail the label flow.
 
@@ -511,10 +495,6 @@ Rebuilding an exact training dataset means recovering the same rows and values t
 
 The first requirement is a published ordinary managed Delta table such as `prod_ml.training.churn_examples` at version `842`.
 
-![An exact training dataset requires the published Delta table version, retained data, code revision, run rules, and validation evidence](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/exact-training-dataset-rebuild.png)
-
-*The version identifies the table state. Retention keeps that state available. Historical code, configuration, time cutoffs, and validation evidence explain and verify the recovered rows.*
-
 ### Step 1: Recover The Published Table Version
 
 The model run should store the fully qualified table name and version. Verify that the version still exists, then read it explicitly through time travel.
@@ -623,9 +603,9 @@ Delta Lake gives every table a reliable committed state and historical version. 
 
 Unity Catalog surrounds this path. It gives the assets governed names, controls access, identifies owners, supports discovery, and records supported lineage and audit evidence.
 
-![Unity Catalog governs the complete path from source data through Delta state, a data contract, a Lakeflow candidate, a publication job, and training evidence](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/governed-ml-data-complete-path.png)
+![The governed Databricks ML data path connects source events, Delta tables, data contracts, Lakeflow validation, reviewed publication, and a training run pinned to one table version](/content-assets/articles/article-mlops-mlops-infrastructure-databricks-governed-ml-data/governed-ml-data-path.png)
 
-*Unity Catalog governs every stage. The contract controls meaning and quality. The publication boundary creates a managed Delta version that training can pin and an investigator can recover.*
+*Unity Catalog governs access, ownership, lineage, and audit across the path. The rebuild evidence preserves the table version, code revision, feature-time rules, and validation report needed to explain the training dataset.*
 
 The result is more than a folder of training files. It is a named, authorised, versioned, explained, and traceable production asset.
 

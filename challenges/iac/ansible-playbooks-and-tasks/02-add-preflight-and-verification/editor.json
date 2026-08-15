@@ -1,0 +1,88 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Deploy orders web\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Render orders configuration\n      ansible.builtin.template:\n        src: orders.conf.j2\n        dest: /etc/orders/orders.conf\n"
+    },
+    {
+      "filename": "templates/orders.conf.j2",
+      "initialValue": "listen={{ orders_port }}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "pre_task",
+          "module": "assert"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.assert",
+              "that"
+            ],
+            "minItems": 2
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "task",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.template",
+              "dest"
+            ],
+            "equals": "/etc/orders/orders.conf"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "post_task",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "status_code"
+            ],
+            "equals": 200
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "templates/orders.conf.j2"
+      }
+    ]
+  }
+}

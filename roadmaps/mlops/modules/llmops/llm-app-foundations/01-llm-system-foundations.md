@@ -26,7 +26,7 @@ aliases:
 12. [Review The Path From User Request To Final Action](#review-the-path-from-user-request-to-final-action)
 13. [References](#references)
 
-At a high level, a **large language model application** is software that uses a model to interpret information or propose a response inside a controlled product workflow. The model supplies flexible language judgement. The surrounding application supplies trusted data, permissions, tools, state, validation, measurement, and recovery.
+A model can draft a useful answer, while a production feature also needs trusted inputs and permission to act. It must validate the result and recover from failure. A **large language model application** places the model's language judgement inside that controlled workflow. Application software manages the tools and state, measures what happened, and applies safeguards around each boundary.
 
 This distinction explains why a polished prototype can still be far from production. A model may produce a convincing answer from one prompt. A real service also needs to know who made the request, which facts are current, which actions are permitted, what happened after a timeout, and whether a new release improves the user outcome.
 
@@ -50,27 +50,9 @@ After confirmation, the orchestrator exposes a separate write tool, `reroute_ord
 
 The application validates that outcome, stores the committed state, and returns the response. A trace records the model and tool steps. Later, the final delivery outcome can show whether the reroute actually succeeded and can supply a new evaluation case if the interaction failed.
 
-```mermaid
-sequenceDiagram
-    participant U as Customer
-    participant A as LLM application
-    participant M as Model interface
-    participant O as Order service
-    U->>A: Ask for status and reroute
-    A->>A: Authenticate, load policy and state
-    A->>M: Instructions, request, and available read tool
-    M-->>A: Request lookup_order
-    A->>O: Authorized order lookup
-    O-->>A: Current status and eligible pickup point
-    A->>M: Trusted tool result
-    M-->>A: Explain status and request confirmation
-    U->>A: Confirm pickup point
-    A->>O: Idempotent reroute request
-    O-->>A: Committed transaction
-    A->>M: Confirmed domain result
-    M-->>A: Structured final response
-    A-->>U: Validated confirmation
-```
+![A nine-step delivery-support request in which the application authenticates the customer, the model requests an order lookup, confirmation gates the write action, and the order service commits the reroute once.](/content-assets/articles/article-mlops-llmops-llm-systems-2026/one-request-through-llm-system.png)
+
+*The read path can explain current status without changing anything. Only explicit confirmation opens the controlled write path, where application policy and an idempotency key protect the order-service transaction.*
 
 Responsibility for this interaction is distributed across the system. The model API handles generation and tool requests. Application code owns identity and authorization. The order service owns business truth and the transaction. The orchestrator owns progress and recovery. Evaluation and observability show whether the complete system behaves well.
 
@@ -142,6 +124,19 @@ Conversation history provides useful context; application state remains authorit
 
 Long histories also create cost and distraction. Store authoritative facts in application state, keep recent conversational details that affect the next decision, and retrieve older evidence through stable references. This approach lets the model see a compact working view while the full audit history remains available elsewhere.
 
+```mermaid
+flowchart TD
+    Goal["Current model decision<br/>(one bounded job)"] --> Instructions["Instructions<br/>(role, boundaries, and completion rules)"]
+    Goal --> Runtime["Trusted runtime facts<br/>(identity, policy, and current state)"]
+    Goal --> Retrieval["Retrieved evidence<br/>(current, authorised, and source-labelled)"]
+    Goal --> History["Relevant conversation<br/>(recent details needed for this step)"]
+    Instructions --> Assemble["Context assembly<br/>(order, budget, and trust labels)"]
+    Runtime --> Assemble
+    Retrieval --> Assemble
+    History --> Assemble
+    Assemble --> Model["Model request<br/>(compact working view)"]
+```
+
 ## Connect The Application To The Model Through One Interface
 
 <!-- section-summary: The model interface combines model choice, instructions, input items, structured outputs, and tool requests into a versioned contract. -->
@@ -189,6 +184,10 @@ This check illustrates two validation layers. Zod verifies the response shape. T
 <!-- section-summary: Tools let a model request information or actions, while trusted application code retains execution, credentials, authorization, and transaction control. -->
 
 A **tool** is a named capability described with a purpose and an input schema. The model can request a tool; the runtime decides whether and how to execute it. This distinction is the foundation of safe tool use.
+
+![A trust-boundary diagram showing untrusted requests and retrieved content influencing a model proposal, followed by five application checks before the order service can commit a reroute.](/content-assets/articles/article-mlops-llmops-llm-systems-2026/model-proposal-permission-boundary.png)
+
+*The model proposes business arguments, but trusted code restores identity, verifies policy and confirmation, and creates the idempotency key. A failed check blocks the write tool; a passed gate reaches the authoritative service and durable state.*
 
 ### Use Read Tools To Fetch Current Facts
 
@@ -381,7 +380,7 @@ Rollback must match the changed layer. A prompt regression may restore an earlie
 
 The framework separates stable application responsibilities from products that change over time. This lets a team adopt managed services or open-source components without losing sight of identity, state, authority, and release evidence. The following choices illustrate how widely used stacks fit those responsibilities.
 
-At the model-interface layer, common managed choices include OpenAI's Responses API, Anthropic's Messages API, Google models through the Gen AI SDK and Vertex AI, and Amazon Bedrock's Responses, Messages, or Converse interfaces. These APIs expose related primitives with different request objects, state options, tool integrations, and data controls. Choose from measured task fit, compliance, regional availability, latency, cost, and operational support.
+At the model-interface layer, common managed choices include OpenAI's Responses API, Anthropic's Messages API, Google models through the Gen AI SDK and Gemini Enterprise Agent Platform, and Amazon Bedrock's Responses, Messages, or Converse interfaces. These APIs expose related primitives with different request objects, state options, tool integrations, and data controls. Choose from measured task fit, compliance, regional availability, latency, cost, and operational support.
 
 For application contracts, JSON Schema is the shared foundation. TypeScript teams commonly validate with Zod; Python teams often use Pydantic. Provider-native structured output and strict tool schemas constrain generation, while application validators and domain services verify meaning.
 
@@ -430,6 +429,10 @@ Review an LLM architecture by following one authenticated request from its input
 An unclear answer reveals a real design gap. Missing source identity points to context. A tool with broad credentials points to action control. Lost progress points to state and orchestration. A regression that reaches every user points to evaluation or release practice.
 
 That is the foundation of a production LLM application: probabilistic model judgement inside an engineered path whose information, authority, lifecycle, evidence, and recovery remain understandable.
+
+![A four-part production LLM system review linking Prepare, Ask, Act, and Improve around an authenticated request, with safety controls spanning every responsibility.](/content-assets/articles/article-mlops-llmops-llm-systems-2026/production-llm-system-review.png)
+
+*Review one request across the four responsibilities: control the information supplied to the model, constrain its response contract, keep real effects inside trusted services, and use release evidence to improve the next approved behaviour bundle.*
 
 ## References
 

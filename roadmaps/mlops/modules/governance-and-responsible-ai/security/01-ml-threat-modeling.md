@@ -34,7 +34,7 @@ aliases:
 ## What A Threat Model Does
 <!-- section-summary: A threat model explains how a plausible adversary could harm an ML system and how engineering controls interrupt that path. -->
 
-At a high level, **threat modeling** is a structured way to ask how someone could harm a system before the harm occurs. The team maps what it values, who might attack it, which interfaces or dependencies provide a path, and which controls prevent, detect, contain, and recover from that path.
+Before releasing an ML system, the team needs to know which assets an attacker could reach and which product actions could cause harm. **Threat modeling is the structured process for answering those questions before the harm occurs.** The team maps what it values, possible attackers, available paths, and the controls that prevent, detect, contain, and recover from attacks.
 
 Machine learning keeps the ordinary software risks and adds new ways to change behaviour. Attackers can compromise an API credential, dependency, container, object store, or cloud role. They can also manipulate training examples, hide a trigger inside a model, craft inputs around a decision boundary, infer private training information, or copy useful model behaviour through repeated queries.
 
@@ -53,6 +53,10 @@ flowchart TD
     E --> F["Verification Evidence<br/>(tests, telemetry, and release gates)"]
     F --> G["Security Decision<br/>(accept, change, restrict, or stop)"]
 ```
+
+![Two attack paths in an automated image-inspection system, comparing model artifact substitution with a visual backdoor and showing the different controls needed for the same unsafe outcome](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/two-attack-paths-one-harm.png)
+
+*Artifact substitution and a visual backdoor can both let an unsafe item pass, but their attack paths require different verification evidence.*
 
 ## Learn The Six Core Concepts
 <!-- section-summary: Assets, adversaries, attack surfaces, trust boundaries, abuse cases, and controls give the review a shared vocabulary. -->
@@ -154,6 +158,10 @@ New sources and large historical backfills need a named reviewer. The same appli
 Feedback loops create a shorter poisoning path. A recommendation system that treats every click as positive feedback can be manipulated by bots. A support classifier trained directly from operator corrections can absorb a malicious or mistaken label. Apply maturity windows, provenance, abuse filtering, sampling review, and canary evaluation before feedback enters a production training set.
 
 Backdoor tests need targeted thinking. Inspect suspicious clusters and rare triggers, compare performance on clean and triggered validation sets, and check whether one source contributes disproportionate influence. Preserve the source snapshot and training environment so responders can reproduce the model and remove the first compromised boundary.
+
+![A compromised supplier account moving a visual backdoor through upload, labels, a training snapshot, and release, with preventive, detective, containment, recovery, and proof controls](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/visual-backdoor-control-layers.png)
+
+*The visual-backdoor abuse case connects one attacker path to prevention, detection, containment, clean recovery, and tests that prove the trusted model has been restored.*
 
 ## Secure Notebooks Training And The Supply Chain
 <!-- section-summary: Training security covers code execution, dependencies, serialized models, compute identity, network reach, secrets, and third-party artifacts. -->
@@ -342,6 +350,10 @@ ML threat modeling starts with the product decision and follows data and control
 Use STRIDE to keep ordinary software threats visible. Use NIST's adversarial ML taxonomy and MITRE ATLAS to discover ML attack families and documented techniques. Convert those lenses into concrete local abuse cases.
 
 The production result is a set of layered controls with evidence. Identity, isolation, provenance, signatures, registry policy, behaviour tests, detection, containment, and clean recovery each interrupt part of an attack path. Before release, the responsible owners must verify those controls and demonstrate that operators can restore a trusted state.
+
+![A threat-modeling summary from system decision through assets, adversary capability, abuse case, controls, and evidence to release outcomes and a production incident recovery loop](/content-assets/articles/article-mlops-governance-and-responsible-ai-ml-threat-modeling/threat-modeling-recovery-summary.png)
+
+*A production threat model binds local abuse cases to release outcomes, then feeds incident containment, clean recovery, and regression evidence back into the next review.*
 
 ## References
 

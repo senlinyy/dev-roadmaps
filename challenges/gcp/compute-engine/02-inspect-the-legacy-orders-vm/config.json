@@ -1,0 +1,34 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "computeInstances": [
+        {
+          "name": "orders-legacy-01",
+          "projectId": "devpolaris-prod",
+          "zone": "europe-west2-b",
+          "status": "RUNNING",
+          "machineType": "e2-standard-2",
+          "network": "orders-prod",
+          "subnetwork": "orders-apps-europe-west2",
+          "serviceAccount": "orders-vm@devpolaris-prod.iam.gserviceaccount.com",
+          "internalIp": "10.42.18.31"
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-legacy-01", "europe-west2-b", "RUNNING", "e2-standard-2", "orders-prod", "orders-apps-europe-west2", "orders-vm@devpolaris-prod.iam.gserviceaccount.com", "10.42.18.31"],
+    "requireCommandPatterns": ["^gcloud\\s+compute\\s+instances\\s+describe\\b"],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 1,
+    "loose": true
+  }
+}

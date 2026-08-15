@@ -28,7 +28,7 @@ id: "article-mlops-llmops-ci-and-regression"
 
 <!-- section-summary: An agent regression occurs after a change causes previously accepted behaviour to fail, even if the final response still sounds convincing. -->
 
-At a high level, an **agent regression** means that a behaviour which previously met its requirements now fails after a change. The change could affect a prompt, model, tool schema, retrieval system, orchestrator, safety policy, or grader. The lost behaviour might be answer quality, correct tool use, approval handling, recovery from an error, or respect for a cost limit.
+A prompt or tool-schema update can leave the application running while silently removing a behaviour that used to work. This is an **agent regression**: a previously acceptable behaviour now fails. The lost behaviour might involve answer quality, correct tool use, approval handling, error recovery, or respect for a cost limit, and the responsible change may sit in the model, retrieval system, orchestrator, safety policy, or grader.
 
 This idea comes from ordinary software testing, with one important addition. An agent produces both an answer and a path through a changing environment. A useful regression suite therefore checks the outcome and the path. It reruns stable cases against a candidate version, compares the evidence with an accepted baseline, and turns the differences into a release decision.
 
@@ -48,6 +48,10 @@ A text snapshot compares the new response with a stored response. That technique
 
 Consider an agent that must check a refund policy and request approval before issuing a credit. A final-answer check may accept “The refund was approved.” The trace could reveal that the agent read an expired policy, skipped approval, received an error from the payment tool, and reported success anyway. The words alone hide the safety and state failures.
 
+![A side-by-side trace comparison showing how a convincing refund answer can hide skipped policy evidence, missing approval, a failed payment effect, and a false success claim](/content-assets/articles/article-mlops-llmops-ci-and-regression/refund-regression-trace-diff.png)
+
+*The first meaningful divergence in a normalized trace explains why the candidate regressed even when its final sentence still sounds convincing.*
+
 A useful agent regression case can examine several kinds of evidence:
 
 - the final outcome in the authoritative system;
@@ -64,7 +68,7 @@ The suite does not demand one identical trajectory for every run. It protects th
 
 <!-- section-summary: Layered suites place fast deterministic checks close to development and reserve slower live evaluation for broader system evidence. -->
 
-One eval suite rarely provides every kind of evidence at a practical speed. In essence, a **layered suite** gives each question to the cheapest environment capable of answering it reliably. Fast contract checks catch basic breakage during development. Full agent cases test decisions and trajectories. Live integration checks confirm that external providers and deployed services still behave as expected.
+One eval suite rarely provides every kind of evidence at a practical speed. A **layered suite** gives each question to the least expensive environment capable of answering it reliably. Fast contract checks catch basic breakage during development. Full agent cases test decisions and trajectories. Live integration checks confirm that external providers and deployed services still behave as expected.
 
 The layers form a progression from controlled evidence to realistic evidence. Higher layers usually cost more and vary more. Lower layers run frequently and point to a narrow defect. A release decision combines them without pretending that one score represents the whole system.
 
@@ -103,6 +107,10 @@ Agent systems mix deterministic software with stochastic model behaviour. **Dete
 The practical rule is simple: use exact assertions for exact requirements, then use repeated evidence for variable behaviour.
 A required approval, forbidden tool, schema field, effect ledger, or maximum retry count is a contract.
 Semantic helpfulness, path efficiency, and recovery quality often need a rubric or model judge.
+
+![A comparison of deterministic contract gates with repeated stochastic quality trials, including the compatible-baseline rule and the article's billing-policy example](/content-assets/articles/article-mlops-llmops-ci-and-regression/deterministic-and-stochastic-gates.png)
+
+*One controlled run can prove a hard invariant, while variable quality needs paired repeated trials, uncertainty, and a baseline produced by the same measurement system.*
 
 ```mermaid
 flowchart TD
@@ -462,6 +470,10 @@ Before adding a production case, confirm that the trace is complete and the outc
 The new case should fail against the affected version. This reproduction step proves that the fixture captures the defect. After the repair, the case joins the frozen regression set or a risk-specific suite. OpenAI's eval guidance, LangSmith datasets, and MLflow evaluation datasets all support this continuous path from observed behavior to reusable offline evidence.
 
 CI regression therefore operates as a learning system. The dataset remembers important failures. Traces explain the path. Graders encode the acceptance rules. Baselines define accepted behavior under a compatible bundle. Gates turn that evidence into a release decision, and production supplies the next set of unknowns.
+
+![A complete CI regression system from a versioned evaluation bundle through tiered evidence, blocker and budget gates, release reporting, production feedback, repair, and staged verification](/content-assets/articles/article-mlops-llmops-ci-and-regression/ci-regression-release-system-summary.png)
+
+*The release decision stays reviewable when the evaluation bundle is pinned, incompatible baselines are rerun, hard blockers remain separate from statistical budgets, and production failures return as reproducible cases.*
 
 ## References
 

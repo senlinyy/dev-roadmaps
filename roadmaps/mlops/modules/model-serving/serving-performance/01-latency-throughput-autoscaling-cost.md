@@ -31,7 +31,7 @@ id: "article-mlops-model-serving-latency-throughput-autoscaling-cost"
 ## What Inference Cost And Scale Mean
 <!-- section-summary: Inference cost and scale describe how a production service turns finite compute capacity into timely accepted predictions under changing demand. -->
 
-At a high level, **inference scale** is the ability to keep serving predictions as demand changes. **Inference cost** is the money spent to produce those usable results. The two belong together because a service can meet its latency target by holding a large amount of idle capacity, or save money by running close to its limit and make users wait in long queues.
+An endpoint may answer quickly during normal traffic and form a long queue after a launch multiplies demand. Keeping extra replicas ready can protect latency, although idle capacity still costs money. **Inference scale** is the ability to keep serving predictions as demand changes, and **inference cost** is the money spent to produce those usable results. Teams must manage them together because either extreme can damage the product.
 
 Imagine a product-ranking endpoint with four ready model replicas. During ordinary traffic, requests arrive steadily and each replica has time to process them. A promotion suddenly doubles the arrival rate. Requests now reach the service faster than the replicas can finish them. A queue grows, response time rises, clients retry, and the retries add more traffic. The model itself may still take the same 30 milliseconds to calculate a ranking. The production system around it has run out of timely capacity.
 
@@ -105,6 +105,10 @@ L_{total} = L_{admission} + L_{queue} + L_{features} + L_{preprocess} + L_{infer
 \]
 
 The exact stages depend on the service. A recommendation endpoint may fetch candidates and online features. A vision endpoint may decode and resize an image. An LLM endpoint separates time to first token from inter-token latency and total generation time.
+
+![Seven stages in an inference request from the service timer and admission through queueing, input preparation, model execution, output handling, and a usable result, with latency, throughput, and percentile views.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/request-path-latency.png)
+
+*Measure the full request boundary and keep accepted latency beside throughput, request-shape percentiles, and rejection, because a fast model alone does not prove a fast or useful service.*
 
 ```mermaid
 flowchart TD
@@ -303,6 +307,10 @@ If the complete scale-up path takes four minutes, a 30-second burst has ended lo
 Scale-down needs patience. Removing a recently warmed replica after one quiet interval can start an oscillation: traffic rises, pods warm, the signal falls, pods leave, and the queue rises again. Stabilization windows and conservative scale-down policies give the system time to reveal the effect of a change.
 
 Each controller needs an explicit responsibility. A model server may tune batches, an HPA changes pods, and a cluster autoscaler changes nodes. Their observation windows and limits should reflect that order. Several controllers reacting to the same delayed symptom can amplify oscillation.
+
+![A safe per-replica operating limit before the saturation knee, connected to bounded admission and the delayed path from an autoscaling signal to a ready replica.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/safe-operating-point.png)
+
+*The tested inflight limit and bounded queue protect current requests; a warm floor and headroom bridge the separate delay before autoscaling can add ready capacity.*
 
 ## Choose An Autoscaler From Its Signal And Serving Platform
 <!-- section-summary: HPA, KEDA, Knative, and KServe operate at different layers, so the workload and scaling signal determine which component should own the decision. -->
@@ -504,6 +512,10 @@ Rollback restores a known-safe combination of limits, scaling policy, serving im
 Inference scaling is the controlled relationship among arriving work, per-request time, safe concurrency, finite capacity, queueing, delayed autoscaling, and spend. Latency shows the experience of one request. Throughput shows completed work. Concurrency and queues show work in progress. Saturation explains the limit. Cost per accepted result shows the economic consequence.
 
 Measure the whole request path and representative workload. Find the safe operating point for one replica. Bound the queue and define overload behaviour. Choose an autoscaling component whose signal matches the missing capacity, then account for its startup delay. Prove peak load, capacity loss, recovery, and unit cost before expanding the release.
+
+![Capacity-release workflow from a representative workload contract and one-replica tests through a safe operating point, capacity plan, staged release, operating baseline, four evidence gates, and complete recovery.](/content-assets/articles/article-mlops-model-serving-latency-throughput-autoscaling-cost/capacity-release-summary.png)
+
+*A capacity change is ready for release only after service, resource, control, and economic evidence pass together, with a tested route back to the previous complete configuration when any limit fails.*
 
 ## References
 

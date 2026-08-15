@@ -38,7 +38,7 @@ aliases:
 ## What Continuous Delivery Means For An ML Service
 <!-- section-summary: Continuous delivery automates the path from a reviewed change to a production-ready model release while preserving evidence and production control. -->
 
-At a high level, **continuous delivery is a repeatable path that keeps a tested release ready for production**. A change enters the path, automated checks gather evidence, the same immutable release moves through staging, and production waits behind a controlled decision.
+A model change should not need an improvised sequence of copying files and rerunning checks before every release. **Continuous delivery provides a repeatable path that keeps a tested release ready for production.** Automated checks gather evidence, the same immutable release moves through staging, and production waits behind a controlled decision.
 
 The word *continuous* describes readiness and repeatability. Production release frequency can still match the product's risk. A team may deliver several low-risk internal services each day and release a regulated decision model less often. Both can use continuous delivery if every candidate follows the same automated path and remains ready for an authorized release decision.
 
@@ -104,6 +104,10 @@ flowchart TD
 
 Many ML teams choose continuous delivery with a production approval gate. Offline evaluation has uncertainty, labels may mature slowly, and a threshold change can affect real people or operational queues. A reviewer can examine segment results, intended use, rollback readiness, and the exact traffic scope before granting authority.
 
+![Continuous integration and continuous delivery compared by their questions and outcomes, followed by human-approved delivery or policy-authorized continuous deployment](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/ci-delivery-deployment.png)
+
+*CI integrates a change, continuous delivery proves that an exact release is production-ready, and continuous deployment automates the final production authority decision.*
+
 Full continuous deployment still has a place. A low-consequence internal ranking model with strong automated tests and rapid outcome feedback may justify it. The choice should follow the harm and reversibility of a wrong decision. The initials *CD* alone never answer that risk question.
 
 ## What Can Start A Delivery Pipeline
@@ -154,6 +158,10 @@ flowchart TD
     class C,D,E,F release
     class G,H verify
 ```
+
+![Serving-code, model-version, feature-or-policy, and capacity changes routed to different release and desired-state work](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/change-to-delivery-path.png)
+
+*The changed boundary determines whether delivery builds a new image, pins a new model, reviews a new behavioural identity, or updates only environment desired state.*
 
 ## How Training And Delivery Work Together
 <!-- section-summary: Training and delivery are separate control paths so production receives the exact model that earned evaluation and approval. -->
@@ -471,24 +479,26 @@ jobs:
     outputs:
       image_digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify model evidence and release contracts
         run: |
           ./delivery verify-candidate "$MODEL_URI"
           ./delivery test-release "$MODEL_URI"
         env:
           MODEL_URI: ${{ inputs.model_uri }}
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           push: true
           tags: ghcr.io/example/model-service:${{ github.sha }}
-      - uses: actions/attest@v4
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/example/model-service
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -500,7 +510,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           MODEL_URI: ${{ inputs.model_uri }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-manifest
           path: release.json
@@ -515,8 +525,10 @@ jobs:
       attestations: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
       - name: Verify the image provenance at its exact digest
@@ -538,8 +550,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
       - run: ./delivery deploy production release.json --traffic-scope initial
@@ -547,6 +561,10 @@ jobs:
 ```
 
 The package job alone can push packages, create attestations, and write linked-artifact metadata. Staging receives read access for the private image and its attestation. Production receives source read access and OpenID Connect authority for the provider deployment path.
+
+The `uses` entries are pinned to full commit SHAs because action code executes with the job's credentials. The version comments keep the reviewed releases visible to people and to dependency-update tooling. Dependabot or Renovate should propose later action releases through reviewed pull requests instead of allowing a movable major-version tag to change a production workflow without review.
+
+Each checkout also sets `persist-credentials: false`. These jobs need the repository files, but they never push a later Git change. Removing the checkout token from Git configuration keeps subsequent build, verification, and deployment commands from reaching a credential they do not need. That boundary is especially important in the production job, where the deploy command already receives its narrowly scoped provider identity through OpenID Connect.
 
 The staging verification extracts the full image reference from `release.json`. Its regular expression requires a SHA-256 digest, and GitHub CLI verifies the provenance subject plus the signing repository. Authentication to GHCR lets the CLI retrieve a private image manifest. A missing digest, invalid attestation, or repository mismatch stops the job before the deploy command.
 
@@ -626,11 +644,16 @@ The training path creates a concrete model candidate. The delivery path combines
 
 The standard is practical: every production prediction should trace to the exact release that earned its evidence and authority, and the team should be able to restore a known-good release through the same trusted control path.
 
+![A model service delivery loop from intake and immutable packaging through staging proof, scoped authority, controlled admission, immediate and delayed evidence, and complete-release recovery](/content-assets/articles/article-mlops-mlops-infrastructure-cd-for-model-services/model-service-cd-summary.png)
+
+*Delivery uses immediate operational evidence and later mature-label evidence to govern expansion while the complete retained release remains available for recovery.*
+
 ## References
 
 - [AWS: What is continuous delivery?](https://aws.amazon.com/devops/continuous-delivery/)
 - [GitHub Actions: Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [GitHub Actions: Artifact attestations for build provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
+- [GitHub Actions: Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)
 - [GitLab CI/CD protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
 - [GitLab deployment safety](https://docs.gitlab.com/ci/environments/deployment_safety/)
 - [Jenkins Pipeline](https://www.jenkins.io/doc/book/pipeline/)

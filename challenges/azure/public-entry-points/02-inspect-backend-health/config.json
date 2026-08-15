@@ -286,6 +286,9 @@
       "HTTP 503"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+network\\s+application-gateway\\s+show-backend-health\\b"
+    ],
     "requireCommands": [
       "az"
     ],

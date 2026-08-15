@@ -1,0 +1,95 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders web\n  hosts: all\n  tasks:\n    - name: Install nginx\n      ansible.builtin.command: apt-get install -y nginx\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "plays": [
+      {
+        "select": {
+          "file": "site.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "become"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "equals": "nginx"
+          },
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "state"
+            ],
+            "equals": "present"
+          },
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "update_cache"
+            ],
+            "equals": true
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "service"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "name"
+            ],
+            "equals": "nginx"
+          },
+          {
+            "path": [
+              "ansible.builtin.service",
+              "state"
+            ],
+            "equals": "started"
+          },
+          {
+            "path": [
+              "ansible.builtin.service",
+              "enabled"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "command",
+      "shell",
+      "raw"
+    ]
+  }
+}

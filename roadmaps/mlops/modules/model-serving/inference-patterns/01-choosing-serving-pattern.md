@@ -30,7 +30,7 @@ aliases:
 ## What A Serving Pattern Decides
 <!-- section-summary: A serving pattern defines how a prediction reaches a product decision, including timing, input arrival, result delivery, failure behavior, and runtime ownership. -->
 
-At a high level, a **serving pattern** describes how a trained model delivers a prediction to the person or system that uses it. The model artifact is only one piece. The pattern also defines how work arrives, how long the consumer can wait, where the result goes, and what the product does after a failure.
+Training produces a model artifact, but the artifact still needs a path to the person or system that will use its prediction. A **serving pattern** describes that path. It defines how work arrives, how long the consumer can wait, where the result goes, and what the product does after a failure.
 
 Several familiar situations show why one pattern rarely suits every model:
 
@@ -190,6 +190,10 @@ flowchart TD
     class A,C,E,G,I input
     class B,D,F,H,J,K process
 ```
+
+![Six concrete product promises map to synchronous online, asynchronous queue, batch, streaming, edge, and hybrid serving patterns](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-product-promises.png)
+
+*The useful pattern follows the actor, deadline, and arrival shape: a payment caller waits, a document enters a durable job queue, a known population runs as a batch, events update state, a disconnected device runs locally, and hybrid work crosses deliberate boundaries.*
 
 ## Use Freshness And Computation Time To Narrow The Choice
 <!-- section-summary: Source-data age, prediction age, processing duration, and result deadline remove serving patterns unable to satisfy the product promise. -->
@@ -402,6 +406,10 @@ flowchart TD
     class B,C,D,E process
 ```
 
+![Five primary serving patterns compared by their health signal, failure unit, and recovery responsibility, with hybrid systems inheriting every path they combine](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-operating-work.png)
+
+*Online, queue, batch, streaming, and edge contracts give on-call teams different clocks and recovery units. A hybrid owns all of the duties created by its component paths.*
+
 ## Revisit The Choice As The Product Changes
 <!-- section-summary: Serving patterns are architecture decisions tied to product constraints, so new deadlines, traffic, features, costs, or device needs can justify a new boundary. -->
 
@@ -423,6 +431,10 @@ Migration should preserve prediction meaning. The old and new paths can run side
 Choosing a serving pattern means choosing how prediction work reaches a real decision. Synchronous online inference serves a caller waiting now. Asynchronous inference completes a durable individual job. Batch inference publishes results for a known population. Streaming inference updates state from continuing events. Edge inference runs near the data source. Hybrid inference divides one decision across useful boundaries.
 
 Start with the actor and action, then define the latest useful answer. Arrival shape, acceptable staleness, computation time, traffic, connectivity, privacy, hardware, and fallback remove unsuitable choices. Those requirements narrow the implementation. The remaining choice may be a managed endpoint, queue, warehouse, lakehouse, stream processor, Kubernetes serving layer, model server, or device runtime.
+
+![Six-step serving-pattern selection starts with the product actor and action, then evaluates deadline, arrival shape, freshness, constraints, and failure policy before choosing a delivery contract and runtime](/content-assets/articles/article-mlops-model-serving-choosing-serving-pattern/serving-pattern-selection-summary.png)
+
+*The delivery contract is a product promise. Runtime and tool selection comes after the team can state who acts, when the answer is useful, how work arrives, and what happens when the path fails.*
 
 ## References
 

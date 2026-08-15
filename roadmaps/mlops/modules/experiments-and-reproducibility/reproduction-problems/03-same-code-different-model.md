@@ -35,7 +35,7 @@ At 08:15, an ML engineer reviews the candidate produced by the nightly fraud-tra
 
 The engineer owns a concrete decision: approve the candidate, hold it, or rerun training before the deployment window. Success requires more than obtaining the old headline metric. The team needs to locate the first meaningful difference between the runs and show, through a controlled comparison, whether that difference explains the prepaid-card regression.
 
-At a high level, **the same code can produce a different model because training is an execution over data, state, software, and hardware**. A Git commit identifies source files. It says nothing by itself about which rows arrived, how they were split and ordered, which defaults were resolved, which native kernels ran, whether training resumed from a checkpoint, or how the final artifact was evaluated.
+A Git commit identifies source files, yet it says nothing about which rows arrived, how they were split, which defaults were resolved, which kernels ran, or whether training resumed from a checkpoint. **The same code can produce a different model because training executes over data, state, software, and hardware.**
 
 ```mermaid
 flowchart TD
@@ -49,6 +49,10 @@ flowchart TD
 ```
 
 The matching commit is valuable. It removes one large branch from the investigation. It is not a complete run identity.
+
+![A matching code commit above a checklist that identifies the first difference across the wider run contract](/content-assets/articles/article-mlops-experiments-and-reproducibility-same-code-different-model/same-commit-different-run-contract.png)
+
+*A matching commit proves one part of the run identity. The remaining rows reveal the larger contract that can change independently and must be compared before the team explains the new model.*
 
 ## Find The First Step Where The Runs Differ
 <!-- section-summary: The investigation follows the training path in order and tests the earliest changed layer before interpreting differences farther downstream. -->
@@ -75,7 +79,7 @@ This order is a diagnostic strategy, not a claim that data always causes the pro
 Use a known-good run as the baseline. The candidate is the unexpected run. Preserve both before launching more jobs. A blind rerun can change data arrival, worker scheduling, or hardware assignment again and create a third unexplained artifact.
 
 ## Define the Difference Before Investigating It
-<!-- section-summary: A useful incident statement names the affected output, comparison boundary, operational consequence, and evidence required for closure. -->
+<!-- section-summary: The incident statement names the affected output, comparison boundary, operational consequence, and evidence required for closure. -->
 
 “The model changed” is too broad. Any stochastic training run can produce different weight bytes. The team needs to describe the behavior that triggered concern.
 
@@ -86,7 +90,7 @@ A good incident statement contains four parts:
 - **Consequence:** which user or operational decision could change;
 - **Closure evidence:** what result would justify approval, correction, or another investigation step.
 
-For the payment model, a useful statement is:
+For the payment model, the investigation can start with this statement:
 
 ```yaml
 same_code_incident:
@@ -216,7 +220,7 @@ sha256sum uv.lock environment/uv-tree.txt environment/torch-env.txt
 
 Package differences are evidence of an alternative cause. They are not proof. Isolate them by running the same data, split, configuration, preprocessing artifact, and initial state in each environment.
 
-A useful example is a tabular pipeline whose source calls the same encoder and estimator. A library upgrade changes dtype coercion for a nullable column. The resulting tensor fingerprint changes before training starts. The environment replay should reproduce that feature difference without relying on final accuracy as the first clue.
+Consider a tabular pipeline whose source calls the same encoder and estimator. A library upgrade changes dtype coercion for a nullable column. The resulting tensor fingerprint changes before training starts. The environment replay should reproduce that feature difference without relying on final accuracy as the first clue.
 
 ## Inspect Hardware, Kernels, and Precision
 <!-- section-summary: Device type, precision mode, kernel selection, drivers, and floating-point reduction order can create numerical differences that grow during training. -->
@@ -293,7 +297,7 @@ resume_state:
     sampler: false
 ```
 
-The missing sampler state is a useful clue. Training can resume from the same weights and still consume examples in another order.
+The missing sampler state identifies another possible cause. Training can resume from the same weights and still consume examples in another order.
 
 Also distinguish **training checkpoints** from **activation checkpointing**. Training checkpoints persist state for later resume. Activation checkpointing saves memory by recomputing forward operations during backpropagation. PyTorch notes that activation checkpointing interacts with random-generator state, especially if code moves tensors to unexpected device types.
 
@@ -371,6 +375,10 @@ If the prepaid-card regression appears in the two jobs using the new snapshot, t
 Full training can be expensive. Use the cheapest test that preserves the suspected mechanism. Feature fixtures can isolate preprocessing. A few deterministic steps can expose order or kernel divergence. A reduced but representative dataset can test environment behavior. Confirm the final causal claim on the full relevant path before making a high-impact release decision.
 
 Avoid changing several controls in the “fix” run. If the team updates data, dependencies, topology, and seed together, a recovered metric supplies no explanation.
+
+![A two-by-two replay matrix showing a regression that follows the new data snapshot across old and new environments](/content-assets/articles/article-mlops-experiments-and-reproducibility-same-code-different-model/controlled-replay-matrix.png)
+
+*The matrix changes data and environment independently. Because the regression appears in both jobs using the new snapshot, the data path is the first supported cause and the environment is a weaker explanation.*
 
 ## Decide Whether the Difference Is Acceptable
 <!-- section-summary: The release decision considers causal confidence, prediction movement, important cohorts, runtime constraints, and the risk of the affected product action. -->
@@ -465,6 +473,10 @@ An unchanged source commit is one verified fact, not a guarantee of an identical
 Define the behavior that matters. Compare run paths from data to evaluation. Stop at the first meaningful divergence and isolate it through a controlled replay. Then decide whether the resulting behavior is safe and add a control at the layer that failed.
 
 This approach turns “the model changed” into an evidence-backed explanation and a concrete production improvement.
+
+![A five-stage investigation from defining the changed behavior through a release decision, followed by controls matched to the confirmed cause](/content-assets/articles/article-mlops-experiments-and-reproducibility-same-code-different-model/model-difference-to-production-control.png)
+
+*A complete investigation produces two outputs: an evidence-backed release decision and a preventive control placed beside the first divergence that caused the incident.*
 
 ## References
 

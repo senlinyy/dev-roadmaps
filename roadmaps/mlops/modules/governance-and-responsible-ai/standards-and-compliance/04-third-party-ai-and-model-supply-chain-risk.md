@@ -156,6 +156,10 @@ package manifests reveal technical dependencies. Data catalogs reveal external
 sources, while deployment manifests reveal live versions. Reconciliation links
 these signals to one governed component graph.
 
+![Studio Light comparison of a supplier list with the component graph for a support-prioritization workflow, including direct suppliers, fourth parties, data flows, control flows, and concentration risk](/content-assets/articles/article-mlops-governance-and-responsible-ai-third-party-ai-model-supply-chain-risk/component-graph-vs-supplier-list.png)
+
+*A component graph shows which external dependency affects each workflow stage, which supplier and fourth parties sit upstream, and where one shared provider can create concentration risk.*
+
 ## Set Due-Diligence Depth Before Adoption
 
 <!-- section-summary: Due diligence investigates the supplier and product before adoption, with depth based on decision influence, data access, privilege, opacity, substitutability, and failure impact. -->
@@ -302,6 +306,10 @@ use foundation models to the Secure Software Development Framework. It is
 intended for model producers, AI-system producers, and acquirers. Supplier
 evidence aligned to that profile can inform due diligence. The buyer still
 assesses the delivered component and local operating context.
+
+![Studio Light evidence path from a supplier language-support claim through scope checking, local assurance, observed evidence, gaps, and an adoption decision](/content-assets/articles/article-mlops-governance-and-responsible-ai-third-party-ai-model-supply-chain-risk/supplier-evidence-local-assurance.png)
+
+*Supplier evidence describes the external product boundary; local assurance tests the exact version, buyer data, configuration, workflow, and failure behavior before the adoption decision.*
 
 ## Put Risk Responsibilities Into The Supplier Contract
 
@@ -670,6 +678,10 @@ problem. Their shared purpose is operational control: the organization can
 identify a dependency, understand its effect, detect change, contain failure,
 preserve evidence, and withdraw it without abandoning the people and processes
 that rely on the product.
+
+![Studio Light summary of seven third-party AI governance jobs, a controlled response table for supplier changes, and distinct fallback, portability, exit, and retirement checks](/content-assets/articles/article-mlops-governance-and-responsible-ai-third-party-ai-model-supply-chain-risk/third-party-governance-summary.png)
+
+*The controls have separate jobs: identify the dependency, set review depth, test it locally, assign supplier responsibilities, bind the release, respond to change, and preserve a tested withdrawal path.*
 
 ## References
 

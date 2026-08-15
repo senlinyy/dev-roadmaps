@@ -28,7 +28,7 @@ aliases:
 14. [What to Carry Into Production](#what-to-carry-into-production)
 15. [References](#references)
 
-At a high level, workflows and agents are two ways to decide **what happens next** in an LLM application.
+Every multi-step LLM application must decide what happens after the current step. A **workflow** follows transitions defined by the developer, while an **agent** lets the model choose among approved next actions within application controls.
 
 A **workflow** puts that decision in application code. The software knows the allowed steps and moves the run through them. A model can still classify text, extract fields, or draft an answer inside a workflow step.
 
@@ -207,23 +207,9 @@ The loop explains how a model can make progress. Process crashes, day-long appro
 
 Consider an agent that books an appointment. The tool sends the booking request, and the provider creates the appointment. The worker crashes before saving the success result. After restart, a transcript-based loop sees no success message and may send the same request again.
 
-```mermaid
-sequenceDiagram
-    participant M as Model loop
-    participant R as Runtime
-    participant P as Booking provider
-    participant S as Durable state
+![An appointment write that commits before a worker crash, followed by a resumed run that queries the booking provider by effect ID and reconciles the authoritative result before considering a retry.](/content-assets/articles/article-mlops-llmops-workflows-and-agents/reconcile-appointment-after-crash.png)
 
-    M->>R: Propose booking with effect_id
-    R->>P: Create appointment
-    P-->>R: Appointment created
-    R--xS: Worker crashes before checkpoint
-    Note over R,S: Outcome is unknown to the resumed run
-    R->>P: Query by effect_id
-    P-->>R: Return existing appointment
-    R->>S: Record reconciled result
-    S-->>M: Continue with one confirmed effect
-```
+*A missing checkpoint leaves the resumed run with an unknown outcome, not proof of failure. The orchestrator queries the authoritative provider, records an existing appointment, or retries only after confirmed absence and policy revalidation.*
 
 The missing capability is **reconciliation**: checking the authoritative system to discover whether an uncertain effect already happened. Reconciliation requires a durable effect identity, a place to store uncertain state, and code that runs before any replay.
 
@@ -239,7 +225,7 @@ These responsibilities belong to the **orchestrator**, sometimes called the agen
 
 <!-- section-summary: The orchestrator is trusted software that assembles context, controls transitions and tools, enforces authority and budgets, checkpoints progress, and records the run outcome. -->
 
-An **orchestrator** is the software control plane around model calls. In essence, it decides what the model is allowed to see, choose, and affect at each point in the run. This operating layer is trusted application software.
+An **orchestrator** is the software control plane around model calls. It decides what the model is allowed to see, choose, and affect at each point in the run. This operating layer is trusted application software.
 
 Its first responsibility is **context assembly**. It selects the current objective, trusted application facts, recent evidence, relevant instructions, and permitted tool definitions. This context should come from governed sources and the current workflow state.
 
@@ -369,25 +355,9 @@ Read tools and write tools have different risk. A read tool retrieves evidence a
 
 An **interrupt** pauses a run and persists what it is waiting for. Human approval is one kind of interrupt. Missing customer input, a dependency outage, or a scheduled deadline can use the same lifecycle idea.
 
-```mermaid
-sequenceDiagram
-    participant M as Model
-    participant O as Orchestrator
-    participant A as Approver
-    participant T as Trusted service
-    participant S as Durable state
+![A controlled-effect approval path in which the orchestrator validates and checkpoints an exact proposal, records approval or rejection, revalidates current state after the pause, and lets only a passed revalidation reach the trusted service.](/content-assets/articles/article-mlops-llmops-workflows-and-agents/exact-effect-approval.png)
 
-    M->>O: Propose effect and arguments
-    O->>O: Validate schema, identity, policy, and current state
-    O->>S: Save proposal digest and interrupt
-    O-->>A: Request approval for exact effect
-    A-->>O: Approve, reject, or let expire
-    O->>O: Revalidate policy and proposal digest
-    O->>T: Execute with idempotency key
-    T-->>O: Committed, rejected, pending, or unknown
-    O->>S: Save authoritative result
-    O-->>M: Return typed observation
-```
+*Approval binds to one proposal digest and cannot bypass post-pause checks. A changed or invalid proposal stops before execution, while a valid proposal reaches the trusted service with server-held credentials and an idempotency key.*
 
 Approval should bind to the exact proposal. A refund approval can include the order, amount, currency, destination, policy version, and expiry. A material change to any field creates a new proposal and a new approval request.
 
@@ -623,6 +593,10 @@ Place an orchestrator around every production loop. It assembles context, valida
 Use multiple agents for genuine trust, context, execution, ownership, or parallel-work boundaries. Select runtime layers according to the control problem: direct APIs for bounded calls, an agent SDK for model-tool turns, LangGraph for explicit stateful graphs, and durable workflow engines for long business lifecycles.
 
 Evaluate the business outcome and the trajectory that produced it. The final answer, external effects, evidence, approvals, retries, stops, latency, and cost all belong to the quality contract.
+
+![Four alternative execution patterns—from one bounded model call through a multi-agent system—placed above shared orchestration controls and a release gate that checks outcome, trajectory, and the authoritative effect ledger.](/content-assets/articles/article-mlops-llmops-workflows-and-agents/workflow-agent-control-summary.png)
+
+*Choose the smallest pattern that fits the task rather than treating the four designs as a maturity ladder. Wherever adaptive control exists, trusted orchestration owns transitions, tools, checkpoints, budgets, reconciliation, and the evidence required for release.*
 
 ## References
 

@@ -1,0 +1,100 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure mixed web fleet\n  hosts: orders_web\n  become: true\n  gather_facts: false\n  tasks:\n    - name: Install nginx\n      ansible.builtin.command: install-nginx\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "plays": [
+      {
+        "select": {
+          "file": "site.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "gather_facts"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "when"
+            ],
+            "contains": "ansible_facts.os_family"
+          },
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "state"
+            ],
+            "equals": "present"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "dnf"
+        },
+        "paths": [
+          {
+            "path": [
+              "when"
+            ],
+            "contains": "ansible_facts.os_family"
+          },
+          {
+            "path": [
+              "ansible.builtin.dnf",
+              "state"
+            ],
+            "equals": "present"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "service"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.service",
+              "state"
+            ],
+            "equals": "started"
+          },
+          {
+            "path": [
+              "ansible.builtin.service",
+              "enabled"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "forbiddenModules": [
+      "command",
+      "shell"
+    ]
+  }
+}

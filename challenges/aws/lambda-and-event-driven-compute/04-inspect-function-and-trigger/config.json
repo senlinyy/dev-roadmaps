@@ -64,6 +64,10 @@
       "\"State\": \"Enabled\"",
       "\"BatchSize\": 10"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+lambda\\\\s+get-function-configuration\\\\b",
+      "^aws\\\\s+lambda\\\\s+list-event-source-mappings\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

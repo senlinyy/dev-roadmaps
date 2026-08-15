@@ -33,7 +33,7 @@ The run can still be unsafe.
 
 Suppose an upstream identifier changed from an integer to a prefixed string. The transformation accepted both types after converting them to text, so the job stayed green. The label join, however, matched only 62 percent of examples instead of its usual 96 percent. The final table contains valid columns and readable rows, yet more than one third of the outcomes are missing. A model trained on that table would learn from a distorted view of reality.
 
-This is the problem that **data validation** solves. At a high level, data validation asks whether a particular set of data is fit for a particular use. “The file exists” and “the SQL finished” are operational facts. “This dataset is safe to train on” is a stronger claim that needs evidence about the data itself.
+This is the problem that **data validation** solves. It asks whether a particular set of data is fit for a particular use. “The file exists” and “the SQL finished” are operational facts. “This dataset is safe to train on” is a stronger claim that needs evidence about the data itself.
 
 The intended use matters. A delayed outcome table may be acceptable for a monthly report and unusable for a training run scheduled this morning. One malformed online request can receive a client error while other requests continue. A broken label join across an entire training release should stop every new candidate model.
 
@@ -83,6 +83,10 @@ Three controls cross every layer:
 - **A publication gate** interprets the complete result set and controls whether a consumer can discover the dataset.
 
 These controls turn individual assertions into a dependable production system.
+
+![Seven validation layers covering source readiness, structure, meaning, relationships, time, distributions, labels, and leakage](/content-assets/articles/article-mlops-data-for-ml-systems-data-validation-for-ml-pipelines/seven-validation-layers.png)
+
+*Each layer answers a different safety question before the dataset can be considered for training.*
 
 ## Confirm the Source Is Ready
 <!-- section-summary: Readiness checks stop a pipeline from interpreting missing, stale, partial, or unreadable input as real business behaviour. -->
@@ -193,20 +197,6 @@ Three timestamps help expose the boundary:
 - the decision time says when the model would have predicted.
 
 For each historical example, feature availability should be at or before decision time. A refund may have an event date attached to the original purchase, yet the refund record only arrived ten days later. Joining by event date alone would leak that later knowledge into the earlier decision.
-
-```mermaid
-
-sequenceDiagram
-    participant E as "Historical example"
-    participant F as "Feature history"
-    participant V as "Temporal validator"
-
-    E->>V: "decision_at = 10:00"
-    F->>V: "feature available at 09:45"
-    V-->>E: "Eligible for the example"
-    F->>V: "corrected feature available at 11:30"
-    V-->>E: "Exclude from the 10:00 example"
-```
 
 Point-in-time joins implement this rule by selecting the latest eligible feature value for each decision. Validation then checks for future availability timestamps, missing historical matches, and unexpected changes in match coverage after late data or a backfill.
 
@@ -323,6 +313,10 @@ Severity comes from product impact. An incompatible serving schema usually block
 Row-level and dataset-level decisions also differ. After dropping one invalid record, the gate rechecks the remaining dataset. It must recompute row count, class balance, segment coverage, and any other assumptions affected by the removal.
 
 Publication should create a new immutable identity or move an atomic “approved” reference only after the decision passes. Training jobs consume that approved identity. Searching a mutable folder for the newest files could expose an unvalidated dataset.
+
+![A validation gate combining blocking and advisory checks and producing pass, quarantine, or publish-with-warning decisions](/content-assets/articles/article-mlops-data-for-ml-systems-data-validation-for-ml-pipelines/validation-decision-gate.png)
+
+*The gate turns check results into an explicit publication decision and records the report, owner, and rule version behind it.*
 
 ## Keep Bad Data Out, Repair It, And Rebuild Affected Outputs
 <!-- section-summary: Recovery preserves the rejected data, fixes the responsible boundary, rebuilds a new version, and proves that the original contract passes. -->
@@ -475,6 +469,10 @@ The publication gate waits for every required result. A complete pass exposes a 
 If a rule fails, the response fixes the responsible boundary and writes corrected data to a new version. The same contract validates that replacement. Evidence connects the final decision to the dataset, code, policy, owner, and downstream model. Operational monitoring confirms that the validation job itself continues to run over the intended scope.
 
 This full path is what turns data checks into an MLOps control. The model receives data whose structure, meaning, history, population, and outcomes were all evaluated for the use that follows.
+
+![A six-step path from detecting unsafe data through quarantine, impact tracing, source repair, rebuild, verification, and republishing](/content-assets/articles/article-mlops-data-for-ml-systems-data-validation-for-ml-pipelines/safe-republish-path.png)
+
+*Recovery closes the validation loop by fixing the source, rebuilding every affected output, and preserving proof that publication is safe again.*
 
 ## References
 

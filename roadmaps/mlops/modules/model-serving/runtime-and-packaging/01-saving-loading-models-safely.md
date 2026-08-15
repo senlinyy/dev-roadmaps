@@ -26,7 +26,7 @@ id: "article-mlops-model-serving-saving-loading-models-safely"
 ## What Saving A Model Really Means
 <!-- section-summary: Saving a model preserves enough information for another process to reproduce the reviewed prediction behaviour. -->
 
-At a high level, **saving a model** means turning the useful result of training into something another process can use later. A notebook may hold a fitted Python object in memory. A production service starts on another machine, often days or months later, and needs to recreate the same prediction behaviour from stored artifacts.
+A fitted model may exist only as a Python object inside a notebook. The object disappears when that process ends, while a production service may start on another machine months later. **Saving a model** means turning the useful result of training into stored artifacts that another process can load to recreate the approved prediction behaviour.
 
 The word *model* can hide several separate things. The learned weights or tree structure perform the mathematical calculation. Preprocessing turns a request into the values that calculation expects. A signature describes the allowed input and output shape. The runtime supplies framework libraries and native code. Metadata explains the class order, threshold, training lineage, and release identity.
 
@@ -46,6 +46,10 @@ The production goal is a **release bundle**: an immutable set of model data, com
 ```mermaid
 flowchart TD; A["Training Result<br/>(fitted computation in memory)"] --> B["Release Bundle<br/>(model and companion responsibilities)"]; B --> C["Verified Loader<br/>(identity and trust checks)"]; C --> D["Known Prediction<br/>(reviewed input-to-output behaviour)"]; D --> E["Ready Runtime<br/>(traffic may reach this version)"]
 ```
+
+![Binary classifier with class order manual review then auto approve shows how a model can load successfully yet produce the opposite decision when the service misreads probability index zero](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-bundle-class-order.png)
+
+*The release bundle preserves the model, transformations, contracts, runtime, immutable identity, and evidence required to reproduce the reviewed prediction meaning.*
 
 ## Save Everything Needed To Reproduce A Prediction
 <!-- section-summary: A release bundle preserves computation, transformations, contracts, environment, and identity as distinct responsibilities. -->
@@ -235,6 +239,10 @@ A new worker can fail readiness and leave traffic on healthy old workers. An in-
 
 The loader should distinguish failure classes. A download timeout may support a bounded retry. A digest mismatch is an integrity failure. An unsupported operator is a compatibility failure. A wrong fixture result is a behaviour failure. Each one needs different evidence and recovery.
 
+![Seven-stage controlled loader keeps the current model serving while a candidate resolves its approved digest, downloads to bounded staging, passes integrity, parser, contract, backend, warm-up, and fixture checks, then publishes readiness](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-loader-admission-path.png)
+
+*Traffic may move only after the staged candidate publishes its verified loaded identity. Integrity, compatibility, contract, or behaviour failure rejects the candidate without replacing the current release.*
+
 ## Verify Model Files And Their Build Provenance
 <!-- section-summary: Digests, signatures, provenance, permissions, and isolation answer separate questions about artifact trust. -->
 
@@ -320,6 +328,10 @@ A model file preserves one part of a production prediction. Transformations pres
 Production safety comes from the full path: publish immutable bytes, resolve a governed identity, verify before parsing, load under controlled permissions and resources, run representative behaviour checks, expose the loaded version, and retain the complete previous release. A successful deserialization is one checkpoint inside that process.
 
 This framework also gives incident responders a useful order. Confirm the loaded bundle and image identities first. Then inspect integrity, contract, preprocessing, runtime, and fixture evidence. The first broken boundary points toward the repair and identifies the complete release that can serve as rollback.
+
+![Complete model release path validates an immutable bundle and serving image before canary traffic, expands only with healthy evidence, and restores the complete retained release before verifying rollback in live traffic](/content-assets/articles/article-mlops-model-serving-saving-loading-models-safely/model-release-rollback-summary.png)
+
+*Healthy canary evidence supports gradual expansion and reassessment. A failed check or stop condition restores the retained bundle, compatible image, transformations, contracts, policy, and fixtures before new requests prove recovery.*
 
 ## References
 

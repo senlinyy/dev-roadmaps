@@ -37,10 +37,6 @@ One explanation is a new mix of properties. The service now receives many more f
 
 The production question is therefore broader than “did a statistic cross a threshold?” The team needs to identify what moved, establish whether the evidence is trustworthy, measure the effect on predictions and outcomes, and connect the change to a safe response.
 
-![Drift investigation from approved reference and current production windows through comparison, feature and outcome context, and a choice to observe, repair, or retrain](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/drift-investigation-map.png)
-
-*A reference and a current window create the comparison. Feature health, prediction behaviour, and outcomes explain the change and guide the response.*
-
 A drift score answers one bounded question: how different are these two groups of data? It does not prove that accuracy declined, identify a broken feature pipeline, or decide that retraining is necessary.
 
 ## The Four Types Of Drift
@@ -92,10 +88,6 @@ Delayed labels create an early view and a final view. Reviewer disagreement, ove
 
 A common implementation stores reviewer actions and later outcomes beside the prediction ID in a Delta table. dbt builds the mature cohort after the label window closes, and a pinned scikit-learn task calculates calibration and error by score band. Prometheus may show the override rate within minutes, while the cohort result appears weeks later. Movement in both measures for the same model route and segment provides an early warning followed by direct evidence that the learned relationship changed.
 
-![Side-by-side comparison of data drift changing the input mix and concept drift changing the outcome for familiar inputs](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/data-vs-concept-drift.png)
-
-*Data drift changes which inputs arrive. Target shift changes the overall outcome mix. Concept drift changes what familiar inputs imply about the outcome.*
-
 ### Prediction Drift Changes the Model Output: `P(Ŷ)`
 
 **Prediction drift** means that the distribution of model outputs has changed. The symbol `Ŷ` represents the model's prediction, so the change can be written as a movement in `P(Ŷ)`. A classifier may produce far more high-risk scores. A regression model may produce longer delivery estimates. A ranking model may concentrate recommendations among fewer items.
@@ -103,6 +95,10 @@ A common implementation stores reviewer actions and later outcomes beside the pr
 Prediction drift is available immediately because the service creates predictions at decision time. It is a symptom whose cause still needs investigation. Inputs may have moved, a new model may score the same inputs differently, a policy may route a different population to the model, or a preprocessing release may have changed the values before inference.
 
 Suppose the high-risk share from a fraud model doubles after a canary begins. The baseline route stays stable on comparable traffic. That pattern points toward the candidate artifact or its preprocessing path. If both routes move together, the team looks toward the population, shared features, or policy. Mature chargebacks later show whether prediction quality also changed.
+
+![Four drift types showing changes in inputs, outcome mix, input-to-outcome relationship, and model outputs, followed by shared evidence checks](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/four-types-of-drift.png)
+
+*Data, target, concept, and prediction drift answer different questions. Feature health, release and policy identity, and mature outcomes are shared checks before interpreting any of them.*
 
 ## Use Outcome Labels To Confirm Whether Drift Harmed Quality
 <!-- section-summary: Inputs and predictions provide fast leading signals, while mature outcomes establish whether the model still supports accurate decisions. -->
@@ -173,6 +169,10 @@ Reference data needs an identity. Teams assign a `baseline_id` and record the ex
 Baseline promotion follows a controlled workflow. The monitor runs the proposed reference beside the current reference through a complete business cycle. Owners review the alert volume under both references and confirm that mature quality remains healthy for important segments.
 
 The approved record points to the exact data snapshot and stores the filters used to build it. Its feature definitions preserve the meaning of each comparison. The record also keeps the approval reason and reviewers. Rolling back means selecting the previous `baseline_id`; it should not require rebuilding history from an undocumented query.
+
+![Four drift baselines matched to their monitoring questions: training, recent healthy, seasonal, and concurrent route](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/choosing-drift-baseline.png)
+
+*A baseline is an answer to a monitoring question. Training, recent healthy, seasonal, and concurrent-route references create different interpretations and cannot substitute for one another.*
 
 ## Interpret Drift Scores With Statistical And Product Context
 <!-- section-summary: Statistical tests and distances describe distribution changes, while effect size, sample count, feature meaning, and quality evidence determine their production importance. -->
@@ -365,10 +365,6 @@ Each run writes a manifest with its input snapshots, row counts, rejected rows, 
 
 Late partitions require a backfill of the exact affected window with the same baseline and configuration. The corrected run records a revision and links to the earlier result. Historical evidence remains visible, so release reviewers can see that the metric changed after its original publication.
 
-![A production drift run selecting windows, validating data, comparing distributions, storing evidence, publishing a bounded signal, and investigating](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/drift-monitoring-production-run.png)
-
-*The production job validates its windows before calculating drift, stores the detailed evidence in governed data, and publishes a bounded alert for investigation.*
-
 Prometheus or the cloud monitor receives low-cardinality signals such as dataset drift status, run freshness, and affected feature count. The warehouse or lakehouse retains the detailed per-feature and per-segment results. This boundary keeps high-cardinality values and sensitive samples out of operational metrics.
 
 ### Choose Tools That Fit The Existing Data Platform
@@ -408,16 +404,16 @@ Retraining is one possible response. Strong ranking with probabilities that are 
 
 Offline segment evaluation measures whether the candidate addresses the observed failure. Shadow or canary traffic then compares it with the approved model on live inputs. Promotion requires explicit quality and product thresholds. A breach returns traffic to the previous artifact. Drift starts the investigation; release evidence controls promotion.
 
-![Drift response map separating contract repair, healthy-population observation and baseline review, and relationship change requiring recalibration or retraining](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/drift-response-decision.png)
-
-*Contract failures stay at the data boundary. Healthy population changes may justify observation or a reviewed baseline. Changed relationships enter a controlled recalibration, policy, or model-release path.*
-
 ## The Main Idea
 <!-- section-summary: Drift monitoring describes change, while feature health and mature quality evidence explain its cause and consequence. -->
 
 Data drift means the model is seeing a different mix of inputs. Target shift means the outcome mix changed. Concept drift means the relationship between inputs and outcomes changed. Prediction drift means the model's output distribution moved. A production system can experience several of these changes at once.
 
 The drift score provides the first clue. A meaningful reference, visible distributions, segments, versions, feature-health checks, and mature outcomes turn that clue into a supported diagnosis. The response can then follow the cause: restore measurement, repair a damaged pipeline, observe a healthy change, approve a new baseline, recalibrate scores, change policy, or evaluate a new model.
+
+![Drift investigation summary that validates evidence, locates the affected route and population, measures consequences, and selects a cause-matched response](/content-assets/articles/article-mlops-monitoring-data-drift-concept-drift/drift-investigation-summary.png)
+
+*Drift response starts by validating evidence, locating the affected route and population, and measuring consequences. The cause determines whether the team observes, repairs, contains, recalibrates, changes policy, or retrains.*
 
 ## References
 

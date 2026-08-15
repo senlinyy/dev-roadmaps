@@ -80,7 +80,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Removing two of six equal hosts from a fleet already at 75% utilization can leave too little capacity for normal traffic and failure margin. A smaller canary or batch directly reduces that risk. Ansible does not secretly serialize a larger configured batch, and the load balancer cannot rewrite the play's `serial` value."
+      "explanation": "Removing two of six equal hosts from a fleet already at 75% utilization can leave too little capacity for normal traffic and failure margin. A smaller canary or batch directly reduces that risk. Ansible does not secretly serialize a larger configured batch, and the load balancer cannot rewrite the play's `serial` value. See [Controlling playbook execution with strategies](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)."
     },
     {
       "id": "q5",
@@ -162,7 +162,7 @@
         "a",
         "b"
       ],
-      "explanation": "`--limit` narrows the inventory selected for a particular run, while `serial` controls how many of those selected hosts complete the play as a batch. Health evidence can inform an operator or automation gate, but it does not rewrite the selected inventory. Increasing `forks` changes parallel capacity without overriding a tighter serial boundary."
+      "explanation": "`--limit` narrows the inventory selected for a particular run, while `serial` controls how many of those selected hosts complete the play as a batch. Health evidence can inform an operator or automation gate, but it does not rewrite the selected inventory. Increasing `forks` changes parallel capacity without overriding a tighter serial boundary. See [Controlling playbook execution with strategies](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)."
     },
     {
       "id": "spot-check-mode-limit-q5",
@@ -189,7 +189,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Local readiness proves the process responds on the host, while the unhealthy load balancer target shows the customer traffic path is still broken. The release gate requires both, so the rollout must pause. Increasing the batch, ignoring external health, or removing the check would widen risk without resolving routing or registration."
+      "explanation": "Local readiness proves the process responds on the host, while the unhealthy load balancer target shows the customer traffic path is still broken. The release gate requires both, so the rollout must pause. Increasing the batch, ignoring external health, or removing the check would widen risk without resolving routing or registration. See [Controlling playbook execution with strategies](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html)."
     }
   ]
 }

@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "account-boundary",
+      "type": "single",
+      "scenario": "A payments workload has separate production and development teams. A development administrator must never be able to change production resources, even after a mistaken broad IAM policy. What is the strongest first isolation boundary?",
+      "options": [
+        {
+          "id": "b",
+          "text": "Separate AWS accounts under one organization."
+        },
+        {
+          "id": "a",
+          "text": "Different tags in one account."
+        },
+        {
+          "id": "c",
+          "text": "Different subnets in one VPC."
+        },
+        {
+          "id": "d",
+          "text": "Different CloudWatch dashboards."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "AWS accounts are strong resource and permissions boundaries and limit the blast radius of accidental policies. Learn more in [Organizing your AWS environment](https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/benefits-of-using-multiple-aws-accounts.html)."
+    },
+    {
+      "id": "az-subnet",
+      "type": "single",
+      "scenario": "An application and database are placed in one subnet named private-app. The requirement says the service must tolerate an Availability Zone failure. What is the decisive problem?",
+      "options": [
+        {
+          "id": "a",
+          "text": "A subnet spans every Availability Zone in its Region."
+        },
+        {
+          "id": "c",
+          "text": "A subnet belongs to one Availability Zone, so this placement is still single-AZ."
+        },
+        {
+          "id": "b",
+          "text": "Private subnets cannot contain databases."
+        },
+        {
+          "id": "d",
+          "text": "Availability Zones are global rather than regional."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Each subnet is scoped to one Availability Zone. Tolerating an AZ failure requires placement across AZ-specific subnets. Learn more in [AWS fault isolation boundaries](https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/regions.html)."
+    },
+    {
+      "id": "regional-scope",
+      "type": "single",
+      "scenario": "A team creates an S3 bucket in eu-west-2, then runs an EC2 describe command against us-east-1 and sees no instances. Which interpretation is correct?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The account changed when the Region changed."
+        },
+        {
+          "id": "c",
+          "text": "Availability Zones share names across every account."
+        },
+        {
+          "id": "b",
+          "text": "Most service resources are regional, so the CLI Region scopes the request."
+        },
+        {
+          "id": "d",
+          "text": "IAM policies are stored separately in each Region."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Most resources are regional, and client configuration determines which regional endpoint receives a request. Learn more in [AWS Regions](https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/regions.html)."
+    },
+    {
+      "id": "az-names",
+      "type": "single",
+      "scenario": "Two accounts both show an Availability Zone named us-east-1a. Can the networking team assume those labels identify the same physical AZ?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Yes, letter names are globally fixed."
+        },
+        {
+          "id": "b",
+          "text": "Yes, but only inside AWS Organizations."
+        },
+        {
+          "id": "d",
+          "text": "No, because an AZ can move between Regions."
+        },
+        {
+          "id": "c",
+          "text": "No. Use AZ IDs when coordinating physical-zone alignment across accounts."
+        }
+      ],
+      "correct": [
+        "c"
+      ],
+      "explanation": "Account-specific AZ names can map differently. AZ IDs provide consistent cross-account identification. Learn more in [AWS fault isolation boundaries](https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/regions.html)."
+    },
+    {
+      "id": "multi-account-operating",
+      "type": "multiple",
+      "scenario": "A platform team adopts separate workload accounts. Which practices make the boundary usable without returning to long-lived IAM users?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Use IAM Identity Center for human access."
+        },
+        {
+          "id": "c",
+          "text": "Share one root-user access key across accounts."
+        },
+        {
+          "id": "b",
+          "text": "Use cross-account roles with narrow trust and permissions."
+        },
+        {
+          "id": "e",
+          "text": "Use resource names as the only isolation control."
+        },
+        {
+          "id": "d",
+          "text": "Centralize audit evidence with organization-aware logging."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "d"
+      ],
+      "explanation": "Identity Center, cross-account roles, and centralized evidence support multi-account operation. Root credentials should not become routine access. Learn more in [IAM best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) and [multi-account guidance](https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/benefits-of-using-multiple-aws-accounts.html)."
+    }
+  ]
+}

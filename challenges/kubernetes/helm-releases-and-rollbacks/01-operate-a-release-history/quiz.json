@@ -1,0 +1,70 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "preinstall-evidence",
+      "type": "single",
+      "scenario": "The orders chart and production values have been approved, but the release has never been installed. Reviewers want evidence of the exact Deployment and Service that Helm would produce without changing the cluster. Which action best creates that evidence?",
+      "options": [
+        { "id": "a", "text": "Render the named release with the production values and namespace, then save the resulting manifests as a review artifact." },
+        { "id": "b", "text": "Run an install without values, then inspect whichever defaults reached production." },
+        { "id": "c", "text": "Read only `Chart.yaml`, because chart metadata contains every rendered Kubernetes field." },
+        { "id": "d", "text": "Create the Deployment manually, then let Helm discover it as revision one." }
+      ],
+      "correct": ["a"],
+      "explanation": "`helm template` renders the chart locally from the selected release name, values, and namespace without mutating the cluster. The saved manifest is the concrete Kubernetes evidence reviewers need before install."
+    },
+    {
+      "id": "failed-upgrade-response",
+      "type": "multiple",
+      "scenario": "Revision four submitted valid Kubernetes objects, but the new Pods never became ready before Helm's timeout. Production is impaired and revision three is the known-good release. Which two actions form the strongest immediate recovery path?",
+      "options": [
+        { "id": "a", "text": "Inspect Helm history and workload evidence to confirm the active and known-good revisions." },
+        { "id": "c", "text": "Delete the release history first so Helm cannot refer to the failed revision." },
+        { "id": "b", "text": "Roll back to revision three with a bounded wait, then verify the Deployment and application path." },
+        { "id": "d", "text": "Edit the live ReplicaSet directly and treat the change as a new Helm revision." }
+      ],
+      "correct": ["a", "b"],
+      "explanation": "History identifies the stored target and workload evidence prevents a blind rollback. Helm rollback reapplies the selected stored revision as a new revision, and Kubernetes plus application checks confirm recovery."
+    },
+    {
+      "id": "rollback-history",
+      "type": "single",
+      "scenario": "Release `orders` had revision one, then revision two, and operators rolled back to revision one. Helm history now shows a third row. Why is revision three active instead of revision one becoming active again?",
+      "options": [
+        { "id": "a", "text": "Rollback is itself a release operation, so Helm records a new revision whose content comes from the selected earlier revision." },
+        { "id": "b", "text": "Helm renumbers revision one after every failed readiness probe." },
+        { "id": "c", "text": "Kubernetes ReplicaSets always force Helm to create exactly three revisions." },
+        { "id": "d", "text": "Revision three exists only in local CLI output and is not part of the stored release record." }
+      ],
+      "correct": ["a"],
+      "explanation": "Helm preserves the audit trail. A rollback takes the stored chart, values, and manifest state from the target revision, applies it, and records that operation as the next release revision."
+    },
+    {
+      "id": "release-namespace",
+      "type": "single",
+      "scenario": "Two teams both use release name `orders`, one in namespace `orders-staging` and one in `orders-prod`. An operator runs `helm history orders` without a namespace and sees the wrong environment's record. What part of the release identity was omitted?",
+      "options": [
+        { "id": "a", "text": "The container registry, because Helm release history is stored under each image repository." },
+        { "id": "b", "text": "The namespace, because Helm release records are scoped to the target namespace as well as the release name." },
+        { "id": "c", "text": "The Kubernetes node name, because every Helm revision belongs to one worker." },
+        { "id": "d", "text": "The Service cluster IP, because it selects the release history record." }
+      ],
+      "correct": ["b"],
+      "explanation": "The named release record lives in a namespace. Operators should keep both release name and namespace explicit in status, history, upgrade, and rollback commands when environments reuse names."
+    },
+    {
+      "id": "history-manifest-evidence",
+      "type": "multiple",
+      "scenario": "An incident starts after several chart-source commits, and the repository no longer matches the active production revision. Which two Helm records help reconstruct what was actually released?",
+      "options": [
+        { "id": "b", "text": "The current developer's shell history, even if it used another namespace." },
+        { "id": "a", "text": "The stored values for the active revision." },
+        { "id": "d", "text": "The latest chart defaults from the main branch, regardless of release revision." },
+        { "id": "c", "text": "The stored rendered manifest and revision history for the named release." }
+      ],
+      "correct": ["a", "c"],
+      "explanation": "Helm's release record preserves revision-specific values and rendered manifests. Current source defaults or unrelated shell history cannot reliably reconstruct the exact state submitted by an older release."
+    }
+  ]
+}

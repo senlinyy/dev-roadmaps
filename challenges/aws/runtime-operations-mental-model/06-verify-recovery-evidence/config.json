@@ -143,6 +143,12 @@
       "\"StateValue\": \"OK\"",
       "rollback completed to task definition devpolaris-orders-api:57"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ecs\\\\s+describe-services\\\\b",
+      "^aws\\\\s+elbv2\\\\s+describe-target-health\\\\b",
+      "^aws\\\\s+cloudwatch\\\\s+describe-alarms\\\\b",
+      "^aws\\\\s+logs\\\\s+filter-log-events\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

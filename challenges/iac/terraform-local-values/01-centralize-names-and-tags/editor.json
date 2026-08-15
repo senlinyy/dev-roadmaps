@@ -1,0 +1,129 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "locals.tf",
+  "files": [
+    {
+      "filename": "variables.tf",
+      "initialValue": "variable \"environment\" {\n  type = string\n}\n",
+      "readOnly": true
+    },
+    {
+      "filename": "locals.tf",
+      "initialValue": "locals {\n}\n"
+    },
+    {
+      "filename": "main.tf",
+      "initialValue": "resource \"aws_s3_bucket\" \"logs\" {\n  bucket = \"replace-me\"\n}\n\nresource \"aws_sqs_queue\" \"events\" {\n  name = \"replace-me\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "locals.tf",
+          "path": [
+            {
+              "type": "locals"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "name_prefix"
+            ],
+            "references": [
+              "var.environment"
+            ],
+            "expressionContains": [
+              "format("
+            ]
+          },
+          {
+            "path": [
+              "common_tags",
+              "Service"
+            ],
+            "valueEquals": "orders"
+          },
+          {
+            "path": [
+              "common_tags",
+              "Environment"
+            ],
+            "expressionEquals": "var.environment"
+          },
+          {
+            "path": [
+              "common_tags",
+              "ManagedBy"
+            ],
+            "valueEquals": "terraform"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_s3_bucket",
+                "logs"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "bucket"
+            ],
+            "references": [
+              "local.name_prefix"
+            ]
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "expressionEquals": "local.common_tags"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_sqs_queue",
+                "events"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "name"
+            ],
+            "references": [
+              "local.name_prefix"
+            ]
+          },
+          {
+            "path": [
+              "tags"
+            ],
+            "expressionEquals": "local.common_tags"
+          }
+        ]
+      }
+    ]
+  }
+}

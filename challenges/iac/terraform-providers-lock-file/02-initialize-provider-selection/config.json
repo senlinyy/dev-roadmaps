@@ -1,0 +1,35 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/providers.tf": {
+      "type": "file",
+      "content": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n      version = \"~> 6.0\"\n    }\n  }\n}\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {},
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": [
+      "registry.terraform.io/hashicorp/aws",
+      "h1:devpolaris-training-provider-checksum"
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+init(?:\\s|$)",
+      "^cat\\s+\\.terraform\\.lock\\.hcl$"
+    ],
+    "expectedTerraform": {
+      "initialized": true
+    }
+  }
+}

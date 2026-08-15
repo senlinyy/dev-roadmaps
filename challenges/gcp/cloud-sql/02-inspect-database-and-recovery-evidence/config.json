@@ -1,0 +1,37 @@
+{
+  "cwd": "/home/dev",
+  "env": { "USER": "dev", "HOME": "/home/dev" },
+  "fs": { "/home/dev": { "type": "dir" } },
+  "commandModules": ["gcp"],
+  "cloud": {
+    "gcp": {
+      "projectId": "devpolaris-prod",
+      "region": "europe-west2",
+      "sqlInstances": [
+        {
+          "name": "orders-postgres-prod",
+          "projectId": "devpolaris-prod",
+          "region": "europe-west2",
+          "databaseVersion": "POSTGRES_16",
+          "state": "RUNNABLE",
+          "privateIp": "10.50.0.12",
+          "availabilityType": "REGIONAL",
+          "backupEnabled": true,
+          "pointInTimeRecoveryEnabled": true
+        }
+      ]
+    }
+  },
+  "grader": {
+    "strategy": "contains",
+    "source": "all-stdout",
+    "expected": ["orders-postgres-prod", "europe-west2", "POSTGRES_16", "RUNNABLE", "10.50.0.12", "REGIONAL", "SUCCESSFUL", "backupEnabled", "pointInTimeRecoveryEnabled", "true"],
+    "requireCommandPatterns": [
+      "^gcloud\\s+sql\\s+instances\\s+describe\\b",
+      "^gcloud\\s+sql\\s+backups\\s+list\\b"
+    ],
+    "requireCommands": ["gcloud"],
+    "minCommandCount": 2,
+    "loose": true
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "database.tf",
+  "files": [
+    {
+      "filename": "database.tf",
+      "initialValue": "resource \"aws_db_instance\" \"orders\" {\n  identifier = \"orders-prod\"\n  engine     = \"postgres\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "database.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_db_instance",
+                "orders"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "identifier"
+            ],
+            "valueEquals": "orders-prod"
+          },
+          {
+            "path": [
+              "engine"
+            ],
+            "valueEquals": "postgres"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "database.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_db_instance",
+                "orders"
+              ]
+            },
+            {
+              "type": "lifecycle"
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "prevent_destroy"
+            ],
+            "valueEquals": true
+          },
+          {
+            "path": [
+              "create_before_destroy"
+            ],
+            "valueEquals": true
+          }
+        ]
+      }
+    ]
+  }
+}

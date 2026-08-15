@@ -194,6 +194,10 @@ flowchart TD
     class C,F risk;
 ```
 
+![An older camera causing blurred images, lower parsed defect scores, delayed high-risk equipment inspections, and worker danger, with a testable control aligned to each stage](/content-assets/articles/article-mlops-governance-and-responsible-ai-responsible-ai-checks-before-release/maintenance-harm-controls.png)
+
+*A concrete harm path turns a broad safety concern into specific slices, detectors, reviews, manual routing, alerts, and a recovery decision.*
+
 ## Interpret Fairness Results For Each Affected Group
 
 <!-- section-summary: Subgroup assessment compares outcomes and errors across relevant populations, then interprets each metric through the product decision and harm scenario. -->
@@ -277,6 +281,10 @@ Avoid silently choosing a different threshold for a subgroup to make one chart
 look balanced. Group-specific thresholds create distinct policy and legal
 questions. They require explicit authority, evidence, documentation,
 implementation tests, and monitoring.
+
+![A production threshold creating 900 alerts per day compared with a review team capacity of 500, showing why the human oversight gate cannot operate as designed](/content-assets/articles/article-mlops-governance-and-responsible-ai-responsible-ai-checks-before-release/human-review-capacity.png)
+
+*Human oversight is ineffective when the threshold creates more required reviews than the team can handle, even if the model metric improves.*
 
 ## Test Accessibility, Inclusion, And Human Oversight
 
@@ -395,6 +403,24 @@ threshold can trigger segment review or traffic restriction. A privacy incident
 can stop logging and begin the response plan. A human-review queue breach can
 disable automated routing.
 
+An industrial implementation connects several evidence systems. OpenTelemetry
+can carry the serving release, policy version, and operational correlation
+across the request path without placing sensitive feature values in span
+attributes. Prediction and mature-outcome records stay in a governed warehouse
+or lakehouse. dbt data tests or another data-quality job check freshness,
+uniqueness, accepted values, and join coverage before quality metrics publish.
+Prometheus-compatible or cloud-native monitoring handles service and control
+capacity alerts. The incident system routes each alert to the named owner and
+links the runbook, fallback, and exact release under investigation.
+
+Suppose subgroup recall crosses its release boundary while endpoint latency and
+error rate remain healthy. The owner first verifies label maturity and join
+coverage. If the evidence passes, the release workflow freezes canary expansion
+and routes the affected cases to the approved human-review path. The team then
+compares the candidate, baseline, threshold policy, and feature health for that
+subgroup. This sequence protects people while preserving enough evidence to
+choose between a policy repair, model rollback, or new training work.
+
 Prepare incident evidence before deployment: release identity, input and output
 correlation, model and policy versions, data lineage, decision reasons, access
 logs, and rollback target. Run tabletop exercises for high-priority harm
@@ -457,12 +483,31 @@ feature-importance, counterfactual, and causal-analysis views. The methods keep
 their separate assumptions; a dashboard does not turn attribution into causal
 proof or choose the correct fairness objective.
 
+The CI job should evaluate one immutable candidate against named dataset and
+policy versions. It writes a machine-readable report plus detailed artifacts,
+records their digests, and links them to the candidate in the registry or
+tracking system. The release workflow then resolves those exact identities. It
+rejects a request if the report belongs to another model, the approval expired,
+the requested population exceeds the approved scope, or required evidence is
+missing. A passing notebook or dashboard screenshot cannot substitute for this
+identity check.
+
 ### Keep The Reviewer Separate From The Development Decision
 
 Independent reviewers own defined questions: data use, model validation,
 privacy, security, safety, accessibility, domain suitability, and operational
 readiness according to risk. The final release authority examines accepted
 findings, unresolved risks, and proposed scope.
+
+The permissions should reflect those responsibilities. A developer identity
+can publish a candidate and request review. A validation role can attach
+findings without changing production. The accountable approval role can accept
+remaining risk for its declared scope. A separate release workload changes the
+production route after verifying the current decision. Protected CI
+environments, registry permissions, cloud IAM, and the approval system enforce
+the separation. Emergency access follows a shorter audited path with expiry and
+post-incident review; it does not give the development job permanent release
+authority.
 
 ### Record Conditions And Temporary Exceptions In The Approval
 
@@ -488,7 +533,7 @@ release_decision:
   conditions:
     - unreadable_images_route_to_human_review
     - stop_if_review_queue_exceeds_capacity
-  next_review_at: 2026-10-01T09:00:00Z
+  next_review_at: "${POLICY_COMPUTED_REVIEW_TIME}"
 ```
 
 The values illustrate the record shape. Deployment gates compare immutable
@@ -505,6 +550,14 @@ Production evidence can weaken the assumptions behind an earlier approval.
 Periodic review asks whether the intended use, affected population, benefit,
 harms, model, data, policy, controls, vendors, and operating conditions still
 match that decision. Its cadence follows risk and the rate of change.
+
+For example, a document-routing model may remain accurate overall while appeal
+records show that one language group receives more incorrect routes. The review
+record links that signal to the deployed release and the original language
+coverage claim. The owner can restrict that group to human routing, preserve
+the affected decisions, investigate representation and parser behaviour, and
+return with new evidence. The approval authority then decides whether to restore
+the original scope, keep the restriction, replace the model, or retire the use.
 
 Material changes trigger earlier review. Examples include a new model or
 provider, changed data source, new population or geography, expanded automation,
@@ -539,6 +592,10 @@ The work continues after deployment through monitoring, appeals, incidents,
 material-change detection, and periodic review. Those signals can narrow,
 replace, or retire the system as evidence changes.
 
+![Six responsible AI evidence gates converging on independent review and five release outcomes, with only approved scopes entering limited exposure, canary monitoring, and reassessment](/content-assets/articles/article-mlops-governance-and-responsible-ai-responsible-ai-checks-before-release/responsible-ai-release-summary.png)
+
+*The release decision binds an exact system and use to independent evidence, keeps blocked candidates out of production, and sends material changes back through review.*
+
 ## References
 
 - [NIST AI Risk Management Framework Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)
@@ -550,4 +607,6 @@ replace, or retire the system as evidence changes.
 - [Fairlearn MetricFrame](https://fairlearn.org/main/api_reference/generated/fairlearn.metrics.MetricFrame.html)
 - [scikit-learn probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
 - [Azure Machine Learning Responsible AI dashboard](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-responsible-ai-dashboard?view=azureml-api-2)
+- [OpenTelemetry: What is OpenTelemetry?](https://opentelemetry.io/docs/what-is-opentelemetry/)
+- [dbt: Add data tests to your DAG](https://docs.getdbt.com/docs/build/data-tests)
 - [W3C Web Content Accessibility Guidelines](https://www.w3.org/TR/WCAG22/)

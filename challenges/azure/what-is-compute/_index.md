@@ -4,6 +4,6 @@ description: "Practice matching Azure compute choices to workload shape, then in
 articleId: article-cloud-providers-azure-compute-application-hosting-azure-compute-mental-model
 articleSlug: what-is-compute
 difficulty: medium
-order: 17
+order: 12
 tags: ["azure","compute","runtime","workloads"]
 ---

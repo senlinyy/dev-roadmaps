@@ -9,7 +9,7 @@ id: "article-mlops-data-for-ml-systems-online-vs-offline-features"
 
 ## Table of Contents
 
-1. [What Problem Are We Solving?](#what-problem-are-we-solving)
+1. [Why Historical Training And Live Prediction Need Different Feature Paths](#why-historical-training-and-live-prediction-need-different-feature-paths)
 2. [Why Training And Live Predictions Need The Same Feature Meaning](#why-training-and-live-predictions-need-the-same-feature-meaning)
 3. [How Training Retrieves Historical Feature Values](#how-training-retrieves-historical-feature-values)
 4. [How Live Predictions Retrieve Current Feature Values](#how-live-predictions-retrieve-current-feature-values)
@@ -25,7 +25,7 @@ id: "article-mlops-data-for-ml-systems-online-vs-offline-features"
 14. [The Main Idea](#the-main-idea)
 15. [References](#references)
 
-## What Problem Are We Solving?
+## Why Historical Training And Live Prediction Need Different Feature Paths
 <!-- section-summary: Offline and online feature paths give the same model input two delivery methods suited to historical learning and live decisions. -->
 
 Suppose a payment-risk model uses `failed_attempts_10m`, the number of failed payment attempts for one account during the previous ten minutes.
@@ -94,6 +94,10 @@ flowchart TD
 ```
 
 The contract keeps meaning stable. Delivery configuration lets the offline path favor historical correctness and the online path favor bounded latency and recent data.
+
+![One versioned feature definition feeding an offline historical path and an online low-latency path](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/offline-online-paths.png)
+
+*Offline and online systems optimize for different workloads, while both must preserve the feature's meaning at the relevant time.*
 
 ## How Training Retrieves Historical Feature Values
 <!-- section-summary: Offline retrieval builds historically correct feature values from durable event history for training, evaluation, batch work, and audits. -->
@@ -217,6 +221,10 @@ WHERE feature_rank = 1;
 The final record ID makes selection deterministic where timestamps tie. A bounded feature can add a lookback predicate so very old values produce an explicit missing state.
 
 Feast historical retrieval and Databricks time-series feature tables support point-in-time joins. A warehouse team can implement the same rule in reviewed SQL. The important evidence is the time boundary and selected source record, not the library name.
+
+![A point-in-time join selecting the latest balance available before a prediction and excluding a later future value](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/point-in-time-cutoff.png)
+
+*For a prediction made at 10:00, the 09:40 value is eligible and the 10:05 value belongs to the future.*
 
 ## Publish Calculated Features From Offline Storage To Online Storage
 <!-- section-summary: Materialization publishes computed feature values into low-latency storage while preserving entity, version, and event-time identity. -->
@@ -357,7 +365,7 @@ Request-time dependencies also consume latency and need fallbacks. A route servi
 ## Respond Safely To Stale, Missing, Or Mismatched Features
 <!-- section-summary: Feature-path incidents need containment based on freshness, key correctness, publication state, online availability, and model consequence. -->
 
-Online and offline feature paths cross several systems, so failure can enter at different boundaries. In essence, diagnosis means finding the first boundary where the expected value stopped moving correctly. The serving team should contain unsafe decisions first. Investigators then trace the entity key and feature version back through the path. Timestamps and watermarks reveal the point where data stopped advancing.
+Online and offline feature paths cross several systems, so failure can enter at different boundaries. Diagnosis begins by finding the first boundary where the expected value stopped moving correctly. The serving team should contain unsafe decisions first. Investigators then trace the entity key and feature version back through the path. Timestamps and watermarks reveal the point where data stopped advancing.
 
 A **stalled materialization job** leaves the online store readable but stale. The service checks feature age and follows the stale policy while the data owner restores the job.
 
@@ -465,6 +473,10 @@ The offline path preserves history and reconstructs what was knowable for each p
 Reliable operation depends on shared semantics and observable delivery. Entity keys, feature versions, event and availability time, window boundaries, defaults, freshness, request-time transformations, and fallbacks must agree. Point-in-time tests prove historical reconstruction. Online probes prove latency and freshness. Vector replay compares the actual serving input with the value reconstructed from history. Failure injection confirms that stale, missing, or unavailable features follow the approved safety path.
 
 Start with an offline path for every model that learns from historical data. Add an online path only for live decisions that need shared, precomputed features under a tight latency budget. That choice keeps the design proportional to the production problem.
+
+![Parity tests, a freshness service-level objective, safe fallbacks, and a repair loop for aligned offline and online features](/content-assets/articles/article-mlops-data-for-ml-systems-online-vs-offline-features/offline-online-alignment-summary.png)
+
+*Alignment combines value parity, bounded staleness, explicit fallback behavior, and a tested path to repair and rematerialize broken features.*
 
 ## References
 

@@ -26,7 +26,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Roles load related tasks, handlers, templates, files, and variables from a known structure. The smallest useful role includes the directories it actually uses. See [Ansible roles guide](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html)."
+      "explanation": "Roles load related tasks, handlers, templates, files, and variables from a known structure. The smallest useful role includes the directories it actually uses. See [Ansible roles](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html)."
     },
     {
       "id": "q2",
@@ -53,7 +53,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Role defaults document normal caller-tunable behavior at low precedence, so inventory can deliberately select staging or production values. Defaults are not encrypted, do not execute as commands, and do not guarantee identical environments. Stronger role vars would be a poor fit when callers are expected to override the values."
+      "explanation": "Role defaults document normal caller-tunable behavior at low precedence, so inventory can deliberately select staging or production values. Defaults are not encrypted, do not execute as commands, and do not guarantee identical environments. Stronger role vars would be a poor fit when callers are expected to override the values. See [Role defaults and variables](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html#using-roles)."
     },
     {
       "id": "q3",
@@ -81,7 +81,7 @@
         "a",
         "b"
       ],
-      "explanation": "The role should contain the tasks and handlers that implement its web-service behavior. Environment host membership, approval policy, and shared production secrets belong at clearer caller, inventory, automation, or secret-management boundaries. A role can also own its templates, but that is not one of the two correct choices in this question."
+      "explanation": "The role should contain the tasks and handlers that implement its web-service behavior. Environment host membership, approval policy, and shared production secrets belong at clearer caller, inventory, automation, or secret-management boundaries. A role can also own its templates, but that is not one of the two correct choices in this question. See [Ansible handlers in roles](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_handlers.html)."
     },
     {
       "id": "q5",
@@ -108,7 +108,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "A role can package implementation files, but production review still needs its input contract, selected targets, changed resources, and possible service or firewall side effects. Reuse alone is not approval evidence. Running broadly before review or making all values non-overridable would increase risk rather than explain the change."
+      "explanation": "A role can package implementation files, but production review still needs its input contract, selected targets, changed resources, and possible service or firewall side effects. Reuse alone is not approval evidence. Running broadly before review or making all values non-overridable would increase risk rather than explain the change. See [Installing Ansible roles](https://docs.ansible.com/projects/ansible/latest/galaxy/user_guide.html)."
     },
     {
       "id": "review-role-boundary-q1",
@@ -135,7 +135,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "A role that combines unrelated security, database, web, and deployment responsibilities gives a small release a much larger possible change surface. Ansible permits many tasks and handlers inside a role, but that does not make the boundary safe. Fewer files also do not compensate for harder review, rollback, and ownership."
+      "explanation": "A role that combines unrelated security, database, web, and deployment responsibilities gives a small release a much larger possible change surface. Ansible permits many tasks and handlers inside a role, but that does not make the boundary safe. Fewer files also do not compensate for harder review, rollback, and ownership. See [Role reuse guidance](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse.html)."
     },
     {
       "id": "review-role-boundary-q2",
@@ -162,7 +162,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "A value that environments are expected to tune belongs in a weak role default or a clearly scoped inventory source. Keeping it in strong role vars blocks the intended caller contract. Duplicating the role creates drift, while hardcoding the template would preserve the same environment-coupling problem."
+      "explanation": "A value that environments are expected to tune belongs in a weak role default or a clearly scoped inventory source. Keeping it in strong role vars blocks the intended caller contract. Duplicating the role creates drift, while hardcoding the template would preserve the same environment-coupling problem. See [Ansible variable precedence](https://docs.ansible.com/projects/ansible/latest/reference_appendices/general_precedence.html)."
     },
     {
       "id": "review-role-boundary-q4",
@@ -189,7 +189,7 @@
       "correct": [
         "a"
       ],
-      "explanation": "Early input validation stops before package, file, or service changes leave a partially configured host and gives the caller a precise contract failure. It does not encrypt variables, suppress later operational failures, or replace documented defaults. Its value is the clean failure boundary before mutation begins."
+      "explanation": "Early input validation stops before package, file, or service changes leave a partially configured host and gives the caller a precise contract failure. It does not encrypt variables, suppress later operational failures, or replace documented defaults. Its value is the clean failure boundary before mutation begins. See [Role argument validation](https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html#role-argument-validation)."
     }
   ]
 }

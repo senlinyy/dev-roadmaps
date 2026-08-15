@@ -1,0 +1,97 @@
+{
+  "cwd": "/workspace/ansible",
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/ansible": {
+      "type": "dir"
+    }
+  },
+  "commandModules": [
+    "ansible"
+  ],
+  "ansible": {
+    "hosts": [
+      {
+        "name": "web-01",
+        "address": "192.0.2.10",
+        "reachable": true
+      },
+      {
+        "name": "web-02",
+        "address": "192.0.2.11",
+        "reachable": true
+      },
+      {
+        "name": "db-01",
+        "address": "192.0.2.20",
+        "reachable": true
+      }
+    ],
+    "groups": [
+      {
+        "name": "orders_web",
+        "hosts": [
+          "web-01",
+          "web-02"
+        ]
+      },
+      {
+        "name": "orders_db",
+        "hosts": [
+          "db-01"
+        ]
+      },
+      {
+        "name": "production",
+        "children": [
+          "orders_web",
+          "orders_db"
+        ]
+      }
+    ],
+    "playbooks": [
+      {
+        "path": "site.yml",
+        "name": "Configure orders web",
+        "hosts": "orders_web",
+        "tasks": [
+          {
+            "name": "Install nginx",
+            "status": "ok"
+          },
+          {
+            "name": "Render configuration",
+            "status": "changed",
+            "diff": "-workers=2\n+workers=4"
+          },
+          {
+            "name": "Verify local health",
+            "status": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "grader": {
+    "strategy": "ansible-state",
+    "requireCommands": [
+      "ansible-inventory",
+      "ansible-playbook"
+    ],
+    "expectedAnsible": {
+      "includesActions": [
+        "inventory-graph",
+        "syntax-check",
+        "playbook-list-hosts",
+        "playbook-list-tasks",
+        "playbook-check"
+      ],
+      "targetHosts": [
+        "web-01"
+      ],
+      "lastPlaybook": "site.yml"
+    }
+  }
+}

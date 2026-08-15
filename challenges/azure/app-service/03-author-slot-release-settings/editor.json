@@ -1,0 +1,15 @@
+{
+  "language": "json",
+  "filename": "slot-settings.json",
+  "completionProfile": "azure-json",
+  "initialValue": "[\n  { \"name\": \"APP_ENV\", \"value\": \"\", \"slotSetting\": false },\n  { \"name\": \"PAYMENTS_API_URL\", \"value\": \"\", \"slotSetting\": false },\n  { \"name\": \"DB_PASSWORD\", \"value\": \"\", \"slotSetting\": false }\n]\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": [], "minItems": 3, "maxItems": 3 },
+      { "path": [], "containsObject": { "name": "APP_ENV", "value": "staging", "slotSetting": true } },
+      { "path": [], "containsObject": { "name": "PAYMENTS_API_URL", "value": "https://payments.internal", "slotSetting": false } },
+      { "path": [], "containsObject": { "name": "DB_PASSWORD", "value": "@Microsoft.KeyVault(SecretUri=https://kv-orders-prod.vault.azure.net/secrets/db-password)", "slotSetting": true } }
+    ]
+  }
+}

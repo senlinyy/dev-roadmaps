@@ -28,9 +28,9 @@ id: "article-mlops-mlops-foundations-simple-mlops-architecture"
 
 <!-- section-summary: A production ML product depends on a connected path from real-world events to training, release, prediction, monitoring, and later outcomes. -->
 
-At a high level, **an MLOps architecture is the set of systems and boundaries that turns real-world data into a model, puts that model into a product, and learns from what happens next**.
-
 Imagine a payment service that asks a fraud model for a risk score. The user sees one quick decision: approve the payment, request another check, or decline it. That decision depends on work spread across several parts of the organization.
+
+**An MLOps architecture is the set of systems and boundaries that connects this work: it turns real-world data into a model, puts that model into a product, and learns from what happens next.**
 
 Long before the request arrives, data pipelines collect past payments and confirmed fraud outcomes. Feature code turns those events into training examples. A training job produces a proposed model. Evaluation checks overall quality and important segments. A registry records the trained model and its results. A delivery pipeline approves and releases one version.
 
@@ -83,7 +83,7 @@ A durable architecture can be understood through seven responsibilities. A small
 
 **Feedback** joins predictions with later outcomes, human review, incidents, and product signals. It creates evidence for evaluation, data improvement, and retraining decisions.
 
-![One MLOps path from product data through training, evaluation, registry, deployment, serving, monitoring, and feedback](/content-assets/articles/article-mlops-mlops-foundations-simple-mlops-architecture/one-mlops-path.png)
+![Seven connected responsibilities carrying data into training, an approved model into production, and outcomes back into learning](/content-assets/articles/article-mlops-mlops-foundations-simple-mlops-architecture/one-connected-mlops-system.png)
 
 *The seven responsibilities form one operating loop. Stable identities connect the model created during training to the predictions and outcomes seen in production.*
 
@@ -113,7 +113,7 @@ The difficult part is time. Training happens after the outcome is known, so the 
 
 Suppose a fraud dataset includes the result of a manual investigation completed two days after payment. That field predicts fraud very well in training. The live scoring service cannot use it at checkout. The offline score looks impressive because the model has seen part of the answer.
 
-A useful dataset contract records the event-time boundary:
+The dataset contract records the event-time boundary:
 
 ```yaml
 dataset: card_payment_training_examples
@@ -367,6 +367,10 @@ An alert needs to identify a condition that an owner can investigate or contain.
 
 Monitoring supplies evidence. Release, rollback, and retraining workflows decide what to do with that evidence.
 
+![Four complementary views of a production ML problem: service, data, model, and outcome evidence](/content-assets/articles/article-mlops-mlops-foundations-simple-mlops-architecture/four-production-evidence-views.png)
+
+*Service, data, model, and outcome evidence answer different questions. Reading them together helps the team locate the failing boundary before choosing a repair.*
+
 ## 7. How Outcomes Improve The Next Model
 
 <!-- section-summary: Feedback joins production predictions with delayed outcomes and human evidence to reveal model quality and guide the next improvement cycle. -->
@@ -468,7 +472,7 @@ This shape offers portability and lets teams select strong tools for each bounda
 
 ### A Practical Starting Point
 
-Start with the data platform the organization already operates. Use managed training jobs and managed endpoints first. Track experiments and models with MLflow or the cloud platform's equivalent. Add a feature store only after reusable or online features create a real need. Use OpenTelemetry with cloud monitoring for service evidence. Keep infrastructure in Terraform and source changes in Git-backed CI/CD.
+Start with the data platform the organization already operates. Use managed training jobs and managed endpoints first. Track experiments and models with MLflow or the cloud platform's equivalent. Reusable definitions or low-latency online retrieval create the need for a feature store. Use OpenTelemetry with cloud monitoring for service evidence. Keep infrastructure in Terraform and source changes in Git-backed CI/CD.
 
 The framework helps the team replace one tool later without losing the system contract. Airflow can give way to a managed pipeline while dataset and run identities stay stable. A managed endpoint can move to KServe while the serving input, output, release, and monitoring contracts stay intact.
 
@@ -527,7 +531,11 @@ An ML product is a connected production system. Data and feature pipelines defin
 
 Orchestration coordinates the work, governance controls access and accountability, and lineage connects the evidence across every boundary.
 
-Cloud platforms, Databricks, and composable open stacks package these responsibilities differently. A durable architecture keeps each contract visible, uses current managed defaults where they reduce operational work, and adds specialized tools only after the workload requires them.
+Cloud platforms, Databricks, and composable open stacks package these responsibilities differently. A durable architecture keeps each contract visible, uses current managed defaults where they reduce operational work, and reserves specialized tools for workloads with requirements that justify them.
+
+![Minimum production ML architecture connecting versioned data, reproducible training, evaluation, release, prediction delivery, and feedback](/content-assets/articles/article-mlops-mlops-foundations-simple-mlops-architecture/minimum-production-ml-architecture.png)
+
+*A small architecture is complete once every lifecycle responsibility has a clear path, identity, owner, and recovery route. Specialized platforms can follow measured scale or latency needs.*
 
 ## References
 

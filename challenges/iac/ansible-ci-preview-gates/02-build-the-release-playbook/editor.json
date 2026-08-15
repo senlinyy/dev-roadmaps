@@ -1,0 +1,151 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Release orders\n  hosts: orders_web\n  tasks:\n    - name: Install latest\n      ansible.builtin.apt:\n        name: orders\n        state: latest\n"
+    },
+    {
+      "filename": "ansible.cfg",
+      "initialValue": "[defaults]\nhost_key_checking = False\nretry_files_enabled = True\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "ansible.cfg",
+        "kind": "text",
+        "contains": [
+          "host_key_checking = True",
+          "retry_files_enabled = False"
+        ],
+        "doesNotContain": [
+          "host_key_checking = False"
+        ]
+      }
+    ],
+    "plays": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "hosts": "orders_web"
+        },
+        "paths": [
+          {
+            "path": [
+              "become"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "serial"
+            ],
+            "equals": 1
+          },
+          {
+            "path": [
+              "max_fail_percentage"
+            ],
+            "equals": 0
+          },
+          {
+            "path": [
+              "any_errors_fatal"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "pre_task",
+          "module": "assert"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.assert",
+              "that"
+            ],
+            "minItems": 2
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "task",
+          "module": "apt"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "name"
+            ],
+            "contains": "orders_release"
+          },
+          {
+            "path": [
+              "ansible.builtin.apt",
+              "state"
+            ],
+            "equals": "present"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "retries"
+            ],
+            "equals": 6
+          },
+          {
+            "path": [
+              "until"
+            ],
+            "contains": "orders_health.status"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "register-used",
+        "producer": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "module": "uri"
+        },
+        "consumer": {
+          "file": "deploy.yml",
+          "section": "post_task",
+          "module": "uri"
+        },
+        "fields": [
+          "status"
+        ]
+      }
+    ]
+  }
+}

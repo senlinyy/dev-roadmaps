@@ -73,6 +73,10 @@
       "us-east-1b",
       "MapPublicIpOnLaunch"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ec2\\\\s+describe-vpcs\\\\b",
+      "^aws\\\\s+ec2\\\\s+describe-subnets\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

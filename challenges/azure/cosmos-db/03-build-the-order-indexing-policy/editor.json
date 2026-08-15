@@ -1,0 +1,16 @@
+{
+  "language": "json",
+  "filename": "indexing-policy.json",
+  "completionProfile": "azure-cosmos-indexing",
+  "initialValue": "{\n  \"indexingMode\": \"none\",\n  \"automatic\": false,\n  \"includedPaths\": [],\n  \"excludedPaths\": [],\n  \"compositeIndexes\": []\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      { "path": ["indexingMode"], "equals": "consistent" },
+      { "path": ["automatic"], "equals": true },
+      { "path": ["includedPaths"], "containsObject": { "path": "/*" }, "minItems": 1, "maxItems": 1 },
+      { "path": ["excludedPaths"], "containsObject": { "path": "/largePayload/*" }, "minItems": 1, "maxItems": 1 },
+      { "path": ["compositeIndexes"], "includes": [ { "path": "/customerId", "order": "ascending" }, { "path": "/createdAt", "order": "descending" } ], "minItems": 1, "maxItems": 1 }
+    ]
+  }
+}

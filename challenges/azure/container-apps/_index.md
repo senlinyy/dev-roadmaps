@@ -4,6 +4,6 @@ description: "Practice reading Container Apps environments, images, revisions, i
 articleId: article-cloud-providers-azure-compute-application-hosting-azure-container-apps
 articleSlug: container-apps
 difficulty: medium
-order: 20
+order: 14
 tags: ["azure","container-apps","revisions","scale"]
 ---

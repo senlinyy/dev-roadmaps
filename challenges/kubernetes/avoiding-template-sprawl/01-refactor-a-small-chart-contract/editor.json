@@ -1,0 +1,38 @@
+{
+  "language": "yaml",
+  "completionProfile": "yaml",
+  "activeFile": "templates/_helpers.tpl",
+  "files": [
+    {
+      "filename": "values.yaml",
+      "initialValue": "replicaCount: 2\nimage:\n  repository: ghcr.io/devpolaris/orders-api\n  tag: 2026.08.1\nservice:\n  port: 80\nenvironmentName: production\nenableExperimentalRouting: false\n"
+    },
+    {
+      "filename": "templates/_helpers.tpl",
+      "initialValue": "{{- define \"orders-api.name\" -}}\norders-api\n{{- end -}}\n"
+    },
+    {
+      "filename": "templates/deployment.yaml",
+      "initialValue": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ .Release.Name }}-orders-api\nspec:\n  selector:\n    matchLabels:\n      app.kubernetes.io/name: orders-api\n  template:\n    metadata:\n      labels:\n        app.kubernetes.io/name: orders-api\n    spec:\n      containers:\n        - name: api\n"
+    },
+    {
+      "filename": "templates/service.yaml",
+      "initialValue": "apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ .Release.Name }}-orders-api\nspec:\n  selector:\n    app.kubernetes.io/name: orders-api\n  ports:\n    - name: http\n      targetPort: http\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      { "file": "values.yaml", "pattern": "(?m)^replicaCount:\\s*2\\s*$", "label": "small replica count input" },
+      { "file": "values.yaml", "pattern": "(?s)^.*image:\\s*\\n\\s+repository:\\s*ghcr\\.io/devpolaris/orders-api\\s*\\n\\s+tag:\\s*2026\\.08\\.1.*service:\\s*\\n\\s+port:\\s*80\\s*$", "label": "image and Service values contract" },
+      { "file": "values.yaml", "pattern": "environmentName|enableExperimentalRouting|labels:", "label": "sprawling values are removed", "negate": true },
+      { "file": "templates/_helpers.tpl", "pattern": "define\\s+\"orders-api\\.selectorLabels\"[\\s\\S]*app\\.kubernetes\\.io/name:\\s*orders-api[\\s\\S]*app\\.kubernetes\\.io/instance:\\s*\\{\\{\\s*\\.Release\\.Name\\s*\\}\\}", "label": "namespaced selector label helper" },
+      { "file": "templates/deployment.yaml", "pattern": "replicas:\\s*\\{\\{\\s*\\.Values\\.replicaCount\\s*\\}\\}", "label": "replica count value wiring" },
+      { "file": "templates/deployment.yaml", "pattern": "image:\\s*\"?\\{\\{\\s*\\.Values\\.image\\.repository\\s*\\}\\}:\\{\\{\\s*\\.Values\\.image\\.tag\\s*\\}\\}\"?", "label": "image value wiring" },
+      { "file": "templates/deployment.yaml", "pattern": "matchLabels:\\s*\\n\\s+\\{\\{-?\\s*include\\s+\"orders-api\\.selectorLabels\"\\s+\\.\\s*\\|\\s*nindent\\s+6\\s*\\}\\}", "label": "Deployment selector uses shared labels" },
+      { "file": "templates/deployment.yaml", "pattern": "labels:\\s*\\n\\s+\\{\\{-?\\s*include\\s+\"orders-api\\.selectorLabels\"\\s+\\.\\s*\\|\\s*nindent\\s+8\\s*\\}\\}", "label": "Pod template uses shared labels" },
+      { "file": "templates/service.yaml", "pattern": "selector:\\s*\\n\\s+\\{\\{-?\\s*include\\s+\"orders-api\\.selectorLabels\"\\s+\\.\\s*\\|\\s*nindent\\s+4\\s*\\}\\}", "label": "Service selector uses shared labels" },
+      { "file": "templates/service.yaml", "pattern": "port:\\s*\\{\\{\\s*\\.Values\\.service\\.port\\s*\\}\\}", "label": "Service port value wiring" }
+    ]
+  }
+}

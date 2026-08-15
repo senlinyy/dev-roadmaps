@@ -30,8 +30,7 @@ id: "article-mlops-model-evaluation-bias-fairness-responsible-evaluation"
 ## What a Fairness Review Is Trying to Learn
 <!-- section-summary: A fairness review asks how an ML-supported decision affects different people, why those effects differ, and whether the remaining risk is acceptable. -->
 
-At a high level, **a fairness review asks whether an ML-supported decision distributes benefits, errors, and harms responsibly across the people it affects**.
-The review studies the whole decision path: the data collected, the label chosen, the model score, the product rule, the human response, and the outcome experienced by a person.
+Two groups can receive very different false-rejection rates even though the model's overall score looks strong. **A fairness review asks whether an ML-supported decision distributes benefits, errors, and harms responsibly across the people it affects.** The review studies the whole decision path: the data collected, the label chosen, the model score, the product rule, the human response, and the outcome experienced by a person.
 
 Consider a model that prioritizes applications for limited appointments.
 The model may have strong overall accuracy and still send qualified applicants from one group to the back of the queue more often.
@@ -278,6 +277,10 @@ NIST AI RMF treats the choice to proceed with an AI system as part of risk manag
 Fairness requirements should be set before the final candidate result appears.
 Product, domain, policy, privacy, legal, and affected-stakeholder perspectives may all be needed.
 The result is a reviewed harm-and-measurement plan, not a metric chosen by whichever model currently scores best.
+
+![A limited-support-program decision connects scores and policy routes to false-negative, false-positive, human-review, and appeal evidence](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/fairness-from-decision-and-harm.png)
+
+*The affected people, benefit, harmful error, human role, and appeal path determine which group metrics and operational evidence belong in the review.*
 
 ## Check For Bias In Data And Labels Before Training
 <!-- section-summary: Historical decisions, labels, sampling, and measurement can create group differences that a model learns or that an evaluation hides. -->
@@ -737,6 +740,10 @@ A fairer model score can still produce unfair outcomes if the product policy, hu
 Roll out the complete change through a bounded pilot or staged release.
 Define success, stop conditions, fallback, review capacity, and the mature outcomes needed for confirmation.
 
+![A resume-classifier disparity is traced to a parser that drops contractor credentials and repaired at the preprocessing layer](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/repair-the-responsible-layer.png)
+
+*A group gap describes the symptom; diagnosis identifies a testable mechanism, and the repair is re-evaluated for utility, coverage, workload, and new trade-offs.*
+
 ## How Current Tools Measure And Reduce Fairness Gaps
 <!-- section-summary: Fairlearn, TFMA Fairness Indicators, AIF360, and managed platforms automate group evidence and mitigation after the team has defined the fairness question. -->
 
@@ -1006,6 +1013,10 @@ They implement an evaluation plan; they do not decide what fairness requires.
 A responsible outcome may change the data, model, threshold, human workflow, product scope, or decision to use ML.
 The release record names the owners, evidence, mitigation, residual risk, fallback, appeal, and production monitoring.
 That complete path turns fairness from a dashboard metric into an accountable engineering and product practice.
+
+![A fairness review maps affected people, validates evidence, measures the complete system, mitigates the cause, protects sensitive data, and records an accountable decision](/content-assets/articles/article-mlops-model-evaluation-bias-fairness-responsible-evaluation/fairness-accountable-action.png)
+
+*Approved, scoped, and human-handled routes enter a monitored feedback loop; rejection records the rationale without releasing the candidate.*
 
 ## References
 

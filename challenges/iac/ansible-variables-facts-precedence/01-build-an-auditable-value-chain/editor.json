@@ -1,0 +1,88 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "group_vars/all.yml",
+      "initialValue": "---\norders_workers: 8\n"
+    },
+    {
+      "filename": "group_vars/production.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "host_vars/web-canary-01.yml",
+      "initialValue": "---\n{}\n"
+    },
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Audit orders inputs\n  hosts: production\n  tasks: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "group_vars/all.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 2
+          }
+        ]
+      },
+      {
+        "file": "group_vars/production.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 6
+          }
+        ]
+      },
+      {
+        "file": "host_vars/web-canary-01.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "orders_workers"
+            ],
+            "equals": 1
+          }
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "section": "pre_task",
+          "module": "debug"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.debug",
+              "msg"
+            ],
+            "contains": "orders_workers"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ]
+  }
+}

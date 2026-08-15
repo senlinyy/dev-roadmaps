@@ -1,0 +1,156 @@
+{
+  "language": "json",
+  "filename": "publish-workflow.asl.json",
+  "completionProfile": "aws-step-functions",
+  "initialValue": "{\n  \"Comment\": \"Publish a validated lesson\",\n  \"StartAt\": \"ValidateLesson\",\n  \"States\": {\n    \"ValidateLesson\": {\n      \"Type\": \"Task\"\n    },\n    \"PublishEvent\": {\n      \"Type\": \"Task\"\n    },\n    \"RecordFailure\": {\n      \"Type\": \"Task\"\n    },\n    \"PublishFailed\": {\n      \"Type\": \"Fail\"\n    }\n  }\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "StartAt"
+        ],
+        "equals": "ValidateLesson",
+        "label": "workflow start"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Type"
+        ],
+        "equals": "Task",
+        "label": "validation task"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Resource"
+        ],
+        "equals": "arn:aws:states:::lambda:invoke",
+        "label": "optimized Lambda integration"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Next"
+        ],
+        "equals": "PublishEvent",
+        "label": "success transition"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Retry",
+          0,
+          "ErrorEquals"
+        ],
+        "includes": "Lambda.ServiceException",
+        "label": "Lambda service retry"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Retry",
+          0,
+          "IntervalSeconds"
+        ],
+        "equals": 2,
+        "label": "initial retry delay"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Retry",
+          0,
+          "MaxAttempts"
+        ],
+        "equals": 3,
+        "label": "bounded retry count"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Retry",
+          0,
+          "BackoffRate"
+        ],
+        "equals": 2,
+        "label": "exponential backoff"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Catch",
+          0,
+          "ErrorEquals"
+        ],
+        "includes": "States.ALL",
+        "label": "fallback catch"
+      },
+      {
+        "path": [
+          "States",
+          "ValidateLesson",
+          "Catch",
+          0,
+          "Next"
+        ],
+        "equals": "RecordFailure",
+        "label": "failure transition"
+      },
+      {
+        "path": [
+          "States",
+          "PublishEvent",
+          "Resource"
+        ],
+        "equals": "arn:aws:states:::events:putEvents",
+        "label": "EventBridge integration"
+      },
+      {
+        "path": [
+          "States",
+          "PublishEvent",
+          "End"
+        ],
+        "equals": true,
+        "label": "successful terminal task"
+      },
+      {
+        "path": [
+          "States",
+          "RecordFailure",
+          "Resource"
+        ],
+        "equals": "arn:aws:states:::sqs:sendMessage",
+        "label": "SQS failure integration"
+      },
+      {
+        "path": [
+          "States",
+          "RecordFailure",
+          "Next"
+        ],
+        "equals": "PublishFailed",
+        "label": "failure record transition"
+      },
+      {
+        "path": [
+          "States",
+          "PublishFailed",
+          "Type"
+        ],
+        "equals": "Fail",
+        "label": "explicit failure state"
+      }
+    ]
+  }
+}

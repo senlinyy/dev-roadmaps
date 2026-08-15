@@ -28,11 +28,15 @@ aliases:
 ## What Backward Compatibility Means For A Model API
 <!-- section-summary: Compatibility keeps an existing client's request valid after the service, model, or surrounding data system changes. -->
 
-At a high level, **model API compatibility** means that an existing client can keep asking for a prediction after the team releases a new implementation. The request remains valid, and the response keeps the meaning the client expects. Failure handling and retry rules also stay predictable. A mobile application or batch job should not require an emergency release because a model changed behind the endpoint.
+A mobile application or batch job should not require an emergency release because a model changed behind its endpoint. **Model API compatibility** means that existing clients can keep requesting predictions after a new implementation is released. Requests remain valid, responses preserve their expected meaning, and failure and retry behaviour stays predictable.
 
 Some compatibility failures are obvious. Removing a required response field can crash a strict client. Changing a number into a string can fail deserialization. ML systems also produce a more dangerous kind of failure: the request succeeds, the server returns `200 OK`, and the response has the expected fields, yet the meaning has changed.
 
 Consider a fraud API that has always returned `risk_score` as a probability from `0.0` to `1.0`. A new model returns an uncalibrated ranking score on the same numerical range. The checkout service still parses the response. Its rule still blocks scores above `0.85`. The integration appears healthy, while the business decision is now based on a different quantity. HTTP success has hidden a semantic break.
+
+![Two risk score responses with the same shape and range but different meanings, showing why a probability threshold cannot safely interpret an uncalibrated ranking score.](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/semantic-compatibility-break.png)
+
+*Matching field names and number ranges do not preserve compatibility when the score no longer means the same thing.*
 
 Two directions of compatibility matter:
 
@@ -97,6 +101,10 @@ Suppose a new churn model replaces three one-hot columns with one categorical co
 The stored event deserves equal attention. A live response can be correct while a monitoring pipeline quietly loses the ability to join predictions to outcomes. For example, renaming `prediction_id` inside an event can reduce label-join coverage days after the release. The online service stays green; quality monitoring loses its evidence.
 
 Each contract needs an owner and a version or release identifier. That identifier does not need to appear in the URL. A response can carry `contract_version`, `model_version`, and `policy_version`, while the stable route remains `/v1/predict`. Separate identifiers make incidents diagnosable because they reveal which layer changed.
+
+![A prediction request crossing public service, feature, model signature, decision, response, and stored-event contracts, with the compatibility responsibility at each boundary.](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/five-model-api-contracts.png)
+
+*A single prediction crosses several contracts, and each contract can fail independently even when the endpoint still returns a successful response.*
 
 ## Keep Request And Response Shapes Compatible
 <!-- section-summary: Structural compatibility preserves fields, types, requiredness, status codes, and other machine-readable rules used by clients. -->
@@ -492,6 +500,10 @@ Model API compatibility is the discipline of preserving useful behavior across c
 OpenAPI with FastAPI and Pydantic can protect an HTTP boundary. MLflow signatures can validate model-ready input and output. Protobuf with Buf can protect RPC and event schemas. Pact can capture expectations owned by independently deployed consumers. These tools find structural problems; semantic fixtures, replay comparisons, contract telemetry, and explicit policy versions protect meaning.
 
 The strongest release process asks three questions. Can every supported old client use the candidate? Can the newest client use the retained release during rollback? Do identical-looking values still carry the same units, freshness, score semantics, and decision policy? Clear answers turn compatibility from a documentation claim into release evidence.
+
+![A model API compatibility release gate combining old and new client-service tests, shape and meaning checks, staged migration, and pass or repair outcomes.](/content-assets/articles/article-mlops-deployment-and-release-management-backward-compatible-model-apis/model-api-compatibility-summary.png)
+
+*A compatible release tests every supported version combination, preserves semantic meaning, and removes old behavior only after usage and rollback gates pass.*
 
 ## References
 

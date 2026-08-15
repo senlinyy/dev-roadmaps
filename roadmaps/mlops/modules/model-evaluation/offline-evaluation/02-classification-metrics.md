@@ -122,6 +122,10 @@ The same metric can describe different consequences in another product. A false 
 
 Pay close attention to matrix orientation. Scikit-learn's `confusion_matrix(y_true, y_pred, labels=[0, 1])` places true labels on rows and predicted labels on columns. Other tools may display the axes differently. A production report should label both axes, show the class names, and keep the class order explicit. Silent axis reversal can turn a false-negative count into a false-positive count during review.
 
+![A defect-detection confusion matrix connects four exact outcome counts to precision recall and specificity calculations](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/confusion-matrix.png)
+
+*The matrix keeps the operational consequence of each cell visible. Precision, recall, and specificity select different denominators from the same four counts.*
+
 ## Precision, Recall, Specificity, and F1 Answer Different Questions
 <!-- section-summary: Precision, recall, specificity, and F1 summarize different relationships among the same four counts, so the product consequence should choose which one leads. -->
 
@@ -228,6 +232,10 @@ Threshold selection belongs on validation data. Repeatedly adjusting the cutoff 
 Score-based metrics answer a related question before the threshold is fixed. **ROC AUC** measures how often positive cases tend to rank above negative cases across thresholds. **Average precision (AP)** summarizes the precision-recall curve and is often informative for rare positives. Random scores have AP near the positive-class prevalence, so the baseline stays visible.
 
 ROC AUC or AP can show that a candidate orders cases better overall. Neither metric says how many alerts the selected threshold produces. The release report needs the curve summary and the actual operating-point counts.
+
+![ROC AUC and average precision are compared with an exact threshold table and an 800-review daily capacity](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/ranking-thresholds.png)
+
+*Score-ordering metrics describe behavior across thresholds. The locked operating point determines recall, precision, and the workload the production team must handle.*
 
 ## Check Whether Predicted Probabilities Match Real Outcomes
 <!-- section-summary: Log loss, Brier score, and calibration curves evaluate probability estimates, while confusion-matrix metrics evaluate the labels created by a threshold. -->
@@ -388,6 +396,10 @@ Classification quality cannot be reduced to one universal score. Accuracy summar
 The threshold turns model scores into product actions, so it changes both the metrics and the workload. ROC AUC and average precision describe score ordering across thresholds. Log loss, Brier score, and calibration curves examine probability quality. Macro, weighted, and micro averages combine multiclass results in different ways, while segment reports show whether important populations share the overall result.
 
 A production report anchors every metric to the decision and its error costs. It preserves raw counts, declares the positive class and threshold, separates decision quality from probability quality, compares against production, and carries class and segment evidence into the release gate.
+
+![A repeatable classification report links pinned inputs and confusion counts to decision probability and segment evidence before release review](/content-assets/articles/article-mlops-model-evaluation-classification-metrics/report-artifacts.png)
+
+*A reproducible report keeps the candidate, dataset, positive class, and threshold beside the counts, probability checks, class support, segments, baseline comparison, and saved artifacts.*
 
 ## References
 

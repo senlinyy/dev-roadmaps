@@ -43,7 +43,7 @@ flowchart TD
     D -->|No| G["Reject submission<br/>(show the exact field error)"]
 ```
 
-In essence, configuration safety moves mistakes to the cheapest point in the run: before data access, compute allocation, and model production.
+Configuration safety moves mistakes to the cheapest point in the run: before data access, compute allocation, and model production.
 
 ## What A Training Configuration Controls
 <!-- section-summary: Run configuration stores the reviewed choices for one execution while the training program keeps the reusable behavior. -->
@@ -94,7 +94,7 @@ The run config names data and feature versions, model family, hyperparameters, r
 
 Some runners transport a selected dataset through a dedicated CLI or managed-job input. The mounted path is an execution detail; the immutable snapshot identity still belongs in the effective run record. The resolver can combine the submitted identity with the path supplied by the platform before it freezes and hashes the config.
 
-Some teams also include a portable compute intent such as `compute_profile: gpu-medium`. The cloud binding for that profile still lives in the job specification. This keeps an experiment meaningful across Azure Machine Learning, Amazon SageMaker AI, Vertex AI, Databricks Jobs, or an internal Kubernetes platform.
+Some teams also include a portable compute intent such as `compute_profile: gpu-medium`. The cloud binding for that profile still lives in the job specification. This keeps an experiment meaningful across Azure Machine Learning, Amazon SageMaker AI, Gemini Enterprise Agent Platform, Databricks Jobs, or an internal Kubernetes platform.
 
 ### Keep Compute And Deployment Settings In The Job Specification
 
@@ -105,6 +105,10 @@ The job specification selects the container image digest, machine type, accelera
 A run may need access to a warehouse, tracking server, or artifact store. The config should carry a secret reference or credential scope, such as `secret://ml-training/warehouse-reader`. The workload identity receives permission to resolve that reference at runtime.
 
 The fetched credential remains inside the protected runtime boundary. Git stores the reference. The run digest covers the reference. Logs, tracking tags, and resolved artifacts omit the credential value.
+
+![Source code, run configuration, job specification, and secret references feeding one reviewed training execution and its identity record.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/training-setting-boundaries.png)
+
+*The four inputs have different owners, yet their identities meet in the evidence for one training execution.*
 
 ## Design A Small And Stable Training Configuration
 <!-- section-summary: A compact hierarchy helps reviewers find data identity, feature identity, model choices, evaluation rules, and reproducibility controls. -->
@@ -243,6 +247,10 @@ Store the serialization format, schema version, and digest algorithm with the di
 The resolved file should travel with the run's metrics and artifacts. MLflow can log it as an artifact and record the digest as a run tag. A managed platform can also store the digest in job labels or metadata. Useful lineage links include the Git commit, source config URI, ordered override list, data snapshot IDs, feature-set version, container digest, and cloud job ID.
 
 This record helps a reviewer connect a metric to the approved configuration. The reviewer compares the submitted digest with the tracking tag and the artifact digest. A match ties the evidence to one exact recipe.
+
+![Configuration layers resolved and validated once, frozen as canonical bytes, hashed, and matched across submission, worker, tracker, and model artifact.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/effective-config-identity.png)
+
+*A shared digest proves that every boundary used the same resolved training recipe.*
 
 ## Keep Runtime Details And Secrets Out Of The Training Recipe
 <!-- section-summary: Environment variables carry runtime facts, while secret managers supply credential values through identities and reviewed references. -->
@@ -403,6 +411,10 @@ The design gives each concern a clear home. Source code defines training behavio
 
 This foundation supports local scripts, CI smoke tests, scheduled retraining, managed cloud jobs, and experiment sweeps with the same contract. The platform may change how it transports values, while the training program keeps one validated recipe from process startup through artifact publication.
 
+![Eight-step training configuration workflow from reviewed settings and precedence through validation, preflight, freezing, job start, and recording the configuration digest with run artifacts.](/content-assets/articles/article-mlops-training-pipelines-config-files-for-ml-training/training-config-workflow-summary.png)
+
+*Run settings, runtime resources, and secret resolution remain separate while one validated recipe follows the job.*
+
 ## References
 
 - [Pydantic Documentation: Configuration](https://docs.pydantic.dev/latest/api/config/)
@@ -413,5 +425,6 @@ This foundation supports local scripts, CI smoke tests, scheduled retraining, ma
 - [MLflow Documentation: Tracking](https://mlflow.org/docs/latest/ml/tracking/)
 - [Azure Machine Learning Documentation: Command Job YAML Schema](https://learn.microsoft.com/en-us/azure/machine-learning/reference-yaml-job-command?view=azureml-api-2)
 - [Amazon SageMaker AI Documentation: How Training Information Reaches A Container](https://docs.aws.amazon.com/sagemaker/latest/dg/your-algorithms-training-algo-running-container.html)
+- [Gemini Enterprise Agent Platform serverless training overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/training/overview)
 - [Databricks Documentation: Job Parameters](https://docs.databricks.com/aws/en/jobs/job-parameters)
 - [Databricks Documentation: Dynamic Value References](https://docs.databricks.com/aws/en/jobs/dynamic-value-references)

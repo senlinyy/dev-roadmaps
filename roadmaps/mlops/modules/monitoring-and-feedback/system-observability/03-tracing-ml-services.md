@@ -1,7 +1,7 @@
 ---
 title: "ML Service Tracing"
 description: "Learn how distributed traces reveal the path, timing, dependencies, model versions, and fallback decisions behind one production prediction."
-overview: "ML service tracing follows one prediction across APIs, feature services, queues, model runtimes, policies, and fallbacks. This article builds the subject from the request journey and span timing through context propagation, OpenTelemetry instrumentation, collection, sampling, privacy, investigation, testing, and recovery."
+overview: "ML service tracing follows one prediction across APIs, feature services, queues, model runtimes, policies, and fallbacks, then connects that journey to span timing, context propagation, OpenTelemetry instrumentation, collection, sampling, privacy, investigation, testing, and recovery."
 tags: ["MLOps", "core", "observability"]
 order: 3
 id: "article-mlops-monitoring-and-feedback-tracing-ml-services"
@@ -45,27 +45,9 @@ The same trace can expose a hidden fallback. A request may return `200 OK`, alth
 
 This is especially important in ML systems. A production prediction often depends on more than one model call:
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant API as Prediction API
-    participant Features as Feature service
-    participant Search as Candidate retrieval
-    participant Model as Model runtime
+![Recommendation request trace showing the API forking feature retrieval and candidate retrieval, joining before model inference and policy, plus a separate 900-millisecond critical-path breakdown](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/recommendation-request-trace.png)
 
-    User->>API: Request a recommendation
-    par Load current features
-        API->>Features: Fetch user and item features
-        Features-->>API: Return values and timestamps
-    and Find candidate items
-        API->>Search: Retrieve candidates
-        Search-->>API: Return candidate set
-    end
-    API->>Model: Score candidates
-    Model-->>API: Return scores and model version
-    API->>API: Apply policy and fallback rules
-    API-->>User: Return ranked result
-```
+*A recommendation request can run feature and candidate work in parallel before model inference and policy. The separate 900-millisecond example shows why the longest dependent chain, not the sum of overlapping spans, controls the caller’s wait.*
 
 The user experiences this whole journey. The API, network, feature service, retrieval system, queue, model runtime, and policy can each add delay or change the result.
 
@@ -162,10 +144,6 @@ A **span event** records that timestamped moment inside an operation. A remote d
 
 Tracing every function creates noise. A helper that converts a list into an array rarely needs its own span. The reader should see the system's important operations, rather than the source file's complete call tree.
 
-![The anatomy of an ML trace showing request topology, child operations, model inference, fallback work, attributes, and span links](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/ml-trace-anatomy.png)
-
-*The outer request span contains smaller operations. Their position and width show sequence, overlap, and duration.*
-
 ## How OpenTelemetry Standardises Tracing
 <!-- section-summary: OpenTelemetry defines how applications create, identify, transport, process, and export trace data while a separate backend stores and displays it. -->
 
@@ -233,7 +211,7 @@ The Collector is optional for a small managed setup because an SDK may export di
 
 The tracing backend still owns storage, indexes, query behavior, retention, access control, and the waterfall interface. The Collector owns movement and processing. The application owns meaningful spans and safe attributes.
 
-In essence, instrumentation observes the work, the API describes it, the SDK turns it into telemetry, trace context connects services, OTLP transports the finished records, the Collector applies shared policy, and the backend helps an engineer investigate them. The rest of this article develops each part through production design and failure scenarios.
+Instrumentation observes the work, the API describes it, and the SDK turns it into telemetry. Trace context connects services, OTLP transports the finished records, the Collector applies shared policy, and the backend gives engineers an investigation view. The following sections connect each part to production design and failure investigation.
 
 ## Choose Spans That Support A Real Investigation
 <!-- section-summary: Span boundaries separate work with its own latency, failure mode, owner, or recovery action. -->
@@ -310,20 +288,9 @@ Application code usually should not parse the header. OpenTelemetry framework an
 
 The example also includes **gRPC**, a high-performance protocol for calling a function on another service. OpenTelemetry propagates the same trace identity across supported HTTP and gRPC clients.
 
-```mermaid
-sequenceDiagram
-    participant API as Prediction API
-    participant Features as Feature service
-    participant Model as Model gateway
+![Direct calls using parent-child trace context compared with three independent request contexts linked to one shared GPU batch](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/trace-context-and-span-links.png)
 
-    Note over API: trace_id = T1<br/>span_id = S1
-    API->>Features: HTTP request + traceparent(T1, S1)
-    Note over Features: trace_id = T1<br/>span_id = S2<br/>parent = S1
-    Features-->>API: Feature response
-    API->>Model: gRPC call + trace context(T1, S1)
-    Note over Model: trace_id = T1<br/>span_id = S3<br/>parent = S1
-    Model-->>API: Prediction response
-```
+*Parent-child context preserves direct cause across HTTP and gRPC calls. A link set connects all contributing request contexts to shared asynchronous batch work without pretending that one request caused the others.*
 
 The shared trace ID lets the backend group all three services into one journey. Each service creates a fresh span ID, and the parent value preserves the order of the calls.
 
@@ -349,10 +316,6 @@ A worker handling one message can continue the original trace. A worker building
 Imagine ten requests entering a dynamic batch. One batch execution should not pretend that request 1 caused requests 2 through 10. OpenTelemetry **span links** connect the shared batch span to all contributing request contexts.
 
 Each request keeps its own trace and prediction ID. The `batch.execute` span links to the ten request spans. If queue delay rises, an operator can inspect the batch and return to the affected requests.
-
-![W3C trace context crossing a queue and span links connecting several request traces to one asynchronous GPU batch](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/trace-context-through-batch.png)
-
-*Parent-child context fits a direct call. Span links describe shared work created from several independent requests.*
 
 ### Limit What Baggage Can Carry
 
@@ -524,10 +487,6 @@ OpenTelemetry exposes internal metrics for queue capacity, queue size, enqueue f
 
 Suppose queue use reaches 85 percent during a backend slowdown. The observability owner reduces routine trace retention or scales the gateway. The backend owner restores ingestion. Recovery appears as falling queue pressure, stopped export errors, and a complete known trace arriving end to end.
 
-![OpenTelemetry spans moving from applications through a Collector pipeline to a tracing backend, with sampling controls and Collector health signals](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/otel-sampling-export-pipeline.png)
-
-*The application creates spans, OTLP carries them, the Collector applies policy, and the backend stores the retained journeys.*
-
 ## How To Reduce Trace Volume And Cost
 <!-- section-summary: Sampling keeps representative healthy traces and higher-value slow, failed, fallback, and release-transition traces. -->
 
@@ -636,10 +595,6 @@ The response follows evidence from broad to specific. The trace identifies the s
 Tracing can also clarify a model-quality problem. Suppose labelled outcomes worsen for one policy version. Sampled traces show that affected requests often hit a feature timeout and select a fallback before the primary policy runs. The model artifact may still be accurate. The serving path changed the decision.
 
 Trace absence needs an explanation too. A decision record may point to a trace removed by sampling or retention. That is expected if the sampling class and retention window are known. Missing recent error traces together with Collector export failures indicates a telemetry incident.
-
-![A cross-signal investigation moving from metric alert to trace path, structured logs, decision record, release evidence, and recovery](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/cross-signal-investigation.png)
-
-*Metrics show the affected population. The trace reveals the path. Logs, resources, and release records support the cause and verify recovery.*
 
 ## Keep Traces Safe And Searchable
 <!-- section-summary: A trace data contract keeps sensitive values and unbounded identifiers out of broadly accessible tracing systems. -->
@@ -803,9 +758,9 @@ OpenTelemetry provides the common instrumentation, OTLP transport, and Collector
 
 A trustworthy tracing system survives failure. Teams test span shape, propagation, privacy, sampling, overhead, backend outages, and recovery. During an incident, they use metrics to find the affected population, open one representative trace, follow its critical path, confirm the cause with logs and resource evidence, contain the problem, and verify the original user-facing signal.
 
-![The complete ML tracing operating loop from span design and propagation through collection, sampling, correlation, privacy checks, testing, recovery, and improvement](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/tracing-operating-loop.png)
+![ML tracing incident summary from a candidate-route latency alert through one representative trace, gpu-l4-b memory evidence, containment, repair, small canary, and staged release decision](/content-assets/articles/article-mlops-monitoring-and-feedback-tracing-ml-services/tracing-incident-recovery-summary.png)
 
-*Tracing connects request design, collection, investigation, and recovery into one production discipline.*
+*Metrics locate the affected population; one trace identifies candidate inference as the slow operation; logs, resources, and release evidence support repair. A small canary must pass the original latency, memory, fallback, and trace checks before staged rollout continues.*
 
 ## References
 

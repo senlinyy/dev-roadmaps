@@ -1,0 +1,129 @@
+{
+  "language": "hcl",
+  "completionProfile": "terraform-aws",
+  "activeFile": "live/prod/main.tf",
+  "files": [
+    {
+      "filename": "modules/app/main.tf",
+      "initialValue": "resource \"aws_lb\" \"app\" { name = \"orders-prod\" }\n",
+      "readOnly": true
+    },
+    {
+      "filename": "modules/app/outputs.tf",
+      "initialValue": "output \"endpoint\" {\n}\n"
+    },
+    {
+      "filename": "modules/monitoring/variables.tf",
+      "initialValue": "variable \"endpoint\" {\n}\n"
+    },
+    {
+      "filename": "modules/monitoring/main.tf",
+      "initialValue": "resource \"aws_synthetics_canary\" \"availability\" {\n  name = \"orders-availability\"\n}\n"
+    },
+    {
+      "filename": "live/prod/main.tf",
+      "initialValue": "module \"app\" {\n  source = \"../../modules/app\"\n}\n\nmodule \"monitoring\" {\n  source = \"../../modules/monitoring\"\n}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "terraform-config",
+    "blocks": [
+      {
+        "select": {
+          "file": "modules/app/outputs.tf",
+          "path": [
+            {
+              "type": "output",
+              "labels": [
+                "endpoint"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "value"
+            ],
+            "references": [
+              "aws_lb.app.dns_name"
+            ]
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "modules/monitoring/variables.tf",
+          "path": [
+            {
+              "type": "variable",
+              "labels": [
+                "endpoint"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "type"
+            ],
+            "expressionEquals": "string"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "modules/monitoring/main.tf",
+          "path": [
+            {
+              "type": "resource",
+              "labels": [
+                "aws_synthetics_canary",
+                "availability"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "environment_variables",
+              "TARGET_ENDPOINT"
+            ],
+            "expressionEquals": "var.endpoint"
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "live/prod/main.tf",
+          "path": [
+            {
+              "type": "module",
+              "labels": [
+                "monitoring"
+              ]
+            }
+          ]
+        },
+        "attributes": [
+          {
+            "path": [
+              "source"
+            ],
+            "valueEquals": "../../modules/monitoring"
+          },
+          {
+            "path": [
+              "endpoint"
+            ],
+            "references": [
+              "module.app.endpoint"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "language": "yaml",
+  "completionProfile": "github-actions",
+  "activeFile": ".github/workflows/ansible-review.yml",
+  "files": [
+    {
+      "filename": ".github/workflows/ansible-review.yml",
+      "initialValue": "name: Ansible review\n\non:\n  pull_request:\n\njobs:\n  review:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+    },
+    {
+      "filename": "requirements.yml",
+      "initialValue": "---\ncollections: []\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": ".github/workflows/ansible-review.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "jobs",
+              "review",
+              "permissions",
+              "contents"
+            ],
+            "equals": "read"
+          },
+          {
+            "path": [
+              "jobs",
+              "review",
+              "steps"
+            ],
+            "containsObject": {
+              "name": "Validate syntax",
+              "run": "ansible-playbook -i inventories/production.ini deploy.yml --syntax-check"
+            }
+          },
+          {
+            "path": [
+              "jobs",
+              "review",
+              "steps"
+            ],
+            "containsObject": {
+              "name": "Prove production scope",
+              "run": "ansible-playbook -i inventories/production.ini deploy.yml --list-hosts"
+            }
+          },
+          {
+            "path": [
+              "jobs",
+              "review",
+              "steps"
+            ],
+            "containsObject": {
+              "name": "Preview the canary",
+              "run": "ansible-playbook -i inventories/production.ini deploy.yml --check --diff --limit canary"
+            }
+          }
+        ],
+        "doesNotContain": [
+          "ANSIBLE_VAULT_PASSWORD=",
+          "BEGIN OPENSSH PRIVATE KEY"
+        ]
+      },
+      {
+        "file": "requirements.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "collections"
+            ],
+            "containsObject": {
+              "name": "community.general",
+              "version": "10.7.0"
+            }
+          }
+        ]
+      }
+    ],
+    "forbiddenText": [
+      "vault-password-file: plaintext",
+      "private_key:"
+    ]
+  }
+}

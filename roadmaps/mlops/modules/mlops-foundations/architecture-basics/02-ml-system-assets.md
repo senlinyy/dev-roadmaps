@@ -29,7 +29,7 @@ id: "article-mlops-mlops-foundations-ml-system-assets"
 ## What An ML System Must Record Beyond The Model File
 <!-- section-summary: A production release depends on many connected assets because the model file alone cannot explain, reproduce, operate, or recover the system. -->
 
-A production release depends on far more than one saved model file. At a high level, **an ML system asset is any durable object or record needed to create, evaluate, release, operate, or explain a model-powered system**. Source code is an asset. So are a training-data snapshot, a feature definition, a container image, a training run, a model package, an evaluation report, a release record, and the production outcomes used to judge the model later.
+A production release depends on far more than one saved model file. The team also needs the data snapshot, feature definitions, serving environment, evaluation results, and release history that gave the model its meaning. **An ML system asset is any durable object or record needed to create, evaluate, release, operate, or explain that model-powered system.** Source code is an asset. So are a container image, training run, model package, evaluation report, release record, and the production outcomes used to judge the model later.
 
 The model file is only one result in this chain. It may contain learned weights or decision trees, yet it usually cannot answer the questions that matter during a release or incident:
 
@@ -97,6 +97,10 @@ These groups are useful because each answers a different investigation question.
 The relationships matter as much as the objects. A metric with no model identity cannot support a release decision. A model version with no dataset reference cannot support reproduction. A prediction with no release identity cannot support incident analysis. A label with no prediction join key cannot support production evaluation.
 
 You can think of the graph as the evidence trail for one statement: “this production result came from this approved system.” Every important edge should be queryable instead of living only in a ticket, notebook title, or engineer's memory.
+
+![Code, data, run, model, evaluation, and approval records connected to one recoverable production release](/content-assets/articles/article-mlops-mlops-foundations-ml-system-assets/release-evidence-bundle.png)
+
+*The release gains meaning from the records around it. The model artifact alone cannot explain which data shaped it, why it passed review, or how to recover the production state.*
 
 ## Every Asset Needs Identity, Ownership, and a Lifecycle
 <!-- section-summary: A durable asset contract defines what the asset is, how it is identified, who controls it, how it is verified, and how long it remains usable. -->
@@ -180,7 +184,7 @@ The durable asset is the **resolved configuration**: the final values used after
 
 Secrets are handled differently. The record should identify the secret reference and version or rotation state where the platform permits it. It should never copy credentials into run metadata, logs, or artifacts.
 
-A useful source record might preserve relationships like these:
+A source record can preserve these relationships:
 
 ```yaml
 source:
@@ -236,7 +240,7 @@ flowchart TD
     class T result
 ```
 
-Feature stores such as Feast and managed feature platforms can store shared definitions and support historical or online retrieval. They are useful after several models reuse features or online serving needs consistent low-latency values. A batch model with a few stable warehouse fields may only need governed transformations and versioned tables.
+Feature stores such as Feast and managed feature platforms can store shared definitions and support historical or online retrieval. Several models reusing the same features, or an online service needing consistent low-latency values, can justify that platform. A batch model with a few stable warehouse fields may need only governed transformations and versioned tables.
 
 ### Record Ownership, Permissions, And Discovery For Stored Data
 
@@ -282,7 +286,7 @@ flowchart TD
     class M,Q,X output
 ```
 
-MLflow Tracking records executions as runs and can attach parameters, metrics, code versions, artifacts, datasets, and Logged Models. MLflow 3 can link metrics to a specific Logged Model and dataset, which is useful after one run produces several checkpoints.
+MLflow Tracking records executions as runs and can attach parameters, metrics, code versions, artifacts, datasets, and Logged Models. MLflow 3 can link metrics to a specific Logged Model and dataset, allowing separate evaluation of several checkpoints produced by one run.
 
 Managed training platforms also create job and run records. SageMaker AI keeps these records inside its managed job system. Google Cloud's Gemini Enterprise Agent Platform records its training executions, while Databricks records job execution alongside its MLflow integration.
 
@@ -395,23 +399,13 @@ For an online service, the record binds an endpoint revision to its model and cu
 
 Production records show what the released system predicted and what happened afterward. The system sees live inputs, executes a release, produces predictions, triggers product actions, and eventually receives outcomes that training cannot supply.
 
-A useful prediction record identifies the release, request or batch run, prediction time, governed entity or join key, output summary, policy action, and operational correlation ID. It may also reference the input snapshot or online feature state.
+A prediction record identifies the release, request or batch run, prediction time, governed entity or join key, output summary, policy action, and operational correlation ID. It may also reference the input snapshot or online feature state.
 
 For a payment decision, the record could say that release `42` returned risk band `high`, policy version `fraud-action-v6` routed the payment to review, and trace `abc123` followed the technical request. The later investigation result joins through a governed prediction identifier.
 
-```mermaid
-sequenceDiagram
-    participant App as Product application
-    participant Model as Model release
-    participant Evidence as Governed evidence store
-    participant Outcome as Outcome source
+![Backward lineage from a prediction to its source assets and forward lineage from a changed dataset to affected predictions](/content-assets/articles/article-mlops-mlops-foundations-ml-system-assets/two-way-lineage-trace.png)
 
-    App->>Model: Features and prediction ID
-    Model-->>App: Score and release ID
-    App->>Evidence: Product action and prediction ID
-    Outcome->>Evidence: Mature label and prediction ID
-    Evidence->>Evidence: Join release, action, and outcome
-```
+*Backward tracing explains one production prediction. Forward tracing finds every run, model, release, and prediction that may depend on a changed input.*
 
 The record should contain the minimum approved fields. A release identity and prediction time usually belong in the operational record. A governed join key can connect the result to restricted source data.
 
@@ -466,7 +460,7 @@ Lineage tools discover some relationships automatically. OpenLineage defines Job
 
 Automatic capture has limits. Dynamic code, renamed objects, custom services, direct file paths, unsupported libraries, and external systems can leave gaps. The release decision and product action may also live outside the data platform.
 
-Teams therefore combine captured lineage with explicit identifiers in run, release, prediction, and approval records. A useful lineage review asks where capture stops, which edge is declared by application code, and which human owner can verify the relationship.
+Teams therefore combine captured lineage with explicit identifiers in run, release, prediction, and approval records. During a lineage review, the team identifies where automatic capture stops, which edge application code declares, and which owner can verify the relationship.
 
 Lineage views must respect the same access rules as the underlying data. Catalog and metadata systems should mask protected nodes and enforce the surrounding governance model.
 
@@ -547,6 +541,10 @@ Source and configuration describe intended work. Data, labels, and features desc
 Stable identities connect these records. Ownership gives each asset an accountable response path. Lineage supports backward cause analysis and forward impact analysis. Retention and recovery keep complete historical releases usable for as long as policy requires.
 
 Industrial tools divide this work across source control, storage, tracking, registries, catalogs, orchestrators, deployment systems, and telemetry platforms. The durable design principle stays the same: every production result should lead to the exact system that created it and every material input should lead to the production results it influenced.
+
+![Connected ML assets protected by identity, ownership, integrity, and retention controls](/content-assets/articles/article-mlops-mlops-foundations-ml-system-assets/explainable-release-summary.png)
+
+*Stable identities create the evidence chain. Ownership, integrity checks, and retention keep that chain usable for explanation, impact analysis, and recovery.*
 
 ## References
 

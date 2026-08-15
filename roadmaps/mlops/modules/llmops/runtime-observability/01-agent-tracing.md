@@ -27,7 +27,7 @@ id: "article-mlops-llmops-agent-tracing"
 
 <!-- section-summary: Agent tracing records the connected path of one agent task so a team can explain its decisions, effects, latency, cost, and outcome. -->
 
-At a high level, **agent tracing** is the practice of recording how an agent handled one task from start to finish. The record includes the model calls, retrieval steps, tools, guardrails, handoffs, state changes, errors, and final outcome. It also records how long each step took and how the steps relate to one another.
+A final answer cannot show why an agent selected a tool, where it obtained evidence, or which step consumed most of the time. **Agent tracing** records the complete path of one task: model calls, retrieval, tools, guardrails, handoffs, state changes, errors, timing, and the final outcome.
 
 You can think of a trace as a flight recorder plus a map. The recorder preserves useful facts from the run. The map shows which operation caused the next one. Together, they help a team answer a question that ordinary request logs struggle with: how did this agent reach this outcome?
 
@@ -56,6 +56,10 @@ Each observability signal answers a different question. **Metrics** summarize ma
 Suppose a dashboard shows that successful task completion fell after a release. Metrics reveal the population change. A sample of trace IDs identifies the failing paths. Protected logs may contain a provider error or validation detail. The failed traces can then enter an eval dataset so the repair is tested before the next release.
 
 Tracing alone cannot prove that an answer is accurate. A model request can finish successfully and still produce a poor answer. The span status describes the operation, while an evaluator or later product outcome supplies the quality judgment.
+
+![A support-agent task shown as a connected trace from retrieval and model decision through approval, tool execution, authoritative effect, and final outcome, alongside the distinct questions answered by metrics, logs, traces, and evals.](/content-assets/articles/article-mlops-llmops-agent-tracing/agent-task-causal-trace.png)
+
+*A trace explains the causal path of one run, while an eval judges its quality. Keeping the proposed action separate from the authoritative effect prevents a fluent response from masquerading as a completed operation.*
 
 ## Understand Runs, Traces, And Spans
 
@@ -172,6 +176,10 @@ OpenTelemetry **baggage** carries key-value context alongside trace context. A v
 Baggage travels in request metadata and may reach third-party services. Avoid credentials, personal data, raw prompts, or unrestricted customer identifiers. Low-risk routing information may be useful, although many teams prefer an opaque tenant or policy reference that downstream services resolve under access control.
 
 Propagation failures should produce their own metrics. Count extracted contexts, missing parents, invalid headers, and exporter drops. A user request can succeed while its trace splits into fragments, leaving the later investigation incomplete.
+
+![A distributed agent trace carrying trace context from an API through a queue, worker, tool request, and tool service, with safe propagation fields, prohibited baggage, span-link guidance, and completeness metrics.](/content-assets/articles/article-mlops-llmops-agent-tracing/distributed-trace-context.png)
+
+*Trace context preserves causality across process boundaries but never grants authority. Queue and tool boundaries need explicit propagation tests, safe baggage rules, and metrics that reveal silently fragmented traces.*
 
 ## Record The Right Evidence For Each Agent Step
 
@@ -297,6 +305,18 @@ Their trace models overlap, yet capture defaults, naming, export paths, and data
 Choose one primary operational path, then define the minimum portable fields your system needs across vendors.
 
 The portable layer includes trace identity, parent relationships, workflow and release versions, model and tool operations, bounded outcomes, latency, token usage, error type, and safe references to authoritative effects. Platform-specific features can add richer views and evaluation workflows.
+
+```mermaid
+flowchart TD
+    App["Instrumented application<br/>(portable trace and span fields)"] --> OTel["OpenTelemetry path<br/>(context propagation and OTLP export)"]
+    App --> Native["Framework-native path<br/>(automatic agent instrumentation)"]
+    OTel --> Collector["Collector<br/>(redaction, sampling, and routing)"]
+    Native --> Backend["Primary tracing backend<br/>(run investigation and evaluation)"]
+    Collector --> Backend
+    Collector --> APM["General APM backend<br/>(service and infrastructure operations)"]
+    Backend --> Governed["Governed evidence<br/>(retention, access, and outcome links)"]
+    APM --> Governed
+```
 
 ### OpenAI Agents SDK
 
@@ -479,6 +499,10 @@ Agent tracing gives a team a connected explanation of one agent task. The trace 
 The agent-specific layer adds model, retrieval, tool, guardrail, handoff, state, cost, and outcome evidence. OpenTelemetry provides the portable foundation. OpenAI Agents SDK, LangSmith, and MLflow automate parts of the implementation. Product teams still own business meaning, authoritative effects, privacy controls, sampling policy, and trace completeness.
 
 The result is more useful than a transcript. It shows what the agent attempted, what the surrounding system actually did, where resources were spent, and which evidence supports the final outcome.
+
+![A complete agent-tracing lifecycle from meaningful spans and context propagation through source-side redaction, OTLP export, Collector controls, governed storage, trace-contract checks, backward investigation, and regression testing.](/content-assets/articles/article-mlops-llmops-agent-tracing/investigation-ready-trace-summary.png)
+
+*An investigation-ready trace preserves causality without copying uncontrolled payloads, proves that required evidence is present, links to authoritative effects, and turns confirmed failures into release regressions.*
 
 ## References
 

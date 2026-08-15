@@ -1,0 +1,24 @@
+{
+  "language": "javascript",
+  "activeFile": "telemetry.js",
+  "completionProfile": "node-standard",
+  "files": [
+    {
+      "filename": "telemetry.js",
+      "initialValue": "const { useAzureMonitor } = require('@azure/monitor-opentelemetry');\n\n// Configure telemetry before the app imports its libraries.\n"
+    },
+    {
+      "filename": "server.js",
+      "initialValue": "require('./app');\nrequire('./telemetry');\n"
+    }
+  ],
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      { "file": "telemetry.js", "pattern": "useAzureMonitor\\s*\\(\\s*\\{[\\s\\S]*azureMonitorExporterOptions\\s*:[\\s\\S]*connectionString\\s*:\\s*process\\.env\\.APPLICATIONINSIGHTS_CONNECTION_STRING", "label": "environment-backed Azure Monitor exporter" },
+      { "file": "telemetry.js", "pattern": "serviceName\\s*:\\s*['\"]devpolaris-orders-api['\"]", "label": "stable application role name" },
+      { "file": "telemetry.js", "pattern": "InstrumentationKey=|IngestionEndpoint=", "negate": true, "label": "no hard-coded connection string" },
+      { "file": "server.js", "pattern": "^\\s*require\\(['\"]\\./telemetry['\"]\\);[\\s\\S]*require\\(['\"]\\./app['\"]\\);", "label": "telemetry starts before application code" }
+    ]
+  }
+}

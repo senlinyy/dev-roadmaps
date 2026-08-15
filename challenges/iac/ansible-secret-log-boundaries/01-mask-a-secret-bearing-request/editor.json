@@ -1,0 +1,67 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Trigger orders deployment\n  hosts: localhost\n  gather_facts: false\n  tasks:\n    - name: Start deployment\n      ansible.builtin.uri:\n        url: https://deploy.internal.example/orders\n        method: POST\n        headers:\n          Authorization: Bearer training-token-123\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "headers",
+              "Authorization"
+            ],
+            "contains": "orders_api_token"
+          },
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "status_code"
+            ],
+            "equals": 202
+          },
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "return_content"
+            ],
+            "equals": false
+          },
+          {
+            "path": [
+              "register"
+            ],
+            "equals": "deploy_response"
+          },
+          {
+            "path": [
+              "no_log"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "contains": "deploy_response.status"
+          }
+        ]
+      }
+    ],
+    "forbiddenText": [
+      "training-token-123"
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "passThreshold": 1,
+  "questions": [
+    {
+      "id": "local-route",
+      "type": "single",
+      "scenario": "An app at 10.20.10.8 connects to RDS at 10.20.21.18 in the same 10.20.0.0/16 VPC. The app route table also has 0.0.0.0/0 to a NAT gateway. Which route wins?",
+      "options": [
+        {
+          "id": "b",
+          "text": "10.20.0.0/16 local."
+        },
+        {
+          "id": "a",
+          "text": "0.0.0.0/0 to NAT."
+        },
+        {
+          "id": "c",
+          "text": "A public internet gateway route."
+        },
+        {
+          "id": "d",
+          "text": "No route because the subnets differ."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "The local route is more specific than the default route and carries traffic between VPC subnets. Learn more in [VPC route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)."
+    },
+    {
+      "id": "public-subnet",
+      "type": "single",
+      "scenario": "A subnet has 0.0.0.0/0 to an internet gateway, but an EC2 instance has only a private IPv4 address. Can the instance initiate IPv4 internet traffic directly through the IGW?",
+      "options": [
+        {
+          "id": "a",
+          "text": "Yes, the route automatically creates a public address."
+        },
+        {
+          "id": "b",
+          "text": "No, it also needs a public IPv4 address or Elastic IP."
+        },
+        {
+          "id": "c",
+          "text": "No, internet gateways support inbound traffic only."
+        },
+        {
+          "id": "d",
+          "text": "Yes, if its security group has no rules."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "An IGW route does not assign a public address. Public IPv4 communication also requires a public IPv4 or Elastic IP. Learn more in [VPC route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)."
+    },
+    {
+      "id": "nat-placement",
+      "type": "single",
+      "scenario": "Private app subnets in two AZs use one NAT gateway in us-east-1a. What operational concern should the design review surface?",
+      "options": [
+        {
+          "id": "a",
+          "text": "NAT gateways accept inbound internet connections."
+        },
+        {
+          "id": "c",
+          "text": "NAT gateways replace security groups."
+        },
+        {
+          "id": "b",
+          "text": "An AZ failure or cross-AZ path can affect private outbound traffic, so per-AZ NAT paths may better match the resilience target."
+        },
+        {
+          "id": "d",
+          "text": "NAT gateways route local VPC traffic."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "A NAT gateway is zonal. Route design should match the required failure boundary and account for cross-AZ traffic. Learn more in [NAT gateway basics](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)."
+    },
+    {
+      "id": "endpoint-route",
+      "type": "single",
+      "scenario": "A private subnet has 0.0.0.0/0 to NAT and a managed S3 prefix-list route to a gateway endpoint. Where should S3 traffic go?",
+      "options": [
+        {
+          "id": "a",
+          "text": "NAT because default routes always win."
+        },
+        {
+          "id": "c",
+          "text": "The internet gateway attached to the VPC."
+        },
+        {
+          "id": "d",
+          "text": "The local route because S3 is in the same account."
+        },
+        {
+          "id": "b",
+          "text": "The gateway endpoint because its destination is more specific."
+        }
+      ],
+      "correct": [
+        "b"
+      ],
+      "explanation": "Longest-prefix matching selects the managed prefix-list endpoint route over the default NAT route. Learn more in [VPC route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)."
+    },
+    {
+      "id": "route-debug",
+      "type": "multiple",
+      "scenario": "A private task cannot download a package from the internet. Which checks directly test the outbound route path?",
+      "options": [
+        {
+          "id": "a",
+          "text": "The subnet association points to the expected route table."
+        },
+        {
+          "id": "d",
+          "text": "The Route 53 hosted zone has an MX record."
+        },
+        {
+          "id": "b",
+          "text": "The route table has a usable 0.0.0.0/0 target."
+        },
+        {
+          "id": "e",
+          "text": "Change the public hosted-zone TTL before inspecting the packet path."
+        },
+        {
+          "id": "c",
+          "text": "The NAT gateway is available in a public subnet with an IGW route."
+        }
+      ],
+      "correct": [
+        "a",
+        "b",
+        "c"
+      ],
+      "explanation": "The path depends on association, default route, NAT state and placement, and the NAT subnet path to the IGW. Learn more in [NAT gateway troubleshooting](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)."
+    }
+  ]
+}

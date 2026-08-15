@@ -367,6 +367,10 @@
       "bootDiagnostics"
     ],
     "loose": true,
+    "requireCommandPatterns": [
+      "^az\\s+vm\\s+show\\b",
+      "^az\\s+vm\\s+get-instance-view\\b"
+    ],
     "requireCommands": [
       "az"
     ],

@@ -1,8 +1,8 @@
 ---
-title: "What Is Terraform State?"
-description: "Review Terraform plan summaries, replacement markers, redacted values, and drift evidence before an apply."
+title: "Terraform State Inspection"
+description: "Use Terraform state commands to identify managed addresses and inspect the provider ID recorded for one production object."
 articleId: article-iac-terraform-state-what-is-state
 difficulty: medium
-order: 8
-tags: ["terraform", "plans", "review", "drift"]
+order: 13
+tags: ["terraform","state","inspection","safety"]
 ---

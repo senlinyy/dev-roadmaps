@@ -28,11 +28,15 @@ id: "article-mlops-llmops-trajectory-evals"
 
 <!-- section-summary: Final-output grading sees the answer, while trajectory grading also sees the decisions and effects that produced it. -->
 
-At a high level, a **trajectory** is the recorded path of one agent run. It includes the model turns, tool calls, tool results, guardrails, handoffs, state changes, errors, and final response. A **trajectory eval** checks whether that path followed the rules of the task.
+Two agents can return the same final answer after taking very different actions. A **trajectory** records that path: the model turns, tool calls, results, guardrails, handoffs, state changes, errors, and final response. A **trajectory eval** checks whether the path followed the rules of the task.
 
 This extra view matters because an agent can reach a correct-looking answer through a bad process. A support agent may quote the correct refund rule from memory without reading the current policy. A scheduling agent may announce a new meeting time even though the calendar write failed. A research agent may use a document containing injected instructions and still produce a plausible summary. Final-answer grading can miss all three failures.
 
 The path also helps diagnose a weak final answer. A trace can show that retrieval returned the wrong source, the model selected the wrong tool, valid arguments were rejected by a tool contract, or the orchestrator lost state after a handoff. The answer says that the run failed. The trajectory shows where useful evidence first appeared.
+
+![Three plausible final answers hiding a missing policy lookup, a failed calendar update, and a guardrail violation, with trace records, complementary graders, and failure ownership](/content-assets/articles/article-mlops-llmops-trajectory-evals/same-answer-hidden-trajectory-failures.png)
+
+*Final text can look acceptable while the path violates evidence, effect, or guardrail rules. The trajectory shows the earliest trustworthy failure evidence and the layer most likely to own the repair.*
 
 ```mermaid
 flowchart TD
@@ -232,6 +236,10 @@ The uncertain-commit case is especially important. Suppose an email tool times o
 
 Recovery graders should check the earliest unsafe point. A later apology cannot erase a duplicate side effect. The report should name the triggering fault, the policy branch chosen, each retry, any compensation, and the final verified state.
 
+![Step and whole-run graders, a partial-order booking path, terminal guardrail branches, and reconciliation of an email outcome after a timeout](/content-assets/articles/article-mlops-llmops-trajectory-evals/trajectory-relationships-and-recovery.png)
+
+*Trajectory grading protects the relationships that matter. Harmless path variation remains valid, while confirmation, guardrail, effect, and recovery invariants stay enforceable.*
+
 Run important recovery cases several times because model choices may vary even under fixed fixtures. One unsafe path among repeated runs matters for approval, permission, and irreversible-effect controls. For softer choices such as fallback wording, report the distribution and inspect disagreement.
 
 ## Scores Need Partial Credit and Severity
@@ -371,6 +379,10 @@ Failure attribution should separate model decisions, context and retrieval, tool
 Reports should identify the case, trace, agent bundle, environment, tool contracts, grader bundle, and repetitions. Keep hard blockers separate from softer quality scores. Link every human or model judgement to its evidence so reviewers can verify the decision.
 
 The central idea is straightforward: final-output grading tells the team whether the answer looks acceptable. Trajectory grading tests whether the agent used a safe, grounded, and reliable path to produce it. That evidence turns agent quality from a vague impression into a set of repairable engineering properties.
+
+![A summary of trajectory evaluation from controlled cases and identical sandbox replay through normalization, completeness checks, layered graders, privacy controls, judge calibration, findings, release reporting, and blocker-aware decisions](/content-assets/articles/article-mlops-llmops-trajectory-evals/trajectory-eval-system-summary.png)
+
+*A trustworthy comparison holds the case, environment, tool behavior, clock, permissions, injected fault, and grader versions constant. Incomplete traces remain infrastructure results, and hard blockers remain separate from quality scores.*
 
 ## References
 

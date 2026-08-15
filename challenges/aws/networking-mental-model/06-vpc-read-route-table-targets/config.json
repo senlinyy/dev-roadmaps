@@ -91,6 +91,11 @@
       "nat-orders-a",
       "available"
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+ec2\\\\s+describe-route-tables\\\\b",
+      "^aws\\\\s+ec2\\\\s+describe-internet-gateways\\\\b",
+      "^aws\\\\s+ec2\\\\s+describe-nat-gateways\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

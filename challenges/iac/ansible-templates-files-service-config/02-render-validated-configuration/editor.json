@@ -1,0 +1,74 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Configure orders service\n  hosts: orders_web\n  become: true\n  tasks:\n    - name: Copy configuration\n      ansible.builtin.copy:\n        content: \"listen=8080\"\n        dest: /etc/orders/orders.conf\n"
+    },
+    {
+      "filename": "templates/orders.conf.j2",
+      "initialValue": "listen=8080\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "templates/orders.conf.j2",
+        "kind": "template",
+        "contains": [
+          "orders_port",
+          "orders_workers | default(2)",
+          "orders_upstream | mandatory"
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.template",
+              "dest"
+            ],
+            "equals": "/etc/orders/orders.conf"
+          },
+          {
+            "path": [
+              "ansible.builtin.template",
+              "mode"
+            ],
+            "equals": "0640"
+          },
+          {
+            "path": [
+              "ansible.builtin.template",
+              "validate"
+            ],
+            "contains": "%s"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "file-reference",
+        "source": {
+          "file": "site.yml",
+          "module": "template"
+        },
+        "argumentPath": [
+          "ansible.builtin.template",
+          "src"
+        ],
+        "targetFile": "templates/orders.conf.j2"
+      }
+    ]
+  }
+}

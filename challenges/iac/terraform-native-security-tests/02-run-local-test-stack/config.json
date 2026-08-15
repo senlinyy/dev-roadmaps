@@ -1,0 +1,42 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/main.tf": {
+      "type": "file",
+      "content": "resource \"aws_s3_bucket\" \"this\" { bucket = \"dp-orders-dev\" }\n"
+    },
+    "/workspace/tests/module.tftest.hcl": {
+      "type": "file",
+      "content": "run \"plan\" { command = plan }\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {},
+  "grader": {
+    "strategy": "terraform-state",
+    "source": "all-stdout",
+    "expected": [
+      "Success! The configuration is valid.",
+      "Success! 1 passed, 0 failed."
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+fmt\\s+-check$",
+      "^terraform\\s+init(?:\\s|$)",
+      "^terraform\\s+validate$",
+      "^terraform\\s+test$"
+    ],
+    "expectedTerraform": {
+      "initialized": true,
+      "lastAction": "test"
+    }
+  }
+}

@@ -27,7 +27,7 @@ aliases:
 13. [The Main Idea](#the-main-idea)
 14. [References](#references)
 
-At a high level, a training trigger answers one practical question: **why should the system consider training a new model now?** A daily clock tick, a completed data partition, a batch of new labels, a drift investigation, or an approved incident request can all supply that reason.
+A daily training job can wake up on time while its newest data partition is still incomplete. A **training trigger** supplies the reason that the system should consider a new run now. That reason may be a clock tick, a completed data partition, a batch of mature labels, a drift investigation, or an approved incident request.
 
 That signal is only a proposal. The system still has to prove that training is safe and useful. Are the inputs complete? Are enough labels mature? Is another run already using the same snapshot? Is compute capacity available? Does this request need human approval? Separating the proposal from those checks is the foundation of reliable trigger design.
 
@@ -44,7 +44,7 @@ A production trigger layer resolves this by handling three distinct decisions:
 2. **Evaluate eligibility.** Check data readiness, labels, policy, capacity, and active work.
 3. **Reserve one logical run.** Create a stable identity before asking the orchestrator to launch it.
 
-In essence, the trigger says, “please consider this work.” Eligibility says, “the required evidence is ready.” The run identity says, “all retries and duplicate signals for this work refer to the same run.”
+The trigger says, “please consider this work.” Eligibility says, “the required evidence is ready.” The run identity says, “all retries and duplicate signals for this work refer to the same run.”
 
 ```mermaid
 flowchart TD
@@ -88,6 +88,10 @@ A **manually approved run** starts from a person or an approval workflow. It fit
 Manual runs carry the same governance as automated runs. The request names immutable inputs, code and pipeline versions, purpose, owner, expiry, and release permissions. The approval adds authority to the shared eligibility process.
 
 A production trigger layer can accept all four proposal types through one normalized request contract. The shared contract sends automation and operator actions through the same data checks, deduplication rules, concurrency limits, and audit record.
+
+![Schedules, events, data-aware checks, and manual approvals create normalized retraining requests that share one eligibility policy](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/four-signals-one-policy.png)
+
+*Every request source records the same interval, dataset versions, and purpose. The policy may wait, reject, or reserve one logical run key before training begins.*
 
 ## Define Which Time Period A Scheduled Run Covers
 <!-- section-summary: A schedule identifies a processing interval and cadence; data readiness remains a separate decision. -->
@@ -311,7 +315,7 @@ Table update is a useful data-aware signal, especially with commit version passe
 
 ### Managed ML Pipelines And Cloud Event Buses
 
-SageMaker Pipelines can be an EventBridge target for schedules or event patterns. Vertex AI provides recurring pipeline schedules with concurrency controls; an external Eventarc handler can submit an event-driven `PipelineJob`. Azure Machine Learning v2 provides time-based schedules, while external event-driven entry commonly uses Event Grid plus an adapter or external orchestrator. Azure ML’s native v2 schedule documentation explicitly excludes event-based triggers.
+SageMaker Pipelines can be an EventBridge target for schedules or event patterns. Gemini Enterprise Agent Platform Pipelines provides recurring pipeline schedules with concurrency controls; an external Eventarc handler can submit an event-driven `PipelineJob`. The current product name appears alongside the existing `google.cloud.aiplatform` Python namespace, so code still uses types such as `PipelineJobSchedule`. Azure Machine Learning v2 provides time-based schedules, while external event-driven entry commonly uses Event Grid plus an adapter or external orchestrator. Azure ML’s native v2 schedule documentation explicitly excludes event-based triggers.
 
 The shared delivery contract is simple: the handler must tolerate another copy of the event and must detect work that never reached it. It first stores the event source, event ID, and dataset version in one durable transaction. It then derives the logical run key and either creates the request or attaches the event to the existing request. Acknowledgement happens after this durable write. Exhausted deliveries move to a dead-letter store, and periodic reconciliation compares published snapshots with ledger entries to recover missing work.
 
@@ -347,6 +351,10 @@ The resulting recovery design contains five mechanisms:
 
 Test these paths with duplicate events, reordered events, a timeout after run creation, scheduler downtime, and a dead-letter replay. Recovery should produce one logical candidate and a complete audit trail.
 
+![A trigger ledger suppresses duplicate deliveries, repairs a lost submission response by querying the logical key, and reconstructs missing events through reconciliation](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/trigger-ledger-recovery.png)
+
+*The ledger creates one logical request for a redelivered event, attaches an already accepted orchestrator run after a lost response, and sends recovered proposals through normal eligibility.*
+
 ## Monitor And Audit Training Triggers
 <!-- section-summary: Trigger operations focus on delayed evidence, duplicate suppression, missed work, queue pressure, manual authority, and safe replay. -->
 
@@ -375,6 +383,14 @@ Schedules, events, data-aware conditions, and manual approvals are ways to propo
 
 Use clocks for predictable intervals, domain events for meaningful state changes, data-aware checks for completeness, and approvals for exceptional authority. Add watermarks, lateness rules, rate control, idempotency, bounded backfills, and reconciliation. These controls turn “train now” from a fragile callback into an explainable operational decision.
 
+Consider a daily forecast whose schedule fires while one regional sales partition is still loading. The schedule has done its job: it proposed the expected interval. The readiness gate now keeps that proposal waiting, records the missing partition, and admits the run after the complete dataset receives an immutable identity. A duplicate completion event finds the same logical run instead of launching another training job.
+
+![A safe trigger lifecycle records a proposal, resolves immutable inputs, evaluates readiness, reserves one logical key, submits idempotently, and links the pipeline run to audit evidence](/content-assets/articles/article-mlops-training-pipelines-scheduled-vs-event-based-training/safe-trigger-lifecycle.png)
+
+*Pending and rejected requests preserve their exact evidence. Admitted work reaches one pipeline run, while reconciliation returns missing or ambiguous work to the request ledger.*
+
+That separation also gives operations a safe recovery path. A missing signal can be reconstructed from source truth, a duplicate can be suppressed through the ledger, and a corrected historical interval can be replayed with promotion disabled. The final evidence should show one accepted request, one identified dataset, one pipeline run or explained failure, and no competing candidate created by retries.
+
 ## References
 
 - [Apache Airflow asset-aware scheduling](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/asset-scheduling.html)
@@ -390,7 +406,7 @@ Use clocks for predictable intervals, domain events for meaningful state changes
 - [Databricks file-arrival triggers](https://docs.databricks.com/aws/en/jobs/file-arrival-triggers)
 - [Databricks table-update triggers](https://docs.databricks.com/aws/en/jobs/trigger-table-update)
 - [SageMaker Pipelines EventBridge triggers](https://docs.aws.amazon.com/sagemaker/latest/dg/pipeline-eventbridge.html)
-- [Vertex AI PipelineJob schedules](https://docs.cloud.google.com/python/docs/reference/aiplatform/latest/google.cloud.aiplatform.PipelineJobSchedule)
+- [Gemini Enterprise Agent Platform pipeline schedules](https://docs.cloud.google.com/gemini-enterprise-agent-platform/machine-learning/pipelines/schedule-pipeline-run)
 - [Azure Machine Learning pipeline schedules](https://learn.microsoft.com/en-us/azure/machine-learning/how-to-schedule-pipeline-job)
 - [Google Eventarc event retries](https://docs.cloud.google.com/eventarc/docs/retry-events)
 - [Azure Event Grid delivery and retry](https://learn.microsoft.com/en-us/azure/event-grid/delivery-and-retry)

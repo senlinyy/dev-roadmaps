@@ -1,0 +1,101 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "deploy.yml",
+  "files": [
+    {
+      "filename": "deploy.yml",
+      "initialValue": "- name: Trigger orders deployment\n  hosts: localhost\n  gather_facts: false\n  tasks:\n    - name: Start deployment\n      ansible.builtin.uri:\n        url: https://deploy.internal.example/orders\n        method: POST\n        headers:\n          Authorization: \"Bearer {{ orders_api_token }}\"\n        status_code: 202\n      register: deploy_response\n      no_log: true\n\n    - name: Show response\n      ansible.builtin.debug:\n        var: deploy_response\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "deploy.yml",
+        "kind": "yaml",
+        "doesNotContain": [
+          "var: deploy_response",
+          "var: orders_api_token",
+          "deploy_response.content",
+          "deploy_response.json"
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "uri"
+        },
+        "paths": [
+          {
+            "path": [
+              "no_log"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "ansible.builtin.uri",
+              "return_content"
+            ],
+            "equals": false
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "assert"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.assert",
+              "that"
+            ],
+            "minItems": 1
+          }
+        ]
+      },
+      {
+        "select": {
+          "file": "deploy.yml",
+          "module": "debug"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.debug",
+              "msg"
+            ],
+            "equals": "Deployment request accepted"
+          },
+          {
+            "path": [
+              "changed_when"
+            ],
+            "equals": false
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "type": "register-used",
+        "producer": {
+          "file": "deploy.yml",
+          "module": "uri"
+        },
+        "consumer": {
+          "file": "deploy.yml",
+          "module": "assert"
+        },
+        "fields": [
+          "status"
+        ]
+      }
+    ]
+  }
+}

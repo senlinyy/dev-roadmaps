@@ -4,6 +4,6 @@ description: "Practice mapping Azure service choices to traffic, compute, state,
 articleId: article-cloud-providers-azure-foundations-core-services
 articleSlug: azure-core-services-map
 difficulty: medium
-order: 4
+order: 3
 tags: ["azure", "services", "compute", "data", "observability", "az-cli"]
 ---

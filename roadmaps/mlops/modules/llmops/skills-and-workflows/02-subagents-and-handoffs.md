@@ -26,7 +26,7 @@ id: "article-mlops-llmops-subagents-and-handoffs"
 ## Why One Agent Should Not Own Every Task
 <!-- section-summary: Subagents divide complex work after one agent can no longer hold the required context, authority, and independent tasks inside one clear operating boundary. -->
 
-At a high level, **subagents are bounded workers that help another agent or workflow complete a larger task**. Each worker receives a smaller job, a focused view of the evidence, and only the capabilities required for its part. A coordinator keeps track of the overall objective and decides what to do with the results.
+A large task may contain several investigations that need separate context, tools, or ownership. **Subagents are bounded workers that take those smaller jobs.** Each receives a focused view of the evidence and only the capabilities required for its part, while a coordinator tracks the overall objective and decides what to do with the results.
 
 Imagine a release review that covers an API change, a database migration, and a security policy update. One agent can inspect all three. As the review grows, it also has to hold several sets of files, tool descriptions, test results, and risk rules in the same working context. It may receive database credentials for one check and deployment access for another. Independent investigations run one after another, even though they could proceed at the same time.
 
@@ -59,6 +59,10 @@ flowchart TD
 ```
 
 The useful question is therefore, “Which boundary should this worker own?” A job title in a prompt supplies no isolation by itself. The assignment, context, runtime identity, result contract, and coordinator create the production boundary.
+
+![A release coordinator sends API, database, and security reviews to specialists with focused evidence and narrow authority, then validates their findings at one merge gate.](/content-assets/articles/article-mlops-llmops-subagents-and-handoffs/bounded-release-review.png)
+
+*Three specialists inspect the same release candidate through separate context and permission boundaries; only the coordinator owns the final recommendation.*
 
 ## Understand Delegation, Routing, Handoffs, And Review
 <!-- section-summary: Subagents, specialist agents, agent tools, handoffs, routers, skills, ordinary tools, and orchestrators solve different parts of a coordinated system. -->
@@ -438,25 +442,9 @@ The reviewer needs an approval packet containing:
 
 Approval attaches to that exact proposal. If a worker changes the target version, command, recipients, or parameters, the digest changes and the action returns to review.
 
-```mermaid
-sequenceDiagram
-    participant W as Worker
-    participant O as Orchestrator
-    participant H as Human reviewer
-    participant X as Trusted executor
+![An exact-action approval flow in which a worker proposal passes orchestrator checks and human review, while only an approved and unchanged digest can reach the trusted executor.](/content-assets/articles/article-mlops-llmops-subagents-and-handoffs/exact-action-approval.png)
 
-    W->>O: Submit action proposal and evidence
-    O->>O: Validate policy, scope, and digest
-    O-->>H: Present exact approval packet
-    H-->>O: Approve or reject proposal digest
-    alt approved and still current
-        O->>X: Execute with scoped credential and idempotency key
-        X-->>O: Return committed effect identity
-        O-->>W: Resume with verified outcome
-    else rejected, expired, or changed
-        O-->>W: Return denial or require new proposal
-    end
-```
+*Approval covers one reviewed action digest. A changed, rejected, or expired proposal returns for review instead of reaching execution.*
 
 Human approval should bind to one exact action. Agent identity remains a separate trust decision. “Trust the deployment agent for the rest of the run” can cover future commands the reviewer never saw. Broader standing approvals require a separate policy decision with carefully bounded parameters.
 
@@ -539,6 +527,10 @@ flowchart TD
 ```
 
 A sound multi-agent system has the smallest topology that creates a real boundary. Every worker receives a contract, selected context, narrow authority, and a measurable result. The orchestrator preserves state and ownership. Merge protects evidence. Recovery protects effects. Human approval protects consequential decisions. Evaluation then proves whether the extra coordination improves the product.
+
+![A five-check decision framework for subagent delegation, followed by the contract, context, authority, state, merge, recovery, and evaluation controls required for bounded coordination.](/content-assets/articles/article-mlops-llmops-subagents-and-handoffs/subagent-decision-summary.png)
+
+*Delegate only when responsibility, context, authority, results, and dependencies form a useful boundary whose value exceeds the coordination cost.*
 
 ## References
 

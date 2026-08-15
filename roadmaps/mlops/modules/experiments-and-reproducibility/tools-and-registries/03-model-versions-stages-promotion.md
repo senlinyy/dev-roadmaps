@@ -34,7 +34,7 @@ At 10:00, a release owner receives the evaluation results for version `42` of a 
 
 The mistake would be costly in either direction. Promoting the wrong candidate could block valid payments or allow more fraud. Rejecting the candidate without understanding its evidence would leave the known false-positive problem in service. A successful release therefore needs stronger proof than a green dashboard: the approval names version `42`, the evaluation belongs to version `42`, the deployment loads version `42`, and version `41` remains available as a tested rollback target.
 
-At a high level, **model promotion** is the governed act of changing which immutable model version a downstream system is allowed or expected to use. The downstream system may be an online endpoint, a batch-scoring job, or a release pipeline. Promotion can move an alias, copy a model into a production-controlled registry namespace, update a deployment specification, or combine those actions.
+An approved model does not reach users merely because its files exist in a registry. A downstream endpoint, batch job, or release pipeline must be directed to that exact version. **Model promotion is the governed act that changes which immutable model version those systems are allowed or expected to use.**
 
 ```mermaid
 flowchart TD
@@ -77,7 +77,7 @@ During an incident, these identifiers answer different questions. The run explai
 ## Keep A Model Version Unchanged During Review
 <!-- section-summary: A reviewed version must keep the same model bytes and load contract so every later decision refers to the behavior that validation measured. -->
 
-An immutable candidate is a model whose meaningful contents stay fixed after registration. In essence, the version acts as a sealed subject for testing and approval. If its tokenizer, preprocessing state, dependency requirements, label map, or weights change, the behavior under review has changed too.
+An immutable candidate is a model whose meaningful contents stay fixed after registration. The version acts as a sealed subject for testing and approval. If its tokenizer, preprocessing state, dependency requirements, label map, or weights change, the behavior under review has changed too.
 
 Create a new logged model and a new registered version for any change that could affect predictions or loading. Registry systems commonly allow mutable descriptions, tags, and aliases because those fields describe the version. That convenience should never be used to replace the artifact behind an approved version.
 
@@ -128,6 +128,10 @@ The important line is the resolution of `candidate.version`. Every validation qu
 Consider two releases running close together. The first job resolves `Candidate` to version `42`. A second job later moves `Candidate` to version `43`. If the first job resolves the alias again during deployment, it may deploy version `43` using version `42`'s approval. A release controller prevents this race by storing the resolved version, serializing promotion for the same model, and checking that the expected old `Champion` still owns the alias before changing it. If the state changed, the controller stops and asks for reconciliation.
 
 Aliases also behave differently across workloads. A batch job that loads `@Champion` at startup can record the resolved version for that run. An online service may keep a model in memory for hours. Its running workers retain the loaded model until a deployment integration observes the alias change and creates a new serving revision.
+
+![Monday and Thursday snapshots show an alias moving from version 42 to version 43 while release 108 remains pinned to the loaded version 42](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/alias-version-runtime.png)
+
+*The alias records current selection intent; the release record and runtime identity preserve the exact model that production loaded.*
 
 ## Validate One Exact Model Version
 <!-- section-summary: Validation evidence explains why one exact version is suitable for a defined use, population, and operating boundary. -->
@@ -258,6 +262,10 @@ flowchart TD
 
 A failed step leaves the prior production reference intact whenever possible. The workflow records the failure and can resume from verified state. A retry never goes back to the `Candidate` alias to discover a different version.
 
+![Parallel unsafe and safe promotion timelines show how resolving a candidate alias twice can deploy an unreviewed version, while pinning version 42 keeps evidence and runtime aligned](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/resolve-candidate-once.png)
+
+*Resolving the alias once prevents a concurrent alias change from separating the deployed model from the evidence that reviewers approved.*
+
 ## Deploy The Exact Approved Model Version
 <!-- section-summary: Deployment automation uses a concrete model version so the running release cannot change through an unrelated alias update. -->
 
@@ -362,6 +370,10 @@ Store the record before traffic moves, then append deployment and verification r
 Model promotion is a controlled change of intent and deployment, built around an exact model version. Logged-model identity and registry versions hold the candidate steady. Validation evidence explains its supported use. Approval grants authority. Aliases make current intent discoverable. Environment-qualified models enforce ownership boundaries. Deployment references and runtime telemetry prove what served predictions.
 
 A reliable review can follow five questions: Which exact version is under consideration? What evidence belongs to it? Who authorized the change? Which deployment loaded it? Which complete release can restore service? If every answer points to an immutable identity and a durable record, promotion and rollback remain understandable under pressure.
+
+![Six-step promotion loop resolves, validates, authorizes, prepares, deploys, and verifies one release identity before monitoring or restoring a pinned recovery release](/content-assets/articles/article-mlops-experiments-and-reproducibility-model-versions-stages-promotion/promotion-rollback-summary.png)
+
+*Safe promotion carries the same release identity through every control and treats runtime verification as the final proof of what changed.*
 
 ## References
 

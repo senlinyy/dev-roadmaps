@@ -1,0 +1,101 @@
+{
+  "language": "json",
+  "filename": "lifecycle-configuration.json",
+  "completionProfile": "aws-json",
+  "initialValue": "{\n  \"Rules\": [\n    {\n      \"ID\": \"ReceiptRetention\",\n      \"Status\": \"Disabled\",\n      \"Filter\": {\n        \"Prefix\": \"\"\n      },\n      \"Transitions\": [],\n      \"NoncurrentVersionTransitions\": []\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "Rules"
+        ],
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "single receipt lifecycle rule"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "ID"
+        ],
+        "equals": "ReceiptRetention",
+        "label": "rule ID"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "Status"
+        ],
+        "equals": "Enabled",
+        "label": "enabled rule"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "Filter",
+          "Prefix"
+        ],
+        "equals": "receipts/",
+        "label": "receipt prefix"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "Transitions"
+        ],
+        "containsObject": {
+          "Days": 30,
+          "StorageClass": "STANDARD_IA"
+        },
+        "label": "current object transition"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "Expiration",
+          "Days"
+        ],
+        "equals": 365,
+        "label": "current object expiration"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "NoncurrentVersionTransitions"
+        ],
+        "containsObject": {
+          "NoncurrentDays": 30,
+          "StorageClass": "STANDARD_IA"
+        },
+        "label": "noncurrent transition"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "NoncurrentVersionExpiration",
+          "NoncurrentDays"
+        ],
+        "equals": 90,
+        "label": "noncurrent expiration"
+      },
+      {
+        "path": [
+          "Rules",
+          0,
+          "AbortIncompleteMultipartUpload",
+          "DaysAfterInitiation"
+        ],
+        "equals": 7,
+        "label": "multipart cleanup"
+      }
+    ]
+  }
+}

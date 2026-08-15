@@ -1,0 +1,126 @@
+{
+  "language": "json",
+  "filename": "permissions-policy.json",
+  "completionProfile": "aws-iam-policy",
+  "initialValue": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"ListReceiptPrefix\",\n      \"Effect\": \"Allow\",\n      \"Action\": [],\n      \"Resource\": \"arn:aws:s3:::devpolaris-receipts-prod\",\n      \"Condition\": {}\n    },\n    {\n      \"Sid\": \"WriteEncryptedReceipts\",\n      \"Effect\": \"Allow\",\n      \"Action\": [],\n      \"Resource\": \"\",\n      \"Condition\": {}\n    },\n    {\n      \"Sid\": \"EncryptReceipts\",\n      \"Effect\": \"Allow\",\n      \"Action\": [],\n      \"Resource\": \"\"\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "Statement"
+        ],
+        "minItems": 3,
+        "maxItems": 3,
+        "label": "three scoped permission statements"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Action"
+        ],
+        "includes": "s3:ListBucket",
+        "maxItems": 1,
+        "label": "bucket listing action"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Resource"
+        ],
+        "equals": "arn:aws:s3:::devpolaris-receipts-prod",
+        "label": "bucket resource"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Condition",
+          "StringLike",
+          "s3:prefix"
+        ],
+        "equals": "receipts/*",
+        "label": "list prefix condition"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Action"
+        ],
+        "includes": "s3:PutObject",
+        "maxItems": 1,
+        "label": "object write action"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Resource"
+        ],
+        "equals": "arn:aws:s3:::devpolaris-receipts-prod/receipts/*",
+        "label": "receipt object resource"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Condition",
+          "StringEquals",
+          "s3:x-amz-server-side-encryption"
+        ],
+        "equals": "aws:kms",
+        "label": "KMS encryption requirement"
+      },
+      {
+        "path": [
+          "Statement",
+          2,
+          "Action"
+        ],
+        "includes": "kms:Encrypt",
+        "label": "KMS encrypt action"
+      },
+      {
+        "path": [
+          "Statement",
+          2,
+          "Action"
+        ],
+        "includes": "kms:GenerateDataKey",
+        "minItems": 2,
+        "maxItems": 2,
+        "label": "bounded KMS actions"
+      },
+      {
+        "path": [
+          "Statement",
+          2,
+          "Resource"
+        ],
+        "equals": "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555",
+        "label": "exact KMS key"
+      },
+      {
+        "path": [
+          "Statement",
+          0,
+          "Action"
+        ],
+        "excludes": "*",
+        "label": "no wildcard bucket action"
+      },
+      {
+        "path": [
+          "Statement",
+          1,
+          "Resource"
+        ],
+        "doesNotContain": "*:*:*:*:*:*",
+        "label": "no global resource"
+      }
+    ]
+  }
+}

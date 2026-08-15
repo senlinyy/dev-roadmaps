@@ -1,0 +1,50 @@
+{
+  "cwd": "/workspace",
+  "env": {
+    "USER": "dev",
+    "HOME": "/workspace"
+  },
+  "fs": {
+    "/workspace": {
+      "type": "dir"
+    },
+    "/workspace/backend.tf": {
+      "type": "file",
+      "content": "terraform {\n  backend \"s3\" {\n    bucket       = \"dp-terraform-state-prod\"\n    key          = \"orders/prod/terraform.tfstate\"\n    region       = \"eu-west-2\"\n    use_lockfile = true\n  }\n}\n"
+    }
+  },
+  "commandModules": [
+    "terraform"
+  ],
+  "terraform": {
+    "backendType": "s3",
+    "resources": [
+      {
+        "address": "aws_s3_bucket.orders",
+        "id": "dp-orders-prod"
+      }
+    ],
+    "plan": {
+      "add": 0,
+      "change": 0,
+      "destroy": 0
+    }
+  },
+  "grader": {
+    "strategy": "terraform-state",
+    "source": "all-stdout",
+    "expected": [
+      "Plan: 0 to add, 0 to change, 0 to destroy."
+    ],
+    "requireCommandPatterns": [
+      "^terraform\\s+init(?=.*-migrate-state)",
+      "^terraform\\s+plan(?:\\s|$)"
+    ],
+    "expectedTerraform": {
+      "initialized": true,
+      "backendType": "s3",
+      "backendMigrated": true,
+      "lastAction": "plan"
+    }
+  }
+}

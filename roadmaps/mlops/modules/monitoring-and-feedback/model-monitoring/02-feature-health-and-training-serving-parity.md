@@ -31,12 +31,6 @@ This distinction explains why an inference service can return `200 OK` while mak
 
 **Training-serving parity** adds a second question: would the training pipeline and the live inference path calculate the same feature for the same case at the same point in time? Training often uses a warehouse or Spark job. Online inference may use a feature store, cache, stream processor, or request-time function. Those systems can implement the same feature name with different formulas, timestamps, defaults, or software versions.
 
-The complete path looks like this:
-
-![One feature contract feeding historical training and live serving paths, with request-time health checks and row-level parity replay](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-health-parity-map.png)
-
-*The feature contract supplies one meaning to two calculation paths. Health checks protect the live value, while parity replay asks whether offline and online calculations agree for the same entity and decision time.*
-
 The definition is the shared starting point. Health checks ask whether live delivery respected that definition. Parity replay compares the two calculation paths. Once the team knows which boundary failed, it can repair the data path instead of reaching immediately for a model rollback.
 
 ## What A Feature Contract Records
@@ -59,6 +53,10 @@ The contract proves its value when enforcement happens close to each failure. At
 These tools overlap, and each sees a different moment. A dbt test can catch that a daily table lost 12% of its customer rows. A request validator can stop a negative inventory value before it reaches a live decision. A schema registry can catch a producer changing an integer to a string before either consumer runs. Teams choose the smallest combination that covers their real boundaries instead of making every rule run in every system.
 
 Enforcement also has a release path. A contract change is proposed with compatibility expectations and sample data. Producers publish the new field or formula alongside the old version, consumers dual-read or shadow the new path, and parity checks compare the results. Only after dependent models and dashboards understand the new meaning does the owner retire the previous version. This staged change prevents an innocent data migration from silently changing a model input.
+
+![Feature contract feeding historical training and live serving paths with boundary validation, health checks, and row-level parity replay](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-contract-parity.png)
+
+*The feature contract defines one meaning for historical training and live serving. Boundary checks and row-level parity reveal whether either path changed the formula, source time, default, or tolerance.*
 
 ## Trace A Feature From Source To Prediction
 <!-- section-summary: Feature telemetry records which value reached the model, where it came from, when it was produced, and whether a fallback path supplied it. -->
@@ -112,10 +110,6 @@ At the fourth step, both the value and the serving system can look healthy. The 
 For example, source events can arrive on time while one regional online store stops accepting writes. The global stream lag remains healthy, and a warehouse profile still sees current values. Request records from that region show rising feature age and a fallback to cached data. The product owner applies the approved regional fallback, while the platform owner repairs replication. A warehouse-only freshness check would miss the exact boundary that affected decisions.
 
 Consider a Kafka-to-Flink pipeline that materializes `current_inventory` into Redis. Every stored value carries its source event time and materialization time. The inference service calculates feature age from the source time, then increments bounded Prometheus counters for total and stale observations by feature, route, and region. The platform dashboard keeps Kafka consumer lag, the Flink watermark, Redis write failures, and request-time stale share on the same timeline. Healthy Kafka lag with a delayed Flink watermark points toward processing; healthy stream progress with stale values in one region points toward the online store or its replication path.
-
-![Feature telemetry across Kafka, Flink, Redis, inference, governed records, and Prometheus](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-telemetry-production-path.png)
-
-*Following one feature across the production path turns a generic stale-value alert into a boundary diagnosis. Stream lag, watermark delay, store-write health, request-time age, and fallback evidence each describe a different handoff.*
 
 ## The Different Checks Needed For Feature Health
 <!-- section-summary: Feature checks cover structure, completeness, validity, freshness, relationships, and population movement because each failure has a different cause. -->
@@ -186,9 +180,9 @@ The correct join works backward from the prediction timestamp. It selects the ne
 | Support message | 1 June, 09:30 | 1 June, 10:20 | No |
 | Confirmed return | 10 June | 10 June | No |
 
-![Point-in-time timeline using a profile update and blocking a late-arriving support message and future return outcome](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/point-in-time-boundary.png)
+![Point-in-time availability timeline that includes the 28 May profile update and independently excludes the late 1 June support message and future 10 June return](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/point-in-time-availability.png)
 
-*Point-in-time retrieval follows availability as well as event time. The support message happened before the prediction, yet the platform learned about it twenty minutes too late for that historical row.*
+*Point-in-time retrieval applies both event time and availability time. The support message happened before the prediction but arrived too late, while the future return remains the outcome.*
 
 The support message happened before the prediction, while the model service could not have seen it at 10:00. The return is the future outcome. Point-in-time logic excludes both. Small fixtures around these boundaries provide strong tests: one event just before the cutoff, one that arrives late, one after the prediction, and one outside the feature's lookback window.
 
@@ -258,7 +252,7 @@ These services reduce integration work. They can schedule comparisons, store res
 
 Tool choice follows the latency and reuse pattern. A warehouse-first stack is usually enough for daily or hourly batch predictions: dbt owns tested transformations, Airflow or Dagster schedules them, and the serving job reads a versioned table or files from object storage. A low-latency online system may add Kafka or a cloud stream, Flink or Spark Structured Streaming, and Redis, DynamoDB, Bigtable, or a managed online feature store. The feature store sits between calculation and retrieval; it does not replace source validation, stream monitoring, or request-time safety.
 
-Feast is useful when a team needs a common feature registry plus point-in-time historical retrieval and online serving across its own infrastructure. A managed feature service can reduce platform operations when most workloads already live with one cloud provider. Databricks Feature Engineering fits teams whose training data, governance, and serving path already center on Unity Catalog and Delta. Adopting a feature platform for one daily table usually adds more ownership and failure modes than it removes.
+Teams that need a common feature registry plus point-in-time historical retrieval and online serving across their own infrastructure can use Feast for that shared path. A managed feature service can reduce platform operations for workloads already concentrated with one cloud provider. Databricks Feature Engineering fits teams whose training data, governance, and serving path already center on Unity Catalog and Delta. Adopting a feature platform for one daily table usually adds more ownership and failure modes than it removes.
 
 The alerting path remains deliberately small. The feature pipeline writes detailed validation failures to a warehouse audit table or Great Expectations validation store. Prometheus, Grafana, or the cloud monitor receives aggregates such as stale share, missing share, parity mismatch rate, and job freshness. Airflow or Dagster carries task failures and dataset dependencies. This separation gives the responder fast notification and enough row-level evidence to investigate without placing customer identifiers in metrics.
 
@@ -283,10 +277,6 @@ A schema incident follows a similar structure with a different repair. Suppose a
 
 The team compares source counts, feature-table coverage, and prediction receipts by country before switching readers. A canary then proves that the restored field reaches the intended transformation and online store. The rollback remains the old API adapter plus the conservative product rule until both parity and coverage remain healthy through a complete data cycle. This is the practical difference between detecting a missing column and recovering the decision path that depended on it.
 
-![Feature incident recovery from detection and route containment through shadow repair, verification, canary traffic, staged restoration, and rollback](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-path-recovery.png)
-
-*Feature recovery keeps the affected route safe first, repairs data in isolation, and restores traffic only after source progress, entity coverage, replay parity, and serving latency agree.*
-
 ## The Main Idea
 <!-- section-summary: Reliable feature monitoring keeps the meaning, timing, and calculation of model inputs consistent from historical training data to live inference. -->
 
@@ -295,6 +285,10 @@ Feature health asks whether live values still satisfy their definitions. Trainin
 Together, these checks locate failures before the team changes the model itself. A stale cache calls for data-path recovery, while a changed unit calls for a producer or transformation fix. A mismatch isolated to one serving route points toward its deployed calculation. A genuine population shift sends the team toward drift and quality analysis.
 
 The practical lesson is to preserve enough evidence to tell those cases apart. The contract explains the intended meaning. Captured timestamps show what reached inference, parity replay compares the two calculations, and a bounded recovery proves that the repaired route is safe. That chain keeps a data failure from turning into an unnecessary model change.
+
+![Feature-path recovery summary from route containment through isolated replay, parity verification, canary traffic, staged restoration, and fallback](/content-assets/articles/article-mlops-monitoring-feature-health-training-serving-parity/feature-path-recovery-summary.png)
+
+*Feature recovery contains the affected route, restores and replays into a shadow prefix, verifies parity, and uses a canary before staged restoration. The model stays unchanged.*
 
 ## References
 

@@ -60,6 +60,10 @@ Each layer answers a different question. The logical name answers “What kind o
 
 A digest adds an integrity check. A **digest** is a fingerprint calculated from content or metadata. The digest of a canonical manifest can prove that the manifest stayed unchanged. A full content digest can prove that the dataset bytes stayed unchanged. Those are different promises, so the record should state what was hashed and which algorithm was used.
 
+![Six pieces of evidence that give one dataset version a durable identity](/content-assets/articles/article-mlops-data-for-ml-systems-dataset-versioning-and-lineage/exact-dataset-version.png)
+
+*A logical name identifies an exact dataset version only after it is bound to an immutable snapshot, contract, transformation, time boundary, and manifest.*
+
 ## Keep The Exact Rows And Files Used For Training
 <!-- section-summary: Table snapshots, object manifests, and warehouse materializations preserve data in different ways and require explicit retention. -->
 
@@ -208,6 +212,10 @@ Unity Catalog automatically captures lineage for many operations executed on Dat
 
 A catalog makes lineage discoverable and applies governance. Data preservation remains the responsibility of table snapshots, object versions, and retained evidence. Runtime capture may also have gaps for unsupported operations or external tools. The manifest remains the durable release record, while the lineage backend supplies navigation and impact analysis.
 
+![Lineage from a source snapshot through a dataset and training run to a model, batch scores, and an online endpoint](/content-assets/articles/article-mlops-data-for-ml-systems-dataset-versioning-and-lineage/lineage-blast-radius.png)
+
+*Lineage makes the blast radius visible: a corrected source field can be traced to every dataset, model, and production output that used it.*
+
 ## Connect Each Dataset Version To The Training Job That Used It
 <!-- section-summary: Experiment tracking should log the dataset identity as a first-class model input with its source, digest, schema, and usage context. -->
 
@@ -329,6 +337,10 @@ Every published dataset version needs enough detail to recover and explain it. I
 Retention determines how long the team can retrieve or rebuild the release. Access policy controls who can inspect its contents. Audit records preserve the people, purpose, checks, and approvals around it.
 
 With those parts connected, a model metric has a defensible data story. The team can compare runs on equal terms, find downstream impact after a source correction, retrieve a historical snapshot, or rebuild from pinned evidence under a declared tolerance. The dataset name then serves as a stable part of the model release record.
+
+![Snapshot, contract, and lineage joined with retention, access, and verification to create reproducible model evidence](/content-assets/articles/article-mlops-data-for-ml-systems-dataset-versioning-and-lineage/dataset-versioning-summary.png)
+
+*The complete record joins exact data, agreed meaning, and downstream history with the controls needed to preserve and verify the evidence.*
 
 ## References
 

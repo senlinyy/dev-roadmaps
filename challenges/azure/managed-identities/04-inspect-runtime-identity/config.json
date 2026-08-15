@@ -67,6 +67,10 @@
       "principal-mi-orders-api-prod",
       "UserAssigned"
     ],
+    "requireCommandPatterns": [
+      "^az\\s+containerapp\\s+identity\\s+show\\b",
+      "^az\\s+identity\\s+show\\b"
+    ],
     "requireCommands": [
       "az"
     ],

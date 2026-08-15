@@ -28,7 +28,7 @@ id: "article-mlops-governance-and-responsible-ai-model-governance-explained"
 ## What Model Governance Actually Governs
 <!-- section-summary: Model governance controls the important decisions around a model-powered system from proposed use through retirement. -->
 
-At a high level, **model governance** is the way an organization controls important decisions about a model-powered system. It establishes who may propose a use, which risks deserve investigation, what evidence supports release, who may accept the remaining risk, and how the organization can restrict or retire the system later.
+A model can pass technical evaluation while its intended use, remaining risk, or release authority remains disputed. **Model governance is how an organization controls those important decisions.** It establishes who may propose a use, which risks require investigation, what evidence supports release, who may accept remaining risk, and how the system can later be restricted or retired.
 
 The governed subject is the complete production use. It includes the model, its data, the product workflow, the people who rely on the output, automated rules around the model, the serving environment, and the fallback path. A model artifact sitting in a registry has limited practical effect. The same artifact placed inside a hiring screen, a fraud queue, or a music recommender can create very different consequences.
 
@@ -117,6 +117,10 @@ flowchart TD
 The mapping exercise should also describe credible failure paths. A false positive may send a legitimate transaction to review. A false negative may miss suspicious activity. A delayed prediction may arrive after an investigator has already decided. A confusing explanation may push reviewers toward automation bias. A feedback loop may cause past interventions to distort future labels. Each path points toward a different evaluation or control.
 
 Model cards support this work by recording intended uses and limitations. They also preserve evaluation conditions and performance across relevant groups. A **system card** can describe the broader deployed system. It connects model behavior with product safeguards and human controls, then documents red-team findings and remaining limitations. Both documents summarize evidence. The inventory and release record still need stable links to the exact versions under review.
+
+![Governance decision map showing how a model's decision authority and potential impact determine its evidence, approval, enforcement, monitoring, and recourse controls](/content-assets/articles/article-mlops-governance-and-responsible-ai-model-governance-explained/governance-follows-decision-authority.png)
+
+*The same risk score can support an investigator or block a purchase automatically. Greater decision authority and harder-to-reverse consequences require deeper evidence, approval, recourse, and release controls.*
 
 ## Give Every Decision a Named Owner
 <!-- section-summary: Decision rights state who prepares evidence, who challenges it, who accepts risk, who deploys, and who may restrict the system. -->
@@ -278,6 +282,10 @@ flowchart TD
 
 No single product supplies this complete control path. MLflow or a managed registry identifies models. Unity Catalog or another catalog governs data and AI assets. Git and CI preserve code review and automated checks. An identity provider supplies roles. A ticket or workflow tool records decisions. The serving platform enforces runtime configuration. Observability and incident systems preserve production evidence.
 
+![Release governance gate joining a governed system record to an immutable release bundle and permitting production only when use, artifact, policy, environment, approval, and requester authority match](/content-assets/articles/article-mlops-governance-and-responsible-ai-model-governance-explained/exact-release-governance-gate.png)
+
+*A governed system record and immutable release bundle meet at the deployment gate. Only matching use, artifact, policy, environment, approval, and requester authority may enter production.*
+
 ## Handle Temporary Exceptions And Changes That Affect Approval
 <!-- section-summary: Exceptions grant temporary, scoped permission under compensating controls, while change control decides whether new evidence or approval is required. -->
 
@@ -317,7 +325,7 @@ flowchart TD
     D --> G["Roll Back or Disable<br/>(stop the affected release)"] & H["Reopen Governance<br/>(new risk map, evidence, and approval)"]
 ```
 
-Every material signal needs an owner and response rule. A schema break can block inference. A segment-quality decline can restrict a population and send cases to manual review. An unexpected use can trigger a scope investigation. A security event can disable the endpoint or revoke credentials. Dashboards support governance only after they connect evidence to authority and action.
+Every material signal needs an owner and response rule. A schema break can block inference. A segment-quality decline can restrict a population and send cases to manual review. An unexpected use can trigger a scope investigation. A security event can disable the endpoint or revoke credentials. A governance dashboard connects each signal to the authority and action responsible for it.
 
 Incident records join the live release with the affected interval. They identify model and policy versions, then preserve the data condition and user impact. The decision owner, mitigation, and recovery evidence complete the record.
 
@@ -414,6 +422,10 @@ Release tooling then enforces that decision through immutable references, policy
 Production monitoring checks the conditions that supported approval. Incidents and reviews can continue, restrict, replace, or retire the system. External models follow the same system-level process even if their internal training remains outside the organization.
 
 The result is a practical operating system for accountable decisions. Standards shape the process, specialists supply discipline-specific evidence, and industrial platforms enforce individual controls. Stable links among purpose, evidence, authority, production state, and lifecycle action make governance operational and auditable.
+
+![Model governance lifecycle from intended use and impact classification through evidence, authority, exact-release enforcement, monitoring, reassessment, and retirement](/content-assets/articles/article-mlops-governance-and-responsible-ai-model-governance-explained/model-governance-lifecycle-summary.png)
+
+*Governance follows one use from definition and impact classification through evidence, accountable decision, exact-release enforcement, monitoring, and live review. Returned evidence and rejected releases never reach deployment.*
 
 ## References
 

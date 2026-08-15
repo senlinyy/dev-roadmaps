@@ -34,7 +34,7 @@ If the team sends this notebook directly to scheduled compute, the job may fail 
 
 Success has a concrete shape. From a clean checkout, another engineer can install the declared environment and run one command against a named data snapshot. The process produces a verified model bundle, structured metrics, and exit status `0`. A second run with the same declared inputs follows the same computation and never overwrites the first completed result.
 
-This transition is about creating a **program boundary**. At a high level, the boundary states everything the training program receives, everything it controls, every external service it may call, and every result it promises to produce.
+A notebook can depend on variables created several cells earlier, local files, and credentials already present on the author's machine. A scheduled job receives none of that hidden state. The transition therefore creates a **program boundary** that states everything the training program receives, everything it controls, every external service it may call, and every result it promises to produce.
 
 ## Why Notebooks Work Well For Exploration
 <!-- section-summary: Notebooks support exploration through interactive state, while automated jobs need a clean process that reconstructs all required state from declared inputs. -->
@@ -89,6 +89,10 @@ flowchart TD
 
 These contracts also classify failure. Invalid arguments fail at invocation. A schema mismatch fails data validation. A library import failure identifies the runtime environment. A missing completion manifest means publication never completed. The caller can decide whether a retry is safe from the failure class and committed output state.
 
+![Four contracts feeding one training program: immutable data, resolved configuration, pinned dependencies, and a verified output bundle.](/content-assets/articles/article-mlops-training-pipelines-notebook-to-training-script/training-program-contracts.png)
+
+*Explicit contracts let tests validate every declared training input and every required output.*
+
 ## Move Stable Notebook Logic Into Functions
 <!-- section-summary: Small functions expose data flow and isolate deterministic model logic from storage, tracking, and other side effects. -->
 
@@ -135,7 +139,7 @@ Importing the package should never start training, connect to a warehouse, creat
 
 The **entrypoint** is the function that coordinates one complete training attempt. It loads declared data, validates contracts, calls the model functions, saves the bundle, and returns a structured summary.
 
-The entrypoint receives external capabilities through **dependency injection**. In another term, it accepts the data reader, bundle writer, and tracker that it needs instead of constructing fixed production clients inside the function. A local run can use filesystem adapters. A managed job can use mounted object-storage paths and MLflow tracking. Tests can use in-memory readers and temporary directories.
+The entrypoint receives external capabilities through **dependency injection**. In practical terms, it accepts the data reader, bundle writer, and tracker that it needs instead of constructing fixed production clients inside the function. A local run can use filesystem adapters. A managed job can use mounted object-storage paths and MLflow tracking. Tests can use in-memory readers and temporary directories.
 
 ```python
 from pathlib import Path
@@ -272,6 +276,10 @@ Local filesystems can use a same-filesystem atomic rename. Object stores have di
 
 Side effects outside the output bundle need the same care. Metric logging should use the stable run and attempt identity. Registry promotion belongs after evaluation and approval, far outside the training function. Sending notifications or changing aliases inside `train()` would make an infrastructure retry repeat a release action.
 
+![One logical training run branching into a failed upload attempt and a successful retry that verifies and conditionally commits one immutable result.](/content-assets/articles/article-mlops-training-pipelines-notebook-to-training-script/retry-safe-training-run.png)
+
+*Separate attempt workspaces and a single committed manifest keep retries from mixing partial and complete outputs.*
+
 ## Report Progress And Return A Clear Result
 <!-- section-summary: Structured events explain what the job attempted, while exit status gives the runtime one unambiguous success or failure signal. -->
 
@@ -358,6 +366,10 @@ Data, configuration, dependency, and output contracts replace kernel memory. Pre
 Retry-safe staging prevents partial artifacts from appearing complete. Structured logs explain each phase, while exit status tells the runtime whether the output contract succeeded. Unit tests protect logic, integration tests protect boundaries, and a smoke test proves the installed command works from a clean environment.
 
 The result is a training program that runs the same way on a laptop, in CI, inside a container, and on managed compute. The platform around it can change without rewriting the model calculation or inventing hidden state.
+
+![The path from notebook exploration through stable functions and one command to verified evidence across local, CI, and managed-job runtimes.](/content-assets/articles/article-mlops-training-pipelines-notebook-to-training-script/notebook-to-managed-job-summary.png)
+
+*One command and one output contract let the same training program move between execution environments.*
 
 ## References
 

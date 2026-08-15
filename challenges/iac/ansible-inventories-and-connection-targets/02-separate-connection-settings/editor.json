@@ -1,0 +1,65 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "group_vars/orders_web.yml",
+  "files": [
+    {
+      "filename": "inventory.ini",
+      "initialValue": "[orders_web]\nweb-01 ansible_host=192.0.2.10 ansible_user=deploy ansible_python_interpreter=/usr/bin/python3\nweb-02 ansible_host=192.0.2.11 ansible_user=deploy ansible_python_interpreter=/usr/bin/python3\n\n[production:children]\norders_web\n"
+    },
+    {
+      "filename": "group_vars/orders_web.yml",
+      "initialValue": "---\n{}\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "files": [
+      {
+        "file": "inventory.ini",
+        "kind": "inventory",
+        "paths": [
+          {
+            "path": [
+              "orders_web",
+              "hosts",
+              "web-01",
+              "ansible_host"
+            ],
+            "equals": "192.0.2.10"
+          },
+          {
+            "path": [
+              "production",
+              "children",
+              "orders_web"
+            ],
+            "exists": true
+          }
+        ],
+        "doesNotContain": [
+          "ansible_user=",
+          "ansible_python_interpreter="
+        ]
+      },
+      {
+        "file": "group_vars/orders_web.yml",
+        "kind": "yaml",
+        "paths": [
+          {
+            "path": [
+              "ansible_user"
+            ],
+            "equals": "deploy"
+          },
+          {
+            "path": [
+              "ansible_python_interpreter"
+            ],
+            "equals": "/usr/bin/python3"
+          }
+        ]
+      }
+    ]
+  }
+}

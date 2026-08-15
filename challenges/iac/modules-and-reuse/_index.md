@@ -1,8 +1,8 @@
 ---
-title: "Module Basics"
-description: "Call a Terraform child module, shape its input and output contract, and judge when a module is too thin."
+title: "Terraform Module Basics"
+description: "Extract a focused private bucket module and call it from a root environment through an explicit input and output contract."
 articleId: article-iac-terraform-modules-basics
 difficulty: medium
-order: 9
-tags: ["terraform", "modules", "reuse", "outputs"]
+order: 16
+tags: ["terraform","modules","reuse","contracts"]
 ---

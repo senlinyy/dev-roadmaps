@@ -28,7 +28,7 @@ Imagine a team investigating a model released several months ago. The training r
 
 Nothing crashed. The query is valid. The extra rows appeared because the sources continued changing after the original build. Some events arrived late. Several labels reached maturity. Incorrect transactions were corrected. A customer dimension gained new attributes. Privacy requests removed other records. The SQL describes how to transform data, while the sources decide which historical facts enter that transformation.
 
-At a high level, **rebuilding a past dataset means recreating the data state that an earlier training or evaluation run actually used.** The work has to recover both the recipe and the world seen by that recipe.
+A team may need to investigate an old prediction, repeat an evaluation, or prove what an earlier model learned from. **Rebuilding a past dataset means recreating the data state that the earlier training or evaluation run actually used.** The work has to recover both the recipe and the world seen by that recipe.
 
 This distinction matters during several ordinary situations:
 
@@ -61,6 +61,10 @@ flowchart TD
 ```
 
 The final comparison is part of the reconstruction. A successful pipeline run proves that the replay finished. It says nothing about whether the replay produced the historical rows. The team needs expected identities and validation evidence from the original build.
+
+![Two timelines showing why the original dataset had 11.8 million rows while a later rerun of the same query had 12.4 million rows](/content-assets/articles/article-mlops-data-for-ml-systems-rebuilding-past-datasets/todays-query-vs-yesterday.png)
+
+*Late events, mature labels, corrections, and deletions change the historical world even if the SQL text stays unchanged.*
 
 ## What You Need To Rebuild A Past Dataset
 <!-- section-summary: Seven connected records prove what the old dataset contained, how it was produced, and whether the rebuilt output matches it. -->
@@ -124,6 +128,10 @@ The manifest stores references and hashes instead of copying the underlying data
 One manifest cannot create evidence after it has disappeared. A Delta version number loses value after required files are vacuumed. An S3 key without its version ID resolves to the latest object. A Git commit without the dependency lock may recreate the source code under a different runtime. Reconstruction therefore has to influence retention and run-record design before the incident arrives.
 
 MLflow dataset tracking can preserve a dataset source, digest, schema, and profile beside the training run. OpenLineage can connect input datasets, the transformation job, its run, and the output dataset. These systems strengthen discovery and provenance. The storage platform still owns the historical bytes, and the build manifest still owns reconstruction-specific timing and split rules.
+
+![The cutoff, input snapshots, code commit, runtime image, late-data policy, and split membership feeding an exact rebuild workspace](/content-assets/articles/article-mlops-data-for-ml-systems-rebuilding-past-datasets/exact-rebuild-evidence.png)
+
+*An exact rebuild needs the original time boundary and data state as well as the code, runtime, timing rules, and row membership.*
 
 ## Choose The Exact Past Moment To Rebuild
 <!-- section-summary: The historical boundary separates which entities belonged in the dataset, what facts were visible, and which labels were mature enough to use. -->
@@ -261,9 +269,11 @@ Source verification should fail fast. Confirm that every version or snapshot res
 ## Recover The Code, Parameters, And Environment
 <!-- section-summary: Source code, compiled transformations, resolved configuration, dependencies, and engine settings together define the historical dataset recipe. -->
 
-Exact inputs recover the old facts, although they cannot show how those facts became model-ready rows. The rebuild also needs the code, resolved parameters, and execution environment used by the original pipeline. These records cover SQL, Python, macros, feature definitions, library versions, engine versions, container image, and behaviour-changing settings. Old source code can produce a different result under a new runtime or a new set of variables.
+Exact inputs recover the old facts. They do not recover the recipe that turned those facts into model-ready rows. That recipe has three parts: the transformation code, the parameter values resolved for the run, and the execution environment that interpreted both.
 
-A Git commit identifies version-controlled SQL and Python. It may also identify dbt models, macros, tests, and package declarations. Git alone misses values supplied at runtime: dbt variables, environment-dependent configuration, orchestration parameters, secrets references, warehouse target, and dynamically selected models.
+Consider a label job whose look-forward window comes from an orchestration parameter. The original run used 45 days, while today's default is 30 days. Checking out the original Git commit still produces different labels unless the rebuild also restores the resolved parameter. A runtime change can have the same effect: a different Spark setting for session time zone may move events across a daily boundary even though the SQL text has not changed.
+
+A Git commit identifies the version-controlled part of the recipe, such as SQL, Python, dbt models, macros, tests, and package declarations. The rebuild record must also capture values supplied at runtime, including dbt variables, selected nodes, warehouse target, orchestration parameters, and behaviour-changing engine settings. Package locks and immutable container-image digests preserve the libraries and operating environment that executed the recipe. Secret values should stay in the secret manager; record the secret reference and version where policy allows it.
 
 ### Recover The Exact Code That Ran
 
@@ -560,7 +570,11 @@ The replay applies the original late-data and label rules. Stable split manifest
 
 Delta Lake versions, Iceberg snapshots and tags, object version manifests, and warehouse materializations preserve different forms of source history. Git, dbt artifacts, dependency locks, and container digests preserve the recipe. MLflow and OpenLineage connect the evidence to training runs and downstream models.
 
-The final claim must match the preserved evidence. A result that satisfies the declared identity and equality checks is an exact rebuild. A result with missing snapshots, deleted records, substituted sources, or unrecoverable runtime behaviour is a best-effort reconstruction with a gap register and limited permitted use.
+The final classification must match the preserved evidence. **Exact** means the rebuild passes the declared identity and equality checks. **Equivalent** applies only when every difference is explained and immaterial for the declared use. Unexplained or material differences make the result **Not Reproduced**, so it must not be used as exact release or audit evidence. A team may preserve a gap-registered reconstruction as a separate exploratory artifact, but that artifact does not change the rebuild classification.
+
+![A rebuild loop that restores evidence, replays transformations, compares rows and splits, explains differences, and classifies the result](/content-assets/articles/article-mlops-data-for-ml-systems-rebuilding-past-datasets/rebuild-compare-classify.png)
+
+*Classify the rebuild as Exact, Equivalent only for explained and immaterial differences, or Not Reproduced when a difference remains unexplained or material.*
 
 ## References
 

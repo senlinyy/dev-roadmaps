@@ -64,7 +64,11 @@ flowchart TD
 
 This contract view changes the investigation. “The model is bad” is too broad to guide an incident. “The online feature vector no longer matches the training feature contract” points to evidence, an owner, a containment action, and a repair.
 
-The same view also prevents tool shopping from taking over. MLflow can preserve run and model evidence. Delta Lake or Apache Iceberg can give data a recoverable version. Feast can support point-in-time feature retrieval. OpenTelemetry can carry service telemetry. These tools help only after the team has named the contract they are meant to enforce.
+The same view also prevents tool shopping from taking over. MLflow can preserve run and model evidence. Delta Lake or Apache Iceberg can give data a recoverable version. Feast can support point-in-time feature retrieval. OpenTelemetry can carry service telemetry. The team names the contract first, then selects the tool that can enforce it.
+
+![Common production ML failures appearing at the handoffs between exploration, data preparation, training, release, operation, and learning](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/failures-at-handoffs.png)
+
+*Recurring failures often reveal a missing contract at a lifecycle handoff. Identity, evidence, ownership, and a return path make the handoff operable.*
 
 ## How To Investigate A Suspected Model Failure
 <!-- section-summary: A reliable investigation validates the evidence first, identifies recent changes, separates service health from prediction quality, and contains user impact before making a model decision. -->
@@ -108,6 +112,10 @@ flowchart TD
 Containment protects users while the team investigates. An online decision service may route traffic back to a proven model, disable a risky automated action, or use a conservative rules-based fallback. A batch pipeline may stop publication and preserve the previous complete output. The safest action depends on the product, which is why fallback behaviour needs approval before an incident.
 
 Recovery also needs evidence. A green deployment status proves that a change finished. It does not prove that the original failure disappeared. The team should rerun the failed contract check, compare the repaired window with a known-good baseline, confirm the user-facing signal, and watch the system through an agreed observation period.
+
+![Evidence-first investigation order with user-impact containment running in parallel](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/evidence-first-investigation.png)
+
+*The investigation validates evidence and recent changes before assigning blame. Containment runs in parallel so user impact does not wait for a complete root-cause analysis.*
 
 ## What Can Fail During Development And Data Preparation
 <!-- section-summary: Notebook-only work, unreproducible datasets, and training-serving skew arise before release because executable code, data identity, or feature meaning was never made explicit. -->
@@ -499,7 +507,7 @@ Every platform addition needs an owner, service objective, upgrade plan, and sec
 
 Before release, the team should test whether it can detect, contain, repair, and verify a known failure. A **failure drill** is a controlled exercise for that purpose. Real users stay outside the exercise, while the team uses the actual monitoring path, release mechanism, permissions, fallback, and recovery evidence.
 
-A useful drill changes one contract at a time. Introduce a stale feature timestamp into a staging route and confirm that the feature check stops the decision or invokes the approved fallback. Break an outcome join and confirm that join-coverage monitoring blocks the quality report. Point a canary at an incompatible feature schema and confirm that contract tests prevent promotion. Remove access to a rollback artifact and confirm that the readiness check catches the missing dependency before release.
+Change one contract per drill. Introduce a stale feature timestamp into a staging route and confirm that the feature check stops the decision or invokes the approved fallback. Break an outcome join and confirm that join-coverage monitoring blocks the quality report. Point a canary at an incompatible feature schema and confirm that contract tests prevent promotion. Remove access to a rollback artifact and confirm that the readiness check catches the missing dependency before release.
 
 The drill record can stay compact:
 
@@ -534,6 +542,10 @@ Production ML failures feel confusing if every alert is reduced to “the model 
 Notebook-only work breaks the execution contract. Mutable datasets break reproducibility. Training-serving skew breaks feature meaning. Weak evaluation breaks candidate approval. Release gaps break production-state control. Silent failure breaks monitoring. Label defects break feedback. Ownership gaps break decision authority. Platform overbuilding breaks delivery.
 
 Every strong response follows the same discipline: validate the evidence, locate the broken handoff, contain user impact, repair the system through a supported industrial path, prove recovery at the user-facing boundary, and add a control that catches the same failure earlier.
+
+![Incident loop from detection through evidence validation, containment, handoff repair, and proven recovery](/content-assets/articles/article-mlops-mlops-foundations-common-mlops-failure-modes/proven-recovery-summary.png)
+
+*Repair changes the system. Recovery proof shows that the original failure is gone and the user-facing behavior is healthy through the agreed observation window.*
 
 ## References
 

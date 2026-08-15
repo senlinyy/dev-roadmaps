@@ -1,6 +1,7 @@
 ---
-title: "Ansible Vault"
+title: "Choose a Vault Boundary"
 order: 3
+revision: 2
 ---
 
-Use storage, runtime, rotation, and recovery evidence to decide whether a Vault workflow protects the full secret lifecycle.
+Choose what to encrypt, how to supply Vault credentials, and how to rotate secrets safely.

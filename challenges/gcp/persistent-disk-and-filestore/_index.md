@@ -4,6 +4,6 @@ description: "Practice attached-storage choices for GCP workloads that need bloc
 articleId: article-cloud-providers-gcp-storage-databases-persistent-disk-filestore
 articleSlug: persistent-disk-and-filestore
 difficulty: medium
-order: 23
+order: 24
 tags: ["gcp", "persistent-disk", "filestore", "storage"]
 ---

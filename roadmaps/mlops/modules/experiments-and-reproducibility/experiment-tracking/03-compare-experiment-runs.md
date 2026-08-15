@@ -26,9 +26,9 @@ id: "article-mlops-experiments-and-reproducibility-compare-experiment-runs"
 15. [References](#references)
 
 ## Two Scores Can Hide Two Different Experiments
-<!-- section-summary: A higher metric has meaning only after the team confirms that both runs answered the same experimental question. -->
+<!-- section-summary: Before interpreting a higher metric, the team confirms that both runs answered the same experimental question. -->
 
-At a high level, **comparing experiment runs** means explaining why one training run produced a different result from another. The visible part is usually a pair of scores. The real work is deciding whether the score difference came from the intended model change or from some other part of the experiment.
+Two runs may differ by one accuracy point while also using different data snapshots, dependencies, or evaluation rules. **Comparing experiment runs means explaining which difference produced the changed result.** The real work is separating the intended model change from every other part of the experiment.
 
 Imagine two classification runs:
 
@@ -52,7 +52,7 @@ flowchart TD
 This order prevents a familiar mistake: sorting a run table by one metric and treating the first row as the answer.
 
 ## Compare Runs To Find Why Results Changed
-<!-- section-summary: A useful comparison connects a measured outcome to the controlled change that could have produced it. -->
+<!-- section-summary: A run comparison connects a measured outcome to the controlled change that could have produced it. -->
 
 An experiment asks a question such as, “Does adding recency features improve ranking quality?” or “Does a smaller learning rate improve calibration?” A run is one execution of that experiment. Run comparison evaluates the evidence across executions.
 
@@ -104,6 +104,10 @@ flowchart TD
 ```
 
 If comparability fails, the team has learned something useful: the current runs cannot answer the intended question. Rerunning one model on the other run’s evaluation snapshot is often faster and safer than debating incompatible scores.
+
+![Baseline and candidate runs passing through task, data, split, label, metric, and environment comparability checks before their scores are interpreted](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/run-comparability-gate.png)
+
+*Treat a metric difference as evidence only after both runs answer the same question with the same evaluation data and rules. A failed gate sends the team back to align the evidence or rerun the comparison.*
 
 ## Choose The Reference Run And The New Run To Compare
 <!-- section-summary: The baseline is the reference the team cares about, and the candidate is the controlled alternative being evaluated against it. -->
@@ -219,6 +223,10 @@ flowchart TD
 ```
 
 Statistical significance and practical significance answer different questions. A tiny improvement can be statistically credible on millions of examples and still have little product value. A larger but uncertain improvement may justify another run instead of immediate rejection.
+
+![Overlapping baseline and candidate seed results beside segment checks showing lower overall error but higher error for noisy mobile calls](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/seed-and-segment-checks.png)
+
+*Repeated seeds show whether a gain is larger than ordinary training variation. Segment results then reveal whether the average improvement hides a regression in an important operating condition.*
 
 ## Compare Hyperparameter Trials as One Study
 <!-- section-summary: Hyperparameter trials belong to one parent study, and the study design matters as much as the top child-run score. -->
@@ -361,7 +369,11 @@ Comparing runs is an investigation into cause, not a leaderboard ritual. First e
 
 MLflow, W&B, and managed experiment platforms make runs searchable and visible. The scientific structure comes from the team: shared evidence, explicit baselines, controlled changes, repeated trials, protected evaluation, and clear conclusions.
 
-The best result of a comparison is a justified next step. Sometimes that step is a release candidate. Sometimes it is a cleaner experiment. Both are progress if the team can explain why.
+A comparison should end with a justified next step. That step may be a release candidate or a cleaner experiment, supported by a recorded explanation of the choice.
+
+![Run comparison progressing from a shared question and aligned evidence through controlled differences, behavioural analysis, uncertainty checks, and a recorded conclusion](/content-assets/articles/article-mlops-experiments-and-reproducibility-compare-experiment-runs/justified-comparison-decision.png)
+
+*A fair comparison explains why the result changed and records its limits. The evidence may support a candidate, a cleaner experiment, or rejection of the proposed change.*
 
 ## References
 

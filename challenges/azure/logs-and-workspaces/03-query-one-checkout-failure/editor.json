@@ -1,0 +1,17 @@
+{
+  "language": "kusto",
+  "filename": "checkout-failure.kql",
+  "completionProfile": "azure-kql",
+  "initialValue": "ContainerAppConsoleLogs_CL\n| where TimeGenerated > ago(24h)\n| take 100\n",
+  "grader": {
+    "strategy": "regex-all",
+    "expected": [
+      { "pattern": "^\\s*ContainerAppConsoleLogs_CL\\s*$", "flags": "m", "label": "Container Apps console log table" },
+      { "pattern": "where\\s+TimeGenerated\\s+between\\s*\\(datetime\\(2026-05-07T09:35:00Z\\)\\s*\\.\\.\\s*datetime\\(2026-05-07T09:50:00Z\\)\\)", "flags": "i", "label": "bounded incident window" },
+      { "pattern": "where\\s+OperationId\\s*==\\s*[\\\"']checkout-5001[\\\"']", "flags": "i", "label": "operation correlation filter" },
+      { "pattern": "project\\s+TimeGenerated\\s*,\\s*OperationId\\s*,\\s*ResultCode\\s*,\\s*SeverityLevel\\s*,\\s*Message\\s*,\\s*_ResourceId", "flags": "i", "label": "incident evidence columns" },
+      { "pattern": "order\\s+by\\s+TimeGenerated\\s+asc", "flags": "i", "label": "ascending event timeline" },
+      { "pattern": "\\|\\s*take\\b", "flags": "i", "negate": true, "label": "no arbitrary row shortcut" }
+    ]
+  }
+}

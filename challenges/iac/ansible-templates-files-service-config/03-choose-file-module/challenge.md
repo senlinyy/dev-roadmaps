@@ -1,6 +1,7 @@
 ---
-title: "Files and Templates"
+title: "Choose the File Module"
 order: 3
+revision: 2
 ---
 
-Use file ownership, rendered content, validation, and rollout evidence to choose safe Ansible file operations.
+Choose between file, copy, template, lineinfile, and blockinfile for concrete configuration changes.

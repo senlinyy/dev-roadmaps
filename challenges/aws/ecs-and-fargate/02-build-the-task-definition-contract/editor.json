@@ -1,0 +1,161 @@
+{
+  "language": "json",
+  "filename": "task-definition.json",
+  "completionProfile": "aws-ecs-task-definition",
+  "initialValue": "{\n  \"family\": \"orders-api\",\n  \"requiresCompatibilities\": [],\n  \"networkMode\": \"\",\n  \"cpu\": \"\",\n  \"memory\": \"\",\n  \"executionRoleArn\": \"\",\n  \"taskRoleArn\": \"\",\n  \"containerDefinitions\": [\n    {\n      \"name\": \"orders-api\",\n      \"image\": \"123456789012.dkr.ecr.eu-west-2.amazonaws.com/orders-api:2026.08.1\",\n      \"essential\": true,\n      \"portMappings\": [],\n      \"environment\": [],\n      \"secrets\": []\n    }\n  ]\n}\n",
+  "grader": {
+    "strategy": "json-paths",
+    "expected": [
+      {
+        "path": [
+          "family"
+        ],
+        "equals": "orders-api",
+        "label": "task family"
+      },
+      {
+        "path": [
+          "requiresCompatibilities"
+        ],
+        "includes": "FARGATE",
+        "minItems": 1,
+        "maxItems": 1,
+        "label": "Fargate compatibility"
+      },
+      {
+        "path": [
+          "networkMode"
+        ],
+        "equals": "awsvpc",
+        "label": "awsvpc network mode"
+      },
+      {
+        "path": [
+          "cpu"
+        ],
+        "equals": "512",
+        "label": "task CPU"
+      },
+      {
+        "path": [
+          "memory"
+        ],
+        "equals": "1024",
+        "label": "task memory"
+      },
+      {
+        "path": [
+          "executionRoleArn"
+        ],
+        "equals": "arn:aws:iam::123456789012:role/orders-ecs-execution",
+        "label": "execution role"
+      },
+      {
+        "path": [
+          "taskRoleArn"
+        ],
+        "equals": "arn:aws:iam::123456789012:role/orders-api-task",
+        "label": "task role"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "portMappings"
+        ],
+        "containsObject": {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        },
+        "label": "application port"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "environment"
+        ],
+        "containsObject": {
+          "name": "LOG_LEVEL",
+          "value": "info"
+        },
+        "label": "plain log configuration"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "secrets"
+        ],
+        "containsObject": {
+          "name": "PAYMENTS_API_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-2:123456789012:secret:orders/payments-token-a1b2c3"
+        },
+        "label": "secret injection"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "logConfiguration",
+          "logDriver"
+        ],
+        "equals": "awslogs",
+        "label": "CloudWatch log driver"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "logConfiguration",
+          "options",
+          "awslogs-group"
+        ],
+        "equals": "/ecs/orders-api",
+        "label": "log group"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "logConfiguration",
+          "options",
+          "awslogs-region"
+        ],
+        "equals": "eu-west-2",
+        "label": "log Region"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "logConfiguration",
+          "options",
+          "awslogs-stream-prefix"
+        ],
+        "equals": "ecs",
+        "label": "log stream prefix"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "healthCheck",
+          "command"
+        ],
+        "includes": "CMD-SHELL",
+        "label": "shell health check"
+      },
+      {
+        "path": [
+          "containerDefinitions",
+          0,
+          "healthCheck",
+          "command"
+        ],
+        "includes": "curl -f http://localhost:3000/health || exit 1",
+        "label": "health endpoint"
+      }
+    ]
+  }
+}

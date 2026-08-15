@@ -34,7 +34,7 @@ aliases:
 ## What A Model Rollback Must Restore
 <!-- section-summary: A model rollback restores the complete set of compatible components that produced an approved decision instead of changing one model file in isolation. -->
 
-At a high level, a **model rollback** moves production from an unsafe release to a previously approved way of making decisions. The goal is to stop new harm quickly and restore behavior the team already understands.
+Suppose a newly released model begins sending valid requests to the wrong product action. A **model rollback** moves production away from that unsafe release and restores a previously approved way of making decisions. The goal is to stop new harm quickly and return to behaviour the team already understands.
 
 Imagine a new ranking model starts placing unavailable products at the top of search results. The API still returns `200 OK`, latency looks healthy, and every container is ready. Customers see poor results anyway. The team needs to send new searches back through the previous ranking path.
 
@@ -92,6 +92,10 @@ previous_approved_release: search-ranking-r42
 ```
 
 The release ID acts as the name of the whole decision path. The component fields explain what it contains. During an incident, the operator selects `search-ranking-r42` and verifies that its component versions are still available and compatible with current production inputs.
+
+![A safe rollback from search-ranking-r43 to the complete known-good search-ranking-r42 release bundle, with separate prospective recovery and retrospective repair tracks.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/complete-release-rollback-target.png)
+
+*Restoring the complete release preserves the compatible model, image, features, policy, API, deployment, and route while prior decisions remain a separate remediation workload.*
 
 An alias such as `Champion` or `production` is helpful for discovery, yet it is mutable. Incident records and prediction telemetry should preserve the concrete model version resolved from that alias. Otherwise the same alias can refer to different artifacts at different moments.
 
@@ -235,6 +239,10 @@ kubectl rollout status deployment/search-api --namespace ml-serving
 
 This action covers the image and other fields inside the recorded Pod template. External ConfigMaps, registry aliases, feature tables, and database migrations remain unchanged. The release bundle shows which additional controls must move together.
 
+![A comparison of registry aliases, traffic controls, Kubernetes undo, batch correction runs, and GitOps commits showing what each rollback control changes and what must be verified next.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/rollback-control-effects.png)
+
+*Each control changes one layer; recovery requires following declared state through the loaded runtime to the customer or business outcome.*
+
 ## Check Feature, API, And Policy Compatibility Before Rollback
 <!-- section-summary: The previous model is safe only if current features, request schemas, outputs, and decision policies still satisfy its contract. -->
 
@@ -372,6 +380,10 @@ A production model is part of a larger decision path. Safe rollback identifies t
 The work continues after the serving change. Caches, state, queues, batch outputs, GitOps declarations, and already-consumed actions can preserve candidate effects. A mature recovery process gives each of those effects an owner and an evidence-based closure condition.
 
 The most important skill is understanding what each control changes. A registry alias changes a reference. A traffic weight changes routing. A deployment revision changes a Pod template. A batch correction creates replacement data. Recovery is complete only after those controls combine into safe customer and business outcomes.
+
+![The complete online and batch model rollback path from containment and compatibility checks through execution, five recovery gates, durable-state reconciliation, and repair of earlier effects.](/content-assets/articles/article-mlops-deployment-and-release-management-rolling-back-bad-model/model-rollback-summary.png)
+
+*Online and batch paths converge at recovery verification; only written criteria can advance the response to durable state reconciliation and repair of earlier effects.*
 
 ## References
 

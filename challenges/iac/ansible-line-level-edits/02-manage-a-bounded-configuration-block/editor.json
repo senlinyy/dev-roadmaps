@@ -1,0 +1,65 @@
+{
+  "language": "yaml",
+  "completionProfile": "ansible-playbook",
+  "activeFile": "site.yml",
+  "files": [
+    {
+      "filename": "site.yml",
+      "initialValue": "- name: Harden SSH\n  hosts: production\n  become: true\n  tasks:\n    - name: Add security settings\n      ansible.builtin.copy:\n        content: |\n          PasswordAuthentication no\n          PermitRootLogin no\n        dest: /etc/ssh/sshd_config\n"
+    }
+  ],
+  "grader": {
+    "strategy": "ansible-project",
+    "tasks": [
+      {
+        "select": {
+          "file": "site.yml",
+          "module": "blockinfile"
+        },
+        "paths": [
+          {
+            "path": [
+              "ansible.builtin.blockinfile",
+              "marker"
+            ],
+            "contains": "DEVPOLARIS MANAGED SSH POLICY"
+          },
+          {
+            "path": [
+              "ansible.builtin.blockinfile",
+              "block"
+            ],
+            "contains": "PasswordAuthentication no"
+          },
+          {
+            "path": [
+              "ansible.builtin.blockinfile",
+              "block"
+            ],
+            "contains": "PermitRootLogin no"
+          },
+          {
+            "path": [
+              "ansible.builtin.blockinfile",
+              "backup"
+            ],
+            "equals": true
+          },
+          {
+            "path": [
+              "ansible.builtin.blockinfile",
+              "validate"
+            ],
+            "contains": "%s"
+          },
+          {
+            "path": [
+              "diff"
+            ],
+            "equals": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,7 @@
 ---
-title: "Rolling Updates and Serial Execution"
-order: 1
+title: "Choose the First Production Run"
+order: 2
+revision: 2
 ---
 
-Use preview, target, capacity, batch, and health evidence to decide whether a production rollout should continue.
+Choose canary size, failure policy, and evidence for the first production batch.

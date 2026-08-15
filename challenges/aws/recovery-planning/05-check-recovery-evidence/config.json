@@ -48,6 +48,10 @@
       "\"Encrypted\": true",
       "\"Status\": \"Enabled\""
     ],
+    "requireCommandPatterns": [
+      "^aws\\\\s+rds\\\\s+describe-db-snapshots\\\\b",
+      "^aws\\\\s+s3api\\\\s+get-bucket-versioning\\\\b"
+    ],
     "requireCommands": [
       "aws"
     ],

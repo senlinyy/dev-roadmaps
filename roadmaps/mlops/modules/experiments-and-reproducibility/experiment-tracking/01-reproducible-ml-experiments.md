@@ -29,7 +29,7 @@ id: "article-mlops-experiments-and-reproducibility-reproducible-ml-experiments"
 ## Running the Code Again Is Only the First Step
 <!-- section-summary: A successful rerun proves that code still executes, while reproduction tests whether the original result and conclusion can be reconstructed. -->
 
-At a high level, **reproducibility** means preserving enough evidence to reconstruct an ML result and test the conclusion it supported. A training program can still execute after its data, dependencies, or hidden state have changed. Successful execution therefore proves less than successful reproduction.
+A training program can still execute after its data, dependencies, or hidden state have changed. **Reproducibility means preserving enough evidence to reconstruct an ML result and test the conclusion it supported.** Successful execution proves less than a successful reproduction.
 
 Imagine an engineer finds an old training command and runs it again:
 
@@ -39,7 +39,7 @@ uv run python train.py --config configs/candidate.toml
 
 The command finishes successfully, yet the validation score differs from the recorded result. The script read today's version of a warehouse table, the package resolver installed newer libraries, and the notebook that created the original split had uncommitted state. The team has rerun the program, but it has not reconstructed the original experiment.
 
-At a high level, a **rerun** means that an executable workflow runs again. A **reproduction** means that the material conditions behind a result can be recovered and tested against a declared acceptance rule. The second idea is stronger. It asks which data entered training, which code and configuration executed, which environment and hardware supported it, how randomness was controlled, how evaluation was performed, and which outputs supported the conclusion.
+A workflow can run again and still use changed data or dependencies. That is a **rerun**. A **reproduction** recovers the material conditions behind the earlier result and tests them against a declared acceptance rule. It asks which data, code, configuration, environment, hardware, randomness, evaluation, and outputs supported the conclusion.
 
 A successful reproduction does not always require identical model bytes. GPU kernels, distributed execution, and floating-point arithmetic can produce small numerical differences. The goal may be exact equality for deterministic preprocessing and dataset membership, plus a tolerance for training metrics and predictions. The team defines that standard before comparing the replay.
 
@@ -62,6 +62,10 @@ flowchart TD
 ```
 
 Reproducibility gives a result a history that another person can inspect. It supports fair model comparison, debugging, audits, incident investigation, and the ability to rebuild an important model after infrastructure or team members change.
+
+![A rerun using current conditions compared with a reproduction that restores the recorded data, code, configuration, environment, seeds, and evaluation policy](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/rerun-versus-reproduction.png)
+
+*A rerun proves that a command still executes. A reproduction restores the material evidence behind the original result so the team can test whether its conclusion still holds.*
 
 ## An ML Experiment Is a Structured Question
 <!-- section-summary: An ML experiment changes a controlled part of a baseline to answer a declared question under a fixed evaluation protocol. -->
@@ -175,6 +179,10 @@ flowchart TD
 
 The bundle should be machine-readable enough for a replay job to verify identities before consuming expensive compute. It also needs plain-language notes so a reviewer can understand the question and outcome without reverse-engineering parameter keys.
 
+![A run ID connected to input evidence, execution conditions, output records, and decision context](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/reproducible-run-evidence-bundle.png)
+
+*The run ID connects the evidence bundle. The underlying snapshots, artifacts, and policies still need durable identities and retention because a tracker cannot reconstruct evidence that was never preserved.*
+
 ## Preserve The Exact Training Data
 <!-- section-summary: A dataset snapshot preserves the exact records, schema, labels, and split used by an experiment. -->
 
@@ -284,7 +292,7 @@ flowchart TD
 ## Record How Every Metric And Artifact Was Produced
 <!-- section-summary: Parameters describe intended inputs, metrics record observations, and artifacts preserve the evidence needed to interpret those observations. -->
 
-At a high level, an experiment tracker stores both the settings supplied to a run and the evidence produced by it. Most trackers offer four related record types. Parameters and metrics describe inputs and observations. Tags and artifacts provide identity, context, and durable evidence. Each type answers a different question.
+During review, the team needs both the settings supplied to a run and the evidence it produced. An experiment tracker stores these through four related record types. Parameters and metrics describe inputs and observations; tags and artifacts provide identity, context, and durable evidence.
 
 A **parameter** is an intended input that normally stays fixed during a run. Learning rate and class weighting are parameters because the training process receives them as choices. Log the resolved value used by the process, even if it came from a default or command-line override.
 
@@ -540,6 +548,10 @@ The evidence bundle connects a question ID and run ID to immutable dataset snaps
 MLflow 3, W&B, Databricks-managed MLflow, and cloud-native tracking services can store and navigate this evidence. The platform cannot decide which product guardrails matter, keep a mutable source from changing, or define an honest replay policy. Those responsibilities remain part of experiment design.
 
 A strong replay verifies identities before compute, creates a new linked run, restores the recorded conditions, and applies exact checks plus predeclared tolerances. The result is valuable even if reproduction fails, because the first divergence reveals instability or missing evidence that the team can correct.
+
+![A replay workflow that verifies recorded identities, runs a clean replay, applies exact and tolerance checks, and accepts reproduction or investigates the first divergence](/content-assets/articles/article-mlops-experiments-and-reproducibility-reproducible-ml-experiments/replay-verification-path.png)
+
+*Exact identity checks decide whether the job is an exact replay or a labelled migration study. The clean replay then uses the original evaluation and predeclared tolerances to test the original conclusion.*
 
 ## References
 
