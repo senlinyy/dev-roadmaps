@@ -9,17 +9,31 @@ id: article-cloud-providers-aws-observability-cloudtrail-config-what-changed
 
 ## Table of Contents
 
-1. [The Question After the Alarm](#the-question-after-the-alarm)
-2. [CloudTrail: Who Called Which API](#cloudtrail-who-called-which-api)
-3. [Event History, Trails, Lake, and Insights](#event-history-trails-lake-and-insights)
-4. [Data Events and Network Activity Events](#data-events-and-network-activity-events)
-5. [CloudTrail Security Baseline](#cloudtrail-security-baseline)
-6. [AWS Config: What the Resource Looked Like](#aws-config-what-the-resource-looked-like)
-7. [Rules, Aggregators, Conformance Packs, and Remediation](#rules-aggregators-conformance-packs-and-remediation)
-8. [Investigation Walkthrough: The Open Security Group](#investigation-walkthrough-the-open-security-group)
-9. [Putting It All Together](#putting-it-all-together)
+1. [What Change Questions Come After an Alarm?](#what-change-questions-come-after-an-alarm)
+2. [What Does CloudTrail Record About an API Call?](#what-does-cloudtrail-record-about-an-api-call)
+3. [When Do You Use Event History, a Trail, Lake, or Insights?](#when-do-you-use-event-history-a-trail-lake-or-insights)
+4. [When Do You Need Data or Network Activity Events?](#when-do-you-need-data-or-network-activity-events)
+5. [What Does AWS Config Record About Resource State?](#what-does-aws-config-record-about-resource-state)
+6. [How Do Rules, Aggregators, Conformance Packs, and Remediation Help?](#how-do-rules-aggregators-conformance-packs-and-remediation-help)
+7. [How Do You Investigate an Open Security Group?](#how-do-you-investigate-an-open-security-group)
+8. [How Do CloudTrail and Config Work Together?](#how-do-cloudtrail-and-config-work-together)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## The Question After the Alarm
+"What changed?" contains several questions: what was different, when did it become different, which operation caused the transition, which AWS identity performed it, and whether the resulting state was acceptable. CloudTrail records the action side. AWS Config records the state side.
+
+The sections below answer these questions in order:
+
+1. **What Change Questions Come After an Alarm?**
+2. **What Does CloudTrail Record About an API Call?**
+3. **When Do You Use Event History, a Trail, Lake, or Insights?**
+4. **When Do You Need Data or Network Activity Events?**
+5. **What Does AWS Config Record About Resource State?**
+6. **How Do Rules, Aggregators, Conformance Packs, and Remediation Help?**
+7. **How Do You Investigate an Open Security Group?**
+8. **How Do CloudTrail and Config Work Together?**
+
+## What Change Questions Come After an Alarm?
 <!-- section-summary: CloudWatch shows symptoms, while CloudTrail and AWS Config explain the AWS change behind those symptoms. -->
 
 Go back to the checkout system from the previous article. CloudWatch alarms fire because `orders-api` is returning HTTP 500 errors, the `inventory-worker` pods in EKS are logging database connection failures, and the `receipt-renderer` Lambda function still looks healthy. The first incident question is operational: which workload is failing?
@@ -37,7 +51,7 @@ These two services work best together. CloudTrail might show that an assumed rol
 
 We will start with CloudTrail because every change investigation needs the API activity record first. Then we will add AWS Config so the team can compare the resource before and after the change.
 
-## CloudTrail: Who Called Which API
+## What Does CloudTrail Record About an API Call?
 <!-- section-summary: CloudTrail events record AWS API activity, including the caller, action, time, source, request details, and affected resources. -->
 
 A **CloudTrail event** is a record of activity in an AWS account. The activity can come from the AWS Console, AWS CLI, AWS SDKs, AWS service-to-service calls, or other API paths that CloudTrail monitors. In plain terms, CloudTrail records the control-plane question: who asked AWS to do something?
@@ -84,6 +98,8 @@ Here is a simplified event shape for the checkout incident:
 
 That one event already gives the team a lead. The caller used an assumed role. The API came from EC2. The change touched security group `sg-0abc123def456`. The request opened PostgreSQL port `5432` to the world. The team still needs to confirm the actual resource state, but CloudTrail has answered who called the API and what API they called.
 
+An API call is not the resource state. The request may fail, a second API call may reverse it seconds later, or a deployment may overwrite the configuration. CloudTrail records error information for relevant failed requests, and its events are not guaranteed to appear in API-call order. Treat it as an activity ledger, not an ordered application stack trace or a complete state timeline.
+
 CloudTrail separates events into several types:
 
 | Event type | Beginner definition | Production example |
@@ -103,7 +119,7 @@ The event type decides which CloudTrail feature you need. Event history is quick
 
 
 
-## Event History, Trails, Lake, and Insights
+## When Do You Use Event History, a Trail, Lake, or Insights?
 <!-- section-summary: CloudTrail has several access patterns, and each one fits a different retention, query, and investigation need. -->
 
 **Event history** is the fastest starting point. AWS enables CloudTrail by default for accounts, and Event history gives a searchable, downloadable, immutable record of the past 90 days of management events in one AWS Region. It is useful when the incident is fresh and the question is simple.
@@ -181,7 +197,7 @@ Event history has clear limits. It covers management events only, it looks back 
 
 A **trail** delivers selected CloudTrail events to an S3 bucket. A production trail is usually multi-Region, often organization-wide, and stored in a dedicated log archive account. Trails can include management events, data events, and network activity events based on the selector configuration. They can also send events to CloudWatch Logs for monitoring and alarms.
 
-A **CloudTrail Lake event data store** stores events for SQL queries. Lake queries can filter across multiple fields instead of a single lookup attribute. AWS documentation now includes an important availability caveat: CloudTrail Lake closed to new customers starting May 31, 2026, while existing customers can continue to use the service as normal. If your organization already uses Lake, it can be a powerful investigation layer. New customers need to follow current AWS availability guidance and use trails, S3, Athena, SIEM tooling, or other approved paths when Lake enrollment is unavailable.
+A **CloudTrail Lake event data store** stores events for SQL queries. Lake queries can filter across multiple fields instead of the single lookup attribute supported by one Event history lookup. It is useful for questions such as every security-group modification made by one role across several months or all IAM policy changes near an incident.
 
 A CloudTrail Lake query for existing Lake customers might look like this:
 
@@ -206,7 +222,7 @@ These options create a practical decision tree. Event history is good for a fres
 
 The next decision is data events, because teams often assume CloudTrail records every object read or function invoke automatically. That assumption causes painful gaps.
 
-## Data Events and Network Activity Events
+## When Do You Need Data or Network Activity Events?
 <!-- section-summary: Data events and network activity events add deeper visibility, but teams should select them carefully because they can be high volume and cost sensitive. -->
 
 **Data events** record operations performed on or inside resources. S3 object-level API calls are the classic example. A bucket policy change is a management event, while `GetObject`, `PutObject`, and `DeleteObject` on objects are data events. Lambda function `Invoke` activity and DynamoDB table data-plane activity are also common examples.
@@ -253,11 +269,13 @@ That selector records write data events for objects under one critical bucket pr
 
 **Network activity events** answer a newer kind of question. They let VPC endpoint owners record AWS API calls made through their VPC endpoints from a private VPC to an AWS service. For example, a platform team that owns a private S3 endpoint can use network activity events to investigate API calls that crossed that endpoint path.
 
+They are not VPC Flow Logs. Flow logs describe network conversations such as source, destination, protocol, port, bytes, and acceptance. Network activity events describe AWS API calls that passed through a VPC endpoint. One is network-flow evidence; the other is API-activity evidence tied to the private service path.
+
 The design rule is the same for both event types: match the event stream to the investigation question. CloudTrail can record very detailed activity, and detailed activity can create very large event volume. Useful audit logging has a purpose, a retention plan, and a review process.
 
 Before AWS Config enters the story, the CloudTrail baseline itself needs protection. Audit logs lose value when attackers or overly broad administrators can quietly turn them off or delete them.
 
-## CloudTrail Security Baseline
+### How Do You Protect the CloudTrail Audit Record?
 <!-- section-summary: CloudTrail evidence needs centralization, multi-Region coverage, log validation, encryption, alerting, and tightly controlled access. -->
 
 CloudTrail logs are security evidence. They should live in a place where ordinary application administrators have no edit or delete path. In a multi-account AWS organization, that usually means a dedicated log archive account and an organization trail that records activity for all member accounts.
@@ -287,12 +305,16 @@ CloudTrail now answers who called the API. The resource-state side still needs A
 *The audit baseline shows which event types and retention choices help teams investigate security and production changes later.*
 
 
-## AWS Config: What the Resource Looked Like
+## What Does AWS Config Record About Resource State?
 <!-- section-summary: AWS Config records resource inventory and configuration history so teams can compare resource state before and after a change. -->
 
 **AWS Config** gives a detailed view of AWS resource configuration. It records supported resources, their relationships, and how their configuration changed over time. A resource can be an EC2 instance, security group, EBS volume, VPC, IAM role, S3 bucket, or another supported AWS resource type.
 
 The core record in AWS Config is a **configuration item**, often shortened to **CI**. A configuration item is a snapshot of a resource's configuration at a point in time. When AWS Config detects that a supported resource was created, changed, or deleted, it records a new configuration item. AWS Config also tracks relationships, so a security group change can show related EC2 instances.
+
+Config does not fundamentally store a human-written diff. It records state A, state B, and state C; a comparison derives that A to B added a rule or B to C changed a tag. This snapshot model is powerful because Config observes resource configuration through service discovery and Describe/List APIs, including changes that may not map neatly to one convenient user API event.
+
+Recording frequency changes what history preserves. **Continuous** recording captures configuration changes as they are detected. **Daily** recording keeps the latest differing item for a 24-hour period and can omit intermediate states. Daily mode reduces item volume, but continuous recording is more useful for security-sensitive resources where a dangerous configuration existed for only minutes.
 
 In the checkout incident, CloudTrail showed the API call that opened a security group. AWS Config can show the captured security group configuration around that time:
 
@@ -385,7 +407,7 @@ AWS Config recording has scope and Region considerations. AWS Config supports ma
 
 History is useful during incidents. Rules, aggregators, conformance packs, and remediation make AWS Config useful before the incident.
 
-## Rules, Aggregators, Conformance Packs, and Remediation
+## How Do Rules, Aggregators, Conformance Packs, and Remediation Help?
 <!-- section-summary: AWS Config can evaluate resources, centralize compliance views, package rule sets, and trigger controlled remediation workflows. -->
 
 An **AWS Config rule** evaluates whether resources match a desired configuration. AWS provides managed rules for common checks, and teams can create custom rules with AWS Lambda or CloudFormation Guard. A rule can run when a matching resource changes, on a periodic schedule, or in a hybrid mode that uses both triggers.
@@ -412,6 +434,8 @@ aws configservice put-config-rule \
 ```
 
 Rules turn change history into posture. Instead of discovering a public SSH rule during an incident, the team can receive a noncompliant result when the rule appears. For database security groups, the team might use a managed rule with parameters or a custom Guard rule that matches company network policy.
+
+A **detective** evaluation examines a resource that already exists and reports whether deployed state is compliant. A supported **proactive** evaluation asks whether proposed resource properties would be compliant if deployed. Proactive evaluation is still detection: it does not automatically block deployment or remediate the proposal. A deployment system must consume the result and enforce the gate.
 
 After the rule evaluates, inspect the compliance result:
 
@@ -443,6 +467,8 @@ A **conformance pack** is a collection of AWS Config rules and remediation actio
 
 **Remediation** connects a noncompliant rule result to an AWS Systems Manager Automation document. A remediation can be manual or automatic. For sensitive resources, teams usually start manual: a Config rule flags a risky security group, the responder reviews the finding, and an approved automation removes the bad rule. After the team trusts the detection and remediation path, low-risk fixes can move to automatic remediation.
 
+Automatic remediation should be idempotent, narrowly scoped, tested, least-privileged, and safe to run twice. Config may act from a compliance snapshot that no longer reflects the resource's latest state, so the automation should re-check assumptions instead of blindly applying a destructive change.
+
 This is the healthy governance loop:
 
 1. AWS Config records the resource.
@@ -454,7 +480,7 @@ This is the healthy governance loop:
 
 Now we can put CloudTrail and AWS Config together in a real investigation.
 
-## Investigation Walkthrough: The Open Security Group
+## How Do You Investigate an Open Security Group?
 <!-- section-summary: CloudTrail identifies the caller and API action, while AWS Config confirms the exact resource state before and after the change. -->
 
 The checkout alarm fired at 15:32 UTC. `inventory-worker` started logging database connection failures. The database stayed healthy, and no recent application deployment touched the worker. That points the team toward infrastructure.
@@ -483,6 +509,8 @@ Example output:
 ```
 
 The event list shows `AuthorizeSecurityGroupIngress` at 15:24 UTC. The full event shows the assumed role session, source IP address, request parameters, security group ID, port, and CIDR block. That answers the caller side of the question.
+
+The displayed AWS identity may be a pipeline role rather than the human who initiated the change. The complete chain could be developer, Git commit, CI job, `AssumeRole`, and finally the EC2 API call. CloudTrail establishes the AWS principal and session; Git history, CI/CD logs, and release records may be required to attribute the upstream human decision.
 
 Second, the responder asks AWS Config for the security group history:
 
@@ -535,7 +563,7 @@ CloudTrail gives the activity trail. AWS Config gives the resource state trail. 
 *The investigation path combines alarm time, CloudTrail events, Config history, resource tags, and remediation evidence.*
 
 
-## Putting It All Together
+## How Do CloudTrail and Config Work Together?
 <!-- section-summary: CloudWatch, CloudTrail, and AWS Config form the operational loop for symptoms, actions, and resource state. -->
 
 The full observability and audit loop has three layers. **CloudWatch** answers how the workload behaved: errors, latency, throttles, restarts, logs, traces, and alarms. **CloudTrail** answers who or what called AWS APIs: identity, event name, source IP, request parameters, and time. **AWS Config** answers what AWS resources looked like: current inventory, historical configuration items, relationships, compliance state, and remediation hooks.
@@ -550,12 +578,70 @@ In real incidents, the order often looks like this:
 
 For a small account, Event history and a few Config lookups may solve the investigation. For a production organization, teams usually centralize CloudTrail through organization trails, protect logs in a log archive account, enable targeted data events, record important AWS Config resource types in every active Region, aggregate Config data, and package baseline rules as conformance packs.
 
+The practical algorithm is: observe the symptom, locate the implicated resource, use Config to establish the changed state and time window, use CloudTrail to identify the nearby API action and AWS actor, search for other actions by that actor, query Config for other resources in the same bad state, restore the resource, and add detection or prevention for recurrence. Starting with the state-transition window makes the causal event search much smaller.
+
 The last piece is discipline. CloudTrail and Config help most when teams turn them on deliberately, protect the records, and practice using them before a serious incident. A normal deployment review gives the team a much calmer place to learn these queries than a security incident with executives asking for a timeline.
 
+## What Should You Remember?
+<!-- section-summary: CloudTrail records actor and API activity, while AWS Config records resource state, relationships, compliance, and the path back to a desired configuration. -->
 
----
+Think of AWS infrastructure as a movie. CloudTrail is the script of actions; Config is the sequence of state frames. CloudTrail alone can show that someone called an API without proving the resulting state. Config alone can show that a resource changed without fully attributing the action. Together they reconstruct actor, operation, state transition, compliance consequence, and remediation.
 
-**References**
+:::expand[What Change Questions Come After an Alarm?]{kind="recap"}
+CloudWatch shows symptoms, while CloudTrail and AWS Config explain the AWS change behind those symptoms.
+:::
+
+:::expand[What Does CloudTrail Record About an API Call?]{kind="recap"}
+CloudTrail events record AWS API activity, including the caller, action, time, source, request details, and affected resources.
+
+It records AWS activity such as time, identity or role session, service, API operation, Region, source IP, user agent, request parameters, resources, and error information. It proves the recorded API activity, not necessarily the resource's lasting state.
+
+Management events cover control-plane operations. Data events cover high-volume operations on or inside resources such as S3 objects. Network activity events cover supported AWS API calls through VPC endpoints and are different from VPC Flow Logs, which record network flows.
+:::
+
+:::expand[When Do You Use Event History, a Trail, Lake, or Insights?]{kind="recap"}
+CloudTrail has several access patterns, and each one fits a different retention, query, and investigation need.
+
+Use Event history for recent Regional management-event lookup, a trail for durable selected event delivery, Lake for SQL-style queries across event data stores where used, and Insights for unusual API call or error-rate patterns.
+:::
+
+:::expand[When Do You Need Data or Network Activity Events?]{kind="recap"}
+Data events and network activity events add deeper visibility, but teams should select them carefully because they can be high volume and cost sensitive.
+
+CloudTrail evidence needs centralization, multi-Region coverage, log validation, encryption, alerting, and tightly controlled access.
+
+Capture broadly with a multi-Region, often organization-wide trail; centralize evidence in a protected log archive account; use tightly scoped access, encryption, lifecycle, and log-file validation; select valuable data events; and alert on attempts to stop, delete, or weaken the audit system.
+:::
+
+:::expand[What Does AWS Config Record About Resource State?]{kind="recap"}
+AWS Config records resource inventory and configuration history so teams can compare resource state before and after a change.
+
+A configuration item is a point-in-time resource snapshot containing identity, attributes, configuration, and relationships. Config records versioned states rather than only diffs, so comparisons reveal what changed and related resources reveal indirect blast radius.
+
+Continuous recording preserves detected intermediate configuration changes and gives higher investigative fidelity. Daily recording reduces configuration-item volume but can omit temporary states, making it less suitable for resources where brief exposure matters.
+:::
+
+:::expand[How Do Rules, Aggregators, Conformance Packs, and Remediation Help?]{kind="recap"}
+AWS Config can evaluate resources, centralize compliance views, package rule sets, and trigger controlled remediation workflows.
+
+Rules evaluate configuration as compliant or noncompliant, aggregators centralize read-only views across accounts and Regions, conformance packs bundle rules and remediation, and Systems Manager Automation performs reviewed or automatic fixes. Proactive evaluation reports proposed compliance but is not itself an enforcement gate.
+:::
+
+:::expand[How Do You Investigate an Open Security Group?]{kind="recap"}
+CloudTrail identifies the caller and API action, while AWS Config confirms the exact resource state before and after the change.
+
+An AWS action can transform resource state A into state B. CloudTrail observes the action at the API boundary. AWS Config records the resource snapshots around that transition. The two observation points answer different parts of "what changed?"
+
+Use Config history to establish when the rule appeared, search CloudTrail around that time for the modifying API, inspect the role session and request parameters, correlate pipeline or Git evidence when needed, expand actor and state blast radius, remove the bad rule, and verify both the remediation event and restored Config state.
+
+CloudTrail answers who or what performed which operation. Config answers what the resource looked like before and after, how it related to other resources, and whether it complied. Together they produce an evidence-backed change timeline from cause through restoration.
+:::
+
+:::expand[How Do CloudTrail and Config Work Together?]{kind="recap"}
+CloudWatch, CloudTrail, and AWS Config form the operational loop for symptoms, actions, and resource state.
+:::
+
+## References
 
 - [What Is AWS CloudTrail?](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) - Defines CloudTrail, Event history, trails, Lake, and account activity logging.
 - [CloudTrail concepts](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html) - Explains CloudTrail events, event records, trails, and delivery concepts.

@@ -1,7 +1,7 @@
 ---
 title: "EKS"
-description: "Understand when Amazon EKS is the right compute shape for containers that need Kubernetes as their operating layer."
-overview: "EKS is AWS-managed Kubernetes. This article follows a commerce platform through clusters, control planes, worker capacity, pods, services, VPC networking, Pod Identity, operations, and the ECS-vs-EKS decision."
+description: "Understand Amazon EKS from containers and desired state through control planes, workers, Pods, Deployments, Services, networking, workload identity, scaling, operations, and debugging."
+overview: "EKS is AWS-managed Kubernetes. This article explains what Kubernetes adds to containers, which parts AWS manages, how applications reach workers and AWS services, and when the platform is worth its operating surface."
 tags: ["eks", "kubernetes", "containers", "pods", "aws"]
 order: 5
 id: article-cloud-providers-aws-compute-application-hosting-eks
@@ -15,540 +15,592 @@ aliases:
 
 ## Table of Contents
 
-1. [When Containers Need a Platform](#when-containers-need-a-platform)
-2. [Clusters, Control Planes, and Workers](#clusters-control-planes-and-workers)
-3. [Deployments, Services, and Ingress](#deployments-services-and-ingress)
-4. [Networking and Pod AWS Permissions](#networking-and-pod-aws-permissions)
-5. [Operating an EKS Cluster](#operating-an-eks-cluster)
-6. [Choosing EKS or ECS](#choosing-eks-or-ecs)
-7. [An EKS Debugging Path](#an-eks-debugging-path)
-8. [References](#references)
+1. [Why Do Containers Need an Orchestrator?](#why-do-containers-need-an-orchestrator)
+2. [What Does EKS Manage in a Cluster?](#what-does-eks-manage-in-a-cluster)
+3. [What Are Pods, Deployments, and Services?](#what-are-pods-deployments-and-services)
+4. [How Does EKS Networking Work?](#how-does-eks-networking-work)
+5. [How Do Pods and Humans Get Permissions?](#how-do-pods-and-humans-get-permissions)
+6. [How Do Scaling, Health, and Resilience Work?](#how-do-scaling-health-and-resilience-work)
+7. [What Must a Team Operate in EKS?](#what-must-a-team-operate-in-eks)
+8. [How Do You Debug an EKS Application?](#how-do-you-debug-an-eks-application)
+9. [Check Your Understanding](#check-your-understanding)
+10. [References](#references)
 
-## When Containers Need a Platform
-<!-- section-summary: EKS fits teams that want Kubernetes APIs and ecosystem tools as the shared application platform. -->
+The sections below answer these questions in order:
 
-A company has twenty containerized services, shared deployment standards, GitOps, admission policies, certificate automation, and teams that already know Kubernetes. Each service could run on ECS with Fargate. The organization wants Kubernetes APIs as the common platform contract.
+1. **Why Do Containers Need an Orchestrator?**
+2. **What Does EKS Manage in a Cluster?**
+3. **What Are Pods, Deployments, and Services?**
+4. **How Does EKS Networking Work?**
+5. **How Do Pods and Humans Get Permissions?**
+6. **How Do Scaling, Health, and Resilience Work?**
+7. **What Must a Team Operate in EKS?**
+8. **How Do You Debug an EKS Application?**
 
-**Amazon EKS** is AWS-managed Kubernetes. AWS operates the Kubernetes control plane, and your workloads run on worker capacity that you choose: managed node groups, self-managed EC2 nodes, or Fargate profiles for selected pod patterns. EKS gives teams the Kubernetes API on AWS, plus integrations with VPC networking, IAM, load balancers, CloudWatch, and other AWS services.
+## Why Do Containers Need an Orchestrator?
+<!-- section-summary: Containers package applications, but an orchestrator coordinates placement, replacement, scaling, networking, health, and deployment across many machines. -->
 
-For this article, follow `orders-api` inside a commerce platform. The app is one container, and the company deploys all services through Kubernetes Deployments, Services, Ingress, Helm charts, and GitOps pull requests. EKS fits because the platform contract matters across many teams.
+Start with one application named `payments-api`. On a plain EC2 instance, a team can install Linux, Python, libraries, application files, and a long-running process. That works, but deployments depend on the exact state of the server. Which runtime and libraries are installed? Does production match testing? Can two versions run together? How can the application move to another machine?
 
-EKS has two worlds that meet every day:
+A container image packages the application, runtime, libraries, and startup assumptions into a versioned artifact:
 
-| World | What it controls |
-|---|---|
-| **AWS** | Cluster control plane, VPC, subnets, node groups, IAM roles, load balancers, target groups, CloudWatch, and security groups. |
-| **Kubernetes** | Pods, Deployments, Services, Ingress, ConfigMaps, Secrets, service accounts, resource requests, probes, jobs, and policies. |
-
-That split is the central operating reality. During an incident, Kubernetes may explain why a pod did not start, while AWS may explain why the load balancer cannot reach it. The rest of the article keeps those two layers connected.
-
-## Clusters, Control Planes, and Workers
-<!-- section-summary: EKS separates the managed Kubernetes API from the worker capacity that runs application pods. -->
-
-An EKS **cluster** includes a managed Kubernetes control plane. The control plane exposes the Kubernetes API, stores cluster state, and coordinates scheduling decisions. Deployment tools such as `kubectl`, Helm, Argo CD, Flux, and CI/CD systems talk to that API.
-
-Applications run on worker capacity. A **managed node group** is a group of EC2 instances that AWS helps manage as Kubernetes nodes. A **Fargate profile** lets selected pods run on Fargate capacity. Many production clusters use managed node groups for general services and reserve Fargate profiles for specific workload patterns.
-
-Inspect the cluster:
-
-```bash
-aws eks describe-cluster \
-  --name commerce-prod \
-  --region eu-west-2 \
-  --query 'cluster.{Status:status,Version:version,Endpoint:endpoint,Subnets:resourcesVpcConfig.subnetIds,SecurityGroups:resourcesVpcConfig.securityGroupIds}'
+```text
+payments:v7
+┌───────────────────────────┐
+│ application               │
+│ language runtime          │
+│ libraries                 │
+│ configuration assumptions │
+└───────────────────────────┘
 ```
 
-Example output:
+The operating goal changes from “configure this particular server correctly” to “run this immutable application image on a compatible runtime.” Containers improve portability and reproducibility, but they create the next layer of questions when the service needs several copies across several machines.
 
-```json
-{
-  "Status": "ACTIVE",
-  "Version": "1.30",
-  "Endpoint": "https://A1B2C3D4E5F6.gr7.eu-west-2.eks.amazonaws.com",
-  "Subnets": ["subnet-0a111111111111111", "subnet-0b222222222222222"],
-  "SecurityGroups": ["sg-0ekscluster"]
-}
+```text
+worker A                 worker B
+├── payments container  ├── payments container
+├── payments container  └── payments container
+└── payments container
 ```
 
-`Status: ACTIVE` means the cluster API is available. `Version` is the Kubernetes version. `Endpoint` is the Kubernetes API endpoint used by clients. `Subnets` and `SecurityGroups` show the VPC placement and cluster network boundary.
+Who notices when worker A fails? Who recreates its containers? Who changes four replicas to twelve when traffic grows? Who gradually replaces version 7 with version 8? How do clients find replicas whose addresses can change? Who assigns CPU and memory and checks health?
 
-Inspect a managed node group:
+A **container orchestrator** coordinates placement, restart, scaling, networking, service discovery, deployment, health checking, and resource allocation. Kubernetes is one orchestrator. **Amazon Elastic Kubernetes Service (EKS)** is AWS’s managed Kubernetes platform.
 
-```bash
-aws eks describe-nodegroup \
-  --cluster-name commerce-prod \
-  --nodegroup-name general-workers \
-  --region eu-west-2 \
-  --query 'nodegroup.{Status:status,InstanceTypes:instanceTypes,Subnets:subnets,Scaling:scalingConfig,Version:version}'
+The useful opening model is:
+
+> **EC2 provides machines. Containers package applications. Kubernetes coordinates containerized applications across machines. EKS operates the critical Kubernetes control plane for you.**
+
+```text
+users
+  ↓
+AWS load balancer
+  ↓
+Kubernetes Service
+  ↓
+Pods
+  ↓
+worker compute: EC2, Fargate, or EKS Auto Mode
+  ↓
+AWS VPC, IAM, networking, and storage
 ```
 
-Example output:
+### How Does Kubernetes Use Desired State?
+<!-- section-summary: Kubernetes controllers continually compare declared intent with actual cluster state and correct differences. -->
 
-```json
-{
-  "Status": "ACTIVE",
-  "InstanceTypes": ["m7i.large"],
-  "Subnets": ["subnet-0a111111111111111", "subnet-0b222222222222222"],
-  "Scaling": {
-    "minSize": 3,
-    "maxSize": 10,
-    "desiredSize": 4
-  },
-  "Version": "1.30"
-}
+Traditional administration often issues imperative commands: start container A, restart container B, move container C. Kubernetes favors a declaration of the result you want:
+
+```yaml
+replicas: 3
+image: payments:v8
 ```
 
-`InstanceTypes` tells you the EC2 shape of worker nodes. `Scaling` tells you the node group size range and current desired size. `Subnets` tells you where the nodes can launch. If pods are pending because the cluster lacks CPU, memory, or IP addresses, this output helps connect Kubernetes scheduling symptoms to AWS capacity.
+This says “three instances of version 8 should exist.” It does not name the exact workers or individual containers that must survive.
 
-Then look from the Kubernetes side:
+Kubernetes continuously compares **desired state** with **actual state**:
 
-```bash
-kubectl get nodes -o wide
+```text
+desired: 3 payments:v8 Pods
+actual:  2 payments:v8 Pods
+difference: 1 missing
+action: create another Pod
 ```
 
-Example output:
+This repeating feedback process is **reconciliation**:
 
-```bash
-NAME                                           STATUS   ROLES    AGE   VERSION               INTERNAL-IP   OS-IMAGE
-ip-10-20-11-24.eu-west-2.compute.internal     Ready    <none>   12d   v1.30.2-eks-1234567   10.20.11.24   Amazon Linux 2023
-ip-10-20-42-19.eu-west-2.compute.internal     Ready    <none>   12d   v1.30.2-eks-1234567   10.20.42.19   Amazon Linux 2023
+```text
+desired state
+      ↓
+controller compares
+      ↓
+actual state
+      ↓
+correct a difference
+      └──> repeat
 ```
 
-`STATUS: Ready` means Kubernetes can schedule pods on the node. `VERSION` shows the kubelet version on the worker. `INTERNAL-IP` is the node address inside the VPC. If a node is `NotReady`, describe it and check node pressure, kubelet health, CNI state, and the AWS-side node group.
+The durable object is the declaration that three healthy replicas should exist. A particular Pod is replaceable. This desired-state pattern appears throughout Kubernetes: Deployments maintain replicas, schedulers place pending Pods, node agents start required containers, and other controllers reconcile networking, load balancing, storage, and policy objects.
 
-The cluster and workers give the platform a place to run pods. The next step is the application manifest that describes those pods and how traffic reaches them.
+Kubernetes is therefore more than a remote way to run `docker`. It is a distributed control system that keeps trying to make reality match a collection of API objects.
+
+## What Does EKS Manage in a Cluster?
+<!-- section-summary: EKS operates the highly available Kubernetes control plane, while application containers execute on a separately chosen data plane. -->
+
+A Kubernetes cluster has two conceptual halves:
+
+```text
+CONTROL PLANE                     DATA PLANE
+-------------                     ----------
+API server                        worker node
+scheduler                         ├── Pod
+controllers                       ├── Pod
+etcd                              └── Pod
+```
+
+The **control plane decides**, and the **workers execute**. EKS operates the Kubernetes control plane and distributes its critical components across Availability Zones for availability.
+
+The **API server** is the front door to Kubernetes state. When `kubectl apply -f app.yaml` runs, it does not log into a worker and start a container. It submits desired objects to the API server, which authenticates and validates the request and stores the accepted state.
+
+Kubernetes keeps authoritative cluster state in the distributed key-value store **etcd**. That state includes declarations such as a Deployment’s replica count, a Service port, and the node selected for a Pod. EKS manages the control-plane persistence layer.
+
+The **scheduler** finds a worker for a new Pod. It considers requested CPU and memory, available capacity, node labels, affinity, taints and tolerations, topology rules, and other constraints. A GPU workload should not land on an ordinary worker; a Pod without enough memory cannot be scheduled just because a node exists.
+
+**Controllers** perform reconciliation. If a Deployment wants four replicas and only three exist, its controllers arrange for another Pod object. Other controllers observe other API resources and take the appropriate corrective action.
+
+Workers supply the real processors and memory. A typical EC2 worker contains an operating system, container runtime, networking components, the **kubelet**, and scheduled Pods. The kubelet is the node agent: the control plane declares that a Pod belongs on Node 7, and the kubelet on Node 7 makes the required containers run.
+
+EKS manages the control plane, not automatically every application or all worker operations. Later sections separate standard node choices from more managed modes.
+
+## What Are Pods, Deployments, and Services?
+<!-- section-summary: Pods execute tightly coupled containers, Deployments maintain replaceable replicas, and Services give those replicas a stable network identity. -->
+
+Kubernetes schedules **Pods**, not bare containers. A Pod usually contains one main application container:
+
+```text
+Pod
+└── payments-api container
+```
+
+It can also contain tightly coupled supporting containers that share the Pod lifecycle and network identity:
+
+```text
+Pod
+├── payments-api
+└── supporting sidecar
+```
+
+The hierarchy is:
+
+```text
+container image → running container → Pod → node → cluster
+```
+
+Treat Pods as disposable. You generally do not need `payments-pod-37bf9` itself to survive; you need the requested number of healthy payments replicas.
+
+A **Deployment** describes how a stateless application should run. It manages ReplicaSets, which in turn maintain Pods:
+
+```text
+Deployment
+    ↓
+ReplicaSet
+├── Pod
+├── Pod
+└── Pod
+```
+
+If one Pod disappears, desired count 3 and actual count 2 cause the controller to create a replacement. If the image changes from `payments:v8` to `payments:v9`, the Deployment can perform a rolling update rather than stopping every old replica at once.
+
+Individual Pod IP addresses are not good application identities. A Pod at `10.0.14.23` may disappear, and its replacement may receive `10.0.19.44`. A **Service** gives a stable logical endpoint to a changing set of Pods.
+
+```text
+payments Service
+       │ selects label app=payments
+       ├──> Pod A
+       ├──> Pod B
+       └──> Pod C
+```
+
+The Service commonly selects Pods through labels. The stable Service name and address survive while individual targets change. CoreDNS lets another workload use a name such as `payments` instead of memorizing a Pod IP.
+
+This separation—ephemeral application copies behind a stable service identity—is one of Kubernetes’ central design ideas.
+
+### How Does Traffic Enter an EKS Application?
+<!-- section-summary: Ingress and load-balancer controllers translate external routing intent into AWS load balancers that forward to Kubernetes Services and Pods. -->
+
+A Service solves stable application discovery, but public users still need an external path such as `https://shop.example.com/payments`.
+
+```text
+internet
+   ↓
+Ingress and AWS load balancer
+   ↓
+payments Service
+   ↓
+ready payments Pods
+```
+
+An **Ingress** can describe HTTP routing rules, such as `/api/users` to `users-service`, `/api/orders` to `orders-service`, and `/api/payments` to `payments-service`. On standard EKS, the AWS Load Balancer Controller watches supported Kubernetes resources and provisions AWS load-balancing infrastructure. An Ingress can result in an Application Load Balancer, while an appropriate Service of type `LoadBalancer` can result in a Network Load Balancer.
+
+A complete request might travel through Route 53, an ALB, the Kubernetes Ingress rule, a Service, and a ready Pod. Each layer has a different failure mode.
+
+The deployment path travels the opposite direction—from desired state toward execution:
+
+1. A pipeline pushes `payments:v12` to Amazon ECR.
+2. A developer or deployment system applies a Kubernetes manifest.
+3. The API server records the desired Deployment.
+4. controllers determine that three replicas are required.
+5. Pod objects are created.
+6. The scheduler chooses workers.
+7. Each worker’s kubelet pulls the image through the container runtime.
+8. Containers start.
+9. readiness checks succeed.
+10. The Service and load-balancing path begin sending traffic to the ready Pods.
+
+The deployment tool never needs to SSH to a worker and run containers directly. It changes desired state; controllers, scheduler, and node agents realize it.
 
 ![The cluster shape shows the managed control plane, worker nodes, pods, services, ingress, and health checks in one picture](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-cluster-shape.png)
 
-*The cluster shape shows the managed control plane, worker nodes, pods, services, ingress, and health checks in one picture.*
+*EKS separates declarations at the API from execution on workers and traffic through stable service objects.*
 
+## How Does EKS Networking Work?
+<!-- section-summary: Pod connectivity, external application traffic, AWS API reachability, DNS, and network policy are separate network concerns. -->
 
-## Deployments, Services, and Ingress
-<!-- section-summary: Kubernetes objects describe how containers run, how they receive internal traffic, and how an AWS load balancer reaches them. -->
+Avoid treating “EKS networking” as one question. At minimum, ask:
 
-A **Pod** is the smallest Kubernetes workload unit. A **Deployment** keeps a desired number of pod replicas running and rolls out new versions. A **Service** gives a stable internal address for matching pods. An **Ingress** connects external HTTP routing to a Service, usually through a controller such as the AWS Load Balancer Controller on EKS.
-
-Here is a production-shaped Deployment for `orders-api`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-api
-  namespace: orders
-  labels:
-    app: orders-api
-spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-  selector:
-    matchLabels:
-      app: orders-api
-  template:
-    metadata:
-      labels:
-        app: orders-api
-    spec:
-      serviceAccountName: orders-api
-      containers:
-        - name: api
-          image: 123456789012.dkr.ecr.eu-west-2.amazonaws.com/orders-api:2026-06-24
-          ports:
-            - name: http
-              containerPort: 3000
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
-            periodSeconds: 10
-            failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 30
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              memory: "1024Mi"
+```text
+Can one Pod reach another Pod?
+Can a user reach the application?
+Can a Pod reach an AWS API or external dependency?
 ```
 
-The key fields work together:
+On common EC2-backed EKS designs, the Amazon VPC CNI attaches network interfaces to workers and assigns Pods private addresses associated with VPC networking.
 
-| Field | Meaning |
-|---|---|
-| `metadata.name` | Names the Deployment object. |
-| `metadata.namespace` | Places the object in the `orders` namespace. |
-| `replicas` | Asks Kubernetes to keep three pods running. |
-| `strategy.rollingUpdate` | Allows one extra pod during rollout and keeps all existing capacity available. |
-| `selector.matchLabels` | Tells the Deployment which pods it owns. |
-| `template.metadata.labels` | Labels the pods so Deployments and Services can find them. |
-| `serviceAccountName` | Gives the pod a Kubernetes service account, which can connect to AWS permissions through Pod Identity. |
-| `containers.image` | Points at the container image release. |
-| `ports.name` | Gives the container port a readable name so probes and Services can refer to `http`. |
-| `readinessProbe` | Controls whether the pod should receive traffic. |
-| `livenessProbe` | Controls whether Kubernetes should restart a stuck container. |
-| `resources.requests` | Reserves CPU and memory for scheduling decisions. |
-| `resources.limits` | Caps memory use so one container cannot grow without bound. |
-
-Now give the pods a stable internal address:
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: orders-api
-  namespace: orders
-spec:
-  type: ClusterIP
-  selector:
-    app: orders-api
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
+```text
+VPC 10.0.0.0/16
+└── worker 10.0.10.17
+    ├── Pod 10.0.10.52
+    ├── Pod 10.0.10.53
+    └── Pod 10.0.10.54
 ```
 
-`type: ClusterIP` creates an internal Service address. `selector.app: orders-api` finds pods with the matching label. `port: 80` is the Service port inside the cluster. `targetPort: http` sends traffic to the named container port, which is port `3000` in the Deployment. A label mismatch between the Service and pods creates a Service with no endpoints, which is a very common cause of failed traffic.
+This makes subnet address capacity a scheduling concern. A cluster can have spare CPU and memory yet fail to add Pods because the selected subnets cannot supply more addresses.
 
-External HTTP routing usually uses an Ingress managed by a controller:
+Applications should use stable DNS names such as `payments` rather than Pod addresses. CoreDNS resolves the Service name, and Kubernetes routes the request toward a matching ready endpoint.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: orders-api
-  namespace: orders
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: /ready
-spec:
-  ingressClassName: alb
-  rules:
-    - host: orders.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: orders-api
-                port:
-                  number: 80
+Working connectivity is not the same as appropriately restricted connectivity. Kubernetes Pods are not automatically isolated from all one another by default. **NetworkPolicy** resources can restrict allowed Pod traffic when the cluster networking setup supports enforcement.
+
+Network access to an AWS endpoint also does not grant AWS authorization:
+
+```text
+networking: Can packets reach S3?
+IAM:        May this workload call s3:GetObject on this object?
 ```
 
-`ingressClassName: alb` asks the AWS Load Balancer Controller to handle this Ingress. `scheme: internet-facing` creates a public ALB. `target-type: ip` sends traffic directly to pod IPs. `healthcheck-path: /ready` tells the ALB which path to check. The rule maps `orders.example.com` to the `orders-api` Service on port `80`.
+A timeout and an `AccessDenied` point to different layers. Preserve that distinction during design and incidents.
 
-Check the objects after applying them:
+## How Do Pods and Humans Get Permissions?
+<!-- section-summary: Workloads receive scoped AWS identities through Kubernetes service accounts, while humans combine API reachability, IAM authentication, and Kubernetes authorization. -->
 
-```bash
-kubectl -n orders get deployment orders-api
-kubectl -n orders get service orders-api
-kubectl -n orders get endpoints orders-api
-kubectl -n orders describe ingress orders-api
+Different applications should not inherit one broad IAM role from every worker machine. The payments application may need DynamoDB operations, an image worker may need S3 objects, and analytics may need Kinesis. Each should receive only its own permissions.
+
+Kubernetes gives a workload a **ServiceAccount**. A modern EC2-backed EKS path can associate that account with IAM through **EKS Pod Identity**:
+
+```text
+Pod
+ ↓ uses
+Kubernetes ServiceAccount
+ ↓ associated through EKS
+IAM role
+ ↓ supplies temporary credentials
+AWS API
 ```
 
-Example endpoints output:
+For example, `payments-sa` can map to `payments-role`, whose policy grants only required DynamoDB actions. AWS SDKs inside the Pod receive temporary credentials rather than static access keys stored in the image.
 
-```bash
-NAME         ENDPOINTS                                      AGE
-orders-api   10.20.31.45:3000,10.20.42.18:3000,10.20.12.9:3000   4m
+IAM Roles for Service Accounts, usually called **IRSA**, is another supported workload identity mechanism. EKS Pod Identity has compatibility boundaries—for example, it does not apply to Pods running on Fargate—so IRSA remains relevant where Pod Identity is not applicable. The durable principle is more important than the mechanism: give AWS application permissions to the workload identity, not blanket privilege to every worker below it.
+
+Human access follows a separate path. An engineer running `kubectl get pods` must first reach the EKS Kubernetes API endpoint, authenticate, and then be authorized. EKS can use AWS IAM identities and access entries at the AWS integration boundary, while Kubernetes RBAC controls permitted operations within the cluster.
+
+```text
+network access: Can the engineer reach the API endpoint?
+AWS IAM:       Which identity authenticated?
+Kubernetes RBAC: Which cluster actions may it perform?
 ```
 
-The endpoint list should show ready pod IPs and ports. If it shows `<none>`, the Service selector may be wrong, the pods may be unready, or the Deployment may have failed to create pods.
-
-Those manifests run the app. The next layer is how pods connect to the VPC and call AWS APIs.
-
-## Networking and Pod AWS Permissions
-<!-- section-summary: EKS pod networking connects workloads to the VPC, while Pod Identity gives pods scoped AWS permissions without static keys. -->
-
-EKS commonly uses the Amazon VPC CNI plugin. The plugin assigns VPC IP addresses to pods running on EC2 nodes. That makes pod traffic visible in the VPC, and it also means subnet IP capacity matters. A cluster can run out of pod IP addresses before it runs out of CPU.
-
-Security group design depends on the cluster pattern. Some workloads use node security groups. Some clusters use security groups for pods where the environment supports it. In either pattern, the database should accept traffic only from the expected workload path, and the pod should still need IAM permission for AWS API calls.
-
-Pods need AWS permissions for actions such as reading Secrets Manager, writing to S3, or publishing events. **EKS Pod Identity** associates a Kubernetes service account with an IAM role. The application uses the normal AWS SDK credential chain, and the pod receives scoped temporary credentials for that role.
-
-Create an association for the `orders-api` service account:
-
-```bash
-aws eks create-pod-identity-association \
-  --cluster-name commerce-prod \
-  --namespace orders \
-  --service-account orders-api \
-  --role-arn arn:aws:iam::123456789012:role/prod-orders-api-pod-role \
-  --region eu-west-2
-```
-
-Example output:
-
-```json
-{
-  "association": {
-    "clusterName": "commerce-prod",
-    "namespace": "orders",
-    "serviceAccount": "orders-api",
-    "roleArn": "arn:aws:iam::123456789012:role/prod-orders-api-pod-role",
-    "associationId": "a-0abc123def4567890"
-  }
-}
-```
-
-`clusterName`, `namespace`, and `serviceAccount` identify the Kubernetes workload identity. `roleArn` is the IAM role the pod can use. `associationId` is the EKS identifier for this binding. The Deployment uses `serviceAccountName: orders-api`, so new pods in the `orders` namespace can receive this role.
-
-List associations during debugging:
-
-```bash
-aws eks list-pod-identity-associations \
-  --cluster-name commerce-prod \
-  --region eu-west-2
-```
-
-Example output:
-
-```json
-{
-  "associations": [
-    {
-      "clusterName": "commerce-prod",
-      "namespace": "orders",
-      "serviceAccount": "orders-api",
-      "associationArn": "arn:aws:eks:eu-west-2:123456789012:podidentityassociation/commerce-prod/a-0abc123def4567890",
-      "associationId": "a-0abc123def4567890",
-      "roleArn": "arn:aws:iam::123456789012:role/prod-orders-api-pod-role"
-    }
-  ]
-}
-```
-
-If the app receives `AccessDenied`, compare four facts: the pod namespace, the pod service account, the Pod Identity association, and the IAM role policy. If the app cannot reach the database, compare pod IPs, node or pod security groups, NetworkPolicy if used, DNS, routes, and database security group rules.
-
-Now the platform can run the app and give it AWS permissions. The long-term work is operating the cluster safely.
+The EKS API endpoint can have public access, private VPC access, or both. It is not the public URL of your application. `kubectl → Kubernetes API server` and `user → ALB → application` are entirely separate endpoints and security paths.
 
 ![The pod path separates network reachability from cloud permission delivery so pod IPs and role credentials do not blur together](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-pod-network-permissions.png)
 
-*The pod path separates network reachability from cloud permission delivery so pod IPs and role credentials do not blur together.*
+*Pod network connectivity, workload IAM, and human Kubernetes access are related but independent controls.*
 
+### Where Does EKS Worker Compute Come From?
+<!-- section-summary: EKS workloads can run on managed or self-managed EC2 nodes, Fargate, hybrid capacity, or infrastructure managed through EKS Auto Mode. -->
 
-## Operating an EKS Cluster
-<!-- section-summary: EKS operations include Kubernetes upgrades, add-ons, node capacity, autoscaling, observability, and policy guardrails. -->
+Containers ultimately need processors and memory. EKS supports several worker-capacity approaches.
 
-EKS gives a powerful platform, and the platform needs steady care. The team plans Kubernetes version upgrades, managed add-on versions, node AMI updates, autoscaling, admission policies, network policies, image scanning, and observability. This is the work that makes EKS a platform instead of a loose collection of pods.
+With **managed node groups**, EC2 instances run in your AWS account while AWS automates much of provisioning and node-lifecycle work. You still choose instance families, capacity ranges, subnets, and important node configuration.
 
-The core operational signals include:
-
-| Signal | Why it matters |
-|---|---|
-| Deployment rollout status | Shows whether a release reached the desired pod state. |
-| Pod readiness and restarts | Shows whether app containers are healthy enough for traffic. |
-| Node readiness and pressure | Shows whether worker capacity can run pods safely. |
-| Resource requests and limits | Controls scheduling, autoscaling, and eviction risk. |
-| ALB target health | Shows whether AWS can reach the ready pods or nodes. |
-| Pod logs and traces | Explains app-level errors after the platform routes traffic. |
-| Add-on versions | VPC CNI, CoreDNS, kube-proxy, and controller versions affect networking and cluster behavior. |
-
-For a rollout, start with:
-
-```bash
-kubectl -n orders rollout status deployment/orders-api
-kubectl -n orders get pods -l app=orders-api -o wide
+```text
+EKS cluster
+   ↓
+managed node group
+   ↓
+EC2 Auto Scaling capacity
+   ↓
+worker nodes
+   ↓
+Pods
 ```
 
-Example output:
+With **self-managed nodes**, your team controls more of the EC2 lifecycle. That allows deep customization and creates a larger patching, upgrade, and scaling burden. Hybrid nodes extend supported EKS worker patterns to other environments.
 
-```bash
-deployment "orders-api" successfully rolled out
-NAME                          READY   STATUS    RESTARTS   AGE   IP           NODE
-orders-api-6b7c8d9f4f-2mrls   1/1     Running   0          4m    10.20.31.45  ip-10-20-11-24.eu-west-2.compute.internal
-orders-api-6b7c8d9f4f-f8x92   1/1     Running   0          4m    10.20.42.18  ip-10-20-42-19.eu-west-2.compute.internal
-orders-api-6b7c8d9f4f-x9q7p   1/1     Running   0          4m    10.20.12.9   ip-10-20-11-24.eu-west-2.compute.internal
+With **Fargate**, selected Pods receive on-demand compute without your team managing an EC2 worker pool. You think in terms of the Pod’s required CPU and memory, while AWS supplies the underlying virtual-machine capacity. Compatibility and workload-identity differences still matter; Fargate does not make every Kubernetes feature or integration identical to EC2 nodes.
+
+**EKS Auto Mode** extends AWS management beyond the control plane into more data-plane infrastructure. It can provision and scale nodes, maintain the operating system, and manage integrated compute, networking, and storage components. Kubernetes APIs and workload semantics remain, while AWS owns more of the infrastructure underneath them.
+
+The management trend is:
+
+```text
+standard EKS: AWS manages control plane;
+              team operates significant worker/platform infrastructure
+
+EKS Auto Mode: AWS manages control plane plus more node,
+               scaling, networking, and storage infrastructure
 ```
 
-`READY 1/1` means the container in each pod is ready. `STATUS Running` means the pod is running. `RESTARTS 0` means the container has not crashed since startup. The `IP` and `NODE` columns show VPC placement, which helps connect Kubernetes endpoints to ALB target health and node capacity.
+No mode removes responsibility for application manifests, resource sizing, health checks, workload permissions, policy, availability design, and release correctness.
 
-Cluster upgrades need planning. Test the upgrade in a non-production cluster, check deprecated APIs in manifests, update managed add-ons such as VPC CNI, CoreDNS, and kube-proxy, roll node groups, and verify workloads. App teams should know the supported Kubernetes version window and when platform upgrades will happen.
+## How Do Scaling, Health, and Resilience Work?
+<!-- section-summary: Pods and workers scale through different control loops, health separates process life from traffic readiness, and resilience depends on placement choices. -->
 
-Autoscaling also has layers. The Horizontal Pod Autoscaler changes pod replicas based on metrics. Cluster Autoscaler or Karpenter can add worker capacity when pods cannot schedule. These tools depend on realistic resource requests. Tiny requests can pack pods too tightly and create memory pressure. Oversized requests can waste nodes and block scheduling.
+EKS scales at two levels. **Application scaling** changes the number of Pods. A Horizontal Pod Autoscaler can react to metrics and increase three replicas to twelve. **Infrastructure scaling** adds worker capacity when those Pods no longer fit.
 
-Policy guardrails matter because Kubernetes gives many teams one powerful API. Admission policies can require resource requests, approved registries, labels, non-root containers, and safe Ingress settings. Network policies can limit pod-to-pod traffic when the chosen networking setup supports enforcement. These controls keep the platform predictable as more services join.
+```text
+traffic rises
+  ↓
+Horizontal Pod Autoscaler
+  ↓
+3 Pods → 12 Pods
 
-With operations in mind, teams can make an honest ECS-versus-EKS decision.
-
-## Choosing EKS or ECS
-<!-- section-summary: The choice depends on whether Kubernetes as a platform is worth the additional operating responsibility. -->
-
-ECS with Fargate is often the simpler AWS-native path for containers. It gives task definitions, services, IAM roles, load balancing, logs, and rolling deployments without a Kubernetes cluster. For a small number of AWS-only services, that simplicity is a real advantage.
-
-EKS earns its place when Kubernetes solves an organization-level problem. GitOps, Helm standards, custom controllers, admission policy, service mesh, multi-cluster patterns, or a shared platform team can make Kubernetes valuable across many services. The value comes from the platform contract and ecosystem, while the cost is cluster operations.
-
-Use these questions during design review:
-
-| Question | ECS with Fargate often fits when | EKS often fits when |
-|---|---|---|
-| Who owns the platform? | The app team wants AWS-managed container hosting with fewer cluster duties. | A platform team owns Kubernetes standards, upgrades, and guardrails. |
-| How many services share the pattern? | A few services need straightforward container hosting. | Many teams need one Kubernetes deployment contract. |
-| Which tools matter? | AWS IAM, ALB, CloudWatch, and ECS deployments cover the need. | Helm, GitOps, controllers, policy, service mesh, or Kubernetes-native tooling are central. |
-| What does debugging require? | ECS service events, task logs, target health, and IAM roles. | Kubernetes object state plus AWS load balancers, networking, nodes, and IAM. |
-| What skills does on-call have? | Responders are comfortable with AWS-native service evidence. | Responders can use `kubectl`, AWS CLI, controller logs, and cluster metrics together. |
-
-For `orders-api` alone, ECS with Fargate may be enough. For the commerce platform with many teams and Kubernetes standards, EKS can provide the shared operating layer. The decision should name who owns upgrades, add-ons, security policy, cost controls, and incident response before production traffic moves in.
-
-## An EKS Debugging Path
-<!-- section-summary: EKS debugging follows rollout state, pod scheduling, Service endpoints, Ingress events, ALB target health, node capacity, networking, and pod permissions. -->
-
-At 11:40, `orders-api` returns intermittent `503` responses after a deployment. Start with Kubernetes rollout state:
-
-```bash
-kubectl -n orders rollout status deployment/orders-api
-kubectl -n orders get pods -l app=orders-api -o wide
+new Pods remain unscheduled because nodes are full
+  ↓
+node autoscaling mechanism
+  ↓
+additional worker capacity
 ```
 
-Example output:
+EKS Auto Mode, Karpenter, or Cluster Autoscaler can participate in node-side capacity depending on the architecture. The two loops need accurate resource requests. If a Pod requests too little, the scheduler can pack workloads onto a node that later suffers pressure. If requests are far too large, schedulable capacity is wasted.
 
-```bash
-Waiting for deployment "orders-api" rollout to finish: 1 old replicas are pending termination...
-NAME                          READY   STATUS             RESTARTS   AGE   IP           NODE
-orders-api-6b7c8d9f4f-2mrls   1/1     Running            0          20m   10.20.31.45  ip-10-20-11-24.eu-west-2.compute.internal
-orders-api-7d8e9f5c6b-f8x92   0/1     CrashLoopBackOff   4          5m    10.20.42.18  ip-10-20-42-19.eu-west-2.compute.internal
-orders-api-7d8e9f5c6b-x9q7p   0/1     CrashLoopBackOff   4          5m    10.20.12.9   ip-10-20-11-24.eu-west-2.compute.internal
+Kubernetes also separates **liveness** from **readiness**. Liveness asks whether an application is stuck and should be restarted. Readiness asks whether this instance can safely receive traffic.
+
+```text
+Pod starts
+├── process is alive
+├── configuration loads
+├── database connection is established
+└── readiness becomes true
+       ↓
+Service may send traffic
 ```
 
-The new replica set is crashing, so the rollout cannot finish. Describe a failed pod and read the previous container logs:
+A running process can be unready. Restarting it may not repair a temporary dependency that simply requires the target to remain out of service.
 
-```bash
-kubectl -n orders describe pod orders-api-7d8e9f5c6b-f8x92
-kubectl -n orders logs orders-api-7d8e9f5c6b-f8x92 --previous
+Multiple replicas do not automatically create high availability. Three replicas on one node share that node’s failure. Three nodes in one Availability Zone still share a zone failure. Topology spread, affinity and anti-affinity, zone-aware worker capacity, and disruption settings determine whether the workload actually uses the resilience mechanisms Kubernetes provides.
+
+## What Must a Team Operate in EKS?
+<!-- section-summary: Managed control-plane infrastructure still leaves application, Kubernetes platform, worker, networking, identity, storage, and upgrade operations. -->
+
+Think of production operations as layers:
+
+```text
+Layer 5  application: deployments, configuration, health
+Layer 4  workloads: Pods, Services, autoscaling
+Layer 3  platform: DNS, networking, storage, controllers
+Layer 2  workers: nodes, capacity, images, patching
+Layer 1  AWS: VPC, subnets, IAM, load balancers
+
+beside them: AWS-managed EKS control plane
 ```
 
-Example event lines from `describe pod`:
+Important concerns include CPU and memory requests and limits, readiness and liveness probes, Pod autoscaling, worker autoscaling, Availability Zone distribution, logs and metrics, secrets, persistent storage, network policy, workload IAM, Kubernetes upgrades, add-on upgrades, and node patching.
 
-```bash
-Events:
-  Type     Reason     Age                  From               Message
-  Normal   Scheduled  5m                   default-scheduler  Successfully assigned orders/orders-api-7d8e9f5c6b-f8x92 to ip-10-20-42-19.eu-west-2.compute.internal
-  Normal   Pulled     4m                   kubelet            Successfully pulled image
-  Warning  BackOff    2m (x5 over 4m)      kubelet            Back-off restarting failed container api
+Kubernetes has an active version lifecycle. EKS offers defined support periods, but upgrading still requires coordination. The control plane, worker kubelet versions, managed add-ons such as VPC CNI and CoreDNS, controllers, deprecated APIs, and applications must remain compatible.
+
+Standard EKS therefore does not mean “nothing remains to operate.” It means AWS takes ownership of the critical control-plane infrastructure. More managed worker modes can reduce the infrastructure burden, while the Kubernetes platform and application contract remain yours.
+
+### When Should You Choose EKS Instead of ECS?
+<!-- section-summary: ECS is often simpler for AWS-native container hosting, while EKS fits when Kubernetes itself is an organizational platform requirement. -->
+
+Both ECS and EKS schedule, run, replace, and scale containerized applications. The difference is the orchestration API and platform surface.
+
+ECS uses AWS-native objects:
+
+```text
+ECS cluster → task definition → service → task → container
 ```
 
-The scheduler placed the pod, the image pulled successfully, and the container crashed after startup. The logs might show `AccessDenied` for Secrets Manager. Check the service account and Pod Identity association:
+EKS uses Kubernetes objects and ecosystem:
 
-```bash
-kubectl -n orders get pod orders-api-7d8e9f5c6b-f8x92 \
-  -o jsonpath='{.spec.serviceAccountName}'
-
-aws eks list-pod-identity-associations \
-  --cluster-name commerce-prod \
-  --region eu-west-2
+```text
+EKS cluster → Deployment → ReplicaSet → Pod → container
 ```
 
-If the pod service account is `default` instead of `orders-api`, the Deployment manifest is wrong. If the service account is correct but the association points at another namespace or role, fix the association or IAM role policy. If both are correct, inspect the exact ARN in the error and the role policy resource.
+ECS is often the simpler choice when the requirement is “run containers well on AWS,” the team does not need Kubernetes, AWS-native orchestration is acceptable, and reducing the platform surface matters.
 
-If pods are ready but traffic still fails, inspect Service endpoints and Ingress events:
+EKS is a stronger candidate when Kubernetes itself is part of the platform strategy: the organization already standardizes on it, teams know its operating model, Kubernetes-native tools are required, operators or custom controllers extend the API, portability matters, or a platform team maintains sophisticated shared workflows.
 
-```bash
-kubectl -n orders get endpoints orders-api
-kubectl -n orders describe ingress orders-api
+A useful first filter is:
+
+```text
+Do we need Kubernetes as a platform contract?
+       ├── no  → ECS is often simpler
+       └── yes → EKS is likely the relevant AWS service
 ```
 
-Example broken endpoint output:
+This is not a universal rule, but it prevents choosing EKS merely because the application uses containers. Container packaging alone does not create a Kubernetes requirement.
 
-```bash
-NAME         ENDPOINTS   AGE
-orders-api   <none>      12m
+## How Do You Debug an EKS Application?
+<!-- section-summary: Follow desired state through creation, scheduling, process health, service selection, ingress, networking, and AWS permissions. -->
+
+Suppose `https://api.example.com/payments` fails. Treat the cluster as a sequence of layers rather than one giant system.
+
+1. **Is the application desired and available?** `kubectl get deployment` compares desired, updated, and available replicas. If the Deployment wants three and zero are available, an ALB is not the first problem.
+
+2. **Do Pods exist, and what state are they in?** `kubectl get pods` distinguishes `Pending`, `CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`, and healthy-looking `Running` Pods.
+
+3. **Why is a Pod pending?** `kubectl describe pod` can reveal insufficient CPU or memory, unmatched node constraints, a taint without toleration, unavailable storage, or no free Pod IP. That is a scheduling or capacity problem.
+
+4. **Why does a container crash?** `kubectl logs`, including previous-container logs when relevant, moves the investigation toward an invalid command, bad image, missing configuration, unavailable database, or application exception.
+
+5. **Is the Pod ready?** `Running` with `Ready=False` points toward readiness probes, initialization, or dependencies. A Service should not send normal traffic to unready endpoints.
+
+6. **Does the Service select endpoints?** Compare the Service selector with Pod labels. `app=payment` does not match `app=payments`. A selector mismatch creates a stable Service with no backing addresses.
+
+7. **Can external traffic reach the Service?** Inspect Ingress status and events, AWS Load Balancer Controller evidence, ALB or NLB target health, security groups, subnets, DNS, and NetworkPolicy.
+
+8. **Can the application reach dependencies?** An AWS `AccessDenied` suggests workload identity or IAM policy. A timeout suggests DNS, routes, security groups, network policy, NAT, or the dependency itself.
+
+The order to memorize is:
+
+```text
+desired object
+   ↓
+Pod created?
+   ↓
+Pod scheduled?
+   ↓
+container started?
+   ↓
+application healthy?
+   ↓
+Pod ready?
+   ↓
+Service selects it?
+   ↓
+Ingress and load balancer work?
+   ↓
+network path works?
+   ↓
+AWS IAM and dependencies work?
 ```
 
-An empty endpoint list means the Service has no ready pods behind it. The common causes are a selector mismatch, failing readiness probes, or pods in a different namespace. If endpoints exist, move to ALB target health:
-
-```bash
-aws elbv2 describe-target-health \
-  --target-group-arn "$TG_ARN" \
-  --region eu-west-2 \
-  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
-```
-
-Example output:
-
-```json
-[
-  {
-    "Target": "10.20.31.45",
-    "Port": 3000,
-    "State": "healthy",
-    "Reason": null,
-    "Description": null
-  },
-  {
-    "Target": "10.20.42.18",
-    "Port": 3000,
-    "State": "unhealthy",
-    "Reason": "Target.Timeout",
-    "Description": "Request timed out"
-  }
-]
-```
-
-The first pod IP is healthy. The second times out. That points toward readiness, app listener binding, pod security group or node security group, NetworkPolicy, or an app startup issue on that pod.
-
-If pods stay pending, check scheduling:
-
-```bash
-kubectl -n orders describe pod "$POD_NAME"
-```
-
-Example event excerpt:
-
-```console
-Events:
-  Type     Reason             Age   From               Message
-  Warning  FailedScheduling   2m    default-scheduler  0/4 nodes are available: 3 Insufficient cpu, 1 node(s) had untolerated taint {dedicated: batch}.
-```
-
-`FailedScheduling` means Kubernetes has not found a node for the pod. `Insufficient cpu` points toward requested CPU versus node capacity. An untolerated taint means the pod does not have the toleration required for a restricted node pool.
-
-Then compare node readiness and current usage:
-
-```bash
-kubectl get nodes
-kubectl top nodes
-```
-
-Example output:
-
-```console
-NAME                                          STATUS   ROLES    AGE   VERSION
-ip-10-20-31-12.eu-west-2.compute.internal    Ready    <none>   18d   v1.31.4
-ip-10-20-42-19.eu-west-2.compute.internal    Ready    <none>   18d   v1.31.4
-ip-10-20-53-44.eu-west-2.compute.internal    NotReady <none>   2h    v1.31.4
-
-NAME                                          CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
-ip-10-20-31-12.eu-west-2.compute.internal    1840m        92%    6230Mi          78%
-ip-10-20-42-19.eu-west-2.compute.internal    1760m        88%    5901Mi          74%
-```
-
-`STATUS` separates node health from scheduling pressure. `NotReady` sends the investigation toward node group health, kubelet, networking, and recent node changes. High CPU or memory in `kubectl top nodes` supports the scheduler's capacity complaint. If resource capacity looks fine but pods still fail networking, check subnet IP capacity and VPC CNI health from the AWS side.
-
-EKS incidents rarely live in one layer. A good investigation moves from Deployment rollout to pod events, then to Service endpoints, Ingress events, ALB target health, node capacity, networking, and pod AWS permissions. The value of EKS comes from the platform, and the responsibility is reading both Kubernetes and AWS evidence together.
+Do not begin by broadening security groups because “EKS is broken.” Find the earliest layer whose contract is not satisfied, then repair that layer.
 
 ![The debugging path gives an investigation order from rollout and pod events through target health, node capacity, networking, and permissions](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-eks/eks-debugging-path.png)
 
-*The debugging path gives an investigation order from rollout and pod events through target health, node capacity, networking, and permissions.*
+*Kubernetes evidence narrows creation, scheduling, and health; AWS evidence narrows load balancing, VPC capacity, and IAM.*
 
+The entire system fits into one picture:
+
+```text
+developer or CI/CD
+       ↓ kubectl/API
+EKS API endpoint
+       ↓
+AWS-managed control plane
+├── API server
+├── scheduler
+└── controllers
+       ↓ desired state
+worker compute
+├── Node A → Pods
+└── Node B → Pods
+       ↑
+Kubernetes Service
+       ↑
+Ingress and ALB/NLB
+       ↑
+users
+
+alongside: ECR images, IAM workload roles,
+VPC Pod networking, EBS/EFS storage, observability
+```
+
+The shortest useful definition is: **Amazon EKS is AWS’s managed Kubernetes platform. You declare how containerized applications should run, Kubernetes continuously reconciles that state, and EKS operates the critical control plane while integrating workloads with AWS compute, networking, identity, storage, and load balancing.**
+
+## Check Your Understanding
+
+:::expand[Why Do Containers Need an Orchestrator?]{kind="recap"}
+Containers package applications, but an orchestrator coordinates placement, replacement, scaling, networking, health, and deployment across many machines.
+
+It coordinates placement, replacement, scaling, service discovery, networking, health checks, resource allocation, and rolling deployments across a changing pool of machines and container replicas.
+
+Kubernetes controllers continually compare declared intent with actual cluster state and correct differences.
+
+You declare the result that should exist, such as three Pods running a particular image. Controllers repeatedly compare that declaration with actual state and take corrective action when they differ.
+:::
+
+:::expand[What Does EKS Manage in a Cluster?]{kind="recap"}
+EKS operates the highly available Kubernetes control plane, while application containers execute on a separately chosen data plane.
+
+The control plane exposes the API, stores cluster state, schedules Pods, and runs controllers. Workers provide CPU and memory, and their kubelets start the containers assigned to them.
+:::
+
+:::expand[What Are Pods, Deployments, and Services?]{kind="recap"}
+Pods execute tightly coupled containers, Deployments maintain replaceable replicas, and Services give those replicas a stable network identity.
+
+A Pod is the smallest scheduling and lifecycle unit. It can contain one application container or multiple tightly coupled containers that share resources such as network identity.
+
+Ingress and load-balancer controllers translate external routing intent into AWS load balancers that forward to Kubernetes Services and Pods.
+
+A Deployment maintains and rolls out Pod replicas. A Service gives matching ready Pods a stable internal endpoint. Ingress describes external HTTP routing that a controller can realize through an AWS load balancer.
+:::
+
+:::expand[How Does EKS Networking Work?]{kind="recap"}
+Pod connectivity, external application traffic, AWS API reachability, DNS, and network policy are separate network concerns.
+:::
+
+:::expand[How Do Pods and Humans Get Permissions?]{kind="recap"}
+Workloads receive scoped AWS identities through Kubernetes service accounts, while humans combine API reachability, IAM authentication, and Kubernetes authorization.
+
+Reachability only proves packets can travel. The Pod’s AWS workload identity must also receive IAM permission for `s3:GetObject` on the requested resource.
+
+Pod Identity maps a Kubernetes service account to an IAM role for application API calls. A human must reach the EKS API, authenticate through the configured AWS identity path, and then pass Kubernetes RBAC authorization.
+
+EKS workloads can run on managed or self-managed EC2 nodes, Fargate, hybrid capacity, or infrastructure managed through EKS Auto Mode.
+
+Options include managed node groups, self-managed EC2 nodes, Fargate for supported Pod patterns, hybrid nodes, and EKS Auto Mode, which lets AWS manage more node and integrated infrastructure work.
+
+They can share one node or one Availability Zone. Topology rules, zone-spread worker capacity, and disruption settings determine whether replicas actually avoid shared failure domains.
+:::
+
+:::expand[How Do Scaling, Health, and Resilience Work?]{kind="recap"}
+Pods and workers scale through different control loops, health separates process life from traffic readiness, and resilience depends on placement choices.
+
+The application controller can request more Pods, but those Pods still need sufficient node CPU, memory, constraints, and IP addresses. A second capacity loop may need to add workers before Pods can schedule.
+:::
+
+:::expand[What Must a Team Operate in EKS?]{kind="recap"}
+Managed control-plane infrastructure still leaves application, Kubernetes platform, worker, networking, identity, storage, and upgrade operations.
+
+With common VPC CNI networking on EC2 workers, Pods receive VPC private addresses. New Pods may fail to obtain addresses even when workers still have spare CPU and memory.
+
+ECS is often simpler for AWS-native container hosting, while EKS fits when Kubernetes itself is an organizational platform requirement.
+
+When the goal is straightforward AWS container hosting and the organization does not specifically need Kubernetes APIs, ecosystem tools, operators, or a Kubernetes platform contract, ECS often has less operating surface.
+:::
+
+:::expand[How Do You Debug an EKS Application?]{kind="recap"}
+Follow desired state through creation, scheduling, process health, service selection, ingress, networking, and AWS permissions.
+
+Trace desired state, Pod creation, scheduling, container startup, application health, readiness, Service endpoints, Ingress and load balancer, network path, then AWS IAM and dependencies. Stop at the first failed layer.
+:::
 
 ## References
 
-- [What is Amazon EKS?](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html)
-- [Amazon EKS managed node groups](https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
-- [Learn how EKS Pod Identity grants pods access to AWS services](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html)
-- [Amazon VPC CNI](https://docs.aws.amazon.com/eks/latest/best-practices/vpc-cni.html)
-- [Amazon EKS add-ons](https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+- [Kubernetes concepts in Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-concepts.html)
+- [EKS reliability best practices](https://docs.aws.amazon.com/eks/latest/best-practices/reliability.html)
+- [EKS control plane](https://docs.aws.amazon.com/eks/latest/best-practices/control-plane.html)
+- [EKS compute resources](https://docs.aws.amazon.com/eks/latest/userguide/eks-compute.html)
 - [AWS Load Balancer Controller](https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html)
-- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
-- [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/)
-- [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
+- [Amazon VPC CNI](https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html)
+- [Kubernetes network policies on EKS](https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy.html)
+- [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html)
+- [EKS access control](https://docs.aws.amazon.com/eks/latest/userguide/cluster-auth.html)
+- [EKS cluster API endpoint](https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+- [EKS managed node groups](https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
+- [AWS Fargate with Amazon EKS](https://docs.aws.amazon.com/eks/latest/userguide/fargate.html)
+- [What is Amazon EKS?](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html)
+- [EKS data-plane best practices](https://docs.aws.amazon.com/eks/latest/best-practices/data-plane.html)
+- [EKS Kubernetes version lifecycle](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html)
+- [What is Amazon ECS?](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/Welcome.html)

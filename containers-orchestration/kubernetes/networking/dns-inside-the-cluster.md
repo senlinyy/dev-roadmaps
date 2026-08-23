@@ -1,356 +1,359 @@
 ---
 title: "DNS Inside the Cluster"
-description: "Resolve Kubernetes Services by name, understand namespace search paths, and diagnose cluster DNS failures."
-overview: "Cluster DNS lets workloads call Services by stable names instead of temporary IP addresses. A checkout-web call to orders-api separates DNS evidence from Service, endpoint, policy, and application evidence."
+description: "Kubernetes DNS is a dynamically generated address book over Kubernetes API objects."
+overview: "The Kubernetes API is the source of truth. DNS projects that changing state into stable names that applications can use."
 tags: ["dns", "coredns", "services", "namespaces"]
 order: 5
 id: article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster
 ---
+
 ## Table of Contents
 
-1. [Service DNS Names Inside The Cluster](#service-dns-names-inside-the-cluster)
-2. [Why Cluster DNS Exists](#why-cluster-dns-exists)
-3. [Service DNS Names Have Pieces](#service-dns-names-have-pieces)
-4. [The Pod Resolver Expands Short Names](#the-pod-resolver-expands-short-names)
-5. [CoreDNS Answers From Cluster State](#coredns-answers-from-cluster-state)
-6. [A DNS Answer Is Only the First Proof](#a-dns-answer-is-only-the-first-proof)
-7. [How DNS Itself Fails](#how-dns-itself-fails)
-8. [Headless Services Give Clients Pod Addresses](#headless-services-give-clients-pod-addresses)
-9. [Production DNS Habits](#production-dns-habits)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-12. [References](#references)
+1. [Why does Kubernetes need its own address book?](#why-does-kubernetes-need-its-own-address-book)
+2. [What does a Service name actually identify?](#what-does-a-service-name-actually-identify)
+3. [Why can the same short name mean different things?](#why-can-the-same-short-name-mean-different-things)
+4. [What happens during one DNS lookup?](#what-happens-during-one-dns-lookup)
+5. [Why would DNS return Pod addresses instead?](#why-would-dns-return-pod-addresses-instead)
+6. [How can you tell whether DNS is really the problem?](#how-can-you-tell-whether-dns-is-really-the-problem)
+7. [Check Your Answers](#check-your-answers)
+8. [References](#references)
 
-## Service DNS Names Inside The Cluster
-<!-- section-summary: Cluster DNS lets an app carry a stable Service name while Kubernetes turns that name into an address. -->
+Kubernetes DNS is a dynamically generated address book built from Kubernetes API objects. The API server holds the cluster's current Services, Pods, namespaces, and EndpointSlices. The DNS system turns that changing state into names that applications can use.
 
-Kubernetes applications use stable Service names because Pod IPs are temporary. DNS is the first system that makes those names useful because it turns a readable name such as `orders-api.orders` into an address the caller can connect to.
+That is why a frontend can call `http://payments:8080` instead of storing `http://10.96.42.17:8080`. The name expresses which application the frontend needs, while Kubernetes maintains the changing network locations behind it.
 
-**Cluster DNS** is the DNS service Kubernetes provides inside the cluster. Most clusters run CoreDNS for this job, and application Pods use resolver settings that let short Service names expand into full cluster names.
+This article follows six questions:
 
-The example is `checkout-web` calling `orders-api`. DNS evidence stays separate from Service, EndpointSlice, policy, and application evidence so a beginner can see which layer has been proven and which layer still needs checking.
+1. **Why does Kubernetes need its own address book?**
+2. **What does a Service name actually identify?**
+3. **Why can the same short name mean different things?**
+4. **What happens during one DNS lookup?**
+5. **Why would DNS return Pod addresses instead?**
+6. **How can you tell whether DNS is really the problem?**
 
-The first concrete app setting is the orders API URL. The `checkout-web` Pods need to call the orders API, so their config can say `http://orders-api.orders`. That value is readable for a human, but the runtime still needs an IP address before it can open a network connection.
+## Why does Kubernetes need its own address book?
+<!-- section-summary: Kubernetes DNS gives a changing set of Pods a stable application name derived from Kubernetes API state. -->
 
-**Cluster DNS** is the in-cluster name lookup system that answers that first question. The checkout Pod asks for the Service name, DNS returns the Service address, and then the normal Kubernetes Service path can continue toward ready backend Pods. Later checks may involve endpoints, policy, ports, and application health, but DNS is the first proof: can the name turn into an address?
+Start with a system outside Kubernetes. If `payments` always ran on one machine at `10.20.30.40`, ordinary DNS could map the name `payments` to that permanent address. The application identity and its network location would remain together.
 
-![Kubernetes cluster DNS request path from checkout-web through Pod resolver, kube-dns Service, CoreDNS Pods, Service record, ClusterIP answer, EndpointSlices, and orders API Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/cluster-dns-request-path.png)
+Kubernetes deliberately separates those two ideas. Imagine that three Pods currently run the `payments` application:
 
-*DNS proves the name lookup first. The Service, EndpointSlices, policy, and application response still need their own proof after the address comes back.*
+- Pod A has IP address `10.244.1.18`.
+- Pod B has IP address `10.244.2.31`.
+- Pod C has IP address `10.244.3.7`.
 
-The useful habit is to keep the pieces separate during a real incident. If the name fails, DNS needs attention. If the name resolves and the Service has no endpoints, the selector, Pod labels, or readiness need attention. If the name resolves and endpoints exist, the next checks move toward policy, ports, and application behavior.
+Pod A can disappear because its process crashes, its node is drained, or a rollout replaces it. Kubernetes may create Pod D at `10.244.4.22`. The application remains `payments` even though one of its locations changed. Its identity therefore has to remain separate from any one Pod IP.
 
-## Why Cluster DNS Exists
-<!-- section-summary: Kubernetes DNS lets applications use stable Service names while Pods and endpoint IPs change during normal operations. -->
+A Service gives that changing workload a stable identity. A Service named `payments` selects the matching Pods, while EndpointSlices record the network endpoints that currently belong behind it. When Pods appear, disappear, or become unready, Kubernetes updates those EndpointSlices and callers continue using the same Service name.
 
-**Cluster DNS** is the DNS system Kubernetes provides inside the cluster. DNS means a name lookup system: an application asks for a readable name, and the resolver returns an address. In Kubernetes, the most common name an application asks for is a Service name such as `orders-api.orders.svc.cluster.local`.
+DNS makes the Service identity usable as a network name. Instead of teaching every application about Services and EndpointSlices, Kubernetes lets the caller use a familiar name such as `payments.default.svc.cluster.local`. The important chain is:
 
-The reason this exists is ordinary Kubernetes movement. A rollout replaces Pods. A node drain moves Pods away from a machine. Autoscaling adds more replicas during busy traffic. Each Pod can receive a new IP address, so application config should point at a stable Service name instead of a temporary Pod address such as `10.244.3.18`.
+1. The caller asks for a DNS name.
+2. That name identifies a Kubernetes Service.
+3. The Service is associated with EndpointSlices.
+4. The EndpointSlices contain the current usable Pod addresses.
 
-A **Service** gives the orders API a stable in-cluster identity. For a normal ClusterIP Service, Kubernetes creates a Service IP and publishes a DNS record for the Service name. The app calls the name, DNS returns the Service IP, and the Service sends traffic to ready backend Pods.
+![A stable payments DNS name resolves to a Service front door while EndpointSlices track changing Pod addresses behind it](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/service-dns-vs-dataplane.png)
 
-The application should carry the orders API name because Pod IPs change:
+*The application keeps one stable name while Kubernetes updates the Pods and endpoint addresses behind it.*
 
-```yaml
-env:
-  - name: ORDERS_API_BASE_URL
-    value: http://orders-api.orders
+This is more dynamic than ordinary public DNS. Cluster DNS needs to understand Kubernetes namespaces, Services, Pods, and EndpointSlices, and it must react when those objects change. The Kubernetes API remains the source of truth; DNS is a convenient view of that truth for software that needs to connect by name.
+
+That model also explains where a cluster DNS record comes from. Nobody needs to maintain a separate zone file for every Service. When a Service is created, changed, or removed through the Kubernetes API, the cluster DNS system can synthesize the corresponding answer from the new state.
+
+Consider a replacement cycle. Three `payments` Pods may be replaced by three others with new Pod IPs. EndpointSlices change to reflect those locations, while the Service identity and its normal DNS name remain stable. Callers keep asking for `payments`; they do not need a configuration update for every Pod replacement.
+
+```text
+stable identity: payments.shop.svc.cluster.local
+stable front door: Service ClusterIP
+changing locations: EndpointSlice Pod addresses
 ```
 
-That value has two concrete parts. `orders-api` is the Service name, and `orders` is the namespace. A checkout Pod in the `checkout` namespace needs both parts because the target Service lives in a different namespace.
+This is the distinction between **identity** and **location**. DNS publishes an address for the durable Service identity. Kubernetes networking continuously relates that front door to the current locations. Without the separation, every caller would need to discover and track short-lived Pod IPs itself.
 
-The Service behind that name can stay small. The selector connects the stable Service name to the actual orders API Pods:
+## What does a Service name actually identify?
+<!-- section-summary: A normal Service name resolves to the Service ClusterIP; the Service data plane later chooses a backend Pod. -->
+
+Consider this Service in the `shop` namespace:
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: orders-api
-  namespace: orders
+  name: payments
+  namespace: shop
 spec:
   selector:
-    app.kubernetes.io/name: orders-api
+    app: payments
   ports:
-    - name: http
-      port: 80
-      targetPort: 3000
+    - port: 8080
 ```
 
-That short namespace-qualified name is enough for normal in-cluster calls. The fully qualified form, `http://orders-api.orders.svc.cluster.local`, carries the same destination with every DNS piece written out.
+Suppose Kubernetes assigns the Service a ClusterIP of `10.96.42.17`, and its EndpointSlices currently contain three Pod addresses: `10.244.1.18`, `10.244.2.31`, and `10.244.3.7`.
 
-## Service DNS Names Have Pieces
-<!-- section-summary: A Kubernetes Service DNS name includes the Service, namespace, service record marker, and cluster domain. -->
+For a normal Service, the Service's A or AAAA record resolves to its ClusterIP for the relevant IP family. In this IPv4 example, a lookup for `payments.shop.svc.cluster.local` returns `10.96.42.17` rather than the three Pod IPs. That distinction separates name resolution from traffic routing.
 
-A **Service DNS name** is the DNS name Kubernetes publishes for a Service. For a normal Service, the A or AAAA record resolves to the Service cluster IP. For our orders API, the full name usually looks like `orders-api.orders.svc.cluster.local`.
+DNS answers one question: **what stable address belongs to the `payments` Service?** The Service data plane answers a later question: **which ready backend should receive this connection?** A cluster may implement that second decision with kube-proxy or another networking data plane, including an eBPF-based implementation, but it happens after DNS has returned an address.
 
-The pieces read from specific to broad. Writing them out helps reviewers see the exact namespace and cluster DNS area involved.
+The complete Service name also describes where this identity lives:
 
-The namespace is the piece that most often explains a confusing lookup. `checkout-web` runs in `checkout`, while the orders API Service lives in `orders`. If the app uses only a short name, the resolver may search the wrong namespace first. Writing the full name once gives the team a precise destination before using shorter forms in normal config.
-
-| Piece | Meaning in this example |
+| Name piece | Meaning |
 |---|---|
-| `orders-api` | The Service name |
-| `orders` | The namespace that owns the Service |
-| `svc` | The DNS area for Kubernetes Services |
-| `cluster.local` | The cluster domain, which many clusters use by default |
+| `payments` | The Service name |
+| `shop` | The namespace that owns the Service |
+| `svc` | The Kubernetes DNS area used for Services |
+| `cluster.local` | The cluster DNS domain |
 
-The cluster domain can be different in a real platform. Some clusters use a custom suffix, and platform teams usually document it beside the cluster bootstrap settings. Application teams should still rely on the Service name and namespace because those pieces carry the application intent.
+The general form is `<Service>.<Namespace>.svc.<ClusterDomain>`. `cluster.local` is common, while the cluster configuration can choose a different suffix.
 
-The namespace piece is the part beginners most often miss. A Pod in the `orders` namespace can usually call `http://orders-api` because the resolver starts in the caller's namespace. A Pod in the `checkout` namespace should call `http://orders-api.orders` because the target Service lives somewhere else.
+This naming hierarchy is another projection of Kubernetes objects. The name includes the Service and namespace because those are part of the object's identity in the API. For a normal Service, CoreDNS uses that Service state to produce a record whose value is the ClusterIP. EndpointSlices are still important, but they belong to the next network step, when the Service forwards a connection to a backend.
 
-Here is the Service evidence an operator would expect. The cluster IP in this output should match the DNS answer for a normal ClusterIP Service.
+Suppose a lookup returns `10.96.42.17`, but an HTTP request to `payments:8080` fails. The correct DNS answer proves that the name reached the stable Service address. The remaining investigation should move to the Service ports, EndpointSlices, NetworkPolicy, network data plane, or application process, because each of those later layers needs its own evidence.
 
-```bash
-kubectl -n orders get svc orders-api -o wide
-```
+This boundary is worth remembering in one sentence: DNS maps a normal Service name to its ClusterIP; Service networking maps that ClusterIP to one backend Pod.
 
-```bash
-NAME                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
-orders-api   ClusterIP   10.96.42.18   <none>        80/TCP    12m   app.kubernetes.io/name=orders-api
-```
+The boundary also changes the meaning of a healthy test. `nslookup payments` returning the ClusterIP proves the name-to-Service mapping. It does not exercise TCP port `8080`, the Service's `targetPort`, the endpoint readiness set, NetworkPolicy, or the payments process. A subsequent connection test begins those later checks. Keeping the two requests separate prevents “DNS works” from being mistaken for “the application works.”
 
-The DNS answer for a normal ClusterIP Service should match the Service cluster IP. That IP can change if the Service gets recreated, so the app config should continue to store the name.
+## Why can the same short name mean different things?
+<!-- section-summary: A Pod resolver adds namespace-specific search domains, so the same short name can expand to different complete Service names. -->
 
-## The Pod Resolver Expands Short Names
-<!-- section-summary: kubelet writes resolver settings into each Pod, and those settings decide how short names expand. -->
+Kubernetes allows different namespaces to contain Services with the same name. A `development` namespace can contain a Service named `database`, and a `production` namespace can contain another Service named `database`. Their full identities are different:
 
-A **resolver** is the piece of the operating system or runtime that performs DNS lookups for a process. In Kubernetes, kubelet writes DNS settings into each Pod's `/etc/resolv.conf`. That file tells containers which DNS server to ask and which search suffixes to try for short names.
+- `database.development.svc.cluster.local`
+- `database.production.svc.cluster.local`
 
-This resolver file is the bridge between application config and cluster DNS. The app may only ask for `orders-api.orders`, but the container runtime still needs a nameserver and search rules to complete the lookup. During an incident, checking the file from the caller Pod proves the lookup path the application actually uses.
+An application inside the `development` namespace may still call `database` without writing the full name. The caller's operating-system resolver supplies the namespace context before it sends the query to the DNS server.
 
-Inside a `checkout-web` Pod, the file often looks like this. This is one of the first files an operator should capture during DNS debugging.
+Kubelet normally writes resolver settings into each Pod. In a Pod from the `development` namespace, `/etc/resolv.conf` may look like this:
 
-```bash
-kubectl -n checkout exec deploy/checkout-web -- cat /etc/resolv.conf
-```
-
-```bash
-search checkout.svc.cluster.local svc.cluster.local cluster.local
+```text
 nameserver 10.96.0.10
+search development.svc.cluster.local svc.cluster.local cluster.local
 options ndots:5
 ```
 
-The `nameserver` line points at the cluster DNS Service IP. The `search` line starts with the caller namespace, so a lookup for `orders-api` first expands under `checkout.svc.cluster.local`. The `ndots:5` option influences whether the resolver tries search-suffix forms before treating a name as complete.
+The application asks to resolve `database`. Because the name is short, the resolver tries the search domains and can form `database.development.svc.cluster.local`. A Pod in `production` receives a different first search suffix, so the same short name can become `database.production.svc.cluster.local`.
 
-Now the cross-namespace bug has a concrete explanation. If the web app asks for only `orders-api`, the resolver tries the `checkout` namespace first. The orders Service lives in `orders`, so the lookup returns `NXDOMAIN` unless another Service with that short name exists in `checkout`. `NXDOMAIN` means the resolver received an answer saying the name has no record at that location. In this scenario, the useful fix is to include the destination namespace in application config.
+The caller's own resolver supplies the namespace context by expanding the short name with the search list that kubelet placed in that Pod. CoreDNS receives a complete query such as `database.development.svc.cluster.local` or `database.production.svc.cluster.local` and answers that exact name.
 
-```bash
-kubectl -n checkout exec deploy/checkout-web -- nslookup orders-api.orders
+This means short names are convenient and context-dependent at the same time. They make same-namespace calls concise, but moving identical application configuration into another namespace changes which Service that short name denotes. A namespace-qualified name such as `database.production` states the cross-namespace dependency explicitly and lets the resolver form the intended complete Service name.
+
+![Two Pods use their own namespace search suffixes to expand the same short database name into different complete Service names](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/namespace-search-expansion.png)
+
+*The short name stays the same; the search domain supplied to each Pod provides the namespace context.*
+
+This behavior gives same-namespace calls a concise form. It also explains a common cross-namespace mistake. If a Pod in `shop` needs a Service named `payments` in `finance`, the short name `payments` first refers to the `shop` namespace. The caller should use `payments.finance` or the full name `payments.finance.svc.cluster.local` to identify the intended Service.
+
+The `ndots:5` setting affects how the resolver treats names that already contain dots. A name with fewer than five dots may be tried with cluster search suffixes before it is tried as an absolute name. For example, `api.example.com` can lead to attempts resembling:
+
+```text
+api.example.com.shop.svc.cluster.local
+api.example.com.svc.cluster.local
+api.example.com.cluster.local
+api.example.com
 ```
 
-```bash
-Name:      orders-api.orders.svc.cluster.local
-Address:   10.96.42.18
-```
+Those extra attempts can add DNS queries, latency, and CoreDNS load. A trailing dot, as in `api.example.com.`, marks a name as complete so the resolver skips the search domains.
 
-That output proves the Service name resolves from the same namespace as the caller. The next question is the server that returned this answer.
+The search list, `ndots`, runtime behavior, and resolver implementation can affect the exact query order. The reliable first-principles rule is simpler: a short Service name only becomes complete after the Pod resolver applies its configured search context.
 
-![Pod resolver search path showing a short name failing in the checkout namespace and a namespace-qualified Service name resolving in the orders namespace](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/resolver-search-path.png)
+## What happens during one DNS lookup?
+<!-- section-summary: A lookup moves from the application resolver to the cluster DNS Service and CoreDNS, then returns a Service address before any application connection begins. -->
 
-*A cross-namespace caller should include the destination namespace so the resolver goes straight to the intended Service name.*
+Follow one lookup from a frontend Pod in the `shop` namespace. The Pod wants the `payments` Service, whose ClusterIP is `10.96.42.17`.
 
-## CoreDNS Answers From Cluster State
-<!-- section-summary: Pods usually query the kube-dns Service, which routes DNS traffic to ready CoreDNS Pods. -->
+The application begins with a normal operating-system call such as `getaddrinfo("payments", ...)`. Its language runtime or system library passes the name to the Pod's resolver, which reads `/etc/resolv.conf` to find both the DNS server and the search domains.
 
-**CoreDNS** is the common DNS server implementation used by Kubernetes clusters. Kubernetes usually exposes it through a Service named `kube-dns` in the `kube-system` namespace. The Service name stays `kube-dns` for compatibility, even when the actual Pods run CoreDNS.
+With the default `ClusterFirst` DNS policy, kubelet normally configures the Pod to use the cluster DNS Service. The resolver sees that `payments` is a short name, applies `shop.svc.cluster.local`, and asks for `payments.shop.svc.cluster.local` at the nameserver address, such as `10.96.0.10`.
 
-The checkout Pod sends DNS traffic to the nameserver IP from `/etc/resolv.conf`. That IP usually belongs to the `kube-dns` Service. Kubernetes routes the DNS packet to a ready CoreDNS Pod, and CoreDNS answers Service and Pod DNS questions by watching Kubernetes objects through the API.
+That nameserver address usually belongs to a Kubernetes Service for cluster DNS. Behind the Service are CoreDNS Pods listening on UDP and TCP port 53. The DNS query therefore follows an ordinary Service path to a ready CoreDNS instance.
 
-That means the DNS proof has its own Service path behind it. If the caller cannot resolve any cluster names, the problem may sit in the `kube-dns` Service, CoreDNS Pod readiness, DNS egress policy, or CoreDNS logs. The next command checks the stable DNS Service before the article looks at the Pods behind it.
+CoreDNS can answer Kubernetes names because its Kubernetes integration watches API state. Conceptually, it already knows that a Service named `payments` exists in `shop` and has ClusterIP `10.96.42.17`. It synthesizes an A record answer from that state and sends the address back through the resolver to the application.
 
-```bash
-kubectl -n kube-system get svc kube-dns
-```
+![The complete lookup path from an application short name through the Pod resolver, cluster DNS Service, CoreDNS, Kubernetes API state, and back to the caller](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/cluster-dns-lookup-steps.png)
 
-```bash
-NAME       TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                  AGE
-kube-dns   ClusterIP   10.96.0.10   <none>        53/UDP,53/TCP,9153/TCP   46d
-```
+*CoreDNS returns an address derived from Kubernetes state; the application connection begins only after that answer comes back.*
 
-The rest of the CoreDNS check can fit in a small table during an incident:
+At this point, DNS has finished its job. The application opens a connection to `10.96.42.17:8080`. Service networking then selects one ready endpoint, perhaps `10.244.2.31:8080`, and forwards the connection. DNS translated `payments` into the stable Service address; the data plane selected Pod B.
 
-| Evidence | Healthy shape |
-|---|---|
-| `kubectl -n kube-system get pods -l k8s-app=kube-dns` | CoreDNS Pods are `Running` and ready |
-| `kubectl -n kube-system get endpointslice -l kubernetes.io/service-name=kube-dns` | EndpointSlice lists ready Pod IPs on port `53` |
-| Recent CoreDNS logs | No repeated plugin errors, API watch errors, or upstream timeouts |
+The complete lookup crosses two Services in a typical cluster. First, the caller sends UDP or TCP port 53 traffic to the cluster DNS Service, which selects a CoreDNS Pod. CoreDNS returns the payments ClusterIP. Then the caller opens an application connection to the payments Service, which selects a payments endpoint. Both use Kubernetes Service machinery, but only the first connection is the DNS protocol.
 
-The label `k8s-app=kube-dns` appears in Kubernetes documentation and many clusters. Managed platforms can add their own labels, so a team runbook should record the selector that works in that environment.
+That detail helps when DNS queries time out. CoreDNS may be healthy while the caller cannot reach the DNS Service because of egress policy or Pod networking. Conversely, the DNS Service can be reachable while CoreDNS lacks API permission to observe Services and EndpointSlices. The same symptom is divided by checking reachability, CoreDNS logs, and Kubernetes-resource access in order.
 
-Now we have the first half of the request path. The app asks for a name, the Pod resolver sends the query to the cluster DNS Service, and CoreDNS returns the Service IP. The HTTP request still has more gates to pass.
+The distinction creates two connected but separate paths:
 
-## A DNS Answer Is Only the First Proof
-<!-- section-summary: DNS success proves name resolution, while EndpointSlices and HTTP checks prove the backend path. -->
-
-A successful DNS lookup answers one question: "Can this caller resolve this Service name?" The next proofs cover whether the Service has ready Pods, whether a NetworkPolicy allows the connection, and whether the app process is listening on the right port. Production debugging gets much clearer when those proofs stay separate.
-
-For the checkout-to-orders path, the first proof is the lookup from the caller namespace. A lookup from another namespace can use a different search path and a different egress policy, so it can tell a different story.
-
-```bash
-kubectl -n checkout exec deploy/checkout-web -- nslookup orders-api.orders
-```
-
-```bash
-Name:      orders-api.orders.svc.cluster.local
-Address:   10.96.42.18
-```
-
-The second proof is the backend list for the Service. **EndpointSlices** are Kubernetes objects that store slices of backend endpoints for a Service, usually Pod IPs and ports. They are the modern evidence source compared with the older Endpoints object, especially for larger Services and dual-stack clusters. For this incident, the EndpointSlice proof should show ready endpoints such as `10.244.3.18:3000` and `10.244.4.22:3000` behind `orders-api`.
-
-The third proof is an actual application response through the same name the app uses. The health endpoint gives a small, bounded request instead of a full user workflow. A healthy result can be as simple as `{"status":"ok","service":"orders-api"}` from `http://orders-api.orders/healthz`.
-
-These checks separate common failure zones. The exact next step should follow the first failing row.
-
-| Evidence | Likely area to inspect next |
-|---|---|
-| `NXDOMAIN` for `orders-api` from `checkout` | Service name, namespace, or missing Service |
-| DNS resolves, EndpointSlices empty | Service selector, Pod labels, readiness, Deployment status |
-| DNS resolves, endpoints exist, request times out | NetworkPolicy, CNI path, kube-proxy, target port, app listener |
-| DNS resolves, HTTP returns `503` or app error | Application health, dependencies, logs, readiness design |
-
-Here is a very normal incident shape. DNS returns `10.96.42.18`, and the EndpointSlice command returns no resources or an empty backend list for `orders-api`. That means the name exists and the backend list is empty. CoreDNS already did its job for the Service name, so the next useful checks are Service selectors, Pod labels, readiness probes, and rollout status.
-
-## How DNS Itself Fails
-<!-- section-summary: DNS troubleshooting checks the caller Pod, Pod resolver config, CoreDNS Pods, the kube-dns Service, EndpointSlices, logs, and policy. -->
-
-DNS itself enters the investigation when a known cluster name fails from the caller Pod. A useful baseline name is `kubernetes.default`, because Kubernetes creates the default API Service in the `default` namespace. If that lookup times out from `checkout-web`, the problem is broader than the orders Service name.
-
-This check separates a local app typo from a shared DNS path issue. If `kubernetes.default` fails, the caller cannot use the cluster's most basic Service name. The team should stop chasing the orders Service for a moment and prove the resolver, CoreDNS Service, CoreDNS Pods, and any policy that controls DNS traffic.
-
-```bash
-kubectl -n checkout exec deploy/checkout-web -- nslookup kubernetes.default
-```
-
-```bash
-;; connection timed out; no servers could be reached
-```
-
-A tight DNS debug bundle starts with the caller Pod's resolver file, then checks the DNS add-on path in `kube-system`. The resolver file proves which nameserver the container is using and which search suffixes its resolver will try. The shared DNS checks prove whether CoreDNS itself is ready to answer cluster names.
-
-| Check | Command shape | Healthy evidence |
+| Stage | Input | Output |
 |---|---|---|
-| Caller resolver | `kubectl -n checkout exec deploy/checkout-web -- cat /etc/resolv.conf` | Nameserver points at the cluster DNS Service, with expected search suffixes |
-| CoreDNS Pods | `kubectl -n kube-system get pods -l k8s-app=kube-dns` | Pods are ready and not crash-looping |
-| kube-dns Service | `kubectl -n kube-system get svc kube-dns` | Service exposes port `53` for UDP and TCP |
-| kube-dns EndpointSlice | `kubectl -n kube-system get endpointslice -l kubernetes.io/service-name=kube-dns` | Ready CoreDNS Pod IPs sit behind the Service |
-| CoreDNS logs | `kubectl logs --namespace=kube-system -l k8s-app=kube-dns --tail=50` | No repeated Kubernetes plugin errors, upstream failures, or reload loops |
+| DNS resolution | `payments.shop.svc.cluster.local` | Service ClusterIP `10.96.42.17` |
+| Service networking | Connection to `10.96.42.17:8080` | One ready backend such as `10.244.2.31:8080` |
 
-If the Pods are crashing, the logs and the CoreDNS ConfigMap give the platform team evidence.
+CoreDNS also handles names outside Kubernetes by forwarding them according to its configuration. That creates another useful troubleshooting boundary: if cluster names work but internet names fail, investigate upstream forwarding; if internet names work but valid `*.svc.cluster.local` names fail, investigate the Kubernetes integration and API access.
 
-NetworkPolicy can also create DNS symptoms. A namespace with default-deny egress blocks DNS traffic until a policy allows egress to the cluster DNS Pods on UDP and TCP port 53. The exact labels should come from the cluster, but this is the common shape for allowing `checkout-web` to query CoreDNS:
+Pod DNS policy can change the path as well. The default `ClusterFirst` behavior sends cluster names to cluster DNS. Pods using `hostNetwork` commonly need `ClusterFirstWithHostNet` if they should retain cluster DNS behavior. Explicit `dnsConfig` settings can also change nameservers, searches, or options. These settings matter because the application can only use the lookup path installed inside its own Pod.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-dns-egress
-  namespace: checkout
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: checkout-web
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-```
+## Why would DNS return Pod addresses instead?
+<!-- section-summary: A headless Service removes the virtual ClusterIP so DNS can expose backend addresses for client-side discovery and stable members. -->
 
-This policy belongs in the networking review for locked-down namespaces. The next article goes deeper into NetworkPolicy, but DNS is the first egress rule many teams need after they enable default deny.
+A normal Service deliberately hides its individual backends. Callers receive one ClusterIP, and Kubernetes chooses a ready Pod for each connection. That is a good fit when the replicas are interchangeable and the caller only cares about reaching the application.
 
-## Headless Services Give Clients Pod Addresses
-<!-- section-summary: Headless Services return backend Pod addresses directly, which fits peer discovery for systems that need individual members. -->
+Some systems need to discover the members themselves. A database cluster may contain `postgres-0`, `postgres-1`, and `postgres-2`, with one leader and two replicas. Peers may need to connect to a particular member, form a quorum, or perform their own load balancing. A single virtual Service address would hide the information the client needs.
 
-A **headless Service** is a Service with `clusterIP: None`. A normal ClusterIP Service gives clients one Service IP, and Kubernetes distributes traffic to ready endpoints behind it. A headless Service publishes DNS answers for the backend Pods directly, so the client can see individual members.
-
-This fits systems that need peer discovery. A database cluster, cache cluster, or message broker may need stable member names such as `orders-db-0`, `orders-db-1`, and `orders-db-2`. An ordinary HTTP API such as `orders-api` usually wants a normal Service because callers want the API rather than a list of individual API replicas.
-
-Here is the headless Service shape for an orders database. This Service is meant for peer discovery instead of ordinary web-to-api traffic.
+A headless Service changes the DNS contract by setting `clusterIP: None`:
 
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: orders-db
-  namespace: orders
 spec:
   clusterIP: None
-  selector:
-    app.kubernetes.io/name: orders-db
-  ports:
-    - name: postgres
-      port: 5432
 ```
 
-With a StatefulSet that uses `serviceName: orders-db`, members can receive stable DNS names such as `orders-db-0.orders-db.orders.svc.cluster.local`, `orders-db-1.orders-db.orders.svc.cluster.local`, and `orders-db-2.orders-db.orders.svc.cluster.local`. Those names identify individual members, which is the point of using this pattern.
+Setting `clusterIP: None` replaces the virtual front door with direct endpoint records. Its A or AAAA records can therefore return backing endpoint addresses such as `10.244.1.10`, `10.244.2.11`, and `10.244.3.12` instead of a Service ClusterIP. The client now sees the set of members and takes on more responsibility for selecting or contacting them.
 
-Readiness still matters. Kubernetes DNS records for Pod hostnames through a headless Service normally depend on the Pod being ready, unless the Service sets `publishNotReadyAddresses: true`. Some peer-discovery systems need early records during bootstrap, but that setting should be a deliberate platform choice because clients may receive addresses for members that are still starting.
+![A normal Service returns one ClusterIP and uses the data plane to choose a Pod, while a headless Service returns multiple Pod addresses directly](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/normal-vs-headless-service-dns.png)
 
-## Production DNS Habits
-<!-- section-summary: Production teams keep names explicit, test from the caller, separate lookup evidence from traffic evidence, and watch DNS load. -->
+*Normal Service DNS hides the replicas behind one front door; headless Service DNS exposes the current members.*
 
-The first habit is explicit config. Same-namespace callers can use the short Service name, and cross-namespace callers should include the destination namespace. For shared charts, incident notes, and platform examples, the fully qualified form removes guesswork.
+This is especially useful with StatefulSets because their Pods have stable ordinal names. When a StatefulSet uses the headless Service, individual members can receive names such as:
 
-This habit exists because production incidents often include several namespaces with similar Service names. A value like `orders-api.orders` tells reviewers which namespace owns the dependency, while the full form documents the entire cluster DNS name. The application still gets a stable name, and humans get fewer assumptions to untangle.
-
-```yaml
-env:
-  - name: ORDERS_API_BASE_URL
-    value: http://orders-api.orders.svc.cluster.local
+```text
+postgres-0.postgres.shop.svc.cluster.local
+postgres-1.postgres.shop.svc.cluster.local
+postgres-2.postgres.shop.svc.cluster.local
 ```
 
-The second habit is testing from the real caller. A lookup from a laptop, CI runner, or random debug Pod may use a different namespace, resolver file, egress policy, and network path. The strongest evidence comes from the workload namespace and a Pod with the same labels and policies as the application.
+The Service name can be used to discover the set, while a member-specific name identifies one Pod. This is service discovery rather than ordinary load balancing: the caller is learning which members exist and can choose a particular one.
 
-The third habit is reducing noisy DNS behavior in busy services. Long-lived HTTP clients, connection pooling, and reasonable client DNS caching reduce repeated lookups. On clusters with high DNS query volume, platform teams may add **NodeLocal DNSCache**, which runs a caching DNS agent on each node and forwards cache misses to the cluster DNS Service.
+That additional visibility transfers responsibility to the client. With a normal Service, the Kubernetes data plane selects a ready endpoint behind one virtual address. With a headless Service, the client receives endpoint addresses and may need to choose a member, retry another address, or respect member roles such as leader and replica. Headless DNS exposes the set; it does not turn every member into an interchangeable backend.
 
-The fourth habit is keeping DNS visible in release evidence. A small release note can include the caller namespace, caller workload, target Service, name used by the app, DNS result, EndpointSlice result, and one HTTP health check. For example, the note might say that `deploy/checkout-web` in `checkout` resolved `orders-api.orders` to `10.96.42.18`, found endpoints `10.244.3.18:3000` and `10.244.4.22:3000`, and received `200` from `/healthz`.
+The records remain dynamic. If `postgres-1` is recreated with a new address, Kubernetes API and EndpointSlice state changes, and the DNS projection can eventually reflect that new location while the member's stable name remains the discovery identity. Stable naming does not mean a permanently fixed Pod IP.
 
-The fifth habit is treating CoreDNS as shared platform infrastructure. Application teams can prove symptoms from their Pods, while platform teams own CoreDNS scaling, Corefile changes, NodeLocal DNSCache, upstream forwarding, and cluster-domain configuration.
+The way records are derived also changes. For a normal Service, the Service object produces a DNS record whose value is the ClusterIP. For a headless Service, CoreDNS uses the Service together with its EndpointSlices to produce records for endpoint addresses. Both answers still come from Kubernetes API state; they expose different levels of that state because the two Service types promise different behavior.
 
-## Putting It All Together
-<!-- section-summary: The whole request path starts with the Service name, then moves through Pod resolver config, CoreDNS, Service records, EndpointSlices, policy, and the app. -->
+## How can you tell whether DNS is really the problem?
+<!-- section-summary: Troubleshooting tests name resolution first, then moves through the Service, EndpointSlices, networking, listener, and application protocol. -->
 
-Now the original environment variable carries a full story. It names the dependency without tying the app to any current Pod.
+An application-reported connection failure can originate from several subsystems. A connection crosses name resolution, Service addressing, Service routing, endpoint selection, Pod networking, the application listener, and finally the application protocol. A useful investigation tests those layers in order and moves beyond DNS once the name has resolved correctly.
 
-For `checkout-web`, the useful destination is the orders API Service in the `orders` namespace. The caller wants the application contract, while Kubernetes handles the changing replicas behind it. DNS gives the application that stable name, and the rest of Kubernetes turns the name into ready backend Pods only after lookup succeeds. This is the reason the environment variable stays readable during rollouts.
+![A DNS troubleshooting path that starts in the affected Pod and narrows the failure through resolver settings, Service state, EndpointSlices, CoreDNS, and the application connection](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/dns-debugging-order.png)
 
-```yaml
-env:
-  - name: ORDERS_API_BASE_URL
-    value: http://orders-api.orders
+*Each check proves one layer, so the next command follows the first failed result instead of restarting the investigation at DNS.*
+
+**Start from the affected Pod.** Resolver settings, namespace context, DNS policy, and NetworkPolicy can differ between workloads. Test the same name the application uses:
+
+```bash
+kubectl exec -it <pod> -- nslookup payments
 ```
 
-The checkout process asks its resolver for `orders-api.orders`. kubelet configured the Pod with a cluster DNS nameserver and search suffixes. The query reaches the `kube-dns` Service, Kubernetes sends it to a ready CoreDNS Pod, and CoreDNS returns the Service IP for `orders-api.orders.svc.cluster.local`.
+or:
 
-After that, the HTTP path continues through the Service and its EndpointSlices. The Service selector finds ready orders API Pods, the network plugin and policies decide whether the packet can move, and the application process on port `3000` handles `/healthz`.
+```bash
+kubectl exec -it <pod> -- getent hosts payments
+```
 
-The useful production check keeps each proof in order: lookup the name from `checkout`, inspect the Service in `orders`, inspect EndpointSlices for `orders-api`, then call `/healthz` through the same name the app uses. That sequence gives a plain incident story. The app used the intended name, the cluster resolved it to the intended Service, the Service had ready backends, and the application answered.
+If the output includes `10.96.42.17 payments.shop.svc.cluster.local`, basic name resolution is working. Compare the short name with the full name:
 
-![Kubernetes DNS production habits summary separating DNS proof from traffic proof and showing headless Services returning Pod addresses](/content-assets/articles/article-containers-orchestration-kubernetes-networking-dns-inside-the-cluster/dns-production-summary.png)
+```bash
+nslookup payments
+nslookup payments.shop.svc.cluster.local
+```
 
-*A successful lookup proves only the name. Production evidence stays stronger when DNS proof and traffic proof stay separate.*
+If the full name works while the short name fails, inspect namespace expectations, `dnsPolicy`, and the search list in `/etc/resolv.conf`:
 
-## What's Next
+```bash
+kubectl exec -it <pod> -- cat /etc/resolv.conf
+```
 
-DNS gives the checkout app a name for the orders API, and Services plus EndpointSlices give that name a backend path. The next production question is who should be allowed to use that path.
+The file should contain the expected cluster DNS nameserver and search domains. A Pod using `hostNetwork`, a custom `dnsConfig`, or an unexpected policy can receive a different resolver path.
 
-The next article covers **NetworkPolicies**. The same `checkout` to `orders` flow can use label-based rules that allow the intended connection while blocking traffic from workloads that have no reason to talk to the orders API.
+**Confirm that the requested Kubernetes object exists.** An `NXDOMAIN` answer often means the Service name or namespace is wrong:
+
+```bash
+kubectl get svc -n shop payments
+```
+
+If the caller is in `shop` but the Service is in `finance`, `payments` and `payments.finance` identify different names. Use the namespace-qualified or full name when crossing that boundary.
+
+**Compare the DNS answer with the Service.** For a normal Service, these two commands should lead to the same ClusterIP:
+
+```bash
+kubectl get svc payments -n shop -o wide
+nslookup payments.shop.svc.cluster.local
+```
+
+If both show `10.96.42.17`, DNS has returned the address stored on the Service. Test that address directly:
+
+```bash
+curl http://10.96.42.17:8080
+```
+
+If both the name-based request and the direct ClusterIP request fail, the evidence points beyond DNS. Investigate Service ports and `targetPort`, the network data plane, NetworkPolicy, or the application listener.
+
+If the direct ClusterIP succeeds while the name-based request fails, the two tests have isolated the difference to name resolution. Return to the affected Pod's resolver configuration, search domains, DNS policy, cluster DNS reachability, and the exact query name. The application and Service path have already produced a successful response by address, so changing endpoint selectors would not explain the name-only failure.
+
+**Inspect the current backends.** EndpointSlices show which addresses the Service can use:
+
+```bash
+kubectl get endpointslices -n shop \
+  -l kubernetes.io/service-name=payments
+
+kubectl describe endpointslice <name> -n shop
+```
+
+For the running example, healthy EndpointSlices might include `10.244.1.18`, `10.244.2.31`, and `10.244.3.7`. If DNS returns the correct ClusterIP while the EndpointSlice is empty, likely causes include a wrong Service selector, mismatched Pod labels, unready Pods, or incorrect ports. The evidence is now `DNS ✓`, `Service ✓`, `endpoints ✗`.
+
+**Inspect CoreDNS when cluster lookups themselves fail or time out.** Check the DNS Pods, logs, Service, and configuration:
+
+```bash
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+kubectl logs -n kube-system -l k8s-app=kube-dns
+kubectl get svc -n kube-system
+kubectl get configmap coredns -n kube-system -o yaml
+```
+
+The `k8s-app=kube-dns` label is commonly used for CoreDNS deployments despite its historical name. CoreDNS also needs permission to watch the Kubernetes resources used to answer names, including Services, namespaces, Pods, and EndpointSlices. Logs that show API watch or permission failures therefore belong to the DNS investigation.
+
+The following symptoms summarize how these checks divide the system:
+
+| Symptom | Likely area |
+|---|---|
+| `payments` fails, but the full name works | Search domain, namespace, or resolver configuration |
+| The full name returns `NXDOMAIN` | Missing Service, wrong name or namespace, or CoreDNS Kubernetes integration |
+| DNS requests time out | DNS Service reachability, NetworkPolicy, or CoreDNS Pods |
+| DNS returns the correct ClusterIP, but the connection fails | Service, EndpointSlices, networking, port mapping, or application |
+| The Service works by IP while its name fails | DNS or resolver path |
+| A headless Service returns several Pod IPs | Expected headless discovery behavior |
+| Cluster names work, but internet names fail | CoreDNS upstream forwarding |
+| Internet names work, but `*.svc.cluster.local` names fail | CoreDNS Kubernetes integration or API access |
+| Short-name results differ across namespaces | Namespace-specific search context |
+
+Finally, keep DNS's contract narrow. If `nslookup payments` returns `10.96.42.17` and `curl payments:8080` reports `Connection refused`, DNS succeeded. The listening process, `targetPort`, TLS setup, policy decision, and HTTP response all belong to later layers and require separate checks.
+
+## Check Your Answers
+
+:::expand[Why does Kubernetes need its own address book?]{kind="recap"}
+Pod addresses change as workloads restart, move, and scale, while applications still need a stable identity for each dependency. Kubernetes DNS projects Service and endpoint state from the API into names that survive those location changes.
+:::
+
+:::expand[What does a Service name actually identify?]{kind="recap"}
+For a normal Service, its DNS name resolves to the Service ClusterIP. Service networking then uses the Service's endpoints to choose a ready backend for the connection.
+:::
+
+:::expand[Why can the same short name mean different things?]{kind="recap"}
+Each Pod receives namespace-specific DNS search domains. Its resolver combines a short name with that context, so `database` in `development` can resolve to a different Service from `database` in `production`.
+:::
+
+:::expand[What happens during one DNS lookup?]{kind="recap"}
+The application asks its resolver, the resolver applies search rules and queries the cluster DNS Service, and CoreDNS answers from Kubernetes API state. After the address returns, the application starts a separate network connection through the Service data plane.
+:::
+
+:::expand[Why would DNS return Pod addresses instead?]{kind="recap"}
+A headless Service uses `clusterIP: None`, so DNS can return its endpoint addresses directly. This supports clients that need member discovery or stable StatefulSet Pod identities instead of one load-balanced front door.
+:::
+
+:::expand[How can you tell whether DNS is really the problem?]{kind="recap"}
+Test resolution from the affected Pod, compare the answer with the Service, and then inspect EndpointSlices and the direct connection. Once DNS returns the correct address, move the investigation to the next failing network or application layer.
+:::
 
 ## References
 
-- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Official Kubernetes behavior for Service DNS names, namespace search paths, Pod resolver configuration, Service records, headless Service records, SRV records, and Pod DNS records.
-- [Debugging DNS Resolution](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) - Official Kubernetes troubleshooting flow for checking CoreDNS Pods, the `kube-dns` Service, EndpointSlices, logs, and CoreDNS query handling.
-- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Service concepts, including EndpointSlices and the relationship between Services and backend endpoints.
-- [Service API reference](https://kubernetes.io/docs/reference/kubernetes-api/core/service-v1/) - Documents Service fields such as `publishNotReadyAddresses`, selectors, ports, and traffic-related settings.
-- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Documents egress isolation, selector behavior, and the DNS impact of default-deny egress policies.
-- [Using NodeLocal DNSCache in Kubernetes Clusters](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/) - Explains node-local DNS caching, cache-miss forwarding, and the performance motivation for high-query clusters.
+- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Official Kubernetes behavior for Service DNS names, namespace search paths, Pod resolver configuration, and headless Service records.
+- [Debugging DNS Resolution](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) - Official Kubernetes checks for Pod resolver settings, CoreDNS Pods, the cluster DNS Service, logs, permissions, and EndpointSlices.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Service and EndpointSlice concepts behind stable addresses and backend selection.

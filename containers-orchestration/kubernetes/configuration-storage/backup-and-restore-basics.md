@@ -1,401 +1,459 @@
 ---
 title: "Backup and Restore Basics"
-description: "Understand the Kubernetes backup and restore surfaces that matter for configuration, secrets, volumes, and cluster state."
-overview: "Backup and restore in Kubernetes means knowing which state lives in the API server, which state lives in volumes or external systems, and how to prove recovery before an incident."
+description: "Understand how to find every important state location, assign each one a recovery source, and reassemble those sources into a working Kubernetes application."
+overview: "Kubernetes recovery is not one copy of a cluster; it is a tested plan for protecting and restoring every state source the application depends on."
 tags: ["kubernetes", "backup", "restore", "etcd"]
 order: 7
 id: article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics
 ---
+
 ## Table of Contents
 
-1. [Recovery Starts with a State Inventory](#recovery-starts-with-a-state-inventory)
-2. [Kubernetes API Objects and etcd](#kubernetes-api-objects-and-etcd)
-3. [Manifests and GitOps Recovery](#manifests-and-gitops-recovery)
-4. [Secrets and Encryption Concerns](#secrets-and-encryption-concerns)
-5. [PVC Snapshots and Restore](#pvc-snapshots-and-restore)
-6. [External Databases and Object Stores](#external-databases-and-object-stores)
-7. [Velero and Cluster Backup Tools](#velero-and-cluster-backup-tools)
-8. [Restore Drill Runbook](#restore-drill-runbook)
-9. [RPO and RTO for the Notification Platform](#rpo-and-rto-for-the-notification-platform)
-10. [Failure Patterns to Catch Early](#failure-patterns-to-catch-early)
-11. [Assembled Recovery Plan](#assembled-recovery-plan)
-12. [Review Checklist](#review-checklist)
-13. [References](#references)
+1. [Why does recovery begin by locating state?](#why-does-recovery-begin-by-locating-state)
+2. [What do etcd snapshots, Git, and cluster backups recover?](#what-do-etcd-snapshots-git-and-cluster-backups-recover)
+3. [How can persistent data be copied consistently?](#how-can-persistent-data-be-copied-consistently)
+4. [Which Secrets, artifacts, and external services extend the recovery boundary?](#which-secrets-artifacts-and-external-services-extend-the-recovery-boundary)
+5. [How do RPO, RTO, and failure scope shape the design?](#how-do-rpo-rto-and-failure-scope-shape-the-design)
+6. [Why must a restore drill rebuild and validate the whole application?](#why-must-a-restore-drill-rebuild-and-validate-the-whole-application)
+7. [How does the five-step model turn an inventory into a recovery plan?](#how-does-the-five-step-model-turn-an-inventory-into-a-recovery-plan)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Recovery Starts with a State Inventory
-<!-- section-summary: A Kubernetes recovery plan starts by naming every part of the app that must come back after a failure. -->
+The explanation follows 7 practical questions:
 
-ConfigMaps, Secrets, environment variables, mounted files, PVCs, and StorageClasses all describe pieces of application state or storage. Backup and restore pulls those pieces into one practical question: after a bad deploy, a deleted namespace, a failed disk, or a lost cluster, what exactly has to come back?
+1. **Why does recovery begin by locating state?**
+2. **What do etcd snapshots, Git, and cluster backups recover?**
+3. **How can persistent data be copied consistently?**
+4. **Which Secrets, artifacts, and external services extend the recovery boundary?**
+5. **How do RPO, RTO, and failure scope shape the design?**
+6. **Why must a restore drill rebuild and validate the whole application?**
+7. **How does the five-step model turn an inventory into a recovery plan?**
 
-A **backup** is a recoverable copy of data or configuration. A **restore** is the tested path that turns that copy into a working system again. The backup command is only one part of the work. Production recovery also needs ownership, access to sensitive values, proof that restored data is usable, and a safe way to reconnect traffic.
+## Why does recovery begin by locating state?
+<!-- section-summary: A recovery plan starts by finding every piece of state, its authoritative home, and the mechanism that can recreate it. -->
 
-For the Customer Notification Platform, recovery has to cover more than Kubernetes YAML. The platform has Deployments, Services, ConfigMaps, Secrets, PVC-backed data, database records, uploaded files, queued messages, provider configuration, and DNS or ingress routing. A useful recovery plan separates those pieces before choosing etcd snapshots, GitOps recovery, PVC snapshots, Velero, and restore drills.
+The easiest way to understand Kubernetes backup is to ask a more fundamental question: if the entire system disappeared, what information would be required to recreate the application correctly?
 
-The first recovery artifact is a state inventory. It tells the team which pieces need a copy and where that copy would come from during an incident.
+That question leads to the central principle:
 
-A namespace backup can help with Kubernetes API objects, but it may leave out managed databases, object storage, or broker data. That is why the first design step is a state inventory. The inventory names each stateful part before the article introduces tools such as etcd snapshots, GitOps recovery, volume snapshots, and Velero.
+> A backup is not a copy of “the cluster.” It is a collection of recovery sources for every piece of state the system depends on.
 
-For the Customer Notification Platform, the inventory might look like this:
+**State** is information that must survive long enough for the system to continue correctly. Some state describes the desired system, such as a Deployment manifest. Other state records what the system has actually done, such as database rows or user uploads.
 
-| State | Where it lives | Recovery source |
+Consider PostgreSQL running in Kubernetes:
+
+```text
+Git
+└── Deployment, StatefulSet, and Service manifests
+        ↓
+Kubernetes API
+└── live objects stored in etcd
+
+PostgreSQL Pod
+└── actual database rows
+        ↓
+PersistentVolume
+        ↓
+Cloud disk or storage system
+```
+
+The same application may also depend on state elsewhere:
+
+```text
+Secret            → etcd or an external secret manager
+Container image   → container registry
+DNS               → DNS provider
+Load balancer     → cloud provider
+TLS certificate   → Kubernetes, a certificate manager, or an external CA
+User uploads      → object storage
+```
+
+Follow one request through that system. A customer opens the site through DNS and a load balancer. The frontend image supplies the executable code, a Deployment describes how to run it, a Secret supplies the database credential, PostgreSQL returns the customer record from its disk, and object storage returns an uploaded receipt. Losing any one of those pieces can break the request even when every other backup is healthy.
+
+This is why “rebuild” and “restore” are related but different operations. Git and infrastructure code can often **rebuild** replaceable structure: a cluster, Namespace, Deployment, or DNS record. A database backup or object-store replica **restores** information that cannot be derived from those declarations. The recovery plan needs both paths and must know where they meet.
+
+There is no single place containing “the application.” An etcd backup protects Kubernetes API state, but it does not copy PostgreSQL rows from a persistent disk. The first recovery task is therefore to find every stateful component, determine where its authoritative copy lives, and assign it a recovery mechanism.
+
+An **authoritative copy** is the version the system treats as the source of truth. A generated search index may be rebuilt from a database, while the underlying customer or order records may be irreplaceable. That difference determines what must be backed up and what can be reproduced.
+
+A **CustomResourceDefinition (CRD)** extends the Kubernetes API with another kind of object, often for an operator to manage. The definition and the objects created from it are API state, so their recovery order matters later.
+
+A state map can look like this:
+
+| State | Usually lives in | Typical recovery source |
 |---|---|---|
-| Deployments, Services, ConfigMaps | Kubernetes API server | GitOps repository or cluster backup |
-| Secrets | Kubernetes API server or external secret manager | External secret store, encrypted manifest, or cluster backup |
-| `notification-postgres` data | PVC or managed database | Volume snapshot or database backup |
-| Notification attachments | Object storage | Bucket versioning and object backup policy |
-| Queued messages | Managed broker | Broker retention, export, or provider backup |
+| Deployments, Services, StatefulSets | etcd | Git and/or cluster backup |
+| CustomResourceDefinitions | etcd | Git plus cluster backup |
+| Dynamically created Kubernetes resources | etcd | Cluster backup |
+| Secrets | etcd or external secret manager | Cluster backup or secret-manager recovery |
+| Application database | PV or managed database | Volume snapshot or database backup |
+| User uploads | Object storage | Object-store replication or versioning |
+| Container images | Registry | Registry replication or retention |
+| DNS | DNS provider | Infrastructure as code or provider configuration |
+| Cloud resources | Cloud provider | Terraform, Pulumi, or another infrastructure source |
+| Encryption keys | KMS or HSM | Key-management recovery mechanism |
 
-This table keeps the conversation grounded. A cluster backup can restore Kubernetes objects, but it may not restore a managed database, an object storage bucket, or messages held by an external broker. Each state location needs its own recovery path.
+A **KMS** is a key management system, and an **HSM** is a hardware security module. Both can hold cryptographic keys required to interpret encrypted backups. Losing the key can make a perfectly copied backup unusable.
 
-Another way to review the plan is by recovery lane:
+The complete recovery design should answer:
 
-| Recovery lane | What it restores | Common tool or source | Beginner check |
-|---|---|---|---|
-| API object lane | Deployments, Services, ConfigMaps, RBAC, PVC objects | GitOps, manifests, Velero, etcd snapshot | Can a fresh namespace recreate the objects? |
-| Sensitive-value lane | Secret keys and certificate material | External secret manager, encrypted Secret workflow, protected backup | Can the app receive keys without printing values? |
-| Durable-data lane | PVC-backed files, databases, indexes | VolumeSnapshot, database backup, storage-provider snapshot | Can a restored Pod read expected data? |
-| External-state lane | Managed databases, buckets, queues, provider resources | Cloud/provider backup and restore features | Can the restored app reach the restored dependency? |
-| Traffic lane | Ingress, DNS, load balancer routing, feature flags | GitOps, provider console/API, runbook steps | Can test traffic reach the recovered service safely? |
+- What state exists?
+- Where does each piece actually live?
+- Which copy is authoritative?
+- How will it be backed up?
+- How frequently is it protected?
+- In what order must the pieces be restored?
+- Which credentials or encryption keys are required?
+- How will the team prove the restore works?
 
-![Backup state inventory](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/backup-state-inventory.png)
+If any answer is missing, the recovery design probably has a gap.
 
-*A backup plan should map each piece of platform state to its real storage location and recovery source.*
+A useful beginner exercise is to start with one user-visible operation and trace every durable fact it touches. For “place an order,” the order row may live in PostgreSQL, a receipt may live in object storage, a payment reference may live in an external service, and the configuration that connects those systems may live in Kubernetes and Git. That trace turns an abstract inventory into a concrete dependency map.
 
-## Kubernetes API Objects and etcd
-<!-- section-summary: Kubernetes API objects live in the control plane backing store, and self-managed clusters usually protect that store with etcd snapshots. -->
+## What do etcd snapshots, Git, and cluster backups recover?
+<!-- section-summary: etcd snapshots protect API state, Git protects reviewed desired configuration, and cluster backups can preserve live objects not represented in Git. -->
 
-Kubernetes stores API objects such as Deployments, Services, ConfigMaps, Secrets, PVCs, and RBAC objects through the API server. In self-managed clusters, that storage is usually **etcd**, a distributed key-value database used by the control plane.
+Kubernetes API state is stored through the API server in **etcd**, Kubernetes' authoritative key-value datastore:
 
-An **etcd snapshot** captures the control plane state at a point in time. It can help restore a self-managed cluster after control plane data loss. Managed Kubernetes providers usually own the control plane backup process, so users rely on provider documentation, managed backup features, and exported Kubernetes manifests.
-
-A self-managed control plane snapshot command can look like this:
-
-```bash
-ETCDCTL_API=3 etcdctl snapshot save /backups/k8s-etcd-2026-06-28.db \
-  --endpoints=https://127.0.0.1:2379 \
-  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/server.crt \
-  --key=/etc/kubernetes/pki/etcd/server.key
+```text
+kubectl → API server → etcd
 ```
 
-Successful output should show a saved snapshot:
+Namespaces, Deployments, StatefulSets, Services, ConfigMaps, Secrets, CustomResourceDefinitions, RBAC objects, Jobs, Ingresses, and PVC objects are examples of state that can be preserved in an etcd snapshot.
 
-```console
-Snapshot saved at /backups/k8s-etcd-2026-06-28.db
-```
+After catastrophic control-plane failure, restoring the snapshot lets the API server see those older objects again. Kubernetes controllers then reconcile them. The important idea is that recovery does not restore the old running container processes. It restores enough API state for Kubernetes to recreate the desired workloads.
 
-Validate the snapshot after creating it:
+### An etcd snapshot does not contain volume data
 
-```bash
-ETCDCTL_API=3 etcdctl snapshot status /backups/k8s-etcd-2026-06-28.db --write-out=table
-```
-
-Useful output includes the snapshot hash, revision, key count, and size:
-
-```console
-+----------+----------+------------+------------+
-|   HASH   | REVISION | TOTAL KEYS | TOTAL SIZE |
-+----------+----------+------------+------------+
-| 7ef846e5 |  884213  |      12543 |      42 MB |
-+----------+----------+------------+------------+
-```
-
-Store snapshots away from the failed cluster and protect them like sensitive data. They can contain Secrets and every other API object.
-
-## Manifests and GitOps Recovery
-<!-- section-summary: GitOps and reviewed manifests give teams a clean way to recreate desired Kubernetes objects after a cluster loss. -->
-
-A Kubernetes object backup is useful, but the desired state should also live outside the cluster. Manifests, Helm charts, Kustomize overlays, and GitOps repositories let a team recreate workloads in a fresh cluster without depending only on the failed API server.
-
-For the notification platform, Git should contain the shape of Deployments, Services, ConfigMaps, PVC requests, RBAC, ingress objects, and policy resources. Live Secret values may come from an external secret manager or encrypted secret workflow instead of plain Git.
-
-A recovery step can be as simple as applying a known environment overlay:
-
-```bash
-kubectl apply -k environments/production/customer-notifications
-```
-
-Expected output names the recreated objects:
-
-```console
-namespace/customer-notifications configured
-deployment.apps/notification-api configured
-deployment.apps/notification-worker configured
-service/notification-api configured
-```
-
-GitOps controllers such as Argo CD or Flux automate this apply loop. The restore drill should still prove that a new cluster can sync the repository and reach a healthy state without manual edits.
-
-## Secrets and Encryption Concerns
-<!-- section-summary: Secret backups need strong access control because restoring a Secret backup can expose live credentials. -->
-
-Secret backup has two sides. You need the ability to recover credentials or recreate them, and you need to prevent backups from becoming an easy credential leak.
-
-If Secrets are sourced from an external manager, the Kubernetes restore path may recreate Secret objects by resyncing from that manager. If Secrets are encrypted in Git, the restore path needs the decryption controller or keys. If Secrets exist only in the cluster, a cluster backup may be the only copy, and that backup must be protected with the same care as production credentials.
-
-Never treat a decoded Secret backup as harmless. Anyone who can restore or read it may be able to connect to databases, send notifications, or sign internal callbacks.
-
-For restore drills, prefer proving presence without printing values. This command prints the Secret name and key names only:
-
-```bash
-kubectl get secret notification-api-secrets \
-  -n customer-notifications \
-  -o go-template='{{.metadata.name}}{{"\n"}}{{range $key, $_ := .data}}{{printf "- %s\n" $key}}{{end}}'
-```
-
-Example output:
-
-```console
-notification-api-secrets
-- DATABASE_URL
-- WEBHOOK_SIGNING_KEY
-```
-
-Use controlled environments and sanitized outputs during documentation. In runbooks, show key names or validation checks rather than full Secret content.
-
-## PVC Snapshots and Restore
-<!-- section-summary: VolumeSnapshots capture PVC-backed storage when the CSI driver supports snapshotting. -->
-
-A **VolumeSnapshot** is a Kubernetes object that asks a CSI snapshot driver to capture a PersistentVolumeClaim. It is useful for PVC-backed workloads such as `notification-postgres` in a training or self-managed cluster.
-
-This is the durable-data lane for storage that lives behind a PVC. The Kubernetes object records the snapshot request, but the CSI snapshot driver and storage platform create the actual copy. For the notification platform, this fits a self-managed PostgreSQL training database or a search index volume. A managed database still needs database-native backup and restore features.
-
-The small shape names the source claim:
-
-```yaml
-apiVersion: snapshot.storage.k8s.io/v1
-kind: VolumeSnapshot
-metadata:
-  name: notification-postgres-2026-06-28
-  namespace: customer-notifications
-spec:
-  source:
-    persistentVolumeClaimName: notification-postgres-data
-```
-
-The snapshot request has a small field contract:
-
-- `kind: VolumeSnapshot` asks the snapshot controller for a point-in-time copy.
-- `metadata.namespace` should match the PVC namespace.
-- `spec.source.persistentVolumeClaimName` names the PVC that backs the data.
-- The CSI driver and snapshot class decide whether this request can actually run in the cluster.
-
-The snapshot status shows whether the copy is ready:
-
-```bash
-kubectl get volumesnapshot -n customer-notifications
-```
-
-A ready snapshot looks like this:
-
-```console
-NAME                             READYTOUSE   SOURCEPVC                    AGE
-notification-postgres-2026-06-28 true         notification-postgres-data   2m
-```
-
-Restoring usually creates a new PVC from the snapshot through a data source:
+Suppose etcd stores this claim:
 
 ```yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: notification-postgres-data-restore
-  namespace: customer-notifications
-spec:
-  dataSource:
-    name: notification-postgres-2026-06-28
-    kind: VolumeSnapshot
-    apiGroup: snapshot.storage.k8s.io
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi
+  name: postgres-data
 ```
 
-The restore PVC fields matter during a drill:
+The claim object can be present in the snapshot while its disk holds the actual `customers`, `orders`, `payments`, and `invoices` tables. The PVC describes and references storage; it does not contain those database records. The disk needs its own recovery source.
 
-- `metadata.name` creates a new claim instead of overwriting the existing claim.
-- `dataSource.name` points to the snapshot to restore from.
-- `dataSource.kind` and `apiGroup` tell Kubernetes that the source is a `VolumeSnapshot`.
-- `accessModes` and requested `storage` should match the restored workload and the snapshot requirements.
-- The restored Pod should mount this new claim first in a safe namespace or test environment.
+### Git and live cluster state solve different problems
 
-Snapshot consistency depends on the application. A database may need a filesystem freeze, database-native backup, or operator-managed snapshot hook so the restored data is usable.
+Git can contain reviewed desired configuration:
 
-## External Databases and Object Stores
-<!-- section-summary: Kubernetes backups do not automatically protect data that lives in managed databases, object storage, or brokers outside the cluster. -->
-
-Many production systems keep important state outside Kubernetes. The notification platform may use managed PostgreSQL for delivery history, object storage for attachments, and a managed queue for outbound jobs. Those systems need their own backup and restore plans.
-
-For a managed database, use database-native backups, point-in-time recovery, and restore drills in a separate environment. For object storage, use versioning, lifecycle policies, replication, and periodic restore checks. For brokers, understand retention windows and whether messages can be replayed from the source of truth.
-
-Kubernetes manifests can restore the application shell. They cannot recreate customer notification history if the database backup fails. Put the external systems in the same recovery plan as the cluster.
-
-## Velero and Cluster Backup Tools
-<!-- section-summary: Tools such as Velero can back up Kubernetes resources and, with provider support, coordinate volume snapshots. -->
-
-Velero is a common open-source tool for backing up and restoring Kubernetes resources. With the right plugins and storage provider support, it can also coordinate volume snapshots. Other enterprise and cloud-native backup tools follow similar ideas.
-
-A cluster backup tool sits across several recovery lanes. It can capture API objects such as Deployments, Services, ConfigMaps, RBAC, and PVC objects, and it may coordinate volume snapshots when the storage platform supports them. It still needs a clear scope because external databases, object stores, managed queues, and provider-side resources may require separate backups.
-
-A Velero backup command can target the notification namespace:
-
-```bash
-velero backup create notification-prod-2026-06-28 \
-  --include-namespaces customer-notifications
+```text
+deployment.yaml
+service.yaml
+ingress.yaml
+configmap.yaml
 ```
 
-The backup description should show a completed phase:
+A GitOps controller such as Argo CD or Flux can use that repository to recreate the declared objects. Git contributes history, review, versioning, desired configuration, and a basis for reconstructing environments.
 
-```bash
-velero backup describe notification-prod-2026-06-28
+The live cluster may also contain objects that were never committed:
+
+```text
+Git
+├── Deployment
+├── Service
+└── Ingress
+
+Cluster
+├── Deployment
+├── Service
+├── Ingress
+├── generated Secret
+├── dynamically created PVC
+├── certificate
+├── operator-generated resources
+└── runtime metadata
 ```
 
-Useful output should show the phase:
+A Kubernetes-resource or cluster backup can preserve point-in-time API objects, including selected runtime-created resources. Git is therefore not necessarily the whole cluster state, and an etcd or cluster backup is not a replacement for Git. A mature plan often uses both.
 
-```console
-Phase:  Completed
-Namespaces:
-  Included:  customer-notifications
+This is also the difference between desired state and business state. A WordPress manifest can recreate replicas, an image reference, and a database endpoint. It cannot recreate posts, users, comments, orders, transactions, or uploads stored in MySQL or object storage.
+
+Declarative infrastructure is usually reproducible state. Business data is usually irreplaceable state. Recovery effort should reflect that difference.
+
+The boundary also explains why restoring an object is not the same as restoring its effect. Recreating a PVC object tells Kubernetes that a claim should exist; it does not prove that the newly bound volume contains the old records. Recreating a Secret object may restore a credential; it does not prove that the external account still accepts it. Each restored declaration must eventually be checked against the system it names.
+
+## How can persistent data be copied consistently?
+<!-- section-summary: Storage snapshots capture bytes, while crash consistency, application consistency, and coordinated timing determine whether those bytes form usable application state. -->
+
+Persistent storage introduces a consistency problem. Imagine a database updating a data page, writing its transaction log, changing an index, and committing a transaction. A disk snapshot can occur in the middle of that sequence.
+
+The snapshot may be a valid storage-level copy while still representing an incomplete application operation. Two consistency models help explain the difference.
+
+### Crash-consistent backup
+
+A crash-consistent copy resembles the disk after sudden power loss. The application must recover through its normal mechanisms, such as a filesystem journal or database transaction log. Many databases can recover this way, but the result depends on the application's guarantees and restore procedure.
+
+### Application-consistent backup
+
+An application-consistent copy lets the application participate:
+
+```text
+pause or flush writes
+        ↓
+reach a known application state
+        ↓
+take the snapshot
+        ↓
+resume writes
 ```
 
-Backup tools still need design decisions. Decide which namespaces are included, which resources are excluded, where backup objects are stored, how long they are retained, and who can restore them. Restoring into the wrong cluster or namespace can overwrite good state with stale state.
+The application may instead use a native backup mechanism such as `pg_dump`, `pg_basebackup`, PostgreSQL write-ahead log archiving, MySQL backup tooling, or MongoDB backup tooling. A **write-ahead log (WAL)** records changes before the database applies them to its main data files, which can support recovery to a consistent point.
 
-## Restore Drill Runbook
-<!-- section-summary: A restore drill proves the recovery path in a safe environment before an incident forces the team to improvise. -->
+The first-principles lesson is simple: backing up storage bytes is not automatically the same as backing up a database correctly. The mechanism must provide the consistency the application requires.
 
-A **restore drill** is a planned practice recovery. The goal is to prove the runbook and catch missing access, stale backups, broken manifests, or undocumented manual steps.
+Think of a backup as choosing a point in a stream of writes. A crash-consistent snapshot chooses a storage point and asks the application to recover from it as if the machine stopped suddenly. An application-consistent mechanism first establishes a boundary the application understands, then copies state from that boundary. The distinction is not whether a snapshot command succeeded; it is whether the restored application can interpret the captured bytes as a valid history.
 
-The drill turns the recovery plan from a document into evidence. A safe namespace or test cluster lets the team restore API objects, reconnect non-production Secrets, attach restored data, and send a controlled test notification. This is where missing permissions, stale manifests, unavailable snapshots, and unsafe traffic steps show up before a real incident.
+That question should be answered before the backup is automated. If PostgreSQL recovery depends on its WAL, the restore procedure must preserve and replay the required log records. If a native dump is the recovery source, the drill must prove that the dump can recreate the intended database. A backup format without a tested interpretation path is only stored data, not yet a recovery capability.
 
-For the notification platform, a safe drill can use a separate namespace or test cluster:
+### Configuration and data must also match in time
 
-1. Create a fresh namespace such as `customer-notifications-restore-drill`.
-2. Restore Kubernetes objects from GitOps or the backup tool.
-3. Restore a database snapshot or create a temporary database from backup.
-4. Sync non-production Secret values from the approved secret source.
-5. Start `notification-api` and `notification-worker` against test endpoints.
-6. Send a test notification and verify the delivery record.
-7. Record elapsed time, missing steps, and cleanup tasks.
+Copies from different systems can each be valid but incompatible together:
 
-Commands that show progress help the drill stay concrete:
-
-```bash
-kubectl get deploy,pod,pvc -n customer-notifications-restore-drill
+```text
+10:00  Kubernetes objects backed up
+10:05  Database schema migration
+10:10  Persistent data copied
 ```
 
-Sample healthy output:
+Restoring the 10:00 objects beside the 10:10 database could pair application version v1 with a schema expected by v2. Neither copy is corrupt; their logical times do not match.
 
-```console
-NAME                                  READY   UP-TO-DATE   AVAILABLE
-deployment.apps/notification-api      2/2     2            2
-deployment.apps/notification-worker   2/2     2            2
+Some recovery designs therefore coordinate a common recovery point across Kubernetes objects, persistent volumes, and database state:
 
-NAME                                      STATUS   VOLUME
-persistentvolumeclaim/postgres-restore    Bound    pvc-restore-123
+```text
+                 Recovery point T
+
+Kubernetes objects ─┐
+Persistent volume ──┼── same logical point
+Database state ─────┘
 ```
 
-![Restore drill timeline](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/restore-drill-timeline.png)
+This coordination becomes more important as a stateful system gains more components and more relationships between them.
 
-*A restore drill should show each recovery step, the owner, the verification command, and the cleanup step.*
+## Which Secrets, artifacts, and external services extend the recovery boundary?
+<!-- section-summary: Anything required to interpret, start, connect, or serve the recovered application belongs inside the recovery dependency map. -->
 
-## RPO and RTO for the Notification Platform
-<!-- section-summary: RPO describes acceptable data loss, while RTO describes acceptable recovery time. -->
+An application running inside Kubernetes can still depend on systems outside it. A `payments-service`, for example, might call PostgreSQL, Stripe, S3, Redis Cloud, Vault, and a DNS provider.
 
-**RPO**, or recovery point objective, is the amount of data loss the business can accept. If the notification database has a 15-minute RPO, the backup design should allow recovery to a point no more than 15 minutes before the failure.
+If its Kubernetes Secret contains `DATABASE_PASSWORD`, `STRIPE_API_KEY`, or `S3_ACCESS_KEY`, recreating Pods is not enough when those credentials are unavailable. The recovery plan must include the authoritative secret source and the identities or credentials needed to reach it.
 
-**RTO**, or recovery time objective, is the time the business can accept before service returns. If the worker has a one-hour RTO, the restore process should bring the worker and its dependencies back within that hour.
+Encryption creates a similar dependency:
 
-For the Customer Notification Platform, choose objectives by state type:
-
-| State | Example RPO | Example RTO |
-|---|---:|---:|
-| Deployment manifests | Near zero through Git | 30 minutes |
-| ConfigMaps and Secrets | Near zero through Git or secret manager | 30 minutes |
-| Delivery history database | 15 minutes | 1 hour |
-| Attachment bucket | 1 hour | 2 hours |
-| Queued jobs | Depends on broker retention | 30 minutes |
-
-These numbers are examples. The real values should come from product and business owners, then engineering should design backups to meet them and drills to prove them.
-
-## Failure Patterns to Catch Early
-<!-- section-summary: Most restore failures come from missing external state, untested permissions, stale manifests, and unsafe Secret handling. -->
-
-Backup plans fail in predictable ways. A cluster backup restores Deployments but not the managed database. A Secret restore requires a decryption key that only existed in the failed cluster. A PVC snapshot restores corrupted database files due to an inconsistent snapshot. A GitOps repo recreates a workload that points at a deleted object storage bucket.
-
-These patterns are included because backup confidence can be misleading. A dashboard may show a completed backup while the application still lacks customer data, credentials, or a valid dependency. Reviewing failure patterns forces the team to test each recovery lane: API objects, sensitive values, durable volumes, external state, and traffic restoration.
-
-Catch these issues before an incident:
-
-| Pattern | Prevention |
-|---|---|
-| Backup without restore test | Run scheduled restore drills |
-| Cluster-only backup | Inventory external databases, buckets, and brokers |
-| Secret restore blocked | Store decryption and secret-source access outside the failed cluster |
-| Inconsistent volume snapshot | Use database-native backup or snapshot hooks |
-| Wrong namespace restore | Restore into a drill namespace first and verify object targets |
-
-The review should focus on proof. A backup listed in a dashboard helps only after a restore drill shows the application can run from it.
-
-## Assembled Recovery Plan
-<!-- section-summary: A complete recovery plan connects each state source to a command, owner, verification check, and cleanup step. -->
-
-Here is a compact recovery plan for the notification platform. Keep the real version in your incident runbook with owners, links, and environment-specific commands.
-
-The assembled plan pulls the earlier lanes into one sequence. It names who restores the Kubernetes shell, who restores sensitive values, who handles databases or PVC data, and who resumes traffic. A useful plan also includes a verification command at every step so the team can prove progress instead of simply checking off tasks.
-
-The table is intentionally compact, but the real runbook should link to exact backups, owners, credentials process, and cleanup steps.
-
-| Step | Owner | Command or action | Verification |
-|---|---|---|---|
-| Recreate namespace and workloads | Platform | Apply GitOps production overlay | Deployments exist and Pods schedule |
-| Restore config | Platform | Sync ConfigMaps from Git | App startup logs show config source |
-| Restore secrets | Security/platform | Sync from external secret manager | Required Secret keys exist |
-| Restore database | Database owner | Restore latest approved backup | Migration and health checks pass |
-| Restore PVC data if used | Platform/database | Create PVC from snapshot | Recovery Pod reads expected data |
-| Resume traffic | App owner | Enable ingress or routing | Test notification succeeds |
-
-Run a small customer-safe verification after restore:
-
-```bash
-curl -sS -X POST https://notification-api.example.internal/test-send \
-  -H 'Content-Type: application/json' \
-  -d '{"channel":"email","template":"restore-drill","recipient":"test@example.invalid"}'
+```text
+Secret
+  ↓
+encrypted value in etcd
+  ↓
+external KMS key decrypts it
 ```
 
-Expected response:
+A perfect etcd snapshot cannot be used if the required encryption key has disappeared. A recovery dependency is therefore anything without which restored state cannot be interpreted or used. This can include:
 
-```console
-{"status":"accepted","traceId":"restore-drill-2026-06-28"}
+- encryption keys;
+- credentials and certificates;
+- DNS and identity providers;
+- container images;
+- external databases and object storage;
+- cloud configuration.
+
+Container images are easy to overlook. A restored Deployment may request `company/payments:v1.8.2`, but recovery still fails if the registry deleted that artifact. For important systems, image retention or registry replication is part of recoverability.
+
+The recovery boundary is not determined by the Kubernetes namespace. It follows every dependency needed to turn restored objects and data into a usable application.
+
+## How do RPO, RTO, and failure scope shape the design?
+<!-- section-summary: RPO limits acceptable data loss, RTO limits acceptable downtime, and the backup location must survive the failure it is meant to cover. -->
+
+Backup design should begin with what the system can tolerate, not an arbitrary schedule.
+
+### Recovery Point Objective
+
+**Recovery Point Objective (RPO)** asks how much recent data the organization can afford to lose.
+
+If backups run hourly and a disaster occurs at 12:47, restoring the 12:00 copy can lose 47 minutes of changes. If the business can lose at most 15 minutes of orders, a daily or hourly copy is insufficient. The design may need continuous WAL shipping, more frequent snapshots, or another form of change capture.
+
+RPO is approximately the maximum acceptable data loss. Backup frequency primarily affects it.
+
+Put the objective on a timeline before choosing a tool. If the last recoverable point is 12:30 and the failure happens at 12:47, the gap is 17 minutes. A 15-minute RPO has already been missed even if the 12:30 copy is flawless. Conversely, taking a copy every five minutes can satisfy a 15-minute point objective only if those copies remain usable and survive the failure.
+
+### Recovery Time Objective
+
+**Recovery Time Objective (RTO)** asks how long the service can remain unavailable.
+
+Suppose recovery requires 25 minutes to create a cluster, 15 minutes to restore Kubernetes state, three hours to restore a 5 TB database, and 30 minutes to validate the application. The total is about four hours and ten minutes. A one-hour RTO cannot be met merely because the backup is valid.
+
+Meeting a shorter RTO may require a warm standby, a replicated database, pre-created infrastructure, cross-region storage, or more automated restoration. Recovery architecture primarily affects RTO.
+
+RPO and RTO measure different axes, so one does not compensate for the other. Continuous WAL shipping may leave only seconds of data at risk while restoring a multi-terabyte base backup still takes hours. A pre-created standby may become ready quickly while containing an older recovery point. A design is acceptable only when its recoverable time and its restoration duration both satisfy the stated objectives.
+
+### Backup and high availability solve different failures
+
+**High availability (HA)** keeps a service running when a component fails. Backup recovers an earlier valid state after important data is destroyed or corrupted.
+
+A database replica can take over when the primary server fails. But if someone deletes the `customers` table, replication can faithfully copy the deletion to the replica. The service is highly available and the data is still wrong. A point-in-time backup from before the deletion provides a recovery path.
+
+Most important systems therefore need both availability and recoverability.
+
+### The copy must survive the protected failure
+
+If a Kubernetes cluster, database, and backup bucket all live in the same cloud account, an account-wide compromise or deletion can remove all three. The design has not protected against that failure scope.
+
+Ask whether the backup can survive the event that destroys the primary system. Depending on the threat model, that may require a different bucket, region, account, or credential set; immutable storage; or an offline copy. Immutability is especially important when defending against ransomware or credential compromise because the backup cannot be changed through the normal write path.
+
+## Why must a restore drill rebuild and validate the whole application?
+<!-- section-summary: A real restore test reveals ordering and dependency problems and succeeds only when business behavior, not just Pod status, is restored. -->
+
+A successful backup job proves that a copy operation ran. A successful **restore drill** proves that the copies can be reassembled into a working system.
+
+A full recovery can follow this order:
+
+```mermaid
+flowchart TD
+    A[Create cluster] --> B[Restore CRDs and API objects]
+    B --> C[Restore Secrets]
+    C --> D[Restore storage]
+    D --> E[Start workloads]
+    E --> F[Restore external dependencies]
+    F --> G[Validate application]
+    G --> H[Enable traffic]
 ```
 
-The test endpoint should use non-production destinations or a provider sandbox. A restore drill should never send real customer notifications by accident.
+The order matters. An operator's CustomResourceDefinition must exist before its Custom Resources can be restored. A `PostgreSQLCluster` object cannot be understood until the API knows the `postgresql.example.com` definition. A StatefulSet may also start before its database volume is ready and fail repeatedly.
 
-## Review Checklist
-<!-- section-summary: Backup review checks state inventory, storage location, restore proof, objectives, Secret safety, and ownership. -->
+A restore exercise exposes those relationships before a real disaster.
 
-Use this checklist before calling a Kubernetes workload recoverable:
+The drill should begin from the failure scope it claims to cover. If the plan protects against losing the cluster, restoring into the original healthy cluster proves too little. Starting with an empty replacement environment forces the team to exercise cluster creation, access to backup storage, key recovery, object ordering, image availability, and storage attachment. It also reveals hidden manual knowledge that never made it into Git or the recovery procedure.
 
-The checklist is a final guardrail for the recovery lane. It asks whether the team knows every state location, whether each location has a restore path, whether objectives are defined, and whether a recent drill proved the path in a safe environment. For Secrets, it also checks that backup access and restore logs will not expose live credentials.
+Validation must go beyond `kubectl get pods`. `Running` means a container process started; it does not prove that customers exist, users can log in, payments work, TLS works, DNS resolves, or external APIs respond.
 
-For the notification platform, the checklist should be reviewed after every major storage, Secret, or dependency change.
+For an e-commerce application, meaningful validation might follow the actual user path:
 
-| Check | What to confirm |
-|---|---|
-| Inventory | Every stateful component has a named storage location |
-| Coverage | Kubernetes objects, volumes, external databases, buckets, and brokers have recovery paths |
-| Objectives | RPO and RTO are defined by state type |
-| Secrets | Backups and restores protect sensitive values and decryption paths |
-| Proof | A restore drill has run recently in a safe environment |
-| Ownership | Each restore step has an owner and verification command |
+```text
+DNS resolves
+    ↓
+HTTPS works
+    ↓
+user logs in
+    ↓
+product catalogue loads
+    ↓
+historical order appears
+    ↓
+new order can be created
+```
 
-![Backup restore checklist](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-backup-and-restore-basics/backup-restore-checklist.png)
+That sequence proves far more than green Pod status because it tests the recovered system's business behavior.
 
-*A useful backup checklist connects coverage, objectives, ownership, restore proof, and sensitive-data handling.*
+The last write is especially valuable. Reading an old order proves that historical data returned; creating a new order proves that storage is writable, current application configuration matches the recovered schema, credentials still authorize the operation, and dependent services can participate. Only after those checks pass should traffic be enabled.
+
+## How does the five-step model turn an inventory into a recovery plan?
+<!-- section-summary: A complete plan identifies state, locates its authority, protects it, reassembles dependencies, and proves the result against recovery objectives. -->
+
+Consider a small application with a frontend, an API, PostgreSQL, Redis, and S3 uploads.
+
+Its state is distributed across several sources:
+
+```text
+Git
+├── Deployments
+├── StatefulSet
+├── Services
+├── Ingress
+└── ConfigMaps
+
+Kubernetes backup
+├── Secrets
+├── PVC metadata
+├── TLS certificate
+└── runtime-created resources
+
+Database backup
+└── PostgreSQL state
+
+Storage snapshots
+└── persistent disks
+
+Object storage
+└── versioning or replication for uploads
+
+Container registry
+└── retained images
+
+Terraform
+├── cluster
+├── DNS
+└── cloud infrastructure
+```
+
+The plan is understandable because every important state location has a corresponding recovery source. Recovery is the act of reassembling those sources in the required order.
+
+Now walk one artifact across the plan. The API Deployment comes from Git, its live generated Secret comes from the Kubernetes backup, its image comes from the retained registry, its PostgreSQL rows come from the database backup, and its uploaded objects come from replicated object storage. Terraform can recreate the cluster and DNS, but none of those infrastructure declarations substitutes for the business data. The application works only after all of these independently protected sources converge.
+
+The process can be reduced to five steps:
+
+1. **Identify:** What state would hurt if it were lost?
+2. **Locate:** Where is the authoritative copy?
+3. **Protect:** Which mechanism creates a recoverable copy?
+4. **Reassemble:** In what order do those copies become a working system?
+5. **Prove:** Can the team restore them and meet its RPO and RTO?
+
+This model shifts the goal away from merely installing a Kubernetes backup tool:
+
+```text
+application
+    ↓
+discover state
+    ↓
+find where each state lives
+    ↓
+assign a recovery source
+    ↓
+understand dependencies
+    ↓
+restore in the correct order
+    ↓
+validate business functionality
+```
+
+You do not back up Kubernetes as one object. You protect the state required to reconstruct the system. From that perspective, etcd snapshots, GitOps, Kubernetes backup tools, CSI volume snapshots, database-native backups, secret managers, object-storage replication, registry retention, RPO and RTO, and restore drills all fit into one recovery design.
+
+## Check Your Answers
+<!-- section-summary: The closing questions reconnect state locations, recovery sources, consistency, external dependencies, objectives, restore order, and proof. -->
+
+:::expand[Why does recovery begin by locating state?]{kind="recap"}
+An application is spread across API objects, volumes, databases, registries, providers, and external services. Recovery begins by identifying every important state set, locating its authoritative copy, and assigning a suitable recovery source. No single “cluster backup” automatically covers them all.
+:::
+
+:::expand[What do etcd snapshots, Git, and cluster backups recover?]{kind="recap"}
+An etcd snapshot protects Kubernetes API state but not the bytes inside persistent storage. Git protects reviewed desired configuration and its history. A cluster-resource backup can preserve selected live objects not represented in Git. Mature recovery designs often combine these sources.
+:::
+
+:::expand[How can persistent data be copied consistently?]{kind="recap"}
+A crash-consistent copy resembles sudden power loss and depends on the application's recovery mechanisms. An application-consistent backup coordinates writes or uses native database tools. Kubernetes configuration and persistent data may also need copies from the same logical recovery point so application and schema versions agree.
+:::
+
+:::expand[Which Secrets, artifacts, and external services extend the recovery boundary?]{kind="recap"}
+Every credential, encryption key, certificate, image, DNS record, identity provider, external database, object store, and cloud setting required to interpret or run the recovered system belongs in the plan. A copied object is useless when a missing key, artifact, or external dependency prevents its use.
+:::
+
+:::expand[How do RPO, RTO, and failure scope shape the design?]{kind="recap"}
+RPO limits acceptable data loss and drives copy frequency. RTO limits acceptable downtime and drives recovery architecture and automation. Backups complement rather than replace high availability, and their location must survive the same failure or compromise that destroys the primary system.
+:::
+
+:::expand[Why must a restore drill rebuild and validate the whole application?]{kind="recap"}
+A restore drill exposes dependency order, such as CRDs before Custom Resources and storage before stateful workloads. Pod status is not enough; the drill must validate DNS, TLS, authentication, historical data, new writes, and other real business behavior before traffic returns.
+:::
+
+:::expand[How does the five-step model turn an inventory into a recovery plan?]{kind="recap"}
+Identify important state, locate its authoritative home, protect it with an appropriate copy, reassemble all sources in dependency order, and prove the result against RPO and RTO. That sequence turns a list of backup tools into a coherent application recovery plan.
+:::
 
 ## References
 
 - [Operating etcd clusters for Kubernetes](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/)
-- [VolumeSnapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/)
-- [Velero documentation](https://velero.io/docs/)
+- [Declarative Management of Kubernetes Objects](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/declarative-config/)
+- [Volume Snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/)
+- [Good Practices for Kubernetes Secrets](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)
+- [PostgreSQL Backup and Restore](https://www.postgresql.org/docs/current/backup.html)

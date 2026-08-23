@@ -22,19 +22,31 @@ aliases:
 
 ## Table of Contents
 
-1. [The Incident Starts with One Error Line](#the-incident-starts-with-one-error-line)
-2. [What CloudWatch Logs Stores](#what-cloudwatch-logs-stores)
-3. [Log Groups, Streams, and Events](#log-groups-streams-and-events)
-4. [Getting Logs into the Right Group](#getting-logs-into-the-right-group)
-5. [JSON Logs and Discovered Fields](#json-logs-and-discovered-fields)
-6. [Logs Insights Query Language](#logs-insights-query-language)
-7. [Query Cost and Field Indexes](#query-cost-and-field-indexes)
-8. [Metric Filters](#metric-filters)
-9. [Retention, Log Classes, and Archiving](#retention-log-classes-and-archiving)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Why Do You Need Logs After a Metric Fires?](#why-do-you-need-logs-after-a-metric-fires)
+2. [What Does CloudWatch Logs Store?](#what-does-cloudwatch-logs-store)
+3. [How Do Workloads Send Events to the Right Log Group?](#how-do-workloads-send-events-to-the-right-log-group)
+4. [Why Do Structured JSON Logs Matter?](#why-do-structured-json-logs-matter)
+5. [How Do You Ask Questions With Logs Insights?](#how-do-you-ask-questions-with-logs-insights)
+6. [How Do You Control Query Cost and Use Field Indexes?](#how-do-you-control-query-cost-and-use-field-indexes)
+7. [How Do Retention, Log Classes, and Archiving Differ?](#how-do-retention-log-classes-and-archiving-differ)
+8. [How Does a Complete Logging System Fit Together?](#how-does-a-complete-logging-system-fit-together)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## The Incident Starts with One Error Line
+An application continuously produces facts about requests, decisions, dependency calls, and failures. CloudWatch Logs receives and stores those facts. CloudWatch Logs Insights searches and aggregates the stored events. The two services belong to one pipeline, but storage and querying are different jobs.
+
+The sections below answer these questions in order:
+
+1. **Why Do You Need Logs After a Metric Fires?**
+2. **What Does CloudWatch Logs Store?**
+3. **How Do Workloads Send Events to the Right Log Group?**
+4. **Why Do Structured JSON Logs Matter?**
+5. **How Do You Ask Questions With Logs Insights?**
+6. **How Do You Control Query Cost and Use Field Indexes?**
+7. **How Do Retention, Log Classes, and Archiving Differ?**
+8. **How Does a Complete Logging System Fit Together?**
+
+## Why Do You Need Logs After a Metric Fires?
 <!-- section-summary: A metric tells the team that checkout is failing, but logs explain the exact request, service, and error that caused the page. -->
 
 Imagine a checkout service running on Amazon ECS. ECS runs containers as tasks, and each task can disappear during deployments, scaling, or recovery. A customer clicks Pay, the browser returns a 502, and the on-call engineer sees a CloudWatch alarm saying the checkout API has a sharp increase in 5xx responses.
@@ -45,7 +57,7 @@ In a smaller system, a developer might SSH into one server and open `/var/log/ap
 
 That is the job of **Amazon CloudWatch Logs**. It gives AWS workloads a durable place to send operational evidence so the team can search it after the compute environment changes. The rest of this article follows that checkout incident from raw log events to useful queries, metrics, and retention controls.
 
-## What CloudWatch Logs Stores
+## What Does CloudWatch Logs Store?
 <!-- section-summary: CloudWatch Logs stores timestamped messages in regional log groups so short-lived workloads can leave durable evidence behind. -->
 
 **Amazon CloudWatch Logs** is a regional AWS service for collecting, storing, searching, and monitoring log data. Regional means a log group in `us-east-1` lives in that Region, and the application must send log data to the Region where the log group exists. For a production workload, this usually means each Region has its own logs, metrics, and alarms for the copy of the system running there.
@@ -67,7 +79,7 @@ graph TB
 
 This structure matters during incidents. The team normally searches the log group across all streams because the failed request could have landed on any task. The stream remains useful after the first query because it tells you which runtime produced the event.
 
-## Log Groups, Streams, and Events
+### How Do Log Groups, Streams, and Events Divide Responsibility?
 <!-- section-summary: A good log group design follows service ownership, while streams identify the runtime source and events hold the searchable evidence. -->
 
 The checkout API needs a log shape that matches how the team investigates. A log group named `/aws/ecs/prod/checkout-api` tells responders the environment and service immediately. Separate groups for `/aws/ecs/staging/checkout-api` and `/aws/ecs/prod/payment-worker` keep permissions, retention, and query cost under control.
@@ -109,7 +121,7 @@ Notice the shape of the event. It has stable names and normal data types, so lat
 *This hierarchy shows the practical search path. Start at the service log group, then use streams and events only after the query finds the right runtime and request.*
 
 
-## Getting Logs into the Right Group
+## How Do Workloads Send Events to the Right Log Group?
 <!-- section-summary: Lambda, ECS, EC2, and advanced container routes all need explicit logging paths so every runtime sends evidence to the group the team will query. -->
 
 The next step is ingestion. **Ingestion** means the path that moves log output from the workload into CloudWatch Logs. Each AWS runtime has its own path, so the practical setup depends on where the checkout code runs.
@@ -186,7 +198,7 @@ For **Amazon EC2** and on-premises servers, the **CloudWatch agent** can tail lo
 
 For containers that need richer routing, **FireLens** can route ECS logs through Fluent Bit or Fluentd to CloudWatch Logs and other destinations. Teams use it when they need parsing, enrichment, multiple outputs, or different routing per container. The simpler `awslogs` driver is still a good starting point for many services because it is direct and easy to inspect.
 
-## JSON Logs and Discovered Fields
+## Why Do Structured JSON Logs Matter?
 <!-- section-summary: JSON log events let Logs Insights discover fields, which turns raw messages into filters, groups, percentiles, and trace lookups. -->
 
 The checkout team now has log data arriving. The next question is whether those events are easy to query. **Structured logging** means each event uses stable fields instead of hiding everything inside one sentence.
@@ -235,7 +247,7 @@ console.log(JSON.stringify({
 
 There is one practical trap with JSON logs. CloudWatch Logs Insights can discover fields, but Lambda discovery handles the first embedded JSON fragment in a Lambda event. If a log message contains several JSON fragments inside one line, a query may need the `parse` command. Production teams avoid that by emitting one clean JSON object per event.
 
-## Logs Insights Query Language
+## How Do You Ask Questions With Logs Insights?
 <!-- section-summary: Logs Insights uses pipe-style commands to filter, parse, aggregate, and sort log events across one or more log groups. -->
 
 **CloudWatch Logs Insights** is the interactive query engine for CloudWatch Logs. It lets you search one or more log groups over a selected time range and then filter, parse, aggregate, sort, and limit the results. The query language reads like a pipeline, where each command takes the output of the previous command.
@@ -350,14 +362,27 @@ Logs Insights also has commands for pattern analysis, anomaly detection, compari
 *The workflow keeps query cost and noise down. A good search narrows the log groups and time window before it starts grouping errors or opening traces.*
 
 
-## Query Cost and Field Indexes
+## How Do You Control Query Cost and Use Field Indexes?
 <!-- section-summary: Logs Insights charges by scanned data, so teams control cost with narrow time ranges, focused log groups, and field indexes for common equality searches. -->
 
 Logs Insights is powerful, and that power has a cost shape. AWS guidance is to select only the needed log groups, use the narrowest possible time range, and cancel console queries before leaving the page so running work stops before completion. Dashboards that contain Logs Insights widgets rerun their queries each time the dashboard refreshes.
 
+The first-principles model is approximately:
+
+```text
+query work
+  ≈ selected log groups
+  × selected time range
+  × log data inside that search space
+```
+
+`limit 20` means return at most twenty result rows; it does not promise that only twenty events will be read. CloudWatch may need to inspect far more data to find the matching rows or compute an aggregate. Selecting fewer display fields also changes the result shape, not necessarily the underlying scan. Returned data and scanned data are different quantities.
+
 For the checkout API, the team should start with the log group and fifteen-minute alarm window, then widen only if the evidence points earlier. Searching every production log group for the last seven days may answer the question eventually, but it scans a much larger amount of data. Query discipline matters because CloudWatch Logs Insights charges based on scanned data.
 
 A **field index** helps equality searches on structured fields. CloudWatch Logs can build indexes for fields in JSON and service logs, and a query that uses an indexed field can attempt to skip events without the target value. Good index candidates are fields that responders search often and fields with high-cardinality values such as `requestId`, `sessionId`, `userId`, or `traceId`.
+
+Field discovery and indexing are not the same. Discovering `requestId` in JSON means the query language can reference the field. Indexing it means supported equality or `IN` searches may avoid scanning unrelated events. CloudWatch does not create an efficient lookup for every discovered value automatically. Indexes are especially useful for high-cardinality identifiers because one requested ID usually matches very few events, while a three-value field such as `environment` eliminates much less data.
 
 ```bash
 aws logs put-index-policy \
@@ -377,7 +402,7 @@ fields @timestamp, requestId, traceId, errorType, message
 
 There are limits to design around. Field indexes apply only to events ingested after the index policy exists, indexed fields are case-sensitive, and field indexes are supported only for the Standard log class. This is one reason teams choose the log class during design instead of trying to change it after the incident.
 
-## Metric Filters
+### When Should a Log Pattern Become a Metric?
 <!-- section-summary: Metric filters turn matching incoming log events into CloudWatch metrics, which helps teams alarm on specific error patterns without rewriting old application code. -->
 
 Logs are detailed, but humans cannot query logs every minute. A **metric filter** watches log events as they are ingested and creates a CloudWatch metric when an event matches a filter pattern. This gives the team a numeric signal that can feed dashboards and alarms.
@@ -424,7 +449,7 @@ High-cardinality dimensions can create surprise cost. AWS warns against dimensio
 
 Metric filters and Logs Insights queries solve different jobs. A query is for investigation after a question appears. A metric filter is for continuous counting and alarming. A healthy production setup uses both: logs hold the detailed evidence, metric filters extract a small number of alarm-worthy signals, and CloudWatch metrics drive the alert loop.
 
-## Retention, Log Classes, and Archiving
+## How Do Retention, Log Classes, and Archiving Differ?
 <!-- section-summary: Retention and log class choices control how long logs stay queryable, which features work, and how much ingestion costs over time. -->
 
 The checkout API is now sending useful JSON logs, and the team can query them. The final design question is lifecycle. **Retention** is the rule that tells CloudWatch Logs how long to keep events before deleting them.
@@ -475,11 +500,13 @@ CheckoutApiLogGroup:
 
 **Infrequent Access** is for logs that teams query less often. It lowers ingestion cost and keeps storage and Logs Insights query charges aligned with Standard, but it supports a subset of features. For example, field indexing, metric filters, subscription filters, Live Tail, anomaly detection, and some query commands are unavailable in this class.
 
-**Delivery** appears in the CloudWatch Logs APIs for Lambda log delivery to Amazon S3 or Amazon Data Firehose. Delivery keeps events in CloudWatch Logs for one day and omits rich CloudWatch Logs features such as Logs Insights queries. This class fits delivery pipelines, while active incident log groups need Standard or Infrequent Access based on the features the team expects to use.
+**Delivery** appears in the CloudWatch Logs APIs for Lambda log delivery to Amazon S3 or Amazon Data Firehose. The raw material describes this class as keeping events in CloudWatch Logs for two days and omitting normal Logs Insights functionality. It fits delivery pipelines, while active incident log groups need Standard or Infrequent Access based on the features the team expects to use.
 
 For long-term pipelines, **subscription filters** send matching log events to services such as Kinesis Data Streams, Amazon Data Firehose, or Lambda soon after ingestion. Teams use subscriptions to centralize logs, enrich them, send them to S3, or feed a security analytics pipeline. Subscription filters are a Standard log class feature, so the class choice affects this architecture.
 
-## Putting It All Together
+Operational retention and archive retention solve different problems. CloudWatch Logs is the interactive observability store used for recent investigation. S3 can keep a longer-lived copy under lifecycle rules when compliance or historical analysis requires years of data. For ongoing archival, the raw material favors a subscription path rather than repeatedly scheduling exports. A common design is thirty days of fast CloudWatch querying plus a much longer S3 lifecycle.
+
+## How Does a Complete Logging System Fit Together?
 <!-- section-summary: A production logging setup sends structured events to owned log groups, queries them carefully, extracts a few metrics, and applies retention before cost drifts. -->
 
 Here is the complete logging setup for the checkout service. The ECS API writes one JSON object per line to stdout. The task definition sends stdout and stderr to `/aws/ecs/prod/checkout-api` through the `awslogs` driver. Lambda fraud checks use JSON logging and a custom log group. A legacy EC2 worker uses the CloudWatch agent until the team can move it into the same container pattern.
@@ -509,16 +536,87 @@ This is the production habit to build. Logs serve as structured evidence, stored
 *The summary image groups the controls that keep logs useful over time: retention, class, indexes, filters, and subscriptions all belong to the log group design.*
 
 
-## What's Next
-<!-- section-summary: The next article follows a single request across services with X-Ray and OpenTelemetry so logs can connect to a full trace. -->
+## What Should You Remember?
+<!-- section-summary: CloudWatch Logs preserves detailed events, Logs Insights turns them into answers, and filters, indexes, and lifecycle controls keep the system usable. -->
 
-CloudWatch Logs tells the team what each service wrote. That is enough for many incidents, but distributed systems create a second question: how did one customer request move through every service, queue, function, and dependency?
+The complete mental model is:
 
-The next article connects those pieces with AWS X-Ray and OpenTelemetry. We will follow one checkout request through HTTP calls, SQS, Lambda, database spans, sampling, trace headers, and trace-to-log correlation.
+```text
+Application facts
+       |
+       v
+Log events
+       |
+       v
+Streams identify producers
+       |
+       v
+Log groups define policy and ownership
+       |
+       +----> Logs Insights for unknown questions
+       +----> Metric filters for known signals
+       +----> Subscriptions or export for other storage
+```
 
----
+Metrics compress information before an incident. Logs preserve event detail so a team can ask questions it did not predict. Logs Insights turns those preserved events back into answers. Field indexes optimize selected recurring lookups, metric filters continuously extract known counts, and retention or archive rules decide where evidence lives over time.
 
-**References**
+:::expand[Why Do You Need Logs After a Metric Fires?]{kind="recap"}
+A metric tells the team that checkout is failing, but logs explain the exact request, service, and error that caused the page.
+
+A metric efficiently shows scale and trend, such as a seven-percent error rate. Logs retain the endpoint, dependency, error code, version, request ID, and other event-level facts needed to explain which operations failed and how.
+:::
+
+:::expand[What Does CloudWatch Logs Store?]{kind="recap"}
+CloudWatch Logs stores timestamped messages in regional log groups so short-lived workloads can leave durable evidence behind.
+
+Set retention at the log-group level according to operational need. Use Standard for active monitoring features, Infrequent Access for less frequently queried logs with reduced features, and Delivery for the specialized delivery path described in the source. Use S3 lifecycle for longer-term archive rather than treating CloudWatch as the only store.
+
+A good log group design follows service ownership, while streams identify the runtime source and events hold the searchable evidence.
+
+An event is one timestamped fact. A stream is a sequence from approximately one producer. A log group collects related streams that share retention, permissions, encryption, ownership, query patterns, and other controls.
+:::
+
+:::expand[How Do Workloads Send Events to the Right Log Group?]{kind="recap"}
+Lambda, ECS, EC2, and advanced container routes all need explicit logging paths so every runtime sends evidence to the group the team will query.
+
+Lambda can deliver function logs, ECS commonly routes container stdout and stderr with `awslogs` or FireLens, and EC2 or on-premises hosts can use the CloudWatch agent. The most important architecture decision is which owned log group receives the events.
+:::
+
+:::expand[Why Do Structured JSON Logs Matter?]{kind="recap"}
+JSON log events let Logs Insights discover fields, which turns raw messages into filters, groups, percentiles, and trace lookups.
+
+Stable fields turn a sentence into a machine-queryable event schema. They directly answer when, where, what, outcome, duration, and correlation questions. Plain text can be parsed, but that forces every investigation to reconstruct structure later.
+
+Discovery makes a JSON or service-log field available to the query language. An index separately allows supported equality or `IN` queries to skip irrelevant events. Index policies apply to new events and belong to Standard-class log groups.
+:::
+
+:::expand[How Do You Ask Questions With Logs Insights?]{kind="recap"}
+Logs Insights uses pipe-style commands to filter, parse, aggregate, and sort log events across one or more log groups.
+
+Use `fields` to select output, `filter` to narrow events, `sort` to order them, `limit` to bound returned rows, `stats` to aggregate, and `parse` to extract fields from legacy text. Begin with the alarm window and widen only when evidence requires it.
+:::
+
+:::expand[How Do You Control Query Cost and Use Field Indexes?]{kind="recap"}
+Logs Insights charges by scanned data, so teams control cost with narrow time ranges, focused log groups, and field indexes for common equality searches.
+
+Logs Insights cost follows scanned uncompressed data. `limit 20` restricts output, not necessarily the events inspected. Narrow time ranges, focused log groups, and suitable indexes reduce the search space.
+
+Metric filters turn matching incoming log events into CloudWatch metrics, which helps teams alarm on specific error patterns without rewriting old application code.
+
+Use Logs Insights when a new investigative question appears. Use a metric filter when a known incoming pattern must be counted continuously for a dashboard or alarm. Keep metric dimensions bounded and preserve high-cardinality detail in the original logs.
+:::
+
+:::expand[How Do Retention, Log Classes, and Archiving Differ?]{kind="recap"}
+Retention and log class choices control how long logs stay queryable, which features work, and how much ingestion costs over time.
+:::
+
+:::expand[How Does a Complete Logging System Fit Together?]{kind="recap"}
+A production logging setup sends structured events to owned log groups, queries them carefully, extracts a few metrics, and applies retention before cost drifts.
+
+Send one structured event per line into owned log groups, keep stable correlation fields, query narrow windows, index frequent identifier lookups, derive only known alarm signals, and set retention or archive rules before volume grows. Each event should have a clear operational purpose.
+:::
+
+## References
 
 - [Amazon CloudWatch Logs concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatchLogsConcepts.html) - Defines log events, log streams, log groups, metric filters, and retention settings.
 - [Log classes](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatch_Logs_Log_Classes.html) - Documents Standard and Infrequent Access feature support, cost differences, and the rule that log class cannot be changed after creation.

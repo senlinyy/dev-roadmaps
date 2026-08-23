@@ -1,481 +1,430 @@
 ---
 title: "Gateway API"
-description: "Use Gateway API resources to split shared listener ownership from application route ownership in Kubernetes."
-overview: "Gateway API gives Kubernetes teams a structured way to publish HTTP traffic through shared Gateways and app-owned Routes. The api.devpolaris.local example moves from GatewayClass to Gateway, HTTPRoute, Service, TLS, status checks, and production rollout evidence."
+description: "Understand why Gateway API exists, how infrastructure and application teams share an edge, and how one request reaches a Service."
+overview: "Gateway API separates the technology behind an edge, the shared listening point, and each application's routing rules. Follow two teams sharing one HTTPS address, then learn how attachment, namespace consent, traffic splitting, and status keep that shared path understandable."
 tags: ["gateway-api", "httproute", "gateway", "routing"]
 order: 4
 id: article-containers-orchestration-kubernetes-networking-gateway-api
 ---
+
 ## Table of Contents
 
-1. [Gateway API in One Request](#gateway-api-in-one-request)
-2. [Why Ingress Started to Strain](#why-ingress-started-to-strain)
-3. [The Objects That Share the Work](#the-objects-that-share-the-work)
-4. [GatewayClass and the Controller](#gatewayclass-and-the-controller)
-5. [A Shared Gateway for the Platform Team](#a-shared-gateway-for-the-platform-team)
-6. [HTTPRoute for the Application Team](#httproute-for-the-application-team)
-7. [TLS and Cross-Namespace Trust](#tls-and-cross-namespace-trust)
-8. [Status Conditions Are Review Evidence](#status-conditions-are-review-evidence)
-9. [Debugging a Broken Route](#debugging-a-broken-route)
-10. [Rollouts and Traffic Splitting](#rollouts-and-traffic-splitting)
-11. [Evidence to Keep in Pull Requests](#evidence-to-keep-in-pull-requests)
-12. [References](#references)
+1. [What is Gateway API in plain terms?](#what-is-gateway-api-in-plain-terms)
+2. [Why can Ingress become awkward for several teams?](#why-can-ingress-become-awkward-for-several-teams)
+3. [Who owns GatewayClass, Gateway, and Routes?](#who-owns-gatewayclass-gateway-and-routes)
+4. [How does an application earn a place on the shared Gateway?](#how-does-an-application-earn-a-place-on-the-shared-gateway)
+5. [Can a Route send traffic to another team's Service?](#can-a-route-send-traffic-to-another-teams-service)
+6. [How does Gateway API handle safer releases?](#how-does-gateway-api-handle-safer-releases)
+7. [How do you prove the configuration became a working route?](#how-do-you-prove-the-configuration-became-a-working-route)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Gateway API in One Request
-<!-- section-summary: Gateway API publishes traffic through role-focused resources, so platform teams and application teams can own different parts of one request path. -->
+A platform team operates a shared cluster entrance, while an application team owns the Service behind it. The practical question is:
 
-Gateway API is a Kubernetes API family for publishing application traffic through shared Gateways and app-owned Routes. It separates the shared edge listener from the application route, which helps platform teams and app teams work on different parts of the same traffic flow.
+> How does `https://payments.example.com/api` arrive from outside the cluster, who owns that entry point, and who is allowed to put routes on it?
 
-The example is `https://api.devpolaris.local/orders`. The platform team owns the public listener and certificate. The orders team owns the route that sends `/orders` traffic to the right Service and can later split traffic during a release.
+**Gateway API separates the infrastructure, listener, route, and backend decisions into cooperating Kubernetes resources.** A controller turns those resources into a working proxy or load balancer.
 
-The path moves from GatewayClass to Gateway, HTTPRoute, Service, TLS rules, status conditions, debugging, and rollout evidence. Each object has one named responsibility in a real production handoff.
+This article follows one request:
 
-A DevPolaris web app calls `https://api.devpolaris.local/orders`. A user clicks "buy", the browser reaches the public hostname, and the request needs to land on the `orders-api` Pods inside the `orders` namespace. That sounds like one simple path, and several teams care about it.
+```text
+GET https://payments.example.com/api
+```
 
-The platform networking team owns the public entry point. They care about the load balancer, the HTTPS listener, the certificate, the public hostname, and which namespaces can attach routes. The orders team owns the application route. They care that `/orders` goes to the right Service, the Service selects ready Pods, and a release can move traffic from stable to canary while other teams keep their routes unchanged.
+That request gives us seven practical questions. Each one follows from a decision that the platform team or an application team must make:
 
-**Gateway API** is a set of Kubernetes resources for describing this public-to-internal path. In plain English, a Gateway describes the listener at the edge, and an HTTPRoute describes which HTTP requests should go to which Service. The implementation details come later; the first idea is just public hostname, listener, route, Service, and ready Pods.
+1. **What is Gateway API in plain terms?**
+2. **Why can Ingress become awkward for several teams?**
+3. **Who owns GatewayClass, Gateway, and Routes?**
+4. **How does an application earn a place on the shared Gateway?**
+5. **Can a Route send traffic to another team's Service?**
+6. **How does Gateway API handle safer releases?**
+7. **How do you prove the configuration became a working route?**
 
-The traffic flow looks like this:
+## What is Gateway API in plain terms?
+<!-- section-summary: Gateway API gives infrastructure teams and application teams separate Kubernetes resources for one shared traffic path. -->
 
-![Gateway API ownership path showing api.devpolaris.local/orders moving through GatewayClass, Gateway listener, HTTPRoute, orders Service, and ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-ownership-path.png)
+Start with the user. Their browser or API client knows one URL and expects the request to reach the payments API securely. Kubernetes namespaces, proxy vendors, and today's ready Pod remain internal implementation details.
 
-*Gateway API splits one request path into platform-owned listener work and application-owned route work.*
+Someone still has to make several different decisions. The infrastructure provider chooses the technology that can handle traffic. The platform operator installs a real HTTPS entrance and supplies its certificate. The payments developer decides that `/api` belongs to the payments Service. These decisions are related, but they have different owners and different risks.
 
-The diagram maps the rest of the article. One request moves from the public hostname to the Pods, and each section names which team owns the next part of the path.
+Gateway API represents those decisions with cooperating resources:
 
-Here is the same path as an ownership handoff:
+Read the relationship from infrastructure toward the application: a `GatewayClass` describes an available gateway implementation, a `Gateway` creates a listening entry point, an `HTTPRoute` attaches matching rules, and each backend reference leads to a Service with ready Pods.
 
-| Path part | Owner | Main review question |
-|---|---|---|
-| `api.devpolaris.local` and HTTPS listener | Platform networking | Is the public listener programmed with the right hostname, port, certificate, and attachment rule? |
-| `/orders` route | Orders team | Does the HTTPRoute attach to the listener and match the path the product exposes? |
-| `orders-api` Service | Orders team | Does the Service port point to ready Pods? |
-| Rollout weights | Orders team with platform visibility | Does the route send the expected share to stable and canary backends? |
+The chain is easier to understand through a building entrance:
 
-That handoff is why Gateway API spends extra object names on ownership. A beginner can follow the request from left to right, while reviewers can review the same route by responsibility.
+- `GatewayClass` is the catalog of entrance systems the company is able to install;
+- `Gateway` is one entrance actually installed at a particular place, with a lock and opening hours;
+- `HTTPRoute` is the receptionist's instruction for directing a visitor after they enter;
+- `Service` is the stable office destination even when the people working there change desks.
 
-## Why Ingress Started to Strain
-<!-- section-summary: Ingress still serves simple HTTP routing, while Gateway API gives teams more ownership, status, and routing structure for shared platforms. -->
+The analogy has a precise Kubernetes mapping. The “entrance system” is a controller implementation. The installed entrance is a Gateway address and listener. The receptionist's instruction is an HTTP host, path, or header match. The office is the Service and its ready endpoints.
 
-**Ingress** is the older Kubernetes API for exposing HTTP and HTTPS Services outside the cluster. It maps hostnames and paths to backends, and many production clusters still run very well with it. A small team with one controller, a few hostnames, and simple path routing can keep using Ingress with no drama.
+Gateway API resources describe desired state. A controller watches those instructions and programs the real data plane that receives packets. With the custom resource definitions installed and every compatible controller absent, Kubernetes can store the YAML while the listener remains missing.
 
-The strain shows up when one shared edge has to serve many teams. DevPolaris might place `/orders`, `/profiles`, `/billing`, and `/search` under the same `api.devpolaris.local` hostname. The platform team wants one safe public listener and one certificate policy. Each application team wants to ship route changes inside its own ownership boundary.
+Keep three layers separate:
 
-Ingress also pushed many advanced behaviors into controller-specific annotations. An annotation is a free-form key-value field on a Kubernetes object. Teams used annotations for rewrites, timeouts, canary traffic, authentication, and controller settings, which meant the YAML shape changed from one implementation to another.
+```text
+Gateway API objects -> desired network configuration
+Gateway controller  -> translates and reconciles that configuration
+data plane          -> proxy or load balancer that handles requests
+```
 
-Kubernetes documentation now recommends Gateway API for newer routing work. The same documentation says the Ingress API remains generally available and has no removal plan, while the API itself has been frozen and no longer receives feature development. That is the practical reason to learn Gateway API: new service networking design work has moved here.
+Creating an HTTPRoute changes the first layer. The controller must observe it, accept its relationships, and program the second layer's result into the third. Only then can a client request exercise the route. This is why successful `kubectl apply` is necessary evidence but never end-to-end proof.
 
-So the next question is simple. If Gateway API spreads the job across several resources, what does each resource do?
+For `GET /api` with `Host: payments.example.com`, the live data path is concrete. The client connects to the Gateway address, the listener accepts the protocol, an attached HTTPRoute matches the hostname and path, its `backendRefs` choose `payments-service:8080`, and the Service selects a ready Pod. Gateway API organizes the edge decisions; the Service still performs stable backend discovery inside the cluster.
 
-## The Objects That Share the Work
-<!-- section-summary: GatewayClass, Gateway, HTTPRoute, and Service each answer a different ownership question in the same traffic path. -->
 
-Gateway API uses several resource types, and the names can blur together on the first read. The easiest way to keep them clear is to attach each object to a question from the DevPolaris request path.
+## Why can Ingress become awkward for several teams?
+<!-- section-summary: Ingress remains useful for simple HTTP routes, while Gateway API adds portable models for separate listener owners, route owners, and richer routing decisions. -->
 
-The request gives every object a job. Someone has to choose the implementation, someone has to publish the listener, someone has to attach the `/orders` route, and the Service still has to point at ready Pods. Reading the objects in that order turns Gateway API from a list of resource names into a handoff between platform and application teams.
+Ingress starts from a compact idea: put a hostname, one or more paths, TLS information, and Service backends in an Ingress object. That works well when one team owns a straightforward web route.
 
-| Resource | Usual owner | What it answers |
-|---|---|---|
-| **GatewayClass** | Cluster platform team | Which Gateway API implementation handles this family of Gateways? |
-| **Gateway** | Platform networking team | Which listeners, hostnames, ports, certificates, and route attachment rules exist? |
-| **HTTPRoute** | Application team | Which HTTP requests match, and which backend Services receive them? |
-| **Service** | Application team | Which stable Kubernetes backend points to the ready Pods? |
+Our shared API introduces a different operating problem. The platform team owns `payments.example.com`, the certificate, the public address, and the decision about which namespaces may publish externally. The payments team only owns `/api`. If all of that lives in one object, either the application team needs permission to edit platform-owned details, or every small route change requires the platform team's help.
 
-**GatewayClass** is cluster-scoped. It names the controller that handles a class of Gateways, the same way a StorageClass tells Kubernetes which storage behavior to use for volumes. A cluster needs at least one usable GatewayClass before a Gateway can serve traffic.
+The limitation is even clearer during a release. Suppose the payments team wants requests with the header `X-Canary: true` to reach `payments-v2`, while normal traffic stays on `payments-v1`. Later it wants a 90/10 split. The portable Ingress API has no standard field for that header match or backend weighting. A controller may support the behavior through annotations or its own custom resource, but moving to another controller can require redesigning the configuration.
 
-**Gateway** is the listener object. It describes traffic handling infrastructure such as an external load balancer or proxy listener, and it declares ports, protocols, hostnames, TLS settings, and route attachment rules. In our scenario, the Gateway is `platform-networking/public-api`, and it owns `api.devpolaris.local` on HTTPS port `443`.
+Teams commonly respond in one of three ways. They can share one large Ingress and coordinate every edit, let each team create an Ingress and rely on controller-specific merge rules for overlapping hostnames, or create a separate load balancer for every application. The first two choices increase coordination and conflict risk. The third improves isolation while increasing infrastructure cost and the number of public edges to operate. Gateway API makes the shared infrastructure and each application's routing separate resources instead.
 
-**HTTPRoute** is the application routing object for HTTP traffic. It attaches to a Gateway listener, matches hostnames, paths, headers, or methods, and forwards matching requests to backend Services. In our scenario, the orders team owns an HTTPRoute that sends `/orders` traffic to the `orders-api` Service.
+Ingress also focuses on HTTP and HTTPS. A platform that wants standard resource models for gRPC, TLS pass-through, or TCP traffic needs something broader than one HTTP routing object.
 
-**Service** remains the internal backend contract. Gateway API still sends traffic to Kubernetes Services. The HTTPRoute sends traffic to a Service, and the Service sends traffic to ready Pods through its selector and EndpointSlices.
+Ingress was intentionally designed around a smaller HTTP routing shape. The shared-platform problem has outgrown that shape, so Gateway API responds with four design goals:
 
-Those four objects give every pull request a cleaner shape. Platform changes touch GatewayClass and Gateway. Application route changes touch HTTPRoute and Service. Reviewers can ask for status from the object that matches the team making the change.
+- **role-oriented:** objects match the people who operate the system;
+- **portable:** common behavior has shared API semantics;
+- **expressive:** matches and traffic choices can be represented directly;
+- **extensible:** implementations can add capabilities without forcing every idea into annotations.
 
-## GatewayClass and the Controller
-<!-- section-summary: GatewayClass connects a Gateway to the installed implementation, and its Accepted condition proves that the controller understands the class. -->
+The cost is more resources. A small site may still be clearer as one Ingress. Gateway API earns its extra structure when the listener, routes, and applications really do have different owners or need richer behavior.
 
-A **Gateway API implementation** is the software that turns Gateway API objects into working traffic behavior. It might program a cloud load balancer, an Envoy-based proxy, a managed Kubernetes gateway, or another data plane. The Kubernetes API stores the objects, and the implementation watches those objects and makes the real network path happen.
+## Who owns GatewayClass, Gateway, and Routes?
+<!-- section-summary: GatewayClass chooses the implementation, Gateway creates the shared listening point, and Routes express application-specific traffic decisions. -->
 
-The **GatewayClass** tells a Gateway which implementation should handle it. The class has a `controllerName`, and that value belongs to the installed controller. Platform teams usually create the class during cluster setup, then tell application teams which class backs internet-facing traffic, private traffic, or internal service traffic.
+Instead of introducing the YAML first, we can assign each decision to the person who can safely make it.
 
-Here is a simple GatewayClass for the DevPolaris public API:
+### A. GatewayClass: what kind of entrance can the cluster build?
+
+**Typical owner:** an infrastructure provider or cluster platform team.
+
+**What it controls:** the controller implementation that will fulfil Gateways of this class. A cluster might have one class backed by a cloud load balancer and another backed by an in-cluster proxy.
+
+**Why it is separate:** application developers should request a supported platform capability without copying vendor identity into every route. The platform can upgrade or govern the implementation behind a stable class name.
+
+**Building analogy:** this is the catalog entry for a type of entrance system—perhaps a staffed main entrance or an automated secure gate. It describes what can be installed. A Gateway later places one at a specific building.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: shared-public
+  name: public-gateway
 spec:
-  controllerName: gateway.devpolaris.local/controller
+  controllerName: example.com/gateway-controller
 ```
 
-The controller name is implementation-specific. In a real cluster, the value comes from the controller documentation and the platform team's installation notes. Many platforms also create more than one class, such as `shared-public`, `shared-private`, and `mesh-internal`, because those names describe the traffic behavior that teams can request.
+If every installed controller ignores `example.com/gateway-controller`, the class remains unaccepted. Every Gateway asking for `public-gateway` is then waiting for technology absent from the cluster.
 
-The first rollout check is the class status. `kubectl get gatewayclass shared-public` should show `ACCEPTED=True`. If the class stays false or empty, the Gateway and HTTPRoute YAML can look perfect while no usable listener appears. That makes GatewayClass status the first piece of evidence for any new cluster, controller upgrade, or new traffic class.
+A platform can publish several classes when the infrastructure choices represent genuinely different capabilities. `public` might create an internet-facing provider load balancer, `private` might create an internal address reachable only from company networks, and `high-security` might require a hardened controller and policy set. Those are platform contracts. Application Routes continue to ask for a stable class name rather than embedding the vendor implementation in every workload repository.
 
-```bash
-kubectl get gatewayclass shared-public
-```
+### B. Gateway: where can traffic enter?
 
-```bash
-NAME            CONTROLLER                              ACCEPTED   AGE
-shared-public   gateway.devpolaris.local/controller     True       2d
-```
+**Typical owner:** a platform administrator or cluster operator.
 
-Now the class exists. The platform team can use it to create the shared listener for `api.devpolaris.local`.
+**What it controls:** the real listening point—protocol, port, hostname, TLS certificate, and rules about which Routes may attach.
 
-## A Shared Gateway for the Platform Team
-<!-- section-summary: The Gateway owns the shared listener, hostname, TLS reference, and the rules for which namespaces may attach Routes. -->
+**Why it is separate:** these settings affect every application sharing the edge. Platform-owned permissions protect the support certificate and keep internal namespaces private while application developers manage their own routes.
 
-A **Gateway** is the platform-owned entry point. In DevPolaris, the platform networking team creates a Gateway named `public-api` in the `platform-networking` namespace. It listens on HTTPS port `443`, accepts traffic for `api.devpolaris.local`, terminates TLS with a certificate Secret, and allows only approved namespaces to attach HTTPRoutes.
-
-This object is where the platform team publishes the shared edge contract. Application teams need a listener name, a hostname, and a rule that says whether their namespace may attach a route. The platform team can keep load balancer internals in its own operating space, while the Gateway gives route owners one reviewed place to attach.
-
-The Gateway names the platform-owned entry point, the GatewayClass, the HTTPS listener, the TLS Secret, and the namespace attachment rule in one object:
+**Building analogy:** the operator now installs one entrance at a real address, fits the lock, and decides which departments may put directions behind it.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: public-api
-  namespace: platform-networking
+  name: shared-gateway
+  namespace: edge
 spec:
-  gatewayClassName: shared-public
+  gatewayClassName: public-gateway
   listeners:
-    - name: https
-      protocol: HTTPS
-      port: 443
-      hostname: api.devpolaris.local
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: devpolaris-api-tls
+    - name: http
+      port: 80
+      protocol: HTTP
       allowedRoutes:
+        kinds:
+          - kind: HTTPRoute
         namespaces:
           from: Selector
           selector:
             matchLabels:
-              shared-gateway: public-api
+              gateway-access: public
 ```
 
-A **listener** is the port, protocol, and hostname the Gateway accepts. TLS termination uses `devpolaris-api-tls` from the Gateway namespace. `allowedRoutes` limits cross-namespace HTTPRoute attachment to namespaces with `shared-gateway=public-api`.
+This listener accepts HTTP on port `80`. It also says that only namespaces carrying `gateway-access: public` may contribute HTTPRoutes. Reconciliation may create a cloud load balancer, an address, proxy Pods, or other implementation-specific infrastructure.
 
-The Gateway fields read as a platform contract:
+`allowedRoutes.namespaces.from` can be `Same`, `All`, or `Selector`. `Same` keeps Routes in the Gateway's namespace, `All` admits every namespace, and `Selector` admits namespaces carrying approved labels. A listener can also restrict the Route kinds it accepts. These choices let the Gateway owner describe the exact sharing boundary before any application attaches.
 
-- `gatewayClassName: shared-public` chooses the installed Gateway implementation.
-- `listeners[].name: https` gives Routes a precise listener name to attach to.
-- `protocol: HTTPS` and `port: 443` describe the edge protocol and port.
-- `hostname: api.devpolaris.local` limits this listener to that host.
-- `tls.mode: Terminate` says the Gateway handles HTTPS at the edge.
-- `certificateRefs[].name: devpolaris-api-tls` names the TLS Secret.
-- `allowedRoutes.namespaces.from: Selector` means only labeled namespaces may attach Routes.
+### C. HTTPRoute: how should an HTTP request be directed?
 
-The listener has a name, and that name matters. Application Routes can point at the `https` listener with `sectionName: https`, which keeps the relationship precise when a Gateway has more than one listener. A public Gateway might have one HTTPS listener for `api.devpolaris.local` and another listener for `admin.devpolaris.local`, so names help routes attach to the intended place.
+**Typical owner:** the application team whose Service will receive the request.
 
-The `allowedRoutes` block is the platform trust rule. It says that a Route from another namespace may attach only when that namespace has the label `shared-gateway=public-api`. The platform team can onboard the `orders` namespace with `kubectl label namespace orders shared-gateway=public-api`, then confirm the label with `kubectl get namespace orders --show-labels`.
+**What it controls:** HTTP matching and forwarding. The route can use a hostname, path, header, or other supported HTTP information to select one or more backend Services.
 
-This is the first half of Gateway API's cross-team handshake. The Gateway listener says which namespaces may attach. The application Route still has to choose this Gateway as its parent. Both sides need to line up before traffic can use the listener.
+**Why it is separate:** an application team can change its own path or release rule without receiving control over the public listener or another team's route.
 
-With the shared listener ready, the orders team can add the route for `/orders`.
-
-## HTTPRoute for the Application Team
-<!-- section-summary: HTTPRoute lets the application team attach path rules to a shared Gateway and forward matching requests to its own Service. -->
-
-An **HTTPRoute** is the object application teams edit for HTTP routing. It names one or more parent Gateways, lists hostnames, defines matching rules, and forwards matching requests to backend Services. For the orders team, this is the normal place to review path changes, canary weights, header matches, redirects, or simple route ownership.
-
-The route belongs to the orders team in the `orders` namespace. The traffic story is specific: requests for `api.devpolaris.local` under the `/orders` path should attach to the platform `https` listener and land on the `orders-api` Service. The route expresses that ownership without asking the orders team to edit the shared Gateway.
+**Building analogy:** this is the receptionist just inside the shared entrance. The receptionist reads “catalog” on the visitor's request and directs that visitor to the catalog office.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: orders-api
-  namespace: orders
+  name: payments
+  namespace: payments
 spec:
   parentRefs:
-    - name: public-api
-      namespace: platform-networking
-      sectionName: https
+    - name: shared-gateway
+      namespace: edge
+      sectionName: http
   hostnames:
-    - api.devpolaris.local
+    - payments.example.com
   rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /orders
-      backendRefs:
-        - name: orders-api
-          port: 80
+    - backendRefs:
+        - name: payments-service
+          port: 8080
 ```
 
-The route says that traffic for `api.devpolaris.local` with a path starting at `/orders` should go to the `orders-api` Service on port `80`. The parent reference points at the shared Gateway listener, and the backend reference points at a Service in the same `orders` namespace as the HTTPRoute.
+The route chooses the stable `payments-service` Service. That Service maintains the current ready endpoint set and selects a Pod for each request. One request now has an explainable path:
 
-The HTTPRoute fields carry the application team's part:
+For `http://payments.example.com/health`, the request passes four decisions in order:
 
-- `parentRefs[].name: public-api` attaches the Route to the shared Gateway.
-- `parentRefs[].namespace: platform-networking` crosses into the platform namespace intentionally.
-- `parentRefs[].sectionName: https` attaches to the named listener instead of any listener on the Gateway.
-- `hostnames[]: api.devpolaris.local` limits the Route to the expected hostname.
-- `matches[].path.type: PathPrefix` matches `/orders` and child paths such as `/orders/healthz`.
-- `backendRefs[].name: orders-api` sends matched requests to the Service.
-- `backendRefs[].port: 80` uses the Service port, not the container port.
+1. the `shared-gateway` Gateway accepts HTTP traffic on port `80`;
+2. the payments `HTTPRoute` matches the hostname;
+3. its backend reference selects `payments-service` on Service port `8080`;
+4. the Service data plane chooses one ready payments Pod.
 
-The Service still does the Kubernetes backend work:
+Most Gateway API YAML becomes easier to read when three references are traced explicitly:
+
+| Reference | Meaning |
+|---|---|
+| `Gateway.spec.gatewayClassName` | Which controller implementation can build this entrance? |
+| `HTTPRoute.spec.parentRefs` | Which Gateway listener should supply traffic to this Route? |
+| `HTTPRoute.rules.backendRefs` | Which Service should receive matching traffic? |
+
+Those references connect the owners without merging their resources into one document.
+
+Each owner can now change its decision without taking ownership of every neighboring decision.
+
+## How does an application earn a place on the shared Gateway?
+<!-- section-summary: A Route asks to use a listener, and the listener independently decides which namespaces and Route kinds it accepts. -->
+
+Consider what would happen without an attachment rule. Any developer who could create an HTTPRoute might name the public Gateway and publish an internal tool to the internet. The platform team would own the entrance but have no control over who placed directions behind it.
+
+Gateway API makes attachment a two-sided agreement. The payments Route uses `parentRefs` to say, “I want to attach to the `http` listener on `edge/shared-gateway`.” The listener uses `allowedRoutes` to say, “I accept Routes only from namespaces approved for public access.” Neither side can create the relationship alone.
+
+In our example, the platform team labels the payments namespace:
 
 ```yaml
 apiVersion: v1
-kind: Service
+kind: Namespace
 metadata:
-  name: orders-api
-  namespace: orders
-spec:
-  type: ClusterIP
-  selector:
-    app: orders-api
-  ports:
-    - name: http
-      port: 80
-      targetPort: 3000
+  name: payments
+  labels:
+    gateway-access: public
 ```
 
-This Service gives the route a stable backend name and port. The selector finds Pods with `app=orders-api`, and EndpointSlices record which Pod IPs are ready for traffic. A healthy HTTPRoute with an unhealthy Service path can still return errors, so route evidence and backend evidence belong together.
+Now the namespace matches the listener's selector. A namespace without that label can still contain an HTTPRoute object, but the public listener does not attach it and no traffic follows it through that Gateway.
 
-The Service fields complete the backend side:
+Permission is only one part of compatibility. The Route's hostname and protocol must also be compatible with the listener, and the Route kind must be admitted. These are visible relationship failures rather than silent merge conventions.
 
-- `type: ClusterIP` keeps the backend private behind the Gateway.
-- `selector.app: orders-api` chooses the application Pods.
-- `ports[].name: http` gives the backend Service port a stable name.
-- `ports[].port: 80` is the port the HTTPRoute targets.
-- `ports[].targetPort: 3000` forwards traffic to the application container.
+This is the important design result: the application team controls **where its own accepted requests go**, while the platform team controls **which applications may use the shared entrance at all**.
 
-Now the route exists. The next production concern is the encrypted edge and the permission model around references that cross namespace boundaries.
+Kubernetes RBAC and Gateway attachment answer different permission questions. RBAC decides whether a person or controller may create or modify an HTTPRoute. `parentRefs` and `allowedRoutes` decide whether that existing Route may attach to this listener. A developer can have permission to create Routes in an application namespace while the public Gateway still refuses every Route from that namespace.
 
-## TLS and Cross-Namespace Trust
-<!-- section-summary: TLS usually belongs to the Gateway listener, and ReferenceGrant controls cross-namespace object references that need explicit permission. -->
+## Can a Route send traffic to another team's Service?
+<!-- section-summary: A Route can use a Service in another namespace only when the target namespace explicitly grants that reference. -->
 
-**TLS termination** means the Gateway receives HTTPS, presents the certificate, decrypts the request at the edge, and forwards the request onward according to the Route. In this DevPolaris setup, the platform team owns TLS because it owns the public listener and hostname. The orders team owns `/orders`; certificate Secret access stays with platform networking.
+Suppose an `HTTPRoute` in `storefront` wants to send traffic to `payment-api` in `payments`. Naming the backend is not enough, because the Route owner must not grant itself access to another team's Service.
 
-Keeping TLS on the Gateway also keeps certificate ownership close to the hostname owner. The platform team can renew one certificate for `api.devpolaris.local`, while several application teams attach routes under that hostname. The orders route then focuses on HTTP matching and Service backends instead of copying certificate references into every app namespace.
-
-The simple pattern keeps the TLS Secret in the same namespace as the Gateway. The TLS part is the same listener snippet from the shared Gateway:
+The Route expresses the reference:
 
 ```yaml
-tls:
-  mode: Terminate
-  certificateRefs:
-    - name: devpolaris-api-tls
+backendRefs:
+  - name: payment-api
+    namespace: payments
+    port: 8080
 ```
 
-In that shape, `platform-networking/devpolaris-api-tls` contains the certificate and private key. cert-manager can create and renew that Secret by watching annotations on the Gateway, depending on how the cluster team configures issuers. The rollout evidence should show both the Gateway status and the certificate material because a listener can exist while certificate automation still has work to do.
-
-| Evidence | Healthy signal |
-|---|---|
-| `kubectl -n platform-networking get secret devpolaris-api-tls` | Secret type is `kubernetes.io/tls` and has certificate data |
-| `kubectl -n platform-networking get certificate devpolaris-api-tls` | Certificate shows `READY=True` when cert-manager owns renewal |
-
-Gateway API also has **ReferenceGrant** for cross-namespace references. A ReferenceGrant is a namespaced object created by the owner of the target namespace. It gives specific kinds of objects in another namespace permission to reference target resources in this namespace.
-
-Route-to-Gateway attachment across namespaces uses the Gateway listener's `allowedRoutes` rule. Other cross-namespace references usually need ReferenceGrant. For example, if an HTTPRoute in `orders` forwards to a Service in `shared-search`, then the `shared-search` owner must create a grant in the `shared-search` namespace:
+The payments team then creates a `ReferenceGrant` in the namespace that owns the Service:
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1
+apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-orders-routes
-  namespace: shared-search
+  name: allow-storefront
+  namespace: payments
 spec:
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
-      namespace: orders
+      namespace: storefront
   to:
     - group: ""
       kind: Service
+      name: payment-api
 ```
 
-This rule keeps namespace ownership clear. The orders team can ask to use a shared backend, and the shared backend owner makes the permission decision. That explicit grant prevents one namespace from quietly pointing production traffic at another namespace's Service.
+The important rule is that the consumer does not grant itself access. The owner of the target grants access. Including `name: payment-api` limits consent to that Service; omitting the name would allow matching Routes to reference every Service of that group and kind in `payments`.
 
-At this point, we have the class, listener, route, Service, TLS, and trust rules. Gateway API gives us one more useful tool: structured status conditions that show where the relationship actually worked.
+This consent is intentionally directional. The storefront Route can ask to use `payment-api`, but only a ReferenceGrant stored beside that target can make the cross-namespace reference valid. Moving the grant into `storefront` would let the consumer approve itself and would defeat the ownership boundary.
 
-## Status Conditions Are Review Evidence
-<!-- section-summary: Gateway API status conditions show whether the class, listener, route attachment, references, and backend relationship were accepted. -->
+Gateway attachment uses a different trust mechanism. A Route in another namespace attaches through `parentRefs` plus the Gateway listener's `allowedRoutes`; that attachment does not require a ReferenceGrant.
 
-A **status condition** is a structured result that controllers write back onto Kubernetes objects. It usually has a type, a true or false status, a reason, and a message. Instead of treating every failed request as "the Gateway is broken", teams can inspect the first false condition and start in the right layer.
+## How does Gateway API handle safer releases?
+<!-- section-summary: HTTPRoute can direct test requests and gradually divide ordinary traffic between two healthy Service versions. -->
 
-Status is especially valuable in Gateway API because several objects have to agree. The class must be accepted, the listener must be programmed, the Route must attach to the right parent, and backend references must resolve. A pull request review should include those controller-written results, because they prove more than the desired YAML alone.
+Suppose `payments-v2` changes the way discounts are calculated. Sending every customer to it immediately would make the first production request the first realistic test. The payments team wants two smaller steps.
 
-The platform team starts with `kubectl -n platform-networking get gateway public-api -o yaml`, and the orders team checks `kubectl -n orders get httproute orders-api -o yaml`. The useful fields are these:
+First, only synthetic requests carrying `X-Canary: true` should reach v2. Everyone else stays on v1. HTTPRoute can describe that decision directly:
 
-| Object | Condition or field | Healthy meaning |
-|---|---|---|
-| Gateway | `addresses` | The implementation reports the public load balancer address |
-| Gateway | `Accepted=True` | The controller accepted the Gateway configuration |
-| Gateway | `Programmed=True` | The implementation programmed the data plane or load balancer |
-| Listener `https` | `attachedRoutes: 1` | At least one Route attached to this listener |
-| Listener `https` | `ResolvedRefs=True` | Listener references such as TLS material resolved |
-| HTTPRoute parent | `Accepted=True` | The Route attached to `platform-networking/public-api` listener `https` |
-| HTTPRoute parent | `ResolvedRefs=True` | Backend Services and permitted references resolved |
+```yaml
+rules:
+  - matches:
+      - headers:
+          - name: X-Canary
+            value: "true"
+    backendRefs:
+      - name: payments-v2
+        port: 8080
+  - backendRefs:
+      - name: payments-v1
+        port: 8080
+```
 
-Route status appears under `parents` because one Route can attach to more than one parent. In this example, the parent is the `https` listener on `platform-networking/public-api`. Those conditions show whether the platform side and application side agree about the route.
+The team can now send a known request with the test header and fix v2 without exposing ordinary users. The more specific header rule wins over the catch-all rule.
 
-A healthy Gateway status may look like this:
+After that proof, the team can put a small share of ordinary traffic on v2:
+
+```yaml
+backendRefs:
+  - name: payments-v1
+    port: 8080
+    weight: 90
+  - name: payments-v2
+    port: 8080
+    weight: 10
+```
+
+The weights are relative. `90` and `10` produce roughly 90% and 10% across a suitable sample of requests. Connection reuse, retries, and low traffic make “every tenth request goes to v2” an invalid expectation and can leave a short observation uneven.
+
+The rollback remains small because v1 is still present. Setting v2's weight to `0` sends new traffic back to the stable Service. Deleting v1 before v2 is proven would remove that safety path.
+
+Gateway API supplies the routing primitives for this rollout; a person or progressive-delivery controller still decides when to change the weights. The Route can express `10%` to v2, while it has no built-in rule saying “increase to 25% when the error rate stays below this threshold” or “return to v1 when latency rises.” Those decisions require measurements, acceptance thresholds, and an operator or rollout system that edits the Route.
+
+Header matching and weighting illustrate why Gateway API can be more portable than annotation-heavy Ingress configurations. They have API fields and conformance expectations. Other features may be **Extended**, meaning their behavior is standardized but an implementation can choose whether to support them. Before relying on rewrites, mirroring, backend TLS, or timeouts, check the controller's conformance report for the Gateway API version you run.
+
+## How do you prove the configuration became a working route?
+<!-- section-summary: Conditions explain whether the controller accepted each relationship, while a real request proves the complete data path. -->
+
+Applying YAML proves that the Kubernetes API server accepted its shape. Controller recognition, listener creation, Route acceptance, Service resolution, and a real request each require separate evidence.
+
+Gateway API exposes those stages through conditions. Think of them as answers from each owner boundary.
+
+For the Gateway:
+
+- `Accepted=True` means the controller accepts the configuration;
+- `Programmed=True` means the data plane is configured for the current generation.
+
+Its status can also publish the address assigned to that data plane:
 
 ```yaml
 status:
   addresses:
     - type: IPAddress
-      value: 203.0.113.40
-  listeners:
-    - name: https
-      attachedRoutes: 1
-      conditions:
-        - type: Accepted
-          status: "True"
-          reason: Accepted
-        - type: Programmed
-          status: "True"
-          reason: Programmed
-        - type: ResolvedRefs
-          status: "True"
-          reason: ResolvedRefs
+      value: 203.0.113.10
 ```
 
-A healthy HTTPRoute parent status may look like this:
+The address gives the candidate endpoint for a real request. It does not by itself prove that the listener, Route, Service, and application all work.
 
-```yaml
-status:
-  parents:
-    - parentRef:
-        name: public-api
-        namespace: platform-networking
-        sectionName: https
-      conditions:
-        - type: Accepted
-          status: "True"
-          reason: Accepted
-        - type: ResolvedRefs
-          status: "True"
-          reason: ResolvedRefs
+For the payments Route's relationship to `shared-gateway`:
+
+- `Accepted=True` means the listener attached the Route;
+- `ResolvedRefs=True` means its Services, ports, filters, and required grants are valid.
+
+Return to the cross-namespace example. The storefront Route can attach successfully while its reference to `payments/payment-api` remains unusable. While the `ReferenceGrant` is absent, the controller can report `Accepted=True` and `ResolvedRefs=False` at the same time: the entrance accepted the Route while the backend owner withheld consent for this destination.
+
+A controller may make the reason explicit:
+
+```text
+Accepted=True
+ResolvedRefs=False
+Reason=RefNotPermitted
 ```
 
-`Accepted=True` means the controller accepted the object or attachment. `Programmed=True` means the controller reports that it pushed the listener into the data plane or load balancer. `ResolvedRefs=True` means referenced objects such as Services, listener sections, or TLS material were found and allowed. `BackendNotFound` is a common false reason for `ResolvedRefs`; it means the Route attached to the Gateway, but the backend Service name, namespace permission, or Service port did not resolve.
+That combination sends the investigation to the cross-namespace grant. Reworking the Gateway listener would address a different relationship that has already been accepted.
 
-For a pull request, these conditions are stronger than a screenshot of YAML. They show what the controller actually accepted after it reconciled the objects. A reviewer can see whether the platform side and application side agree about the route.
+![Gateway and HTTPRoute status conditions identify whether the listener was programmed, the Route attached, and backend references were permitted before the Service can receive traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-status-conditions.png)
 
-![Gateway API status board showing Gateway Accepted and Programmed conditions, HTTPRoute Accepted and ResolvedRefs conditions, and failure reasons like NotAllowedByListeners and BackendNotFound](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-status-conditions.png)
+*Status identifies the incomplete relationship, giving you a precise diagnosis and owner.*
 
-*Gateway API status conditions point to the first failed relationship, which keeps debugging tied to the object that actually needs attention.*
+Inspect the chain in the same order the controller needs it:
 
-The same conditions also guide debugging when the request fails.
-
-## Debugging a Broken Route
-<!-- section-summary: Gateway API debugging follows the first failed condition, then checks Service endpoints and the application response. -->
-
-Gateway API debugging should follow the traffic flow in order: GatewayClass, Gateway, HTTPRoute, Service, and then Pods. That order keeps a platform policy failure from getting mixed up with an application readiness problem.
-
-The first failed condition should decide the owner of the next action. A rejected GatewayClass points to platform setup. A blocked Route attachment points to listener policy or namespace labels. A backend reference failure points to the application Service name, Service port, or cross-namespace permission. That is the reason this section starts with status and then moves toward endpoints.
-
-| Failure class | Common signal | What the signal means |
-|---|---|---|
-| GatewayClass missing or rejected | `kubectl get gatewayclass shared-public` shows `ACCEPTED=False` or no class | The controller class is unavailable, so route edits in `orders` cannot create a listener |
-| Route attachment blocked | HTTPRoute condition has `Accepted=False` and reason `NotAllowedByListeners` | The Gateway listener policy or namespace label blocks the Route |
-| Backend reference missing | HTTPRoute condition has `ResolvedRefs=False` and reason `BackendNotFound` | The Route attached, but the backend Service name, port, grant, or reference is wrong |
-| Backend has no ready endpoints | Service exists, but EndpointSlices are empty or Pods are unready | The edge can route, but the application has no ready backend |
-| Real URL still fails | `curl -i https://api.devpolaris.local/orders/healthz` returns a non-200 response | The team should compare Gateway status, route status, endpoint readiness, and app logs |
-
-Those signals also tell teams who should take the next action. GatewayClass and Gateway failures usually point to platform networking. HTTPRoute and Service failures usually point to the application team. Endpoint and Pod failures move into workload health.
-
-Once the route is healthy, the next production question is how to make route changes gradually instead of sending every release through one all-or-nothing switch.
-
-## Rollouts and Traffic Splitting
-<!-- section-summary: HTTPRoute can express weighted backends for gradual rollouts, while implementation support and rollback evidence still need review. -->
-
-Gateway API can express richer HTTP routing than a basic host-and-path rule. One practical feature is weighted backends. A weighted backend lets one HTTPRoute send most traffic to the stable Service and a small slice to a canary Service, which helps a team test a new version with real production traffic.
-
-For the DevPolaris orders API, the stable Service might point at version `v1`, while the canary Service points at version `v2`. The Route can send 90 percent of matching traffic to stable and 10 percent to canary:
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: orders-api
-  namespace: orders
-spec:
-  parentRefs:
-    - name: public-api
-      namespace: platform-networking
-      sectionName: https
-  hostnames:
-    - api.devpolaris.local
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /orders
-      backendRefs:
-        - name: orders-api
-          port: 80
-          weight: 90
-        - name: orders-api-canary
-          port: 80
-          weight: 10
+```bash
+kubectl describe gateway shared-gateway -n edge
+kubectl describe httproute payments -n payments
+kubectl get svc -n payments
+kubectl get endpointslice -n payments
 ```
 
-This rollout still needs the same evidence as the simple route. Both Services need ready endpoints, the HTTPRoute conditions should stay true, and metrics or access logs should show traffic reaching both versions. The rollback is a small route change: set the canary weight to `0`, restore the stable Service to `100`, or remove the canary backend reference.
+The combinations lead to different owners and fixes. `Accepted=True` with `Programmed=False` means the controller understands the Gateway while its load balancer or proxy remains pending. Route `Accepted=False` points to its parent, listener, namespace permission, hostname, or protocol. `Accepted=True` with `ResolvedRefs=False` points to a Service, port, filter, or ReferenceGrant. Healthy route status with zero Service endpoints means the edge is ready while the application backend remains empty.
 
-Some Gateway API features depend on the implementation and its conformance profile. Core matching and backend routing form the portable center, while details around timeouts, retries, header filters, mirroring, policy attachment, or vendor-specific behavior may vary. A production design review should name the installed implementation and confirm that it supports the fields the team plans to use.
+Check `observedGeneration` too. Only a condition for the current generation proves that the controller processed the latest Route; a generation-6 condition is stale after generation 7 appears.
 
-The YAML file is only the request. The controller status tells you whether the installed implementation accepted the request, so the rollout process should always include both.
+Listener status also reports `attachedRoutes`, the number of Routes that successfully attached through compatible `parentRefs` and `allowedRoutes`. A platform operator expecting seven application Routes can use a count of six as immediate evidence that one relationship was refused or remains unresolved.
 
-## Evidence to Keep in Pull Requests
-<!-- section-summary: Gateway API changes should keep platform evidence, application evidence, backend evidence, and one real request in the review. -->
+Finally, send the request a user will send. Before changing public DNS, test a candidate address while preserving the real hostname:
 
-A Gateway API pull request should leave a short evidence trail. The platform part proves that the shared entry point exists and has been programmed. The application part proves that the Route attached, the references resolved, the backend has endpoints, and the real URL works.
-
-For the orders route, the evidence record should read like the production path. It should name the host, Gateway, listener, Route, Service, expected health URL, and the team ownership boundaries. That record helps reviewers understand the change without reconstructing the request path from several YAML files.
-
-Here is a compact record for the DevPolaris orders route:
-
-```yaml
-gatewayApiChangeRecord:
-  host: api.devpolaris.local
-  platformNamespace: platform-networking
-  gatewayClass: shared-public
-  gateway: public-api
-  listener: https
-  applicationNamespace: orders
-  route: orders-api
-  service: orders-api
-  path: /orders
-  expectedHealthResponse: HTTP 200 from /orders/healthz
-  platformOwns: listener, hostname, TLS Secret, allowedRoutes
-  applicationOwns: HTTPRoute, Service, Pods, canary weights
+```bash
+curl -H 'Host: payments.example.com' \
+  http://203.0.113.10/health
 ```
 
-![Gateway API pull request evidence board with Gateway programmed, Route attached, references resolved, Service endpoints, HTTP 200, stable 90 percent, canary 10 percent, and rollback to stable 100 percent](/content-assets/articles/article-containers-orchestration-kubernetes-networking-gateway-api/gateway-rollout-evidence-summary.png)
+The hostname lets the HTTPRoute select the intended rule while the IP directs the request to the candidate Gateway address. Conditions prove the control relationships; the end-to-end request proves that real traffic can cross them.
 
-*A Gateway API change review should preserve both ownership evidence and one real request through the published route.*
+## Check Your Answers
+<!-- section-summary: Reconstruct Gateway API from the people, decisions, trust boundaries, and request path it represents. -->
 
-The platform evidence should show the class, Gateway address, programmed listener, certificate Secret, and certificate readiness when cert-manager manages TLS. The application evidence should show Route attachment, reference resolution, Service shape, endpoint readiness, and one real response from the published path.
+:::expand[What is Gateway API in plain terms?]{kind="recap"}
+Gateway API divides one traffic path into resources owned by the people responsible for each decision. The platform operates the shared entrance, application teams own their routing rules, and a controller turns the combined intent into a working proxy or load balancer.
+:::
 
-| Evidence group | Commands to keep in the review |
-|---|---|
-| Platform listener | `kubectl get gatewayclass shared-public`, `kubectl -n platform-networking get gateway public-api -o yaml` |
-| TLS | `kubectl -n platform-networking get secret devpolaris-api-tls`, `kubectl -n platform-networking get certificate devpolaris-api-tls` |
-| Application route | `kubectl -n orders get httproute orders-api -o yaml` |
-| Backend readiness | `kubectl -n orders get svc orders-api -o wide`, `kubectl -n orders get endpointslice -l kubernetes.io/service-name=orders-api` |
-| Real request | `curl -i https://api.devpolaris.local/orders/healthz` |
+:::expand[Why can Ingress become awkward for several teams?]{kind="recap"}
+Ingress keeps a deliberately compact HTTP routing model. When a platform team owns the listener and certificate while application teams own separate routes, or when teams need portable header matching and traffic weights, that compact object often relies on shared ownership or controller-specific extensions.
+:::
 
-This evidence turns Gateway API from "more YAML" into a clear operating model. Platform teams own the shared listener and trust boundaries. Application teams own their routes and backends. Status conditions connect both sides, and one real request proves the path from hostname to Pod.
+:::expand[Who owns GatewayClass, Gateway, and Routes?]{kind="recap"}
+An infrastructure or platform team usually owns GatewayClass because it selects the implementation. A platform operator owns Gateway because it defines the address, listeners, TLS, and attachment policy. Application teams own Routes because those resources match requests and select their Services.
+:::
+
+:::expand[How does an application earn a place on the shared Gateway?]{kind="recap"}
+The Route asks to use a listener through parentRefs, while the listener independently admits Route kinds and namespaces through allowedRoutes. The hostname and protocol must also be compatible. A Route that is refused can exist in Kubernetes but receives no traffic through that listener.
+:::
+
+:::expand[Can a Route send traffic to another team's Service?]{kind="recap"}
+Yes, but supported cross-namespace references require the target namespace to consent. The Service owner creates a ReferenceGrant beside the protected Service. This prevents a Route author from granting itself access to another team's backend.
+:::
+
+:::expand[How does Gateway API handle safer releases?]{kind="recap"}
+An HTTPRoute can select test traffic with a header and can divide later traffic between backend Services with relative weights. The team proves the candidate first, starts with a small share, watches real evidence, and can return its weight to zero while the stable backend remains available.
+:::
+
+:::expand[How do you prove the configuration became a working route?]{kind="recap"}
+Gateway Accepted and Programmed conditions prove the listener configuration. Route Accepted and ResolvedRefs prove attachment and backend references. Service endpoints prove application availability. A request using the real hostname finally proves TLS, matching, forwarding, policy, and application behavior together.
+:::
 
 ## References
 
-- [Gateway API - Kubernetes](https://kubernetes.io/docs/concepts/services-networking/gateway/) - Introduces Gateway API as an extensible, role-oriented, protocol-aware service networking API family.
-- [API overview - Gateway API](https://gateway-api.sigs.k8s.io/docs/concepts/api-overview/) - Explains GatewayClass, Gateway, listeners, Routes, and the relationship between the core resources.
-- [GatewayClass - Gateway API](https://gateway-api.sigs.k8s.io/reference/api-types/gatewayclass/) - Documents GatewayClass scope, controller selection, and Accepted status.
-- [HTTPRoute - Gateway API](https://gateway-api.sigs.k8s.io/reference/api-types/httproute/) - Documents parentRefs, hostnames, rules, matches, filters, backendRefs, and route status.
-- [ReferenceGrant - Gateway API](https://gateway-api.sigs.k8s.io/reference/api-types/referencegrant/) - Documents explicit permission for cross-namespace references such as Route-to-Service and Gateway-to-Secret references.
-- [Ingress controllers - Kubernetes](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) - Notes that Kubernetes recommends Gateway for newer work while Ingress remains generally available and frozen.
-- [Service - Kubernetes](https://kubernetes.io/docs/concepts/services-networking/service/) - Explains Services as stable backend abstractions for Pods.
-- [Annotated Gateway resource - cert-manager](https://cert-manager.io/docs/usage/gateway/) - Documents cert-manager certificate automation for annotated Gateway resources.
+- [Gateway API Introduction](https://gateway-api.sigs.k8s.io/docs/introduction/) - Official overview, design goals, and relationship to Ingress.
+- [Gateway API Overview](https://gateway-api.sigs.k8s.io/docs/concepts/api-overview/) - Official resource roles, attachment model, and extension points.
+- [Cross-Namespace Routing](https://gateway-api.sigs.k8s.io/guides/user-guides/multiple-ns/) - Official shared-Gateway and two-sided attachment example.
+- [HTTP Traffic Splitting](https://gateway-api.sigs.k8s.io/guides/user-guides/traffic-splitting/) - Official header-selected and weighted rollout examples.
+- [ReferenceGrant](https://gateway-api.sigs.k8s.io/reference/api-types/referencegrant/) - Official cross-namespace consent model and security rationale.
+- [Gateway API Conformance](https://gateway-api.sigs.k8s.io/docs/concepts/conformance/) - Official Core, Extended, and implementation-specific support definitions.
+- [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Official Ingress scope, controller requirement, and frozen status.

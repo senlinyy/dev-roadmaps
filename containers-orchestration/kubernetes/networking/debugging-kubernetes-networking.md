@@ -1,475 +1,420 @@
 ---
 title: "Debugging Kubernetes Networking"
-description: "Follow a layered diagnostic path for Kubernetes networking failures from DNS to Services, routes, policies, and Pods."
-overview: "Kubernetes networking debugging follows one request through caller, DNS, Service, EndpointSlices, Pod listener, NetworkPolicy, edge routing, events, and logs. A checkout-web incident turns each layer into a small proof."
+description: "Learn how to trace one Kubernetes request through DNS, a Service, EndpointSlices, Pod listeners, policy, and external routing."
+overview: "Kubernetes networking works as a chain of small agreements. A name must resolve, a Service must select ready Pods, the application must listen on the expected port, and policy must allow the connection. Checking those agreements in order makes debugging manageable."
 tags: ["debugging", "kubectl", "dns", "services"]
 order: 7
 id: article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking
 ---
+
 ## Table of Contents
 
-1. [A Failed Service Call](#a-failed-service-call)
-2. [The First Caller Proof](#the-first-caller-proof)
-3. [The DNS Proof](#the-dns-proof)
-4. [The Service Contract](#the-service-contract)
-5. [EndpointSlices, Readiness, and Pod Labels](#endpointslices-readiness-and-pod-labels)
-6. [The Pod Listener](#the-pod-listener)
-7. [NetworkPolicy and the Allowed Flow](#networkpolicy-and-the-allowed-flow)
-8. [Ingress and Gateway at the Edge](#ingress-and-gateway-at-the-edge)
-9. [Events, Logs, and Rollout Clues](#events-logs-and-rollout-clues)
-10. [Safe Fixes and Evidence](#safe-fixes-and-evidence)
-11. [Production Habits](#production-habits)
-12. [References](#references)
+1. [What are you looking for when a request fails?](#what-are-you-looking-for-when-a-request-fails)
+2. [Why should you test from the original caller?](#why-should-you-test-from-the-original-caller)
+3. [What does each error tell you?](#what-does-each-error-tell-you)
+4. [How do you trace a Service name to ready Pods?](#how-do-you-trace-a-service-name-to-ready-pods)
+5. [How do you separate an application problem from a network problem?](#how-do-you-separate-an-application-problem-from-a-network-problem)
+6. [How does the path change for traffic from outside the cluster?](#how-does-the-path-change-for-traffic-from-outside-the-cluster)
+7. [How do you confirm the repair?](#how-do-you-confirm-the-repair)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## A Failed Service Call
-<!-- section-summary: Kubernetes networking debugging starts with one failing request and follows that request one handoff at a time. -->
+Suppose a `frontend` Pod makes one request to the `orders` Service:
 
-Kubernetes networking failures can look vague from the outside. A page hangs, an API returns a timeout, or one service says another service is unreachable. The team needs to follow one request through the same handoffs Kubernetes uses.
+```text
+http://orders:8080/api/orders
+```
 
-**Debugging Kubernetes networking** means proving each layer in order: caller, DNS, Service, EndpointSlice, Pod listener, NetworkPolicy, edge route, events, logs, and recent rollout changes. Each command should answer one question and tell the team what to check next.
+That short URL hides a chain of Kubernetes decisions:
 
-The example is `checkout-web` calling `http://orders-api.orders/healthz`. The request times out, so the same failed call stays in view while the incident turns into small pieces of evidence.
+1. The Pod's DNS resolver turns `orders` into the ClusterIP of a Service.
+2. The `orders` Service describes the destination port and selects a group of Pods.
+3. EndpointSlices hold the addresses of the ready Pods behind that Service.
+4. The cluster's Service data plane sends the connection to one endpoint.
+5. NetworkPolicy rules allow the source and destination to communicate.
+6. The orders process accepts the connection and handles `/api/orders`.
 
-One Pod is calling one Service. A `checkout-web` Pod in the `checkout` namespace calls `http://orders-api.orders/healthz`, and the request times out. That is enough to begin. The team needs one repeatable symptom before anyone changes DNS, Services, policies, or Pods.
+Each step passes the request to the next. A networking problem appears when one step produces a result that is incompatible with the next. For example, DNS may return the correct Service address while the Service has an empty endpoint list. The name works, and the empty EndpointSlice marks the stopping point.
 
-**Kubernetes networking debugging** means following one request one handoff at a time. The caller asks DNS for an address. DNS points to a Service. The Service points to ready backend Pods. Policy may allow or deny the traffic. The destination Pod still needs an application process listening on the expected port.
+This article answers seven questions:
 
-![Kubernetes networking incident path from browser and edge route through checkout-web Pod, Cluster DNS, orders Service, EndpointSlices, NetworkPolicy, and the orders API Pod listener](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-incident-path.png)
+1. **What are you looking for when a request fails?**
+2. **Why should you test from the original caller?**
+3. **What does each error tell you?**
+4. **How do you trace a Service name to ready Pods?**
+5. **How do you separate an application problem from a network problem?**
+6. **How does the path change for traffic from outside the cluster?**
+7. **How do you confirm the repair?**
 
-*The incident path turns one vague networking symptom into a chain of handoffs that can each be proven or ruled out.*
+## What are you looking for when a request fails?
+<!-- section-summary: Find the first step in the request path that produces an unexpected result. -->
 
-The same failed call stays in view from the first proof to recovery. The habit is small proof, then next layer. The team captures the caller symptom first, then checks the name lookup, the Service, the backend Pod list, the Pod listener, policy, edge routing, events, and logs. That order keeps the work concrete because every command answers one question.
+Follow the request and find the first broken handoff. Every successful check proves one part of the path and reduces the number of remaining causes.
 
-| Layer | Question | Useful proof |
+The request succeeds only when every handoff returns a usable result. DNS must return the intended Service, the Service must have ready endpoints, the ports must line up, policy must allow the flow, and the orders process must accept the connection:
+
+The Service handoff is implemented by the cluster's data plane. Some clusters use kube-proxy-managed packet rules, while others use CNI or eBPF-based Service handling. The implementation changes the available diagnostics, while the same logical contract remains: traffic for the Service address and port must reach one usable endpoint and target port.
+
+| Handoff | Question | Healthy result |
 |---|---|---|
-| Caller | What exactly fails from `checkout-web`? | A `curl` from the caller namespace with status code or error text |
-| DNS | Does the Service name resolve from the caller side? | `nslookup orders-api.orders` from `checkout` |
-| Service | Does the Service publish the expected selector and port? | `kubectl -n orders describe svc orders-api` |
-| EndpointSlice | Which ready Pod IPs back the Service? | EndpointSlices labeled with `kubernetes.io/service-name` |
-| Pod | Does the app answer on the Pod IP and target port? | A direct request to the Pod IP and container port |
-| NetworkPolicy | Does policy allow this source to this destination? | Source labels, destination labels, namespace labels, and ports |
-| Edge | Does external HTTP routing point to the healthy internal Service? | Ingress or HTTPRoute backend references and controller logs |
-| Evidence | What changed around the incident time? | Events, rollout history, application logs, and controller logs |
+| Application to DNS | What address belongs to `orders`? | The orders Service ClusterIP |
+| Service to EndpointSlice | Which ready Pods serve the orders? | One or more current Pod addresses |
+| Service port to Pod port | Where should the connection arrive? | The port used by the orders process |
+| Source to destination | Is this flow allowed? | Egress and ingress rules permit it |
+| Socket to application | Is the process ready to answer? | A response from the requested path |
 
-![Kubernetes networking proof by layer board showing caller curl, DNS nslookup, Service describe, EndpointSlice readiness, Pod listener, NetworkPolicy labels, and edge route checks](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-proof-layers.png)
+Suppose DNS returns `10.96.42.10`, the Service has an empty EndpointSlice, and the request eventually times out. DNS has completed its job. The empty EndpointSlice is the first unexpected result, so the next useful check is the Service selector and Pod readiness.
 
-*The first failed proof decides the next check. That keeps the team from jumping between unrelated objects during an incident.*
+This order matters because later layers depend on earlier ones. Editing NetworkPolicy while the Service selects zero Pods spends effort on a layer the request has yet to reach.
 
-The first proof starts where the broken request starts: the caller.
+Treat the process as a binary search over one packet path. If name resolution fails, everything after DNS is still untested. If direct Pod requests work but the ClusterIP fails, the application, endpoint listener, and caller-to-Pod path have been substantially exercised; the remaining gap is around Service configuration or its data plane. The question at each step is not “what could be broken?” but “what is the earliest transition I have not yet proved?”
 
-## The First Caller Proof
-<!-- section-summary: The caller proof records the exact failing request before anyone changes DNS, Services, policies, or Pods. -->
+Keep the request coordinates fixed while making that search: source Pod, namespace, destination name or IP, port, protocol, path, and relevant headers. Changing several coordinates at once can produce a different path and a misleading success.
 
-A **caller proof** is a repeatable request from the same side of the network as the application that reports the problem. For this incident, the caller side is the `checkout` namespace, and the caller workload is `checkout-web`. A browser error alone gives a symptom, but the cluster needs a command that someone else can run again.
+![A Kubernetes request passes through six clear handoffs from the caller to the application, with each handoff labelled by the question it answers](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/request-handoff-chain.png)
 
-A strong first command uses the same URL the app uses. If the application image includes `curl`, the team can test from the Deployment itself. The `-m 5` option gives the request a five-second timeout, which keeps a hanging TCP connection from eating the whole incident window.
+*Treat each Kubernetes object as one handoff in the request path.*
 
-```bash
-kubectl -n checkout exec deploy/checkout-web -- \
-  curl -i -m 5 http://orders-api.orders/healthz
+## Why should you test from the original caller?
+<!-- section-summary: The source Pod determines DNS search paths, network identity, routes, and policy selection. -->
+
+The source of a request changes the path. A laptop uses the laptop's DNS resolver. A Pod in `shop` receives search domains for `shop`, while a Pod in `payments` receives search domains for `payments`. NetworkPolicy also selects Pods by namespace and labels, so two Pods can reach different destinations even when they run the same command.
+
+The original Pod also contributes its network namespace, source IP, node, IP-family configuration, routing table, CNI state, egress policy, and any service-mesh sidecar. A random debug Pod can differ in several of those properties and produce a successful request that says little about the failing application path.
+
+Start by writing down one exact request:
+
+```text
+caller:      frontend Pod in namespace shop
+destination: orders:8080/api/orders
+protocol:    HTTP over TCP
+result:      request fails
 ```
 
-The incident output might be a timeout:
+Then run the request from the caller:
 
 ```bash
-curl: (28) Connection timed out after 5001 milliseconds
-command terminated with exit code 28
+kubectl exec -n shop <frontend-pod> -- curl -sv http://orders:8080
 ```
 
-The output matters more than the command. A DNS failure, a TCP timeout, a connection refused error, and an HTTP `500` point at different layers.
+This test reuses the caller's DNS configuration, source address, labels, routes, and policies. Its result describes the same path as the application request.
 
-| Output shape | Next layer |
-|---|---|
-| `curl: (6) Could not resolve host` | DNS name, namespace, resolver, and CoreDNS |
-| `curl: (28) Connection timed out` | EndpointSlices, NetworkPolicy, or network data plane |
-| `curl: (7) Failed to connect ... port 80` | Service backend, target port, or app listener |
-| `HTTP/1.1 503 Service Unavailable` | HTTP route, backend app, or upstream health |
-
-Many production images leave out shell tools to keep containers small. A temporary debug Pod helps, but that Pod needs to look like the real caller for policy testing. If NetworkPolicy allows only Pods with the `app.kubernetes.io/name=checkout-web` label, a random debug Pod with no labels can produce a fake denial.
-
-The debug Pod should carry the same important labels as `checkout-web`, then run the same `curl -i -m 5 http://orders-api.orders/healthz` request. That keeps policy evidence close to the real caller instead of testing a random unlabeled Pod.
-
-The incident note should record the namespace, workload, URL, command, output, and time. That note sounds ordinary, but it saves real production time. If the next engineer joins ten minutes later, they can see whether the failure changed after a rollout, policy edit, or DNS restart.
-
-Now the request uses a Kubernetes name, so the next proof checks whether that name resolves.
-
-## The DNS Proof
-<!-- section-summary: DNS proves that the caller can turn the Service name into the Service address Kubernetes publishes. -->
-
-**Cluster DNS** is the name lookup system Kubernetes gives to Pods. Kubernetes creates DNS records for Services, and kubelet configures each Pod so its containers know which DNS server and search paths to use. In this incident, `checkout-web` asks DNS for `orders-api.orders`, and DNS should answer with the ClusterIP for the orders Service.
-
-A **ClusterIP** is the stable virtual IP address for a normal internal Service. The caller usually uses the Service name instead of the ClusterIP, because names survive Service recreation patterns and make application config readable. The DNS answer proves the name maps to the Service address; the next layers still need to prove backends and traffic flow.
-
-The proof should run from the `checkout` namespace because Kubernetes DNS search paths include the caller namespace. The short name `orders-api` would first search in `checkout`. The cross-namespace name `orders-api.orders` points to the Service in `orders`, and the full name `orders-api.orders.svc.cluster.local` removes even more ambiguity.
+Small production images often contain only the application binary. Kubernetes supports ephemeral debug containers for this situation:
 
 ```bash
-kubectl -n checkout run dnscheck \
-  --rm -it \
-  --restart=Never \
-  --image=registry.k8s.io/e2e-test-images/agnhost:2.39 \
-  -- nslookup orders-api.orders
+kubectl debug -n shop pod/<frontend-pod> \
+  -it \
+  --image=busybox
 ```
 
-A healthy answer usually shows the cluster DNS server and the Service address:
+An ephemeral container attached to the Pod shares its network namespace, so tools such as `nslookup`, `wget`, or `curl` observe the same network identity. Follow the access and image rules of your cluster before using a debug image.
+
+The word “same” matters at several layers. `curl orders` from a Pod in another namespace may resolve a different fully qualified name. A debug Pod with different labels may be allowed by a NetworkPolicy that denies `frontend`. A Pod on another node may avoid the broken node route. A request outside the mesh sidecar may bypass interception. The closer the diagnostic process is to the real caller, the fewer of those variables change silently.
+
+## What does each error tell you?
+<!-- section-summary: An error shows how far the request travelled and suggests the next boundary to inspect. -->
+
+An error is a clue about the furthest layer that responded.
+
+### A. `NXDOMAIN` or “unknown host”
+
+The DNS resolver finished the lookup and returned zero matching records. Check the Service name, namespace, and the caller's DNS search path.
+
+For example, a Pod in `shop` that requests `orders` searches for `orders.shop.svc.cluster.local`, whereas a Pod in `payments` searches for `orders.payments.svc.cluster.local`.
+
+### B. “Connection refused”
+
+The request reached an address and a TCP response rejected the connection. This commonly means that the application listens on a different port or interface.
+
+For example, the Service may forward to `targetPort: 3000` while the orders process listens on `8080`. The address is reachable; the socket contract is wrong.
+
+A refusal is stronger evidence than a silent timeout because some network component returned a TCP reset. The reset can come from the destination host or from Service forwarding behaviour when usable endpoints are absent, so it narrows the path without identifying one component by itself.
+
+### C. A connection timeout
+
+The client deadline expired before a useful response arrived. Packet filtering, an unreachable route, or an application that accepts a connection and then stalls can all create this result. A timeout identifies a broad part of the path, so use the next check to split it into smaller questions.
+
+### D. HTTP `404`, `500`, `502`, or `503`
+
+An HTTP-speaking component answered. Identify that component before changing the cluster.
+
+- A JSON `404` from the orders API suggests that the route reached application code and `/api/orders` is the next thing to inspect.
+- A Gateway controller's default `404` suggests that the hostname or path matched zero routes.
+- A proxy-generated `503` often points toward an empty or unhealthy backend set.
+
+Headers, response bodies, controller logs, and application logs help identify the responder.
+
+### E. One request in three fails
+
+The ratio may match the backend count. A Service with three endpoints can send roughly one third of requests to a single unhealthy Pod. Test each endpoint directly and compare its listener, readiness, image version, and logs with the other replicas.
+
+Other results fit the same evidence model:
+
+| Result | What has probably happened | Next boundary |
+|---|---|---|
+| DNS query timeout | The resolver received no DNS answer | DNS Service reachability, CoreDNS, caller egress |
+| `Network is unreachable` or `No route to host` | The kernel lacks a usable route to the destination | CNI routes, node networking, destination address |
+| TLS handshake or certificate error | TCP reached a TLS endpoint | SNI hostname, certificate, listener configuration |
+| HTTP `401` or `403` | An HTTP component processed the request | Authentication, authorisation, or proxy policy |
+| TCP connects and the response hangs | A listener accepted the connection | Application protocol, dependency call, or return path |
+
+Status codes and transport errors remain clues rather than universal proofs. The responsible proxy, CNI, and Service implementation can shape the exact error, so pair the client result with object status and component logs.
+
+## How do you trace a Service name to ready Pods?
+<!-- section-summary: Resolve the name, inspect the Service contract, and read the EndpointSlices produced from its selector. -->
+
+Begin with the name used by the application. `getent` exercises the operating-system resolver path used by many applications, while `nslookup` sends an explicit DNS query and shows the DNS answer:
 
 ```bash
-Server:    10.96.0.10
-Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
-
-Name:      orders-api.orders.svc.cluster.local
-Address 1: 10.96.42.18 orders-api.orders.svc.cluster.local
+kubectl exec -n shop <frontend-pod> -- getent hosts orders
 ```
 
-If the lookup fails, the team has a DNS incident or a name mismatch. The next evidence should compare the name in the application config with the Service name, then inspect the Pod resolver file and CoreDNS Pods. The resolver file shows the nameserver and search paths that the container uses, while the CoreDNS Pod list shows whether the shared DNS server is healthy.
+Then inspect the DNS answer directly:
 
-The resolver file should point at the cluster DNS Service, and the CoreDNS Pods should be running. A broken CoreDNS Deployment affects many Services at once, so the incident blast radius grows beyond the orders API. A typo in the Service name affects only this path, so the fix stays near the application config or Service manifest.
+```bash
+kubectl exec -n shop <frontend-pod> -- nslookup orders
+```
 
-DNS success moves the investigation forward. The name resolves to a Service address, so the next question is whether the Service points to the right Pods and port.
+Assume the answer is `10.96.42.10`. That address should match the orders Service:
 
-## The Service Contract
-<!-- section-summary: The Service contract proves the stable name, selector, and caller port that sit in front of changing Pods. -->
+```bash
+kubectl -n shop get service orders -o wide
+kubectl -n shop get service orders -o yaml
+```
 
-A **Service** is the stable network contract in front of changing Pods. It has a name, a namespace, a virtual address for ClusterIP Services, a selector for finding backend Pods, and one or more ports for callers. The orders Service should publish port `80` and forward traffic to the orders API container port `3000`.
+That expectation applies to an ordinary ClusterIP Service. A headless Service has `clusterIP: None`, and its DNS answer can contain Pod or endpoint addresses directly. Check the Service type before treating the absence of a virtual IP as a DNS failure.
 
-This proof comes after DNS because a successful lookup only says the name exists. The Service still has to select the right Pods and map the caller-facing port to the application port. In this incident, the caller uses a friendly Service name, so the next step is to inspect the object behind that name before looking at Pod-level details.
+Inspect the Service:
 
-Here is the Service shape the team expects in this incident:
+```bash
+kubectl get svc orders -n shop -o yaml
+```
+
+The Service contains two related port values:
 
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: orders-api
-  namespace: orders
 spec:
+  clusterIP: 10.96.42.10
   selector:
-    app.kubernetes.io/name: orders-api
+    app: orders
   ports:
-    - name: http
-      port: 80
+    - port: 8080
       targetPort: 3000
 ```
 
-The split between `port` and `targetPort` catches many real teams. `port` is the Service port that callers use. `targetPort` is the port on the selected Pods. In this example, `checkout-web` calls `http://orders-api.orders` on port `80`, and Kubernetes forwards that traffic to port `3000` on the orders API Pods.
+`port: 8080` is the port used by callers. `targetPort: 3000` is the port used on a ready orders Pod.
 
-The first Service command shows the type, ClusterIP, published port, and selector:
-
-```bash
-kubectl -n orders get svc orders-api -o wide
-```
+Next, read the computed backend list:
 
 ```bash
-NAME                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
-orders-api   ClusterIP   10.96.42.18   <none>        80/TCP    4h    app.kubernetes.io/name=orders-api
-```
-
-The detailed Service view adds target port and endpoint hints, but the review questions stay the same:
-
-| Service field | What to verify |
-|---|---|
-| Name and namespace | The URL `orders-api.orders` points at this object |
-| Selector | The labels match the orders API Pod template |
-| Port mapping | Callers use `80`, and Kubernetes forwards to Pod port `3000` |
-| Endpoints hint | Kubernetes currently sees selected backend addresses |
-
-A mismatch in any of those fields can break the request while every Pod still shows `Running`.
-
-Production mistakes usually look small. A Helm values change can rename the Pod label to `app.kubernetes.io/name=orders-api` while the Service still selects `orders-api`. A developer can change the container to listen on `8080` while the Service still targets `3000`. A chart can publish the Service in `order` instead of `orders`, which makes DNS look like the main problem even though the object lives in the wrong namespace.
-
-The Service contract points to the backend list, and Kubernetes stores that backend list in EndpointSlices.
-
-## EndpointSlices, Readiness, and Pod Labels
-<!-- section-summary: EndpointSlices prove which ready Pod IPs and ports the Service will actually use. -->
-
-An **EndpointSlice** is the Kubernetes object that records a slice of backend network endpoints for a Service. In normal Service-backed traffic, those endpoints usually represent Pod IPs and ports. Kubernetes uses EndpointSlices so Services can scale to many backends without one giant endpoints object changing all the time.
-
-EndpointSlices expose the backend list that the Service can actually use. The DNS name can resolve, the Service can have the right ClusterIP, and callers can still fail when no ready Pod sits behind it. Readiness gates traffic here: a Pod with a failing readiness probe should stay out of the ready endpoint list until the app can serve traffic.
-
-The label `kubernetes.io/service-name` connects EndpointSlices to a Service. This command asks for the slices backing the orders API:
-
-```bash
-kubectl -n orders get endpointslice \
-  -l kubernetes.io/service-name=orders-api \
+kubectl get pods -n shop \
+  -l app=orders \
   -o wide
+
+kubectl get endpointslices -n shop \
+  -l kubernetes.io/service-name=orders
 ```
 
-```bash
-NAME                          ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
-orders-api-7k9b4   IPv4          3000    10.244.4.31,10.244.5.18   4h
-```
-
-If the slice has no endpoints, the team should compare Service selectors with Pod labels. This check keeps the focus on the data Kubernetes uses, rather than the labels people remember from a manifest review.
-
-| EndpointSlice finding | Next proof | Likely cause |
-|---|---|---|
-| No slices or no endpoints | Pods selected by `app.kubernetes.io/name=orders-api` with labels shown | Service selector misses the Pod template labels |
-| Endpoints exist but readiness is false | Pod `READY` column and `describe pod` events | Readiness probe, dependency, startup, or config failure |
-| Endpoints exist on an unexpected port | Service `targetPort` and container port | Port drift between Service and application |
-| Endpoints look healthy | Direct Pod listener proof | The failure sits after backend selection |
-
-`Running` only says the container process exists. `READY 0/1` says Kubernetes still keeps that Pod outside normal Service traffic. A failing readiness probe can come from a bad health path, a missing environment variable, a database dependency, or an app that listens on a different port than the probe expects. Once EndpointSlices show ready backend IPs, the next proof leaves the Service abstraction and talks to the Pod listener directly.
-
-## The Pod Listener
-<!-- section-summary: The Pod listener proof checks whether the destination application accepts traffic on the IP and port the Service targets. -->
-
-The **Pod listener** is the actual application socket inside the destination Pod. A socket combines an IP address, a protocol, and a port. For the orders API, the Service targets TCP port `3000`, so the application should listen on an address reachable from other Pods and answer `/healthz` there.
-
-This layer explains a very common production surprise. An app can start successfully and still bind to `127.0.0.1`, which means it listens only on the loopback address inside its own network namespace. Other Pods need the app to listen on the Pod network address, usually by binding to `0.0.0.0` inside the container. The Pod can show `Running`, and the Service can show endpoints, while cross-Pod traffic still fails.
-
-A direct proof uses one of the ready Pod IPs from EndpointSlices and sends a request from the caller side. This bypasses Service load balancing while keeping the source namespace and labels close to the real caller.
-
-```bash
-kubectl -n checkout run netcheck \
-  --rm -it \
-  --restart=Never \
-  --image=curlimages/curl:8.10.1 \
-  --labels=app.kubernetes.io/name=checkout-web \
-  -- curl -i -m 5 http://10.244.4.31:3000/healthz
-```
-
-A successful response from the Pod IP proves the app listener, Pod networking, and source-to-destination path for that backend:
-
-```bash
-HTTP/1.1 200 OK
-content-type: application/json
-
-{"status":"ok"}
-```
-
-If the Service request fails and the direct Pod IP request succeeds, the Service selector, Service port, kube-proxy or data-plane programming, and EndpointSlice wiring deserve attention. If both fail with a timeout, NetworkPolicy or a lower network path could still block traffic. If the direct Pod request returns connection refused, the app likely listens on a different port or address.
-
-Application logs help confirm listener problems. A Node.js service might print `Listening on 127.0.0.1:3000`, while the container needs `0.0.0.0:3000`. A Java or Go app might use the wrong port from an environment variable after a config change. The team can inspect recent logs, environment, health probe output, and, when approved, an ephemeral debug container without guessing.
-
-This kind of debug container should follow the team's production access rules. It can reveal useful packet and socket evidence, and it also gives shell access near a production workload. Teams usually restrict who can use it and record why they used it.
-
-Once the app listener answers from the right source, the next common blocker is policy. NetworkPolicy can allow or deny the same request based on labels, namespaces, ports, and direction.
-
-## NetworkPolicy and the Allowed Flow
-<!-- section-summary: NetworkPolicy debugging compares the real source labels, destination labels, namespace labels, direction, and port. -->
-
-**NetworkPolicy** describes which network traffic Pods may receive or send. It uses selectors and rules over Pods, namespaces, IP blocks, protocols, and ports. Kubernetes stores the NetworkPolicy object, and the cluster's CNI plugin enforces it when the plugin supports policy enforcement.
-
-The important beginner detail is that NetworkPolicy selects Pods rather than Services. An ingress policy in the `orders` namespace protects the destination orders API Pods. The caller may use the Service name, but the policy engine evaluates the packet against source labels, namespace labels, destination Pod labels, and ports.
-
-Here is a focused allow rule for this incident:
+EndpointSlices connect the Service definition to real Pod addresses. Their contents lead to a few common explanations:
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-checkout-to-orders-api
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: checkout
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: checkout-web
-      ports:
-        - protocol: TCP
-          port: 3000
+endpoints:
+  - addresses:
+      - 10.244.2.17
+    conditions:
+      ready: true
+      serving: true
+      terminating: false
+    targetRef:
+      kind: Pod
+      name: orders-6d78bf5c7f-k2p9v
+ports:
+  - port: 3000
 ```
 
-This policy selects the orders API Pods as the protected destination. It allows ingress from Pods labeled `app.kubernetes.io/name=checkout-web` in the `checkout` namespace, and it allows TCP port `3000`. The port is the destination Pod port in this example, because policy evaluates traffic to the Pod.
+This record says that Kubernetes currently associates one usable orders Pod with endpoint port `3000`. The address, conditions, Pod reference, and port are the concrete state consumed by the Service data plane.
 
-The fields to verify are:
+- **The endpoint list is empty.** Compare the Service selector with Pod labels, then inspect Pod readiness. A Pod can run while its readiness condition keeps it out of the ready endpoint set.
+- **The endpoint port differs from the application port.** Compare `targetPort`, named container ports, and the process listener.
+- **Several endpoints appear and one behaves differently.** Request each Pod address directly and compare the outlier with the healthy replicas.
 
-- `metadata.namespace: orders` places the policy with the destination Pods.
-- `podSelector.matchLabels` selects the orders API Pods that the policy protects.
-- `policyTypes: Ingress` controls inbound traffic to those selected Pods.
-- `namespaceSelector` and `podSelector` in the same `from` item require the caller namespace and caller Pod labels to match.
-- `ports[].port: 3000` allows the destination Pod port, not the Service port.
+Endpoint readiness has one deliberate exception. A Service with `publishNotReadyAddresses: true` can publish endpoints before they become ready, often for peer discovery. Inspect that Service field before treating every published address as evidence that the application is ready for ordinary traffic.
 
-The first policy check lists policies in the source and destination namespaces, then compares the labels the rule actually uses:
-
-| Policy evidence | What to compare |
-|---|---|
-| NetworkPolicies in `orders` | Ingress rules protecting destination Pods |
-| NetworkPolicies in `checkout` | Egress rules that might block DNS or orders API traffic |
-| Namespace labels on `checkout` | `namespaceSelector` expectations such as `kubernetes.io/metadata.name=checkout` |
-| Labels on `checkout-web` Pods | Source `podSelector` expectations |
-| Labels on orders API Pods | Destination `podSelector` expectations |
-
-A tiny label drift can close the path. For example, the namespace might have `name=checkout` while the policy expects `kubernetes.io/metadata.name=checkout`. The checkout Pod might carry `app=checkout-web` while the policy expects `app.kubernetes.io/name=checkout-web`. The orders Pod might have new Helm labels after a chart refactor while the old policy still selects the old label set.
-
-`describe networkpolicy allow-checkout-to-orders-api` turns policy YAML into a readable summary:
+Use a Pod address from the EndpointSlice and its endpoint port for a direct test:
 
 ```bash
-kubectl -n orders describe networkpolicy allow-checkout-to-orders-api
+kubectl exec -n shop <frontend-pod> -- \
+  curl -v http://10.244.2.17:3000/health
 ```
+
+This request bypasses the Service address while keeping the same source. When the Pod request succeeds and the Service request fails, the Service data path deserves attention. When both fail, continue toward the listener and policy checks.
+
+Test every ready address when results are intermittent:
+
+```text
+10.244.2.17:3000 -> 200
+10.244.3.22:3000 -> 200
+10.244.5.31:3000 -> timeout
+```
+
+The pattern changes “the Service sometimes fails” into “the original caller cannot reach one specific endpoint.” Compare that Pod's node, readiness, listener, labels, policy selection, and CNI path with the two healthy endpoints. The Service abstraction is still useful, but direct tests reveal the concrete member that disagrees with it.
+
+![A decision path traces orders from DNS to the Service, EndpointSlices, one direct Pod request, and the application listener](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/service-debugging-path.png)
+
+*Each result chooses the next boundary to inspect.*
+
+## How do you separate an application problem from a network problem?
+<!-- section-summary: Compare loopback, Pod-address, and real-caller requests, then inspect policy for the remaining boundary. -->
+
+Three requests reveal three different boundaries.
+
+### A. Request the application through loopback
 
 ```bash
-PodSelector:     app.kubernetes.io/name=orders-api
-Policy Types:    Ingress
-Ingress:
-  To Port: 3000/TCP
-  From:
-    NamespaceSelector: kubernetes.io/metadata.name=checkout
-    PodSelector:       app.kubernetes.io/name=checkout-web
+kubectl exec -n shop <orders-pod> -- \
+  wget -qO- http://127.0.0.1:3000/health
 ```
 
-If the cluster also uses egress policies in `checkout`, the team needs a second rule that allows `checkout-web` to reach the orders API and DNS. Egress policies can block DNS lookups to CoreDNS, which makes a policy problem look like a DNS problem from the application side. The caller proof and DNS proof help separate those cases.
+This asks whether the process can answer inside its own container. An application error here directs attention to startup state, configuration, logs, and the requested path.
 
-One more platform fact belongs in the incident note: the CNI plugin. Clusters commonly use policy-capable plugins such as Cilium, Calico, Antrea, and cloud-provider implementations. Kubernetes can store NetworkPolicy objects in clusters where the network plugin leaves those rules unenforced, so the platform runbook should name the plugin and its policy mode.
-
-When internal traffic now works from `checkout-web` to `orders-api`, the investigation changes direction. If external users still fail, the edge route gets the next proof.
-
-## Ingress and Gateway at the Edge
-<!-- section-summary: Edge debugging starts after the internal Service path works, then checks host rules, paths, backend references, TLS, and controller logs. -->
-
-An **Ingress** is a Kubernetes object for HTTP and HTTPS routing from outside the cluster to Services inside the cluster. A **Gateway** is part of the Kubernetes Gateway API, which separates infrastructure listener configuration from route objects such as HTTPRoute. In both models, an edge controller watches Kubernetes objects and configures a load balancer or proxy.
-
-The key connection is timing. Edge debugging is useful after the internal Service path already works. If `checkout-web` can call `orders-api.orders` from inside the cluster, and public users still receive `404`, `502`, or TLS errors, the problem sits near host matching, path matching, backend references, certificates, or the controller.
-
-For an Ingress-based setup, the team inspects host, path, class, backend Service, and events. A useful Ingress proof compares the public request with the internal Service request. The public request tells the edge symptom. The internal request tells whether the backend path works without the edge controller.
-
-The Ingress description should name the class, host, path, backend Service, and events:
+Check the socket when the request fails or the expected port is unclear:
 
 ```bash
-kubectl -n orders describe ingress orders-api
+kubectl exec -n shop <orders-pod> -- ss -lnt
 ```
+
+An entry for `127.0.0.1:3000` accepts only loopback traffic. An entry for `0.0.0.0:3000` accepts traffic arriving through the Pod's network interface as well.
+
+### B. Request the application through the Pod address
+
+Use the direct `10.244.2.17:3000/health` request from the original caller. This preserves the caller's network context while bypassing Service translation.
+
+When loopback works and the Pod address fails, inspect the bind address. A process bound to `127.0.0.1` serves only loopback traffic. A server intended for Pod traffic commonly binds to `0.0.0.0` or the Pod address.
+
+### C. Request the Pod from the original caller
+
+The direct endpoint request from `frontend` adds the Pod network and policy to the path. If the same Pod answers locally and times out from `frontend`, inspect the policies that select both ends:
 
 ```bash
-Ingress Class: public
-Rules:
-  Host                         Path      Backends
-  api.devpolaris.example       /orders   orders-api:80 (10.244.4.31:3000)
-Events:
-  Normal  Sync  public-ingress-controller  Scheduled for sync
+kubectl get networkpolicy -A
 ```
 
-When the cluster uses Gateway API, the same idea applies to Gateway and HTTPRoute objects. The Gateway holds listeners such as HTTP or HTTPS on a hostname. The HTTPRoute holds matching rules and backend references to Services.
+Kubernetes evaluates egress and ingress separately. For `frontend -> orders:3000`:
 
-For Gateway API, the route status should show that the Route attached and its backend references resolved:
+1. Policies selecting `frontend` determine which egress flows it can send.
+2. Policies selecting orders Pods determine which ingress flows they can receive.
+3. An isolated connection needs an allowed result in both directions.
+
+NetworkPolicies combine additively. When several policies select one Pod, their allowed flows form a union. Read all selecting policies before assuming that one file contains the whole policy result.
+
+### D. Inspect packets after the logical checks agree
+
+Packet capture becomes useful when the name, Service, EndpointSlice, target port, application listener, and policy intent all look correct while the real connection still times out. Capture close to both ends through the debugging method supported by the cluster.
+
+Use `tcpdump` from a supported Pod or Node debugging environment and keep the capture scoped to the current endpoint, port, and time window.
+
+If the caller repeatedly sends TCP `SYN` packets while the destination sees zero packets, the loss occurs between the source and destination. If the destination sees the `SYN` and sends `SYN-ACK` while the caller never receives it, the return path is the next boundary. If the three-way handshake completes, the investigation moves to TLS or the application protocol.
+
+Packets report what the data plane actually carried. They are most useful after the object-level checks have reduced the question to a specific source, destination address, port, and time window.
+
+## How does the path change for traffic from outside the cluster?
+<!-- section-summary: External traffic adds public DNS, an edge address, TLS, and an Ingress or Gateway route before the Service. -->
+
+A request from another Pod starts near the Service. A request from a browser begins several layers earlier:
+
+An external request crosses a sequence of independently testable boundaries: public DNS, the public address, the TCP and TLS listener, the hostname and path route, the Service port, the EndpointSlice backend set, and finally the Pod listener. Test them in that order so each result narrows the remaining search.
+
+Gateway API is the recommended starting point for new Kubernetes edge-routing designs. Ingress remains stable and supported, while its API is frozen. The debugging method stays the same for either choice: prove the additional edge layers before revisiting the already-working internal Service path.
+
+For an outside request, test public DNS, the edge address, TLS, host and path routing, the Service, and the current endpoints in that order. Preserve the real hostname when testing a particular edge address so TLS and HTTP routing receive the same name a user supplies.
+
+For example, `--resolve` can direct one hostname to a chosen load-balancer address while preserving both TLS SNI and the HTTP `Host` value:
 
 ```bash
-kubectl -n orders get httproute orders-api -o yaml
+curl -vk \
+  --resolve api.example.com:443:<LOAD_BALANCER_IP> \
+  https://api.example.com/orders
 ```
 
-```yaml
-status:
-  parents:
-    - parentRef:
-        name: public-api
-        namespace: platform-networking
-      conditions:
-        - type: Accepted
-          status: "True"
-        - type: ResolvedRefs
-          status: "True"
-```
+If this works while the normal public name fails, the added evidence points toward public DNS. If it reaches the controller and returns its default `404`, public addressing and the edge listener worked far enough for hostname or path matching to become the next boundary. If internal Service access already works, retain that evidence instead of restarting at Pod networking.
 
-Common edge mistakes are concrete. The route might match `/api/orders` while the browser calls `/orders`. The backend reference might point at Service port `8080` while the Service publishes `80`. The Ingress class or GatewayClass might point to a missing controller in this cluster. TLS might fail because the certificate covers `dev.devpolaris.example` while users call `app.devpolaris.example`.
+The response suggests the next layer:
 
-Controller logs turn those object checks into implementation evidence. The namespace and Deployment name depend on the controller, but the pattern is the same. The team reads recent logs from the edge controller around the failing request time.
-
-| Edge proof | What it should answer |
-|---|---|
-| Public `curl` to the failing URL | The exact external symptom, status, TLS error, or timeout |
-| Internal caller request to the backend Service | Whether the backend path works without the edge controller |
-| Ingress or HTTPRoute description | Host, path, class, listener, backend Service, and backend port |
-| Controller logs | Whether the controller accepted the route and found a healthy backend |
-
-Edge evidence connects back to the internal proofs. If internal traffic fails, the edge controller only adds noise. If internal traffic works, the edge layer has a clean job: match the host and path, terminate or pass TLS correctly, and forward to the intended Service port.
-
-At this point the team has facts from each network layer. Events, logs, and rollout history help connect those facts to the change that caused the incident.
-
-## Events, Logs, and Rollout Clues
-<!-- section-summary: Events and logs connect the failed layer to a recent change, restart, policy edit, or controller error. -->
-
-**Events** are Kubernetes records about things that happened to objects. They can show scheduling failures, failed image pulls, readiness probe failures, load balancer provisioning errors, and many other object-level changes. **Logs** are messages from containers and controllers. They show what the application or controller saw while the request failed.
-
-Events and logs help most after the layer checks narrow the search. If EndpointSlices are empty, Pod events and readiness logs matter. If the Ingress backend looks wrong, Ingress controller logs matter. If DNS fails for many Services, CoreDNS events and logs matter. This keeps log reading focused instead of turning the incident into a wall of unrelated messages.
-
-The orders namespace events give a short timeline. The orders application logs show recent app behavior. Previous container logs help when the Pod restarted during the incident. Rollout history connects networking symptoms to a Deployment change.
-
-| Evidence | Command shape | Best use |
+| Result | Layer that answered | Next check |
 |---|---|---|
-| Namespace events | `kubectl -n orders get events --sort-by=.lastTimestamp` | Readiness, scheduling, image pull, and object timeline |
-| Current logs | `kubectl -n orders logs deploy/orders-api --since=30m` | App behavior during the failing window |
-| Previous logs | `kubectl -n orders logs deploy/orders-api --previous` | Crash or restart clues |
-| Rollout history and status | `kubectl -n orders rollout history/status deploy/orders-api` | Connect symptoms to a recent Deployment change |
+| DNS returns zero addresses | Public DNS | Record name and published address |
+| TLS certificate error | Edge listener | Hostname, certificate, Secret, listener status |
+| Controller-generated `404` | HTTP edge | Hostname and path rules |
+| Controller-generated `502` or `503` | Route and upstream selection | Service port, endpoints, policy, backend readiness |
+| Catalog API returns `500` | Application | Application logs and dependencies |
 
-Here is a realistic pattern. The caller proof shows a connection refused error. DNS works. The Service targets port `3000`. EndpointSlices have ready Pods. A direct Pod IP request to port `3000` fails. The app logs say `Listening on 127.0.0.1:3000` after the latest rollout. That points to an application bind address change instead of a Service, DNS, or policy problem.
+Controller implementations use different status fields and response formats. Compare the response with route conditions and the relevant controller logs.
 
-Here is another pattern. The caller proof shows a timeout. DNS works. EndpointSlices list ready Pods. Direct Pod IP traffic from the labeled debug Pod times out. The orders namespace has a new `default-deny` NetworkPolicy from the same timestamp as the failure. The policy expects a namespace label missing from the `checkout` namespace. That points to policy label drift.
+## How do you confirm the repair?
+<!-- section-summary: Repeat the original request and one boundary check after changing the smallest responsible configuration. -->
 
-Those examples point to a simple rule: match the fix to the failed proof. Restarting CoreDNS would waste time during an app bind-address problem. Rolling back the app would waste time during a missing Ingress backend port problem. Each layer proof protects the team from changing the nearest visible object instead of the failed one.
+A repair is not confirmed until the original failing request succeeds from the original caller.
 
-Now the team can fix the smallest failed layer and keep enough evidence for the next incident review.
-
-## Safe Fixes and Evidence
-<!-- section-summary: A safe network fix changes the smallest failed layer, proves recovery from the caller, and leaves evidence for review. -->
-
-A **safe fix** changes the layer that failed, then repeats the original caller proof. That last part matters. The incident started with `checkout-web` failing to reach `http://orders-api.orders/healthz`, so recovery should use that same request from the caller side. A green Pod, a successful local curl, or a healthy Ingress controller can support the story, but the caller request closes the loop.
-
-The fix should be as small as the failed proof allows. If the Service selector failed, change the selector or labels. If policy blocked traffic, change the rule that names the source, destination, direction, or port. If the app listened on the wrong address, fix the workload. Matching the fix to the proof keeps the recovery focused and leaves clearer evidence for review.
-
-Here are common fixes matched to the proof that supports them:
-
-| Failed proof | Typical fix | Recovery proof |
-|---|---|---|
-| DNS name fails and Service name is wrong | Correct the application URL or Service name | `nslookup` and caller `curl` from `checkout` |
-| Service selector returns no Pods | Align Service selector with Pod template labels | EndpointSlices show ready Pod IPs |
-| Service targets wrong port | Change `targetPort` or the container listener port | Service request returns `200` |
-| Pods are `Running` but `READY 0/1` | Fix readiness path, dependency, config, or app startup | EndpointSlices show `ready=true` |
-| Direct Pod IP request is refused | Fix app bind address or container port | Direct Pod IP request returns health response |
-| Policy blocks traffic | Correct namespace, Pod selectors, direction, or port | Labeled caller debug Pod can reach backend |
-| External route fails while internal path works | Correct host, path, class, TLS, or backend Service port | Public curl and internal curl both pass |
-
-The rollback path depends on what changed. If the latest orders API Deployment changed the bind address, `kubectl rollout undo` may restore service while the team prepares a proper fix. If a NetworkPolicy change caused the outage, reverting the policy manifest through GitOps or applying the previous known-good rule may restore the path. If an Ingress backend reference changed, the smallest fix may be a route manifest correction rather than an application rollback.
-
-After the fix, the same caller proof should pass:
+Repeat the original request:
 
 ```bash
-kubectl -n checkout run netcheck \
-  --rm -it \
-  --restart=Never \
-  --image=curlimages/curl:8.10.1 \
-  --labels=app.kubernetes.io/name=checkout-web \
-  -- curl -i -m 5 http://orders-api.orders/healthz
+kubectl exec -n shop <frontend-pod> -- curl -sv http://orders:8080
 ```
 
-The evidence bundle can stay short. Keep the original failing command, the failed layer proof, the object diff or rollout change, the fix, and the recovery command. That record gives the post-incident review enough detail to improve tests, chart validation, policy review, or runbooks.
+One success can still miss a faulty replica. Repeat the Service request enough times to exercise the backend set, or call every current EndpointSlice address directly. Confirm that all expected endpoints are ready and that the repair preserved the intended policy boundary instead of routing around it.
 
-For example, a selector incident might end with a short summary: `checkout-web` order history failed for 18 minutes, caller `curl` from the `checkout` namespace timed out, the Service selector matched zero Pods after a chart label change, the team restored `app.kubernetes.io/name=orders-api` on the Pod template, EndpointSlices listed two ready endpoints, caller `curl` returned `200`, and CI gained a rendered-label check.
+The complete workflow is compact enough to reuse:
 
-![Kubernetes networking safe fix loop showing original checkout-web caller proof, smallest fix, same caller proof passing, and the evidence bundle for review](/content-assets/articles/article-containers-orchestration-kubernetes-networking-debugging-kubernetes-networking/debugging-recovery-summary.png)
+1. Reproduce the exact request from the original caller.
+2. Resolve the name and compare the answer with the Service.
+3. Inspect the Service selector, `port`, and `targetPort`.
+4. Read the EndpointSlices and test each Pod endpoint from the caller.
+5. Compare loopback, Pod-address, and ClusterIP requests to isolate the application, Pod network, and Service data plane.
+6. Inspect source egress and destination ingress policies when the direct Pod path fails.
+7. Use packet capture when the logical state agrees but the real path still drops packets.
+8. Repeat the original request after the repair.
 
-*Recovery evidence closes the same loop that opened the incident: repeat the caller proof, show the failed layer, record the fix, and add one prevention check.*
+At every step, write down the last result that worked and the first result that failed. That boundary gives the next command a clear, immediate, reproducible purpose.
 
-The final section turns those incident lessons into daily habits.
+Recording both results also makes the diagnosis reproducible: another operator can repeat the same boundary test instead of beginning again from a vague report.
 
-## Production Habits
-<!-- section-summary: Good network debugging habits make future incidents shorter by keeping names, labels, ports, tools, and evidence predictable. -->
+## Check Your Answers
+<!-- section-summary: Revisit the request path from its first handoff through the final repair check. -->
 
-Production Kubernetes networking needs a few boring and consistent details. Use namespace-qualified Service names for cross-namespace calls, such as `orders-api.orders`, so the application config carries the destination namespace. Use stable label keys like `app.kubernetes.io/name` and keep Service selectors, Deployment labels, and NetworkPolicy selectors aligned in chart tests.
+:::expand[What are you looking for when a request fails?]{kind="recap"}
+Follow one request and find the first handoff that produces an unexpected result. If DNS returns the correct Service address and the EndpointSlice is empty, DNS has completed its part. The Service selector and Pod readiness are the next checks.
+:::
 
-Keep Service ports and container ports easy to trace. A Service can publish `80` and target `3000`, and that is fine when everyone can see the mapping. Name ports consistently, keep readiness probes pointed at the same application health contract, and record whether NetworkPolicy rules should use the Service-facing port or the Pod-facing port in your team's examples.
+:::expand[Why should you test from the original caller?]{kind="recap"}
+The source Pod determines DNS search paths, network identity, routes, and policy selection. A request from the original caller exercises the same path as the application. A laptop or a Pod in another namespace exercises a different path.
+:::
 
-Prepare debug access before the incident. Approve one or two debug images, define who may create temporary debug Pods or ephemeral containers, and document the labels those Pods need for realistic NetworkPolicy tests. A debug Pod with the wrong labels can waste time because it tests a different policy path than the real workload.
+:::expand[What does each error tell you?]{kind="recap"}
+An unknown-name result points to DNS. A quick refusal points toward the listener or port. A timeout covers routing, filtering, and a stalled application. An HTTP response identifies a proxy or application that handled the request. The result tells you which boundary to inspect next.
+:::
 
-Make the first and last command the same shape. The first command captures the failing caller request. The last command proves that same request works again. Everything in the middle explains why it failed and what changed.
+:::expand[How do you trace a Service name to ready Pods?]{kind="recap"}
+Resolve the application name from the caller, compare the answer with the Service ClusterIP, inspect `port`, `targetPort`, selector, and Pod labels, and then read the EndpointSlices. A direct request to each endpoint separates a shared Service-path problem from a single backend problem.
+:::
 
-Kubernetes networking has many pieces, but the request path gives them order. Caller, DNS, Service, EndpointSlices, Pod listener, NetworkPolicy, edge route, events, and logs each answer a different question. When the team asks those questions one at a time, a vague "networking is broken" incident turns into one failed proof and one focused fix.
+:::expand[How do you separate an application problem from a network problem?]{kind="recap"}
+Request the application through loopback, then through its Pod address, and finally from the original caller. These checks add the bind interface, Pod network, and policy one layer at a time. The first change in result identifies the boundary to inspect.
+:::
+
+:::expand[How does the path change for traffic from outside the cluster?]{kind="recap"}
+External traffic adds public DNS, an edge address, TLS, and an Ingress or Gateway route before the Service. Preserve the real hostname in tests, then use the response, route conditions, and controller logs to identify the layer that answered.
+:::
+
+:::expand[How do you confirm the repair?]{kind="recap"}
+Repeat the original request from the original caller. Then exercise the relevant backend set or inspect every EndpointSlice address so one successful request does not hide a failing replica.
+:::
 
 ## References
 
-- [Kubernetes: Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Official walkthrough for diagnosing Services that fail to respond.
-- [Kubernetes: DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Explains Service DNS records, Pod DNS configuration, and namespace-based names.
-- [Kubernetes: Debugging DNS Resolution](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) - Shows how to test DNS from a Pod and inspect resolver configuration.
-- [Kubernetes: Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Defines Services, selectors, ports, target ports, and EndpointSlice relationships.
-- [Kubernetes: EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Describes how EndpointSlices represent Service backends and ready endpoints.
-- [Kubernetes: Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Documents Pod and namespace selectors, ingress and egress rules, and CNI enforcement requirements.
-- [Kubernetes: Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Defines HTTP and HTTPS routing from outside the cluster to Services.
-- [Kubernetes: Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) - Explains Gateway, GatewayClass, and route-based traffic configuration.
-- [Kubernetes: Debug Running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/) - Covers Pod debugging and ephemeral container workflows.
-- [Kubernetes: Logging Architecture](https://kubernetes.io/docs/concepts/cluster-administration/logging/) - Explains how Kubernetes exposes container logs through the API and `kubectl logs`.
+- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Official flow for checking a Service, DNS, EndpointSlices, and Pods.
+- [Debugging DNS Resolution](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/) - Official checks for Pod resolver configuration and cluster DNS components.
+- [Debug Running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/) - Official `kubectl exec` and ephemeral-container techniques.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Service and port-mapping behaviour.
+- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Official backend discovery and endpoint conditions.
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Official ingress, egress, isolation, and additive-rule behaviour.
+- [Gateway API Status](https://gateway-api.sigs.k8s.io/guides/status/) - Official status conditions for Gateway API resources.

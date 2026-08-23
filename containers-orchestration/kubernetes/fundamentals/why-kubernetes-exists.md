@@ -1,241 +1,506 @@
 ---
 title: "What Is Kubernetes?"
-description: "Understand what Kubernetes is and why teams use it for scheduling, self-healing, stable traffic, safe rollouts, and shared operations."
-overview: "Kubernetes is an open source system for running containerized applications across a group of machines. It connects one familiar container to Pods, nodes, clusters, the control plane, desired state, traffic, releases, and operations."
+description: "Build a first-principles understanding of why Kubernetes exists, how it keeps applications running across many machines, and where its responsibility ends."
+overview: "Kubernetes is a distributed control system for running containerized applications across a pool of machines. This article starts with the limits of one process on one server, then explains scheduling, traffic, replacement, releases, and the responsibilities Kubernetes leaves with engineering teams."
 tags: ["kubernetes", "containers", "orchestration", "operations"]
 order: 1
 id: article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists
 ---
+
 ## Table of Contents
 
-1. [What Is Kubernetes?](#what-is-kubernetes)
-2. [From One Container To Many](#from-one-container-to-many)
-3. [The Production Problem](#the-production-problem)
-4. [The Kubernetes Hierarchy](#the-kubernetes-hierarchy)
-5. [Desired State In One Example](#desired-state-in-one-example)
-6. [Traffic, Releases, And Recovery](#traffic-releases-and-recovery)
-7. [What Kubernetes Is Good At](#what-kubernetes-is-good-at)
-8. [Putting It All Together](#putting-it-all-together)
-9. [What's Next](#whats-next)
+1. [Why Does One Running Container Stop Being Enough in Production?](#why-does-one-running-container-stop-being-enough-in-production)
+2. [Which Problem Do Containers Solve, and Which Problem Remains?](#which-problem-do-containers-solve-and-which-problem-remains)
+3. [What Does Kubernetes Do in Plain Terms?](#what-does-kubernetes-do-in-plain-terms)
+4. [How Does Desired State Turn Failures Into Routine Work?](#how-does-desired-state-turn-failures-into-routine-work)
+5. [How Does a Kubernetes Cluster Turn a Manifest Into a Running Application?](#how-does-a-kubernetes-cluster-turn-a-manifest-into-a-running-application)
+6. [How Do Callers Keep One Address While Pods Change?](#how-do-callers-keep-one-address-while-pods-change)
+7. [How Do Scaling and Releases Work?](#how-do-scaling-and-releases-work)
+8. [When Does Kubernetes Earn Its Complexity, and What Do Teams Still Own?](#when-does-kubernetes-earn-its-complexity-and-what-do-teams-still-own)
+9. [Check Your Answers](#check-your-answers)
 10. [References](#references)
 
-## What Is Kubernetes?
-<!-- section-summary: Kubernetes is an open source system for running containerized applications across a group of machines. -->
+## Why Does One Running Container Stop Being Enough in Production?
+<!-- section-summary: One process on one machine can serve requests, while a production service also needs capacity, replacement, stable traffic, and controlled change. -->
 
-**Kubernetes** is an open source system for running containerized applications across a group of machines. You tell Kubernetes what you want running, such as three copies of an API, one stable network name, and a health check. Kubernetes stores that request, chooses machines for the work, starts containers, watches health, replaces failed copies, and gives operators a standard way to inspect what happened.
+Every server-side application begins as an operating-system process. A web server opens a port, receives a request from a browser, runs some code, and returns a response. During development, that entire system may fit on one laptop.
 
-The simple version is this: Kubernetes is the system teams use after containers are no longer just something they start by hand. A container packages an application so it can run consistently. Kubernetes coordinates many of those containerized application copies across many machines, especially after traffic, releases, failures, and team ownership start changing every day.
+An operating system already provides useful local supervision. A service manager such as `systemd` can start a process when the machine boots and restart it after an exit. This is enough for many small applications. The machine supplies CPU and memory, the process serves traffic, and the service manager keeps the process alive.
 
-Picture a Customer Notification Platform. Other product systems call `notification-api` after a checkout, password reset, or billing event. The API records the request and a `notification-worker` sends the email or SMS message. On a laptop, one container can prove the app starts. In production, the team needs several API copies, several worker copies, safe releases, stable traffic, configuration, logs, and recovery after a machine fails.
+Production expands the problem along two axes: capacity and failure. One process can use only the resources of its machine, and losing that machine removes the process with it. If one application copy can safely handle 2,000 requests per second while demand reaches 12,000, six copies provide the required capacity before any failure margin is added. Spreading those copies across machines prevents one machine from carrying the entire service.
 
-That is the first reason Kubernetes exists. It gives the team one shared operating loop: declare what should run, let the cluster place and run it, send traffic to healthy copies, and inspect evidence through the same API.
+The moment the service spans several machines, someone or something must answer a new set of questions:
 
-## From One Container To Many
-<!-- section-summary: A container packages one application process, while Kubernetes coordinates many running copies of those packages. -->
+- Which machines have enough CPU and memory for each application copy?
+- How many copies should exist during normal demand and during a peak?
+- Which copies are ready to receive client requests?
+- Where should a replacement run after a machine disappears?
+- How can callers use one stable address while copies receive new IP addresses?
+- How can a new version replace the current version while the service keeps accepting traffic?
+- Where can an engineer see the requested state, the live state, and the reason for a delay?
 
-A **container** is a packaged application process with the files it needs to run. If you have used Docker before, this part is familiar. The image carries the app code, installed packages, runtime files, and startup command together. The same image can run on a laptop, in CI, in staging, and in production.
+These are coordination questions. Starting a process is one action. Keeping many changing processes organized across many changing machines is an ongoing control problem.
 
-For a first local check, a developer might run the notification API with Docker:
+A fleet of scripts can perform the individual actions. One script chooses a machine, another starts a process, another edits a load balancer, and another restarts failed work. The scripts also need shared memory. After a script finishes, the system still needs to remember that six copies should exist. When a machine fails ten minutes later, another component must notice that the live count fell to five and decide what to do next. Releases, scaling, placement, traffic, and recovery all need to agree on the same picture of the application.
 
-```bash
-docker run -d \
-  --name notification-api \
-  -p 3000:3000 \
-  -e DATABASE_URL=postgres://notifications-db.internal:5432/app \
-  ghcr.io/devpolaris/notification-api:1.4.2
+Kubernetes exists to provide that shared picture and the continuous coordination around it. The questions below form the path through this article:
+
+1. **Why does one running container stop being enough in production?**
+2. **Which problem do containers solve, and which problem remains?**
+3. **What does Kubernetes do in plain terms?**
+4. **How does desired state turn failures into routine work?**
+5. **How does a Kubernetes cluster turn a manifest into a running application?**
+6. **How do callers keep one address while Pods change?**
+7. **How do scaling and releases work?**
+8. **When does Kubernetes earn its complexity, and what do teams still own?**
+
+## Which Problem Do Containers Solve, and Which Problem Remains?
+<!-- section-summary: A container image packages an application consistently; an orchestrator coordinates many running copies across machines. -->
+
+A process depends on more than its source code. It may need a particular language runtime, operating-system libraries, certificates, command-line tools, and configuration files. Installing those pieces separately on every server creates drift: two servers can carry different library versions even though the team intended them to run the same application.
+
+A **container image** packages the application code, runtime, and libraries into a versioned artifact. A container runtime uses that image to start an isolated process.
+
+For a worked example, use a high-volume playback API that will need several runtime copies, stable traffic, and gradual releases. The same `playback-api:4.7.3` image can move through development, testing, and production, which gives the team a much more repeatable unit to operate.
+
+The image answers **what should run**. The container runtime answers **how to start this packaged process on one machine**. Production still needs answers for the fleet:
+
+| Question | Container image or runtime | Cluster coordinator |
+| --- | --- | --- |
+| Which executable and libraries belong together? | Packages them in the image | Uses the chosen image |
+| How does one isolated process start? | Creates the container | Requests the start on a selected machine |
+| How many application copies should exist? | Runs one requested container | Stores and maintains the replica count |
+| Which machine should run each copy? | Uses the local machine | Chooses from the cluster's available machines |
+| What happens after a machine disappears? | Loses the local process with the machine | Creates replacement work on healthy capacity |
+| How do callers find changing copies? | Gives each container local networking | Maintains a stable service identity |
+| How does a release replace a fleet gradually? | Starts whichever image it receives | Coordinates old and new application copies |
+
+This boundary explains the term **container orchestration**. The container remains the packaged runtime unit. Kubernetes coordinates a large number of those units so placement, replacement, networking, and change follow one shared model.
+
+![A Studio Light infographic progresses from one packaged playback API container to several replaceable application copies spread across worker nodes behind one stable Service](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/one-container-to-service.png)
+
+*Containers make each application copy repeatable. Kubernetes turns those copies into a managed service across a pool of machines.*
+
+## What Does Kubernetes Do in Plain Terms?
+<!-- section-summary: Kubernetes stores an application request and continuously coordinates a cluster of machines toward that request. -->
+
+**Kubernetes is a distributed control system for running containerized applications across a group of machines.** A team describes the application state it wants. Kubernetes stores that request, chooses machines for the work, starts application containers, publishes status, and keeps responding when the live system drifts away from the request.
+
+Three ideas inside that sentence deserve careful attention.
+
+### Distributed means the work spans several machines
+
+The machines form a **cluster**. Worker machines contribute CPU, memory, and access to networking and storage. Kubernetes treats that capacity as a pool, then places application work where its requirements can be met.
+
+Suppose three workers have this free capacity:
+
+| Worker | Free CPU | Free memory |
+| --- | ---: | ---: |
+| `worker-a` | 500m | 1 GiB |
+| `worker-b` | 4 cores | 8 GiB |
+| `worker-c` | 2 cores | 2 GiB |
+
+A new playback Pod requests `1` CPU and `1Gi` of memory. `worker-a` fails the CPU requirement, while `worker-b` and `worker-c` have enough requested capacity. The scheduler can evaluate both suitable workers along with placement rules and choose one. The team describes the requirement; the cluster performs the placement decision.
+
+### Control system means the request stays active
+
+Kubernetes keeps a durable record such as “six playback replicas should exist.” Controllers repeatedly compare that requested state with the state they observe. If the live count falls to five, the request still says six, so the system creates work to restore the missing copy.
+
+This is different from a one-time start command. A start command finishes after it launches a process. A stored request continues to influence the system after processes and machines change.
+
+### Platform means several concerns use the same API
+
+Kubernetes represents workloads, networking, configuration, access policy, and storage connections as API resources. Teams can submit changes and inspect results through the same control surface. A deployment system and an engineer using `kubectl` both talk to the Kubernetes API, giving them one shared inventory of the system.
+
+Kubernetes adds a vocabulary for the separate responsibilities:
+
+| Kubernetes term | Beginner meaning | Playback API example |
+| --- | --- | --- |
+| **Cluster** | The whole managed system | Control plane plus the video platform's worker machines |
+| **Node** | One worker machine that supplies resources | A virtual machine with CPU and memory |
+| **Pod** | The smallest scheduled unit, usually one application copy | One running `playback-api` container |
+| **Deployment** | A request for replaceable copies and controlled updates | Keep six playback Pods on image `4.7.3` |
+| **Service** | One stable network identity for a changing group of Pods | `playback-api.streaming.svc.cluster.local` |
+| **Control plane** | Components that accept requests and coordinate the cluster | Stores the Deployment, tracks Pods, and makes placement decisions |
+
+Each object has a narrow job. A Pod describes one runtime copy. A Deployment manages a set of replaceable Pods. A Service represents the network destination. This separation lets Kubernetes change one part, such as replacing a Pod, while preserving another part, such as the address callers use.
+
+## How Does Desired State Turn Failures Into Routine Work?
+<!-- section-summary: Kubernetes treats a declaration as a continuing record of intent and uses reconciliation loops to close gaps between requested and observed state. -->
+
+Infrastructure can be operated through commands that describe actions. An automation script might choose `worker-b`, start `playback-api:4.7.3`, and register the new address in a load balancer.
+
+This **imperative** approach can work. Its weakness appears after the sequence finishes. The action history says what happened earlier, while the current requirement—six healthy copies—must live somewhere else. Recovery code then needs to reconstruct intent from scripts, machine inventories, process tables, and load-balancer entries.
+
+Kubernetes uses a **declarative** approach for most workload management. The team creates an API object whose specification says what should be true:
+
+```yaml
+spec:
+  replicas: 6
+  template:
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/example/playback-api:4.7.3
 ```
 
-The command has a few important parts:
+This object is a **record of intent**. `replicas: 6` continues to mean six desired Pods after the command that created the object has ended.
 
-- `--name notification-api` gives this local container a readable name.
-- `-p 3000:3000` maps a port on the machine to a port inside the container.
-- `-e DATABASE_URL=...` gives the process one runtime setting.
-- `ghcr.io/devpolaris/notification-api:1.4.2` names the image and version to run.
+Kubernetes components run **reconciliation loops**. A reconciliation loop repeats four steps:
 
-This command is useful because it shows the raw ingredients: an image, a port, and configuration. It also shows the limit. The command starts one container on one machine. If that machine restarts, someone or some other system has to bring the container back. If the app needs six copies, someone has to decide where those copies should run. If version `1.4.3` has a bug, the team needs a controlled way to stop the rollout and return to the previous image.
+1. Read the requested state from the API.
+2. Observe the current state of the resources it manages.
+3. Identify a meaningful difference.
+4. Make one or more changes that move the current state toward the request.
 
-Kubernetes starts where that single-container command stops. The container remains the application package. Kubernetes supplies the coordination around many running copies of that package.
+For the playback service, the comparison can be written plainly:
 
-## The Production Problem
-<!-- section-summary: Production needs placement, scaling, recovery, stable traffic, safe releases, and shared evidence around many containers. -->
+```text
+Requested Pods: 6
+Observed Pods:  5
+Difference:     1 missing Pod
+Next action:    create one replacement Pod object
+```
 
-The Customer Notification Platform has a shape that many real systems share. The API accepts live HTTP requests from other product services. The worker processes background messages. Both pieces need a database connection, provider credentials, health checks, logs, metrics, and a release path from staging to production.
+The loop then runs again. The replacement may still be waiting for a node, pulling an image, starting, or passing readiness checks. Kubernetes reports each intermediate state as the change progresses.
 
-![Customer Notification Platform flow showing clients calling notification-api, notification-api writing to the database and queue, notification-worker processing jobs, and external email and SMS providers receiving delivery calls](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/notification-platform-flow.png)
+This model turns common failures into repeated control work:
 
-*The platform has live traffic, background work, durable state, and external providers, so the team needs more than one container command on one server.*
+- A container process exits. The node agent starts it again according to the Pod's restart policy.
+- A managed Pod disappears. The workload controller creates a replacement Pod.
+- A worker becomes unavailable. Controllers eventually replace affected Pods on healthy workers when capacity permits.
+- A Pod fails readiness. Service traffic uses the remaining ready endpoints while that Pod recovers or is replaced.
 
-The first production questions are ordinary and practical:
+The repair follows the declaration. A replica count tells the controller how many copies to restore. Resource requests tell the scheduler what capacity each replacement needs. Readiness tells the networking layer when a copy can serve traffic. Kubernetes can coordinate useful recovery because the team supplied useful intent and signals.
 
-| Production question | What the platform needs |
-| --- | --- |
-| Where should each copy run? | Machines with enough CPU, memory, network access, and storage access |
-| How many copies should exist? | Enough API and worker replicas for traffic and background jobs |
-| What happens after a crash? | A replacement should launch automatically after the failure |
-| How does traffic find the API? | Callers need one stable address while individual copies change |
-| How do releases stay controlled? | New versions need pacing, health checks, and rollback evidence |
-| How do operators debug issues? | Status, logs, events, rollout history, and metrics need standard access |
+The deeper lesson is that Kubernetes manages **application state over time**. A command starts something once. A declaration remains present, and controllers continue working from it as the environment changes.
 
-Trying to solve those questions with SSH sessions and hand-written scripts gets fragile quickly. The team needs a system that remembers the desired application state and keeps checking whether the live machines match it. That system is Kubernetes.
+## How Does a Kubernetes Cluster Turn a Manifest Into a Running Application?
+<!-- section-summary: A control plane accepts a manifest and coordinates the request, while worker nodes supply the resources that run the resulting Pods. -->
 
-## The Kubernetes Hierarchy
-<!-- section-summary: Kubernetes organizes work through Pods, nodes, clusters, the control plane, and API objects. -->
+A Kubernetes cluster has two broad parts: a **control plane** and **worker nodes**.
 
-Kubernetes has a few core words that make the rest of the roadmap easier. The words form a hierarchy from the smallest running unit to the whole environment.
+The control plane manages the overall state of the cluster. It exposes the Kubernetes API, stores accepted objects, runs controllers, and makes scheduling decisions. Worker nodes provide the CPU, memory, and operating-system environment where application Pods run. The control plane assigns and observes work across that shared pool of workers.
 
-A **Pod** is the smallest application unit Kubernetes places and runs. In the common case, one Pod wraps one application container, such as one running copy of `notification-api`. A Pod can also hold a small helper container that must share the same network and storage space with the main app.
+This division lets the control plane reason about pooled capacity across the workers. A Pod can request `1` CPU and `1Gi` of memory. The scheduler compares that request with the cluster's workers and records a suitable node assignment. The kubelet on the chosen worker then starts the Pod's containers through the local container runtime.
 
-A **node** is a machine that can run Pods. In cloud environments, a node is often a virtual machine. In private environments, it may be a physical server. A node supplies CPU, memory, local disk, and networking for the Pods assigned to it.
+The word **Pod** appears here because Kubernetes uses Pods as its smallest scheduled unit. A Pod holds one or more tightly coupled containers that share a network identity and can share volumes. Most ordinary application Pods contain one main container, so `Pod/playback-api-7f8d6` contains the `api` container that runs the playback application process.
 
-A **cluster** is the group of nodes managed together. The team talks to the cluster through the Kubernetes API instead of choosing every machine by hand. The cluster can run many applications, many namespaces, and many copies of the same application.
+Several containers belong in one Pod when they genuinely form one execution unit. For example, an application container and a sidecar that must share the same network namespace and lifecycle can be co-located. Independent services receive separate Pods so they can scale, release, and recover independently.
 
-The **control plane** is the coordination layer for the cluster. It accepts requests, stores Kubernetes objects, chooses nodes for Pods, watches for missing or unhealthy work, and lets node agents report status. A helpful analogy is an operations desk: teams submit a request, the desk records it, assigns work to available machines, and keeps checking whether the work is actually happening.
+Pods are replaceable units. A replacement Pod receives a new identity and usually a new IP address. The higher-level Deployment preserves the application request while individual Pods come and go. Engineers therefore use Deployments for long-running stateless applications and let the controller manage the individual Pods.
 
-The main vocabulary looks like this:
+The next fundamentals articles examine the object relationships and cluster components in more detail. For this opening mental model, remember the ownership boundary:
 
-| Kubernetes word | Simple meaning | Notification platform example |
-| --- | --- | --- |
-| **Pod** | One scheduled application unit | One running copy of `notification-api` |
-| **Node** | One machine that can run Pods | A worker machine with CPU and memory |
-| **Cluster** | Nodes managed through one Kubernetes API | The production Kubernetes environment |
-| **Control plane** | The coordination layer | Accepts changes, stores objects, schedules Pods, watches status |
-| **Deployment** | Object that keeps replaceable Pods running | Maintains four API Pods |
-| **Service** | Stable network name and port | Gives callers one `notification-api` address |
-| **ConfigMap** | Ordinary runtime settings | Queue name, log level, provider mode |
-| **Secret** | Sensitive runtime settings | Database URL or provider token |
+- The control plane keeps the shared request and coordinates decisions.
+- Worker nodes execute assigned Pods and report what happens.
+- Pods carry application containers as replaceable runtime units.
 
-Now the hierarchy is visible: Kubernetes stores objects in the control plane, the control plane coordinates nodes, nodes run Pods, and higher-level objects such as Deployments and Services keep the application usable.
+### How the manifest moves through the cluster
 
-## Desired State In One Example
-<!-- section-summary: Desired state is the request Kubernetes stores, and reconciliation is the loop that keeps current state close to it. -->
-
-The most important Kubernetes idea is **desired state**. Desired state means the condition you want Kubernetes to maintain. For the notification platform, desired state can say: keep four `notification-api` Pods running from image `1.4.2`, expose them through a Service, and send traffic only to Pods that pass a readiness check.
-
-Here is a small Deployment skeleton. It is intentionally small because the first idea is the request, not every production field.
+A Kubernetes **manifest** is a YAML or JSON representation of an API object. The manifest below describes a Deployment for the playback API. The example asks for six Pods, gives the Pods a label, specifies the image, reserves scheduler-visible resources, and defines a readiness check.
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: notification-api
+  name: playback-api
+  namespace: streaming
 spec:
-  replicas: 4
+  replicas: 6
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playback-api
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: playback-api
     spec:
       containers:
-        - name: notification-api
-          image: ghcr.io/devpolaris/notification-api:1.4.2
+        - name: api
+          image: ghcr.io/example/playback-api:4.7.3
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
 ```
 
-The fields have separate jobs:
+The fields form a hierarchy:
 
-- `kind: Deployment` chooses the Kubernetes object that manages replaceable Pods and rollouts.
-- `metadata.name: notification-api` gives the object a stable name for commands, logs, and review.
-- `spec.replicas: 4` records the requested number of API copies.
-- `image: ghcr.io/devpolaris/notification-api:1.4.2` records the application package new Pods should run.
+- `apiVersion` and `kind` identify the API type: an `apps/v1` Deployment.
+- `metadata` gives this Deployment its name and namespace.
+- `spec.replicas` requests six Pod copies.
+- `selector` identifies the Pods that belong to the Deployment.
+- `template` describes how each new Pod should be created.
+- `containers` selects the image and container port.
+- `resources.requests` gives the scheduler capacity requirements.
+- `readinessProbe` gives Kubernetes an application-level signal for traffic readiness.
 
-After the Deployment is stored, controllers keep comparing the request with current reality. If production should have four API Pods and one node fails, current state may drop to three running Pods. The controller notices the gap and asks Kubernetes to create another Pod on a healthy node.
-
-That repeated comparison is **reconciliation**. Kubernetes keeps the request in the API, checks what is actually running, and takes the next action that moves the cluster toward the request.
-
-![Manifest to Pod flow showing kubectl sending a Deployment to the API server, etcd storing state, controllers creating Pods, the scheduler assigning nodes, kubelets starting containers, and status returning through the API](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/manifest-to-pod-flow.png)
-
-*The Deployment request enters through the API, then controllers, the scheduler, and kubelets cooperate to turn that request into running Pods.*
-
-A simple status check shows the desired count beside the live result:
+An engineer or delivery pipeline submits the file:
 
 ```bash
-kubectl get deployment notification-api -n notifications-prod
+kubectl apply -f playback-api.yaml
 ```
+
+`kubectl` converts the manifest into an API request. Several components then complete separate parts of the journey.
+
+### 1. The API server accepts and stores the object
+
+The API server authenticates the caller, checks authorization, runs admission rules, validates the object, and stores the accepted Deployment in the cluster's state. A response such as `deployment.apps/playback-api created` means the Deployment object now exists. The six application copies proceed through later stages.
+
+The object has a requested `spec` and an observed `status`. During startup, the specification can request six replicas while status reports zero, two, or five available replicas. That difference makes unfinished work visible.
+
+### 2. Controllers create the resources needed to satisfy it
+
+The Deployment controller notices the new Deployment and creates a ReplicaSet for this Pod template. The ReplicaSet controller sees a desired count of six and creates six Pod objects. At this point, Kubernetes has records for the intended Pods, while some may still be waiting for placement.
+
+This layered design supports releases later. A changed Pod template can receive a new ReplicaSet, allowing Kubernetes to count the old and new revisions separately.
+
+### 3. The scheduler chooses a node for each pending Pod
+
+A new Pod begins in a pending state and awaits a node assignment. The scheduler filters workers against the Pod's requirements, scores the suitable workers, and records a chosen node. Resource requests, placement constraints, storage topology, taints, and other policies can affect the choice.
+
+If every worker lacks `512Mi` of requested memory, the Pod remains `Pending`. The Deployment request remains stored, and scheduler events explain the capacity gap. Kubernetes has preserved the requirement and exposed the blocked stage.
+
+### 4. The kubelet starts the containers on that node
+
+Each worker runs a **kubelet**, the local node agent. The kubelet sees Pods assigned to its node and asks the container runtime to pull the image and create the containers. Networking and storage integrations prepare the Pod's environment. The kubelet reports container state and Pod conditions back through the API.
+
+### 5. Readiness connects the running process to traffic
+
+A process can be running while it loads policy data, warms caches, or opens its HTTP listener. The readiness probe calls `/ready`. When the application reports success, the Pod becomes eligible for regular Service traffic. This creates a useful distinction between “the process exists” and “the application copy can serve a viewer.”
+
+![A Studio Light control-flow infographic traces a Deployment manifest through the API server, stored desired state, controllers, scheduler, worker kubelets, running Pods, readiness, and status returning through the API](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/manifest-to-running-pods.png)
+
+*The request moves through several observable stages. A Pod that waits in `Pending` points toward placement; a running but unready Pod points toward application startup or readiness.*
+
+These commands inspect the hand-offs:
 
 ```bash
-NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-notification-api   4/4     4            4           18d
+kubectl get deployment playback-api -n streaming
+kubectl get pods -n streaming \
+  -l app.kubernetes.io/name=playback-api -o wide
+kubectl describe pod -n streaming <pod-name>
 ```
 
-`READY 4/4` means four Pods are ready out of four requested Pods. `UP-TO-DATE 4` means the four Pods match the current Deployment template. `AVAILABLE 4` means Kubernetes considers four Pods available for use.
+Read them from the highest level downward. The Deployment shows requested, updated, and available counts. The Pod list shows each copy, its state, and its node. `describe` shows conditions and recent events for one Pod. This mirrors the path Kubernetes used to create the workload.
 
-## Traffic, Releases, And Recovery
-<!-- section-summary: Services, Deployments, readiness checks, rollout status, and events turn running Pods into an operable service. -->
+## How Do Callers Keep One Address While Pods Change?
+<!-- section-summary: A Service gives callers a stable name and continuously maps that identity to the ready Pods selected by labels. -->
 
-Running Pods are only part of the platform. Other applications still need a stable way to call the API, releases need a safe pace, and operators need evidence during production issues.
+Each playback Pod gets its own network identity. A replacement changes both the Pod name and address:
 
-A **Service** gives callers one stable name and port while Pods are replaced behind it. The Service selects Pods by labels and routes only to endpoints Kubernetes considers ready. For the notification platform, callers can use a Service name such as `notification-api.notifications-prod.svc.cluster.local` instead of chasing temporary Pod IPs.
+| Runtime copy | Pod name | Pod IP |
+| --- | --- | --- |
+| Previous | `playback-api-7f8d6-2kl9x` | `10.42.3.18` |
+| Replacement | `playback-api-7f8d6-q7m4p` | `10.42.6.27` |
 
-A Service skeleton shows the first traffic idea:
+Callers need an application address whose lifetime is longer than either Pod. Kubernetes provides a **Service** for that purpose.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: notification-api
+  name: playback-api
+  namespace: streaming
 spec:
   selector:
-    app: notification-api
+    app.kubernetes.io/name: playback-api
   ports:
-    - port: 80
+    - name: http
+      port: 80
       targetPort: http
 ```
 
-The important parts are:
+The selector matches the label on the Deployment's Pod template. Kubernetes maintains endpoint records for matching Pods and their readiness. Another application in the `streaming` namespace can call `http://playback-api`.
 
-- `metadata.name: notification-api` creates the stable Service name.
-- `selector.app: notification-api` tells the Service which Pods sit behind the name.
-- `port: 80` is the port callers use through the Service.
-- `targetPort: http` points at the named container port inside each selected Pod.
+The caller uses the Service name while Kubernetes updates the backend addresses. If one Pod disappears and a replacement becomes ready, the endpoint set changes while the Service identity stays in place.
 
-Deployments also help releases. Updating the API image from `1.4.2` to `1.4.3` changes the Pod template. Kubernetes creates new Pods from the new template, waits for health checks, and removes old Pods according to the rollout strategy.
+Follow one request:
 
-Operators can watch the release:
+1. A session coordinator connects to the `playback-api` Service on port `80`.
+2. Cluster DNS resolves the stable Service name.
+3. The cluster networking path chooses one ready backend address.
+4. Traffic reaches that Pod's named `http` port, which maps to container port `8080`.
+5. The application handles the request and returns the playback session.
+
+Readiness is essential to this path. A newly started Pod can spend several seconds loading regional policy data. Its process is alive during that time, while `/ready` still reports that the Pod needs more startup work. The Service uses other ready Pods until the new one becomes eligible.
+
+This gives Kubernetes a stable layer over changing runtime copies:
+
+| Moment | Service name | Ready backend addresses |
+| --- | --- | --- |
+| Before replacement | `playback-api` | Pod A `10.42.1.8`, Pod B `10.42.2.6`, Pod C `10.42.4.9` |
+| After Pod B is replaced | `playback-api` | Pod A `10.42.1.8`, Pod C `10.42.4.9`, Pod D `10.42.5.3` |
+
+The Service handles discovery inside the cluster. External traffic usually reaches the cluster through an external load balancer, Ingress, or Gateway implementation, then continues to a Service. Those routing layers appear later in the networking module.
+
+## How Do Scaling and Releases Work?
+<!-- section-summary: Kubernetes changes the declared replica count or Pod template, then controllers move the fleet toward the new state at a controlled rate. -->
+
+Scaling and releasing are both changes to desired state.
+
+### Scaling changes the requested population
+
+Suppose playback demand rises before a major live event. The team changes the Deployment from six replicas to ten:
 
 ```bash
-kubectl rollout status deployment/notification-api -n notifications-prod
+kubectl scale deployment/playback-api \
+  --replicas=10 \
+  -n streaming
 ```
+
+The Deployment now records ten desired copies. Its controller updates the managed ReplicaSet, and the ReplicaSet controller creates four more Pod objects. The scheduler places each new Pod where its `500m` CPU and `512Mi` memory requests fit.
+
+The result depends on cluster capacity. Ten Pods need a total of 5 requested CPU cores and 5 GiB of requested memory in this simplified example. If the workers have room, the Pods can be scheduled. If capacity runs out, some Pods stay pending and report the shortage. A node autoscaler or a platform team can add worker capacity, depending on how the cluster is operated.
+
+Horizontal Pod Autoscaling can later adjust a replica target from metrics. The same control model remains: a component updates the desired replica count, then workload controllers and the scheduler make that count real.
+
+### A release changes the Pod template
+
+Now the team changes the image from `4.7.3` to `4.8.0`:
 
 ```bash
-deployment "notification-api" successfully rolled out
+kubectl set image deployment/playback-api \
+  api=ghcr.io/example/playback-api:4.8.0 \
+  -n streaming
+
+kubectl rollout status deployment/playback-api -n streaming
 ```
 
-The command checks rollout progress through the Kubernetes API. Success means the Deployment completed its update according to its rules. A stalled rollout sends the team toward Pods, events, image pull errors, readiness failures, logs, and recent configuration changes.
+The image belongs to the Deployment's Pod template. Changing the template creates a new revision. For a rolling update, Kubernetes gradually increases the new ReplicaSet and decreases the old one within the Deployment strategy.
 
-This is where Kubernetes starts to feel practical. A node can fail, and the stored Deployment request gives the cluster a target to repair. A Pod can crash, and the replacement uses the same template. A release can stall, and rollout status gives the team a shared signal. A Service can keep the caller address stable while the running Pods change underneath it.
+With four replicas, a simplified progression could look like this:
 
-## What Kubernetes Is Good At
-<!-- section-summary: Kubernetes helps most after teams need repeated container operations across machines, releases, traffic, and failures. -->
+| Step | Version `4.7.3` | Version `4.8.0` |
+| --- | ---: | ---: |
+| 1 | 4 ready | 0 |
+| 2 | 4 ready | 1 starting |
+| 3 | 3 ready | 1 ready |
+| 4 | 2 ready | 2 ready |
+| 5 | 1 ready | 3 ready |
+| 6 | 0 | 4 ready |
 
-Kubernetes helps most after the application has crossed from "one container can run" to "this service must keep running." It is useful for teams that need several copies of a service, safe rollouts, standard recovery after failures, stable internal networking, environment-specific configuration, and shared operational commands.
+The exact numbers depend on `maxSurge` and `maxUnavailable`. Readiness controls when a new Pod counts as available. If version `4.8.0` stays unready, rollout progress can stop before all old ready copies disappear.
 
-It also adds real complexity. Teams have to learn manifests, API objects, labels, controllers, networking, storage, security, and cluster operations. A small script, a short-lived demo, or a single internal tool may not need that machinery. Kubernetes earns its keep after the operational work around containers needs a shared platform instead of handmade server steps.
+`kubectl rollout status` answers whether Kubernetes completed the Deployment transition. The team should also check application behavior: request success rate, latency, playback-start failures, and a small end-to-end request. Kubernetes can confirm that the declared rollout state converged. Product-level signals confirm that the new application version behaves correctly.
 
-For the notification platform, Kubernetes is useful because the application has live traffic, background work, health checks, configuration, releases, and several teams that need the same operating language. Product engineers, platform engineers, deployment automation, and production responders can all inspect the same objects and status.
+These examples show why declaration matters. Scaling changes a number in the requested state. Releasing changes a template in the requested state. The same controllers coordinate the detailed steps and expose progress through the API.
 
-## Putting It All Together
-<!-- section-summary: Kubernetes turns repeated container operations into an API-driven loop: declare, schedule, run, route, observe, and repair. -->
+## When Does Kubernetes Earn Its Complexity, and What Do Teams Still Own?
+<!-- section-summary: Kubernetes earns its operational cost through reused coordination, while teams remain responsible for application correctness, data safety, capacity, security, and operational signals. -->
 
-The full picture now has a clear order. A container image packages the application. Kubernetes runs those images inside Pods. Nodes provide the machines. A cluster groups those nodes behind one API. The control plane stores the desired state and coordinates the work. Deployments keep replaceable Pods running. Services give callers a stable route. Controllers, the scheduler, and kubelets keep working toward the request.
+Kubernetes is powerful because it takes responsibility for a specific layer: coordinating declared resources and workloads across a cluster. Clear boundaries prevent the word “self-healing” from promising more than the system can deliver.
 
-For the Customer Notification Platform, this means the team can talk about one operating loop instead of a pile of separate server tasks. A release enters as a Deployment update. The cluster places new Pods, waits for readiness, keeps traffic on healthy copies, and records status for operators. After a node failure or Pod crash, the same loop gives Kubernetes a stored request to repair from.
+Consider several problems in the playback platform:
 
-![Kubernetes operating loop summary showing manifests, API server, controllers, scheduler, nodes, Services, rollout checks, and operations evidence around the Customer Notification Platform](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/kubernetes-operating-loop-summary.png)
+| Situation | Kubernetes contribution | Team responsibility |
+| --- | --- | --- |
+| The application process exits | Restart the container and report its state | Find and fix the code or configuration defect |
+| A worker disappears | Create replacement Pods on available workers | Provide enough spare capacity and operate the node pool |
+| A Pod is still loading policy data | Keep it outside the ready endpoint set | Implement a readiness check that represents serving ability |
+| Version `4.8.0` returns incorrect playback policies | Coordinate rollout state and expose metrics/events hooks | Detect the behavior with tests and service metrics, then correct or roll back |
+| The session database is unavailable | Keep application Pods aligned with their declared state | Design database availability, backups, recovery, and connection behavior |
+| A secret needs rotation | Deliver referenced Secret data to authorized Pods | Choose storage, encryption, access, and rotation controls |
+| Traffic grows beyond cluster capacity | Leave unschedulable Pods pending with events | Add capacity manually or operate suitable autoscaling |
 
-*Kubernetes turns repeated container operations into a shared loop: declare, schedule, run, route, observe, and repair.*
+Kubernetes often restores the **shape** of an application. If a Deployment requests six Pods, it works to restore six Pods. It runs the same declared image and configuration during replacement. An application defect inside that image appears again in the replacement, which is why observability and release verification remain essential.
 
-That is why Kubernetes exists. It gives teams a standard way to operate containers after the application needs more than a single process on a single machine.
+Data introduces another boundary. A stateless playback API can be replaced freely because durable account and session data live elsewhere. Stateful workloads need storage systems, replication, backup, restore testing, and consistency decisions. Kubernetes can attach storage and manage StatefulSet identities, while the data system's correctness still comes from its own design and operations.
 
-## What's Next
+Security also spans layers. Kubernetes offers identities, authorization, admission controls, Secrets, and network policy APIs. Teams configure these controls, secure container images, rotate credentials, protect the control plane, and decide which workloads may communicate.
 
-You now have the first Kubernetes map: container, Pod, node, cluster, control plane, Deployment, Service, desired state, and reconciliation. The next article follows one application through the cluster so those words connect to the actual path from a stored request to running Pods.
+A useful way to divide responsibility is:
+
+- **Kubernetes coordinates:** API objects, placement, Pod lifecycle, replica maintenance, rollout mechanics, and Service membership.
+- **Platform teams operate:** clusters, worker capacity, upgrades, networking, storage integrations, policy, and observability foundations.
+- **Application teams own:** code behavior, data handling, dependency resilience, health semantics, and release acceptance.
+
+That boundary makes Kubernetes easier to reason about. It is an operating layer with strong control mechanisms, and those mechanisms become useful when teams give them accurate requests and signals.
+
+![A Studio Light summary infographic shows teams declaring application intent, the Kubernetes API preserving it, controllers and the scheduler coordinating worker Pods, Services routing only to ready copies, and status flowing back for inspection](/content-assets/articles/article-containers-orchestration-kubernetes-fundamentals-why-kubernetes-exists/kubernetes-coordination-summary.png)
+
+*Kubernetes keeps intent and runtime state in a continuous loop. Teams provide the application behavior, data design, capacity, and health signals that make the loop useful.*
+
+### When Kubernetes is a good choice
+
+Kubernetes introduces a real platform to learn and operate. Its API, networking, storage, security, upgrades, capacity, and observability all require engineering work. The value becomes strongest when many applications and teams can reuse that investment.
+
+Kubernetes is often a good fit when several of these needs appear together:
+
+- Workloads need placement across a pool of machines.
+- Services run several replicas for capacity or availability.
+- Teams release often and need consistent rollout mechanics.
+- Applications include long-running services, background workers, scheduled jobs, or specialized hardware needs.
+- A shared platform team can provide networking, policy, observability, and upgrade practices.
+- The organization needs Kubernetes APIs or controllers supplied by its ecosystem.
+- Workloads should use a consistent operating model across cloud, data-center, or edge environments.
+
+The video platform is a plausible fit. It runs many services and background workers, handles large regional demand changes, performs frequent releases, and has a platform team that can operate the shared cluster layer. The same scheduling, health, policy, and inspection model can serve playback APIs, recommendation workers, thumbnail processing, and internal control services.
+
+A smaller system may gain more from a managed application platform, serverless containers, or a cloud service that owns more of the operating layer. One low-traffic API with a small team may value a simpler deployment model more than Kubernetes extensibility.
+
+Ask concrete questions before adopting it:
+
+| Decision area | Evidence to gather |
+| --- | --- |
+| Workload scale | Number and type of services, jobs, replicas, and hardware requirements |
+| Release needs | Frequency, rollout controls, rollback needs, and team ownership |
+| Reliability | Failure domains, spare capacity, data dependencies, and recovery targets |
+| Platform reuse | Number of teams that will share APIs, policy, tooling, and support |
+| Existing alternatives | Capabilities already available from a managed platform or cloud service |
+| Operating capability | Ownership for upgrades, security, networking, storage, observability, and cost |
+
+The decision should connect Kubernetes features to recurring operational problems. When many teams repeatedly need placement, replacement, discovery, controlled release, and shared policy, Kubernetes can turn separate automation into one coherent platform. When those needs stay small, a higher-level managed service can leave the team with fewer moving parts.
+
+## Check Your Answers
+<!-- section-summary: Eight questions revisit the production problem, the Kubernetes control model, the application path, and the platform boundary. -->
+
+:::expand[Why does one running container stop being enough in production?]{kind="recap"}
+One container serves one application copy on one machine. A production service may need more capacity, survival across process and machine loss, a stable network destination, gradual releases, and a shared record of current and requested state. Coordinating those needs across a changing fleet becomes a continuous control problem.
+:::
+
+:::expand[Which problem do containers solve, and which problem remains?]{kind="recap"}
+A container image packages an application with the runtime files it needs, and a container runtime starts that packaged process on one machine. The remaining problem is fleet coordination: replica count, placement, replacement, stable discovery, release order, and shared status across many machines.
+:::
+
+:::expand[What does Kubernetes do in plain terms?]{kind="recap"}
+Kubernetes stores a team's application request and continuously coordinates a cluster toward it. The control plane accepts and manages the request, worker nodes supply runtime resources, Pods carry application containers, Deployments manage replaceable copies, and Services give those copies a stable network identity.
+:::
+
+:::expand[How does desired state turn failures into routine work?]{kind="recap"}
+Desired state remains stored after the original command ends. Controllers repeatedly compare that request with observed state and take actions that close useful gaps. When a six-replica Deployment has five Pods, the missing copy becomes ordinary reconciliation work driven by the existing request.
+:::
+
+:::expand[How does a Kubernetes cluster turn a manifest into a running application?]{kind="recap"}
+A cluster combines a control plane with worker nodes. `kubectl` sends the manifest to the API server in the control plane. After validation and storage, controllers create the needed objects and Pods, and the scheduler assigns each pending Pod to a suitable worker. The worker's kubelet asks its container runtime to start the containers, while readiness and status flow back through the API.
+:::
+
+:::expand[How do callers keep one address while Pods change?]{kind="recap"}
+A Service provides a stable name and port. Its selector identifies the application's Pods, and Kubernetes maintains backend endpoint records for matching ready Pods. Replacement changes Pod names and addresses while callers continue using the same Service identity.
+:::
+
+:::expand[How do scaling and releases work?]{kind="recap"}
+Scaling changes the desired replica count, so controllers create or remove Pods and the scheduler places new work. A release changes the Deployment's Pod template, so the Deployment coordinates old and new ReplicaSets at a controlled rate. Readiness determines when new Pods count as available for traffic.
+:::
+
+:::expand[When does Kubernetes earn its complexity, and what do teams still own?]{kind="recap"}
+Kubernetes becomes valuable when several workloads and teams repeatedly need scheduling, replicas, recovery, discovery, controlled releases, and shared policy. It coordinates declared resources, placement, Pod lifecycle, rollout mechanics, and Service membership. Platform and application teams still own cluster capacity, upgrades, security configuration, application correctness, durable data, dependency resilience, useful health signals, and release acceptance. A smaller system may gain more from a managed application platform that owns more of the operational layer.
+:::
 
 ## References
 
-- [Kubernetes Overview](https://kubernetes.io/docs/concepts/overview/) - Official overview of Kubernetes as a framework for resilient distributed systems, scaling, failover, deployment patterns, service discovery, and load balancing.
-- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official description of the control plane, worker nodes, API server, etcd, scheduler, controller manager, kubelet, and related components.
-- [The Kubernetes API](https://kubernetes.io/docs/concepts/overview/kubernetes-api/) - Official explanation of the API server, API objects, `kubectl`, discovery, OpenAPI, and server-side validation.
-- [Objects In Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of Kubernetes objects, `spec`, `status`, and desired state.
-- [Pods](https://kubernetes.io/docs/concepts/workloads/pods/) - Official definition of Pods as the smallest deployable units of computing in Kubernetes.
-- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official guide to Deployment behavior, rolling updates, rollout status, rollback, scaling, and Deployment spec fields.
-- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official explanation of Services as stable network abstractions for one or more Pods.
-- [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) - Official guide to storing non-confidential configuration and injecting it into Pods.
-- [Secrets](https://kubernetes.io/docs/concepts/configuration/secret/) - Official guide to sensitive data, Secret usage, and security cautions.
-- [Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Official examples for probes and how kubelet responds to probe results.
-- [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/) - Official guide to automatically adjusting workload replicas based on metrics.
+- [Kubernetes Overview](https://kubernetes.io/docs/concepts/overview/) - Official overview of the platform's role in running distributed systems, service discovery, deployment, scaling, and self-healing.
+- [Objects In Kubernetes](https://kubernetes.io/docs/concepts/overview/working-with-objects/) - Official explanation of records of intent, desired state, object specifications, status, and manifests.
+- [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) - Official explanation of control loops and reconciliation.
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/) - Official description of control-plane and worker-node components.
+- [Pods](https://kubernetes.io/docs/concepts/workloads/pods/) - Official definition of Pods as the smallest deployable units and their role as replaceable application instances.
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Official guide to declarative replica management and controlled rollouts.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official explanation of stable network access to a changing group of Pods.

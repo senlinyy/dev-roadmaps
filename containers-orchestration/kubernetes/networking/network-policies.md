@@ -1,561 +1,384 @@
 ---
 title: "Network Policies"
-description: "Restrict Pod-to-Pod traffic with Kubernetes NetworkPolicies and diagnose allowed and denied flows."
-overview: "NetworkPolicies are Kubernetes rules for controlling which Pods can talk to selected Pods, and which destinations those selected Pods can reach. A small production app moves from open cluster traffic to label-based ingress, egress, DNS, rollout, and debugging."
+description: "Understand how Kubernetes NetworkPolicy turns an open Pod network into explicit, testable communication boundaries."
+overview: "Start with frontend, backend, and postgres on a routable Pod network. Build the allow-list from explicit relationships: which Pods are protected, which callers may enter, which destinations they may leave for, and which ports are part of each relationship."
 tags: ["networkpolicy", "security", "ingress", "egress"]
 order: 6
 id: article-containers-orchestration-kubernetes-networking-network-policies
 ---
+
 ## Table of Contents
 
-1. [The Open Pod Network](#the-open-pod-network)
-2. [What A NetworkPolicy Controls](#what-a-networkpolicy-controls)
-3. [The Default Open State](#the-default-open-state)
-4. [Selecting The Pods To Protect](#selecting-the-pods-to-protect)
-5. [Allowing Ingress](#allowing-ingress)
-6. [Adding Egress Without Breaking DNS](#adding-egress-without-breaking-dns)
-7. [Namespaces, Labels, And Rule Shape](#namespaces-labels-and-rule-shape)
-8. [Where NetworkPolicy Ends](#where-networkpolicy-ends)
-9. [Rolling Policies Out Safely](#rolling-policies-out-safely)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
-12. [References](#references)
+1. [Why are reachability and permission separate?](#why-are-reachability-and-permission-separate)
+2. [What exactly changes when a policy selects a Pod?](#what-exactly-changes-when-a-policy-selects-a-pod)
+3. [How do labels express that frontend may call backend without hard-coded Pod IPs?](#how-do-labels-express-that-frontend-may-call-backend-without-hard-coded-pod-ips)
+4. [Why can the receiver allow a request while the sender still blocks it?](#why-can-the-receiver-allow-a-request-while-the-sender-still-blocks-it)
+5. [Where does NetworkPolicy stop?](#where-does-networkpolicy-stop)
+6. [How do you add a default-deny posture without discovering dependencies through an outage?](#how-do-you-add-a-default-deny-posture-without-discovering-dependencies-through-an-outage)
+7. [Check Your Answers](#check-your-answers)
+8. [References](#references)
 
-## The Open Pod Network
-<!-- section-summary: Kubernetes networking starts open, so teams need a clear way to reduce which Pods can talk to each other. -->
+Kubernetes gives Pods a network on which they can usually reach one another. Imagine three workloads:
 
-Kubernetes makes Pod-to-Pod networking easy by default, and that is useful while a system is young. As the app grows, the same open network can let a debug Pod, compromised workload, or unrelated batch job reach services that should only receive traffic from a small set of callers.
-
-A **NetworkPolicy** is the Kubernetes object that narrows those paths. It selects Pods, then describes the inbound or outbound traffic those Pods should allow. The cluster network plugin enforces the policy on the nodes.
-
-The example is a shop app where `checkout-web`, `orders-api`, `inventory-api`, `postgres`, DNS, and monitoring each need different traffic paths. The flow moves from the default open state to label-based ingress, egress that keeps DNS working, namespace rules, rollout safety, and debugging evidence.
-
-Imagine a small shop running in Kubernetes. The `checkout` namespace has `checkout-web`. The `orders` namespace has `orders-api`. The `inventory` namespace has `inventory-api`. The `data` namespace has `postgres`, and the `monitoring` namespace has a metrics collector. This app already uses Services, DNS, and Ingress from the earlier networking articles, so traffic can flow through stable service names instead of raw Pod IPs.
-
-That is useful for shipping the app, and it also leaves too many paths open. A debug Pod in the wrong namespace might reach `orders-api`. A compromised `checkout-web` Pod might try to connect directly to `postgres`. A batch job might call the inventory service even though the business flow says only `orders-api` should do that. The cluster network gives everything a path unless something narrows that path.
-
-**NetworkPolicies** give you that narrowing step. A NetworkPolicy is a Kubernetes object that selects Pods and lists the traffic those Pods should allow. It can control inbound traffic, called **ingress**, and outbound traffic, called **egress**. In plain terms, it lets you say, "`orders-api` may receive traffic from `checkout-web` on port 8080, and it may send traffic only to DNS, `postgres`, and the inventory service."
-
-![NetworkPolicy boundary map showing orders-api selected by policy, allowed ingress from checkout-web, allowed egress to CoreDNS, postgres, and inventory-api, and denied debug or internet traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-boundary-map.png)
-
-*NetworkPolicy turns an open cluster network into named allowed paths around selected Pods.*
-
-The production order is practical. The policy controls come first. The default open state comes next, because that explains why the first policy can surprise a team. After that, ingress and egress policies, namespace labels, policy limits, and safe rollout evidence complete the boundary.
-
-## What A NetworkPolicy Controls
-<!-- section-summary: A NetworkPolicy controls layer 3 and layer 4 traffic for selected Pods, and the network plugin does the actual enforcement. -->
-
-A **NetworkPolicy** controls network connections involving Pods. Kubernetes defines it as a namespaced object in the `networking.k8s.io/v1` API. The policy uses labels to select the Pods it protects, and then it lists allowed sources, destinations, protocols, and ports. The official API describes the resource as the object that says what network traffic is allowed for a set of Pods.
-
-The important words are **Pods**, **labels**, **ports**, and **directions**. A NetworkPolicy attaches to selected Pods. A Service may be the name the client uses, like `orders-api.orders.svc.cluster.local`, while the policy applies to the destination Pods behind that Service. That distinction matters when you debug, because the Service can exist and resolve correctly while the selected backend Pods still reject the connection.
-
-NetworkPolicy works at network layer 3 and layer 4. Layer 3 means IP addresses and CIDR blocks. Layer 4 means protocols and ports such as TCP 8080, TCP 5432, UDP 53, and SCTP if the cluster supports it. HTTP paths, JWT claims, gRPC methods, SQL statements, and TLS certificate details live above that layer. Rules like "allow only `GET /healthz`" or "allow only requests with this service identity" usually belong in a service mesh, gateway, application, or proxy.
-
-There is one more piece before any YAML matters: the **network plugin**. Kubernetes stores the NetworkPolicy object, and the cluster's CNI or network provider enforces it on the nodes. CNI means Container Network Interface, the plugin layer that wires Pod networking into the cluster. Without plugin support, applying perfect-looking policy YAML creates an API object and leaves traffic unchanged. Production clusters often use providers such as Calico, Cilium, Antrea, or a managed cloud plugin with policy support, and the exact provider belongs to the platform setup.
-
-Our shop has the right plugin installed, so the Kubernetes API can store policies and the plugin can enforce them. The starting traffic shape matters before the first policy arrives.
-
-## The Default Open State
-<!-- section-summary: Pods allow all ingress and egress by default until a NetworkPolicy selects them for that direction. -->
-
-By default, Pods are open for both directions. A Pod can receive inbound connections from other Pods, and it can start outbound connections to other Pods or external IPs if the rest of the cluster and network allow it. Kubernetes calls this non-isolated traffic. In everyday terms, traffic remains open until a NetworkPolicy selects the Pod for that direction.
-
-This default explains a common first surprise. You create a policy for `orders-api`, and suddenly one connection starts timing out while another still works. The reason is that NetworkPolicy isolation happens by direction. A policy can isolate a Pod for ingress, egress, or both, depending on `policyTypes` and the rules you include.
-
-For **ingress**, a Pod enters restricted ingress mode when a NetworkPolicy selects that Pod and applies to ingress. After that, inbound connections must match at least one ingress rule across the policies selecting that Pod. Reply packets for allowed connections are allowed automatically, so a separate return rule is unnecessary.
-
-For **egress**, a Pod enters restricted egress mode when a NetworkPolicy selects that Pod and applies to egress. After that, outbound connections must match at least one egress rule across the policies selecting that Pod. Reply packets for those allowed outbound connections are also allowed automatically.
-
-NetworkPolicies are **additive**. They use a union model instead of a top-to-bottom priority order like some firewall systems. If three policies select `orders-api`, Kubernetes takes the union of the allowed ingress rules and the union of the allowed egress rules for the matching directions. A connection from one Pod to another also needs both sides to agree when both sides are isolated: the source Pod's egress policy must allow leaving, and the destination Pod's ingress policy must allow entering.
-
-The shop team wants a clean first policy in the `orders` namespace, so they choose ingress. They want random Pods to stop calling `orders-api`, while the checkout-web path keeps working. That goal creates one protected workload and one allowed caller to model first.
-
-## Selecting The Pods To Protect
-<!-- section-summary: The podSelector chooses the protected Pods, so policy quality starts with stable workload labels. -->
-
-Every NetworkPolicy has a **podSelector**. This selector chooses the Pods the policy applies to inside the policy's own namespace. If the policy lives in the `orders` namespace, its `podSelector` selects Pods in `orders` as protected targets; Pods in `checkout`, `inventory`, or `data` need policies in their own namespaces. That namespaced boundary keeps ownership clearer, because the team that owns a namespace usually writes the policies for the Pods inside that namespace.
-
-The Pod labels come before the full Deployment. The labels in this example give the policy something stable to follow during rollouts. A NetworkPolicy follows the labels that land on the Pods created from this template:
-
-```yaml
-template:
-  metadata:
-    labels:
-      app.kubernetes.io/name: orders-api
-      app.kubernetes.io/part-of: shop
-      app.kubernetes.io/component: api
+```mermaid
+flowchart LR
+    Frontend[frontend] --> Backend[backend]
+    Backend --> Postgres[postgres]
 ```
 
-The container also gives the API port a name. The NetworkPolicy examples use the numeric Pod port `8080`, while Services can still expose a friendlier caller port such as `80`:
+Without NetworkPolicy, a routable Pod such as `random-pod` can also try to reach those workloads. The intended graph is smaller: frontend may call backend on TCP `8080`, and backend may call postgres on TCP `5432`.
 
-```yaml
-ports:
-  - name: http
-    containerPort: 8080
-```
+**A NetworkPolicy is a namespaced allow-list around selected Pods.** It tells a compatible network plugin which layer-3 and layer-4 conversations may enter or leave particular Pods. Services own stable routing, while application security owns human and workload authentication.
 
-The policy should select stable identity labels and avoid rollout-specific labels. Labels such as `pod-template-hash` change as ReplicaSets change, so they make fragile policies. Labels such as `app.kubernetes.io/name: orders-api` and `app.kubernetes.io/part-of: shop` describe the workload across rollouts, so they make stable policy targets.
+Connectivity and permission answer different questions. A Service creates a stable route to the backend. NetworkPolicy decides whether Pods with the frontend identity may send TCP traffic to that destination port, while unrelated workloads remain blocked.
 
-A first policy can select `orders-api` and deny all ingress by leaving the ingress allow list empty. This is the smallest policy that proves the selected Pods have entered ingress isolation. The caller list stays empty at this step, so this policy should land with the specific allow rule that follows it:
+We will build that boundary by answering six questions:
+
+1. **Why are reachability and permission separate?**
+2. **What exactly changes when a policy selects a Pod?**
+3. **How do labels express that frontend may call backend without hard-coded Pod IPs?**
+4. **Why can the receiver allow a request while the sender still blocks it?**
+5. **Where does NetworkPolicy stop?**
+6. **How do you add a default-deny posture without discovering dependencies through an outage?**
+
+## Why are reachability and permission separate?
+<!-- section-summary: Kubernetes networking makes Pod communication possible, while NetworkPolicy adds an independent decision about which selected conversations are permitted. -->
+
+The cluster network is designed to carry packets between Pods. A Service such as `backend:8080` makes the destination stable and finds ready backend endpoints. Authorisation remains a separate decision about whether frontend may use that reachable path.
+
+That difference matters after compromise. If an attacker gains code execution in `random-pod`, they inherit that Pod's network position. An application password may still protect the database, but network reachability gives the attacker another interface to probe, another parser to exploit, and another chance to find a leaked credential.
+
+NetworkPolicy reduces that reachable surface. The cluster can enforce two positive relationships: Pods with the frontend identity may reach backend on `8080`, and backend may reach postgres on `5432`.
+
+The API describes these relationships as sets rather than individual machines. Let `F` be every Pod carrying `app=frontend` and `B` every Pod carrying `app=backend`. The first permission is the edge `F --TCP/8080--> B`. When a rollout replaces a Pod and gives the replacement a new IP, membership in `F` or `B` follows the stable labels. NetworkPolicy is therefore an allowed communication graph whose nodes are selected workload sets.
+
+This creates one layer of defence alongside application security. First, the route must exist. Next, NetworkPolicy must permit the source and destination port. Once the connection reaches the application, authentication and application authorisation decide what the caller may do. NetworkPolicy can stop an unrelated Pod before it reaches that interface at all.
+
+The distinction is visible in one packet. The CNI may have a valid route from `10.1.1.4` to `10.1.2.7`, proving that the destination is reachable. A policy can still reject traffic because the source Pod is not a member of the allowed frontend set. Conversely, a perfectly written allow rule cannot create a missing route or start a listener. Routing, network authorization, and application response are consecutive conditions rather than substitutes.
+
+Begin policy design with a sentence, not YAML: “frontend needs TCP `8080` to backend so it can submit API requests.” That sentence names the caller set, receiver set, protocol, port, and reason. The manifest is only the Kubernetes encoding of that reviewed relationship.
+
+
+## What exactly changes when a policy selects a Pod?
+<!-- section-summary: A Pod starts non-isolated in each direction, then receives an allow-list for ingress or egress when a policy selects it for that direction. -->
+
+The most important NetworkPolicy rule comes from selection. Selection changes a direction from open traffic to an allow-list.
+
+By default, a Pod is non-isolated for ingress and egress. While every ingress policy leaves it unselected, NetworkPolicy permits incoming traffic. While every egress policy leaves it unselected, NetworkPolicy permits outgoing traffic.
+
+When one or more policies select a Pod for a direction, Kubernetes treats that direction as isolated. Traffic in that direction is then allowed only when at least one selected policy allows it.
+
+### A. Ingress: who may enter this Pod?
+
+An ingress rule protects the receiving Pod. For `backend`, it can allow frontend on TCP `8080` while rejecting unrelated Pods.
+
+### B. Egress: where may this Pod go?
+
+An egress rule protects the sending Pod. For `backend`, it can allow the database on `5432` and DNS on `53`, while preventing arbitrary outbound connections.
+
+### C. Ingress and egress are independent
+
+A Pod can be isolated for ingress while remaining open for egress, or the reverse. A default-deny ingress policy changes only incoming traffic; outgoing traffic keeps its existing behavior.
+
+This policy selects every Pod in `shop` and isolates ingress without allowing any incoming source:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: orders-api-default-deny-ingress
-  namespace: orders
+  name: default-deny-ingress
+  namespace: shop
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
+  podSelector: {}
   policyTypes:
     - Ingress
 ```
 
-This policy selects every `orders-api` Pod in the `orders` namespace. Because it applies to ingress with an empty allow list, inbound application traffic stays closed for those selected Pods. Outbound traffic from `orders-api` stays open, because `policyTypes` contains only `Ingress`.
+The empty `podSelector` means “all Pods in this policy's namespace.” Once applied by a network plugin that enforces NetworkPolicy, existing and future Pods in `shop` are ingress-isolated.
 
-The fields carry the isolation rule:
+Policies are additive. If one policy allows frontend and another allows a monitoring Pod, backend receives the union of both permissions. Standard NetworkPolicy has no ordered deny precedence, so every selected allow contributes to the final permitted set.
 
-- `metadata.namespace: orders` means the policy can select Pods only in the `orders` namespace.
-- `podSelector.matchLabels` chooses the `orders-api` Pods to protect.
-- `policyTypes: Ingress` isolates inbound traffic for those selected Pods.
-- The missing `ingress` allow list means no inbound peers are allowed by this policy.
+For the backend Pods, the result is a union of allowed sources. A policy that allows frontend and another that allows monitoring permit both sources. Omitting frontend from the monitoring policy leaves the frontend permission supplied by the first policy intact.
 
-That deny policy is useful as a starting point, but it breaks the shop if we stop there. The checkout-web still needs to call `orders-api` to create carts, submit orders, and show order history. The next step is an allow rule for exactly that flow.
+In set terms, the effective allow-list is `Policy A ∪ Policy B ∪ Policy C`. Kubernetes combines all applicable allows as a union rather than processing an ordered first-match firewall list. Once a direction is isolated, any flow absent from the union is rejected implicitly.
 
-## Allowing Ingress
-<!-- section-summary: Ingress rules allow selected sources and ports to reach the protected destination Pods. -->
-
-An **ingress rule** describes traffic allowed into the Pods selected by `spec.podSelector`. The rule has two main pieces: `from` for allowed sources and `ports` for allowed destination ports. A request must match the source side and the port side of the rule. If the rule lists multiple sources, any one matching source can satisfy the source side.
-
-The checkout-web Pods run in the `checkout` namespace and carry this label. The policy will use it as the source workload identity. Real workloads may have more labels, but the policy should depend on the labels your platform treats as stable ownership or app identity:
-
-```yaml
-metadata:
-  labels:
-    app.kubernetes.io/name: checkout-web
-    app.kubernetes.io/part-of: shop
-```
-
-The namespace also needs a label, because a `podSelector` inside an ingress peer selects Pods in the policy's own namespace unless you combine it with a `namespaceSelector`. Kubernetes automatically sets the immutable `kubernetes.io/metadata.name` label on namespaces, so the policy can target the `checkout` namespace by that label. Many teams also add their own labels such as `team=commerce` or `environment=prod` for broader grouping.
-
-Here is the policy in pieces. The shell and protected destination come first. The destination selection stays in `spec.podSelector`, and this policy protects matching Pods in the `orders` namespace:
+Ingress and egress can be isolated together with an empty allow-list:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-checkout-web-to-orders-api
-  namespace: orders
+  name: default-deny-all
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+```
+
+This selects every Pod in `shop`, isolates both directions, and supplies zero allow rules. Additional policies then add the specific relationships the application requires.
+
+### Follow the isolation transition
+
+Suppose backend initially has no selecting ingress policy. Frontend, monitoring, and a random Pod can all attempt to connect because backend is ingress-unisolated. Applying `backend-ingress` changes the model immediately for the selected set:
+
+```text
+before: backend ingress = open unless another control blocks it
+after:  backend ingress = union of explicit allows
+```
+
+If that policy allows only frontend on TCP `8080`, monitoring and random traffic disappear from the effective set. Adding a second policy that allows monitoring on `9090` does not override the first. The union now contains both permitted edges. Removing one policy removes only the edges that no remaining policy contributes.
+
+This is why policy names such as “deny-monitoring” are misleading in the standard model. The resource does not execute in order and win over earlier objects. Selection creates isolation; ingress and egress rules contribute allows; unmatched flows in an isolated direction are rejected.
+
+## How do labels express that frontend may call backend without hard-coded Pod IPs?
+<!-- section-summary: Pod and namespace selectors turn mutable workload labels into a durable statement about which application role may communicate across an ownership boundary. -->
+
+Pod IPs are temporary, so useful policies select identities represented by labels. The selector follows current frontend Pods as their addresses change.
+
+We want this sentence:
+
+> Pods labelled `app=frontend` in `shop` may enter Pods labelled `app=backend` on TCP port `8080`.
+
+The corresponding policy belongs in the destination namespace because its `podSelector` chooses the Pods being protected:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: shop
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: orders-api
+      app: backend
   policyTypes:
     - Ingress
-```
-
-Then add the allowed source. The source is checkout-web Pods in the `checkout` namespace:
-
-```yaml
   ingress:
     - from:
-        - namespaceSelector:
+        - podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: checkout
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: checkout-web
-```
-
-Then add the destination port. This is the Pod port serving the API:
-
-```yaml
+              app: frontend
       ports:
         - protocol: TCP
           port: 8080
 ```
 
-In the complete policy, those three pieces live together. This is the first allow rule that makes the earlier default deny safe for the real business path.
+Read it from the protected workload outward.
 
-This policy protects `orders-api` because the policy lives in the `orders` namespace and selects Pods with `app.kubernetes.io/name: orders-api`. It allows traffic from Pods named `checkout-web` in the namespace named `checkout`. It also limits that allowed traffic to TCP port 8080, which is the container port serving the API.
+### A. Who is protected?
 
-The allow-rule fields mean:
+`spec.podSelector` selects `backend` Pods in the `shop` namespace. A NetworkPolicy's destination selection stays within its own namespace.
 
-- `from[].namespaceSelector` limits the source namespace to `checkout`.
-- `from[].podSelector` limits the source Pods to `checkout-web`.
-- Keeping both selectors under the same `from` item requires both labels to match.
-- `ports[].protocol: TCP` and `ports[].port: 8080` allow the destination application port.
+### B. Who may call them?
 
-The shape of the selector matters. In the same `from` item, `namespaceSelector` plus `podSelector` means both must match. The result is "Pods with this label in namespaces with this label." If those selectors were split into two separate `from` list items, the policy would allow all Pods in the selected namespace and also matching Pods in the policy's own namespace. One indentation choice changes the access boundary, so production reviews should slow down around combined selectors.
+The `from` item selects Pods labelled `app=frontend` in the policy's own namespace.
 
-After this policy lands, the expected behavior is simple. `checkout-web` can reach `orders-api` on 8080. A random debug Pod in `checkout` without the checkout-web label stays outside the allowed set. A Pod in `orders` with a different label stays outside the allowed set too. A Pod in `monitoring` needs another additive policy before it can scrape or call the API.
+### C. Which doorway is open?
 
-The inbound path now matches the business path. The next problem is outbound traffic, because `orders-api` still has open egress unless we isolate it too. That takes us from "who may call this API" to "where may this API send data."
+The rule allows TCP `8080`. A shop Pod trying `5432` falls outside this relationship and is denied.
 
-## Adding Egress Without Breaking DNS
-<!-- section-summary: Egress rules narrow where selected Pods can connect, and DNS needs an explicit allow rule after default-deny egress. -->
-
-**Egress** means outbound traffic from selected Pods. For `orders-api`, outbound traffic has a few real production reasons. It needs DNS to resolve service names. It needs PostgreSQL on TCP 5432. It needs to call `inventory-api` on TCP 8080 to reserve stock. It may need to send metrics to the collector. Random cluster scans and random internet calls sit outside the business path.
-
-A default deny egress policy looks small. It selects the same Pods, then turns egress into an allow-list. This mirrors the ingress pattern, except now the selected Pods are the traffic source rather than the protected destination:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: orders-api-default-deny-egress
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Egress
-```
-
-This selects `orders-api` and leaves the egress allow list empty, so outbound connections from those Pods are blocked. This includes DNS. That part catches many teams because the app error message may point to a failed lookup for `postgres.data.svc.cluster.local`, and the real cause is the egress policy blocking UDP or TCP port 53 to the cluster DNS Pods.
-
-A practical egress policy usually starts by allowing DNS. In many clusters, CoreDNS Pods live in `kube-system` and use the label `k8s-app: kube-dns`, but labels can vary. The safer workflow is to check the labels in your own cluster and then write the rule.
-
-```bash
-kubectl -n kube-system get pods --show-labels -l k8s-app=kube-dns
-```
-
-Healthy output should show the DNS Pods and the label the policy will target:
-
-```bash
-NAME                       READY   STATUS    LABELS
-coredns-6f6b679f8f-jh6w7   1/1     Running   k8s-app=kube-dns,pod-template-hash=6f6b679f8f
-coredns-6f6b679f8f-vkwm2   1/1     Running   k8s-app=kube-dns,pod-template-hash=6f6b679f8f
-```
-
-Build the egress allow-list one destination at a time. The policy shell still selects `orders-api`, but now the selected Pods are the traffic source:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-orders-api-egress
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Egress
-```
-
-The first egress rule allows DNS. It targets CoreDNS Pods in `kube-system` and allows both UDP and TCP port 53:
-
-```yaml
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-```
-
-The second rule allows PostgreSQL in the `data` namespace on TCP 5432:
-
-```yaml
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: data
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgres
-      ports:
-        - protocol: TCP
-          port: 5432
-```
-
-The third rule allows the inventory API in the `inventory` namespace on TCP 8080:
-
-```yaml
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: inventory
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: inventory-api
-      ports:
-        - protocol: TCP
-          port: 8080
-```
-
-In the complete policy, those three `egress` items sit under the same policy shell. Each egress item is one allowed destination shape. The DNS rule allows UDP and TCP 53 to matching DNS Pods. The PostgreSQL rule allows TCP 5432 to `postgres` Pods in the `data` namespace. The inventory rule allows TCP 8080 to `inventory-api` Pods in the `inventory` namespace. Other outbound connections from `orders-api` are denied because egress is now isolated and only listed destinations are allowed.
-
-The egress fields are worth reading slowly:
-
-- `policyTypes: Egress` turns outbound traffic into an allow-list for selected Pods.
-- The DNS rule includes both UDP and TCP `53`, because DNS commonly uses UDP and can fall back to TCP.
-- The PostgreSQL rule targets the `data` namespace and `postgres` Pods on TCP `5432`.
-- The inventory rule targets `inventory-api` Pods in the `inventory` namespace on TCP `8080`.
-- Traffic that matches none of the listed egress items is denied for the selected `orders-api` Pods.
-
-External destinations need extra care. NetworkPolicy can use `ipBlock` with CIDR ranges for stable IP ranges outside the cluster. Many SaaS services use changing IP ranges, CDNs, or private endpoints, so hardcoding a small public CIDR can turn into fragile operations work. Teams often combine NetworkPolicy with a stable egress gateway, cloud firewall, NAT control, service mesh egress policy, or provider-specific private connectivity for those cases.
-
-Now we have touched both directions. The next piece is rule shape, because most policy bugs come from labels and selector combinations rather than the idea of ingress or egress itself. The YAML indentation carries real security meaning here.
-
-## Namespaces, Labels, And Rule Shape
-<!-- section-summary: NetworkPolicy rules depend on label selectors, and small YAML shape changes can widen or narrow access. -->
-
-NetworkPolicy uses labels because Pod IPs are temporary. A Pod can die and come back with a new IP. A Deployment can create a new ReplicaSet during a rollout. The policy follows the labels, so the access rule stays attached to the workload identity instead of one short-lived address.
-
-There are three common ways to describe peers in a rule. A **podSelector** describes Pods by labels. A **namespaceSelector** describes namespaces by labels. An **ipBlock** describes CIDR ranges. You can use them for ingress sources or egress destinations, depending on the direction of the rule.
-
-The most important selector detail is the difference between "same peer item" and "separate peer items." This rule allows only `checkout-web` Pods in the `checkout` namespace. Both selectors live under one list item:
+When namespace and Pod selectors are needed together, the structure of the YAML changes the logic. These two peers are alternatives:
 
 ```yaml
 from:
   - namespaceSelector:
       matchLabels:
-        kubernetes.io/metadata.name: checkout
-    podSelector:
-      matchLabels:
-        app.kubernetes.io/name: checkout-web
-```
-
-The namespace and Pod selector live inside the same list item, so the peer must satisfy both. This rule is usually the shape you want when you mean "this workload in that namespace." Both selectors have to match on the same traffic source, which keeps the allowed source set narrow.
-
-This next rule allows more than many people expect. The visual difference is small, but the allowed source set is larger. This is one of the easiest review mistakes to miss because both snippets look reasonable at a quick glance:
-
-```yaml
-from:
-  - namespaceSelector:
-      matchLabels:
-        kubernetes.io/metadata.name: checkout
+        environment: prod
   - podSelector:
       matchLabels:
-        app.kubernetes.io/name: checkout-web
+        app: frontend
 ```
 
-There are two list items now. The first allows all Pods from the `checkout` namespace. The second allows `checkout-web` Pods from the policy's own namespace, because a `podSelector` without a `namespaceSelector` is scoped to the policy namespace. That may be correct for some designs, but it is a wider rule than "checkout-web in checkout."
+They mean “Pods in prod namespaces **OR** frontend Pods in the policy's own namespace.” To require “frontend Pods in prod namespaces,” both selectors must live inside the same list item. A small indentation change can therefore widen access substantially.
 
-![NetworkPolicy selector shape comparison showing one combined peer item allowing only checkout-web in checkout and split peer items allowing all Pods in checkout plus checkout-web in the policy namespace](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-selector-shape.png)
+Treat identity labels like security inputs. A policy is only as precise as the labels it trusts. If any workload can claim `app: frontend`, that selector provides a weak security boundary. Protect workload manifests and namespace labels through admission and deployment permissions as part of the design.
 
-*In NetworkPolicy, two selectors inside one peer item narrow the source. Two separate peer items widen the allowed set.*
+### Read selector indentation as set logic
 
-The same shape rule applies to ports. Multiple ports inside one rule mean any listed port can match. A rule with `from` and `ports` requires both a matching source and a matching port. An empty rule item like `ingress: [{}]` or `egress: [{}]` allows everything in that direction for the selected Pods, so teams should use that only when they truly want an explicit allow-all policy.
+Take a backend in the `backend-prod` namespace. The intended caller set is “Pods labelled `app=frontend` that are also inside namespaces labelled `environment=prod`.” Both conditions belong in one peer:
 
-In production, labels deserve the same review as the policy file. If a team can add `app.kubernetes.io/name: checkout-web` to any Pod in any namespace, and the policy trusts only that Pod label without a namespace boundary, the policy is too wide. Namespace ownership, admission policy, CI checks, and clear label conventions all support NetworkPolicy because the policy engine trusts the labels it receives.
-
-Selectors give us the tool, and NetworkPolicy still remains one layer in the larger security design. The next section marks the edges so the team knows when another layer should join the design.
-
-## Where NetworkPolicy Ends
-<!-- section-summary: NetworkPolicy is useful for Pod traffic boundaries, and other layers handle identity, TLS, HTTP semantics, and some node-level cases. -->
-
-NetworkPolicy gives a strong baseline for Pod traffic boundaries, and it has clear edges. Caller authentication, traffic encryption, HTTP methods, URL paths, request bodies, and user identities all sit outside the standard NetworkPolicy API. RBAC, Pod Security, Secrets management, admission policy, and application authorization still matter because they answer different questions.
-
-The Kubernetes docs call out several jobs that the standard API leaves to other layers. Service-name targets, mandatory shared gateways, TLS policy, and Kubernetes node identity targets sit outside the core NetworkPolicy object. CIDR notation can describe IP-based rules, and node-specific policy usually needs platform networking, cloud firewalls, or another control layer.
-
-There are also implementation details around NAT and Service traffic. Cluster ingress and egress mechanisms may rewrite source or destination IPs, and Kubernetes leaves some ordering details to the network plugin, Service implementation, and cloud provider. That means an `ipBlock` rule might see the original client IP in one environment and a node or load balancer IP in another. Pod and namespace selectors usually make clearer rules for in-cluster traffic.
-
-`hostNetwork` Pods need extra care too. A `hostNetwork` Pod uses the node network namespace, so plugins can handle that traffic differently. Some plugins can distinguish it and apply policy. Others treat it as node traffic. Most application Pods should avoid `hostNetwork`, and platform teams should document how the chosen network plugin treats it.
-
-These limits make NetworkPolicy's job clearer. It answers, "Which Pods can connect to which Pods or IP ranges on which ports?" Service mesh, gateway policy, cloud firewalls, workload identity, and application checks answer different parts of the security story. Good Kubernetes security uses these layers together instead of asking one object to solve every traffic problem.
-
-With those edges clear, the final practical question is rollout. A correct policy can still cause an outage if it lands all at once without observation. The safest teams treat policy changes as application traffic changes, with release visibility, test evidence, and rollback notes.
-
-## Rolling Policies Out Safely
-<!-- section-summary: Safe rollout starts with observed traffic, applies narrow policies in stages, and tests both allowed and denied paths. -->
-
-A safe NetworkPolicy rollout starts by listing the flows the workload actually needs. For `orders-api`, the list might include `checkout-web -> orders-api:8080`, `orders-api -> kube-dns:53`, `orders-api -> postgres:5432`, `orders-api -> inventory-api:8080`, and `monitoring -> orders-api:9090` for metrics. This list should come from app owners, manifests, logs, tracing, and any flow visibility your CNI provides.
-
-A staged rollout usually starts in a development or staging namespace that matches production labels. The first policy isolates one direction, and each following change adds one allowed path. The team tests an allowed path and a denied path after each small change. This slower workflow gives you a clear answer when something breaks, because the last small policy change gives reviewers a small surface to inspect.
-
-These commands help you see the objects and labels involved. They are basic, but they answer the first review question: which Pods and namespaces will this policy actually match?
-
-```bash
-kubectl -n orders get networkpolicy
-kubectl -n orders describe networkpolicy allow-checkout-web-to-orders-api
-kubectl -n orders get pods --show-labels
-kubectl get namespaces --show-labels
+```yaml
+from:
+  - namespaceSelector:
+      matchLabels:
+        environment: prod
+    podSelector:
+      matchLabels:
+        app: frontend
 ```
 
-Temporary client Pods are useful for path tests. The image only needs the network tools for the check, such as `curl`, and the labels on the temporary Pod decide whether it should match the allow rule. In this example, the temporary Pod carries the same source label as `checkout-web`:
+Splitting them into two `from` entries changes intersection into union. The first entry then admits every Pod in a prod namespace, regardless of application label. The second admits frontend-labelled Pods from the policy's own namespace. Both may be much broader than the original sentence.
 
-```bash
-kubectl -n checkout run tmp-client \
-  --rm -it \
-  --image=curlimages/curl:8.8.0 \
-  --labels=app.kubernetes.io/name=checkout-web \
-  -- sh
+Translate each peer back to plain language during review. If the spoken rule contains “and,” the namespace and Pod constraints should describe one combined peer. If the rule genuinely contains “or,” separate peer entries can represent those alternatives.
 
-curl -m 2 http://orders-api.orders.svc.cluster.local:8080/healthz
+## Why can the receiver allow a request while the sender still blocks it?
+<!-- section-summary: A connection is allowed only when source egress permits it and destination ingress permits it, for whichever directions are isolated. -->
+
+Suppose the backend policy above allows frontend, yet frontend still times out. The destination door may be open while the sender's own exit door remains locked.
+
+For a new connection from frontend to backend, both isolated directions must permit the same flow. Frontend's egress rules must allow the backend Pods on TCP `8080`, and the backend Pods' ingress rules must allow the frontend Pods on TCP `8080`.
+
+While frontend remains open for egress, only the destination ingress rule restricts this path. If a default-deny egress policy also selects frontend, an egress allow is required there as well.
+
+The final decision can be written as:
+
+```text
+packet allowed = routing works
+                 AND sender egress allows the flow
+                 AND receiver ingress allows the flow
 ```
 
-The first command creates a short-lived client Pod with the same source label the policy trusts. The second command sends the actual request from inside that Pod. A healthy allowed-path response can stay small:
+For a non-isolated direction, that side contributes an effective allow. Once isolation begins, the flow must appear in at least one applicable policy on that side. A successful connection requires the sender and receiver permissions independently.
 
-```bash
-{"status":"ok","service":"orders-api"}
+In policy terms, frontend's egress allow-list needs the backend Pod set on TCP `8080`, while backend's ingress allow-list needs the frontend Pod set on the same port.
+
+There is another dependency that application diagrams often omit: frontend needs DNS before it can find `backend`. A strict egress allow-list that permits only port `8080` to backend may accidentally block DNS queries.
+
+A complete egress design must also allow the DNS path on port `53`; otherwise the caller may be permitted to reach backend by address while still being unable to resolve the Service name.
+
+A review of the backend policy alone misses two caller-side boundaries. The real request crosses the caller's DNS egress, the caller's application egress, and the receiver's ingress. Each isolated boundary must allow its part of the conversation.
+
+Follow the named request as two network flows:
+
+```text
+1. frontend -> cluster DNS :53
+2. frontend -> backend Pod :8080
 ```
 
-A denied-path test uses a Pod without the trusted label or a Pod from another namespace, then repeats the same `curl`. A timeout often means policy blocked the traffic. A fast `Connection refused` usually means the network path reached the Pod or Service and the app listener was missing on that port. A DNS error points back to DNS egress, the Service name, or CoreDNS health. These details help separate policy problems from ordinary application or Service problems.
+The second flow is evaluated as frontend egress and backend ingress. If the first is denied, the application may never learn the Service address needed to begin the second. A report such as “cannot resolve backend” can therefore be accurate application evidence for a missing egress allow, even though CoreDNS itself is healthy.
 
-Rollback needs policy changes that are small and reversible. If a new allow rule was too narrow, the team can add the missing specific rule rather than deleting the whole default deny in production. If the blast radius is active and users are affected, the team can temporarily remove the newest policy object or scale it back with a narrow patch, then record the missing flow before reapplying. NetworkPolicy should move a namespace toward least traffic, but production recovery still needs a short path back to a working state.
+When testing by direct Pod IP succeeds but testing by Service name fails, do not widen the backend rule immediately. The backend connection may already be permitted. Inspect the earlier DNS flow from the same frontend Pod and ensure both UDP and TCP `53` behavior required by the environment is represented.
 
-The shop now has enough pieces to write the final shape for `orders-api`. The final policy set is just the pieces we already practiced, collected into a production-ready boundary.
+## Where does NetworkPolicy stop?
+<!-- section-summary: Standard NetworkPolicy controls selected network peers, protocols, and ports; users, HTTP actions, Service identity, encryption, and platform-specific data paths belong to adjacent controls. -->
 
-## Putting It All Together
-<!-- section-summary: A complete NetworkPolicy design protects a workload by selecting the Pods, allowing required ingress, and allowing required egress. -->
+NetworkPolicy is deliberately narrower than a complete security system.
 
-Here is the final picture for the shop app. By this point, every allowed path has already appeared in one of the ingress or egress examples above:
+### HTTP meaning belongs to layer seven
 
-The final table is a traffic story with a security decision beside each path. `checkout-web` needs to create and read orders, monitoring needs to scrape metrics, and `orders-api` needs DNS, database, and inventory access to complete the business flow. Every other path is outside that story, so the policy design denies it for the selected Pods.
+Allowing TCP `8080` permits a connection on that port. A layer-seven control such as application authorisation, an API gateway, or service-mesh policy does not distinguish `GET /admin`, JWT claims, SQL query contents, users, or application roles.
 
-| Path | Direction | Decision |
+### Identity and encryption belong to security protocols
+
+A matching label is a network identity input. TLS and workload identity systems provide cryptographic identity, rotate certificates, and help prove which workload initiated a request; application authentication handles the human identity.
+
+### Rules select network peers instead of Service names
+
+Rules select Pods, namespaces, IP blocks, protocols, and ports. To allow traffic behind `backend`, the policy selects the Service's backend Pods. A Service may translate its virtual IP to a Pod IP before or after policy processing, depending on the cluster's networking implementation. This also makes `ipBlock` behaviour around Service traffic and address translation platform-sensitive.
+
+The standard policy model can describe TCP, UDP, and SCTP flows when the installed network implementation supports the protocol. It still evaluates transport conversations rather than the meaning of the payload carried over them. A TCP rule for `8080` treats every HTTP method on that connection as the same network permission.
+
+The application thinks in terms of `frontend -> backend Service`. Enforcement ultimately evaluates the traffic that reaches the selected backend Pod endpoints. This is why Service existence and a matching policy still need compatible Pod labels: the Service selector discovers the backends, and the NetworkPolicy selector defines their communication boundary.
+
+### It only works when the network implementation enforces it
+
+The Kubernetes API can accept a NetworkPolicy while the installed networking plugin lacks enforcement support. In that case the object exists while traffic remains unaffected. Verify the CNI's support and use its diagnostics or flow logs when available.
+
+The implementation may realise the desired rules through iptables, nftables, eBPF, or another data-plane mechanism. The NetworkPolicy object remains the shared API contract; the installed CNI determines which features are enforced and which diagnostic evidence is available.
+
+### Some edge cases are implementation-dependent
+
+Treatment of existing connections after a policy change, node-local traffic, and address translation details can vary. Test the actual cluster rather than inferring enforcement from accepted YAML.
+
+NetworkPolicy evaluates **network identity and transport reachability**. Application and layer-seven controls evaluate the business meaning carried inside the connection.
+
+Kubernetes RBAC belongs to another axis as well. RBAC controls who may call the Kubernetes API and modify resources. NetworkPolicy controls which workload network flows are allowed after the Pods exist.
+
+These layers should reinforce one another without being confused. NetworkPolicy can prevent `random-pod` from opening PostgreSQL's TCP port, but it cannot decide whether an authenticated database connection may execute `DROP TABLE`. mTLS can prove a workload's cryptographic identity, while a label selector alone trusts Kubernetes workload metadata. RBAC can stop an unauthorized developer from changing the policy, while it does not filter application packets between Pods.
+
+## How do you add a default-deny posture without discovering dependencies through an outage?
+<!-- section-summary: Discover required flows, add narrow allows, introduce isolation in stages, and test one required and one forbidden caller so success and denial are both observable. -->
+
+A default-deny policy is a good target, but applying it before you know the application's dependencies converts missing knowledge into downtime.
+
+Start with one workload and draw its required conversations. For frontend, that might be:
+
+The web Pod needs two outbound relationships: DNS on UDP and TCP `53`, followed by `backend` on TCP `8080`. The first lookup discovers the Service address; the second connection carries the application request.
+
+List each concrete external dependency and decide whether the standard policy model can express it safely on this platform. Infrastructure dependencies belong in the same inventory as business services. Typical examples include cluster DNS, metrics and logging collectors, service-mesh components, workload identity services, the Kubernetes API, cloud metadata or provider APIs, databases, message brokers, and explicitly approved external APIs. A broad “internet” rule hides which relationships the application truly needs.
+
+For example, the backend dependency map can include postgres on TCP `5432`, Redis on `6379`, a payments API on `443`, and DNS on `53`. Record required, expected, and unknown flows before isolation; unknown traffic needs investigation rather than permanent permission.
+
+A compact flow inventory makes the desired graph reviewable before it becomes YAML:
+
+| Caller | Required destination | Protocol and port |
 |---|---|---|
-| `checkout-web` in `checkout` -> `orders-api` in `orders` on TCP `8080` | Ingress | Allow |
-| `metrics collector` in `monitoring` -> `orders-api` in `orders` on TCP `9090` | Ingress | Allow |
-| `orders-api` -> CoreDNS in `kube-system` on UDP/TCP `53` | Egress | Allow |
-| `orders-api` -> PostgreSQL in `data` on TCP `5432` | Egress | Allow |
-| `orders-api` -> `inventory-api` in `inventory` on TCP `8080` | Egress | Allow |
-| Random debug Pod -> `orders-api` | Ingress | Deny |
-| `orders-api` -> random external IP | Egress | Deny |
+| frontend | backend | TCP `8080` |
+| frontend | DNS | port `53` |
+| backend | postgres | TCP `5432` |
+| backend | Redis | TCP `6379` |
+| backend | payments API | TCP `443` |
+| backend | DNS | port `53` |
+| worker | postgres | TCP `5432` |
+| worker | queue | TCP `5672` |
+| worker | DNS | port `53` |
 
-The policy set has one main job: protect `orders-api` without breaking the real app flow. The ingress side allows the checkout-web to reach the API on 8080 and the monitoring collector to scrape metrics on 9090. The egress side allows DNS, the database, and the inventory API. Everything else is outside the intended access path.
+Classify each observed flow as required, expected, or unknown. The policies are an encoding of that reviewed graph, and the labels must express the same workload identities.
 
-The manifests can live as separate policy objects so each rule has a clear name and owner. Separate policies also make rollbacks smaller. Since policies are additive, splitting them keeps the same final allow result as long as the selectors and directions match.
+Add the narrow allow policies before isolation where your rollout process permits it. Introduce ingress and egress isolation separately so a failure has a smaller search space. After each change, test the real path from the real caller.
 
-Before reading the full YAML, split the final design into three review steps. First, one policy selects `orders-api` and isolates both directions. Second, one policy adds the inbound callers that the business flow needs. Third, one policy adds the outbound dependencies the API needs to run.
+A safe first slice can protect only postgres ingress. Apply an allow for backend on `5432`, then isolate postgres, and test three results: backend succeeds, frontend fails, and an unrelated Pod fails. The success proves the required dependency survived; both failures prove the new boundary actually excludes callers outside the intended set.
 
-The first object selects `orders-api` and isolates both directions:
+Only after that relationship is understood should the team expand isolation to backend, namespace-wide ingress, and finally egress. Egress usually reveals more hidden infrastructure dependencies because name resolution, telemetry, identity, provider APIs, and external services all begin as outbound flows.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: orders-api-default-deny
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Ingress
-    - Egress
-```
+Also test callers that must be denied. The raw example expects backend-to-postgres to work while frontend-to-postgres and unrelated-Pod-to-postgres fail. Positive and negative tests prove different sides of the boundary.
 
-The second object adds the inbound business and monitoring paths:
+When a required call fails, inspect selection before editing ports:
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-orders-api-ingress
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: checkout
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: checkout-web
-      ports:
-        - protocol: TCP
-          port: 8080
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: metrics-collector
-      ports:
-        - protocol: TCP
-          port: 9090
-```
+1. Does the policy's top-level `podSelector` select the destination Pods you intended?
+2. Do the source namespace and Pod labels match the same peer item?
+3. Is the caller isolated for egress by another policy?
+4. Is DNS allowed before the named call begins?
+5. Does the cluster plugin enforce the API, and what do its flow diagnostics show?
 
-That ingress policy has two blocks. The first block allows `checkout-web` from `checkout` to the API port `8080`. The second block allows `metrics-collector` from `monitoring` to the metrics port `9090`. Both blocks keep namespace and Pod selectors together so each allowed source stays narrow.
+Then walk the packet from both ends. Confirm whether the source Pod is egress-isolated, whether DNS and Service routing work, whether the destination Pod is ingress-isolated, whether selectors are combined as AND or OR as intended, and whether address translation changes what the plugin evaluates. The complete result comes from the union of every policy selecting the source and destination.
 
-The third object adds the outbound dependencies:
+Record the broken relationship plainly by naming the source, destination, direction, protocol, port, and selector that did not match. That explanation shows which assumption failed and where to repair it.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-orders-api-egress
-  namespace: orders
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: orders-api
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: data
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: postgres
-      ports:
-        - protocol: TCP
-          port: 5432
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: inventory
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: inventory-api
-      ports:
-        - protocol: TCP
-          port: 8080
-```
+For example: “frontend Pods are egress-isolated; no selected policy allows UDP/TCP `53` to cluster DNS, so `backend` never resolves.” That statement is actionable and narrow. “NetworkPolicy broke networking” gives no clue whether the missing edge belongs to source egress, destination ingress, selector identity, DNS, or an unenforced CNI feature.
 
-Since NetworkPolicies are additive, these three objects combine into one allowed traffic set for the selected Pods.
+Adoption can progress in stages:
 
-That egress policy has three named dependencies. DNS is first because other Service names depend on it. PostgreSQL is second because the orders API stores and reads order data there. Inventory is third because the order flow needs to reserve stock before checkout can finish. The complete YAML is larger than the idea: one selected workload, a short allow-list, and tests for both allowed and denied paths.
+1. Protect a sensitive workload such as postgres while the rest of the namespace remains open.
+2. Introduce default-deny ingress after required incoming relationships have explicit allows.
+3. Introduce default-deny egress after DNS and external dependencies are mapped.
+4. Keep labels, namespace ownership, and policies aligned with the application's real trust boundaries.
 
-This is the working pattern most teams use. The team selects one workload with stable labels, turns on default deny for the direction it wants to control, and adds the required sources, destinations, and ports as explicit allow rules. The team proves one allowed path and one denied path before moving on. After that evidence is in place, the same sequence can be repeated for the next workload.
+The useful completion criterion is that the allowed network graph resembles the intended dependency graph. Merely counting NetworkPolicy objects says little about which conversations the cluster actually permits.
 
-NetworkPolicy is one security layer in Kubernetes. It is also one of the first layers that turns a flat cluster network into intentional application traffic, because it makes each workload's allowed paths visible in YAML.
+## Check Your Answers
+<!-- section-summary: Reconstruct the policy model from application relationships, directional isolation, selector logic, and observable allowed and denied tests. -->
 
-![NetworkPolicy rollout summary showing observe flows, verify labels, default deny, add one allow rule, test allowed and denied paths, rollback evidence, and small changes](/content-assets/articles/article-containers-orchestration-kubernetes-networking-network-policies/network-policy-rollout-summary.png)
+:::expand[Why are reachability and permission separate?]{kind="recap"}
+Reachability proves that the network can carry packets to a destination. Permission decides whether this source may use that path. NetworkPolicy reduces the interfaces a compromised or mistaken workload can contact, while application authentication and authorisation govern the actions inside an allowed connection.
+:::
 
-*A safe rollout treats policy like an application traffic change: observe first, add one allow path at a time, and prove both the allowed and denied cases.*
+:::expand[What exactly changes when a policy selects a Pod?]{kind="recap"}
+A Pod starts non-isolated in each direction. A policy that selects it for ingress or egress gives that direction an allow-list. Traffic in the isolated direction must match at least one rule from the union of all policies that select the Pod.
+:::
 
-## What's Next
+:::expand[How do labels express that frontend may call backend without hard-coded Pod IPs?]{kind="recap"}
+The destination policy selects backend Pods, then an ingress peer selects frontend Pods by label. That states a durable workload relationship while individual Pod addresses change. When namespace and Pod selectors are combined in one peer they are AND; separate peers are OR.
+:::
 
-You now have the main NetworkPolicy pieces: selected Pods, ingress rules, egress rules, namespace labels, additive policy behavior, DNS allowances, and safe rollout. The next networking problem is debugging the full path when something still fails.
+:::expand[Why can the receiver allow a request while the sender still blocks it?]{kind="recap"}
+Ingress and egress are separate boundaries. If both directions are isolated, frontend egress must allow backend on the port and backend ingress must allow frontend on the same flow. Named calls also require DNS egress before the application connection can begin.
+:::
 
-The next article connects Services, DNS, endpoints, policies, Pods, and node-level clues into a practical Kubernetes networking debugging workflow. That workflow gives you a repeatable path for investigating the timeouts and name-resolution errors that show up after real policy changes.
+:::expand[Where does NetworkPolicy stop?]{kind="recap"}
+Standard NetworkPolicy stops at network peers, protocols, and ports enforced by a compatible network plugin. HTTP methods, users, Service identity, application permissions, encryption, and cryptographic identity belong to higher-level controls.
+:::
+
+:::expand[How do you add a default-deny posture without discovering dependencies through an outage?]{kind="recap"}
+Map real workload flows first, verify the identity labels, add narrow allows, and introduce ingress and egress isolation in stages. After each step, repeat a required call from its real caller and an unwanted call from a representative denied caller.
+:::
 
 ## References
 
-- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Explains the NetworkPolicy model, default pod isolation behavior, additive policy rules, default deny examples, namespace targeting, pod lifecycle behavior, and API limits.
-- [Kubernetes NetworkPolicy API reference](https://kubernetes.io/docs/reference/kubernetes-api/networking/network-policy-v1/) - Defines `NetworkPolicy`, `NetworkPolicySpec`, `podSelector`, `policyTypes`, ingress rules, egress rules, peers, IP blocks, and ports.
-- [Declare Network Policy](https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/) - Walks through applying a simple NetworkPolicy and testing allowed and denied Pod access.
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Official isolation, additive-rule, selector, `ipBlock`, and default-policy behaviour.
+- [Declare Network Policy](https://kubernetes.io/docs/tasks/administer-cluster/declare-network-policy/) - Official walkthrough for selecting Pods and allowing a specific flow.
+- [Default Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/#default-policies) - Official default-deny and allow patterns for ingress and egress.
+- [Namespaces](https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/) - Official namespace behaviour and the immutable namespace-name label.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Service translation and endpoint model that interacts with policy enforcement.

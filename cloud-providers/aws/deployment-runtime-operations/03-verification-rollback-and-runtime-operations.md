@@ -1,7 +1,7 @@
 ---
 title: "Verification, Rollback, and Runtime Operations"
-description: "Use watch windows, smoke tests, CloudWatch, OpenTelemetry, ECS and Lambda evidence, rollback decisions, and runtime actions after AWS traffic moves."
-overview: "Traffic movement starts the production verification period. This article explains how an AWS team watches a candidate version, uses layered evidence, decides whether to continue, pause, roll back, or fix forward, and verifies the service after each action."
+description: "Verify production behavior after an AWS deployment, compare runtime evidence, choose rollback, pause, or fix forward, and prove the system recovered."
+overview: "Follow watch windows, deployment markers, smoke tests, user journeys, metrics, logs, traces, ECS and Lambda checks, asynchronous backlog, remediation decisions, and secondary damage."
 tags: ["aws", "ecs", "lambda", "cloudwatch", "rollback", "observability"]
 order: 3
 id: article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service
@@ -21,586 +21,572 @@ aliases:
 
 ## Table of Contents
 
-1. [The Watch Window Starts](#the-watch-window-starts)
-2. [Smoke Tests and User Journeys](#smoke-tests-and-user-journeys)
-3. [CloudWatch, Logs, and Traces](#cloudwatch-logs-and-traces)
-4. [ECS Runtime Checks](#ecs-runtime-checks)
-5. [Lambda Runtime Checks](#lambda-runtime-checks)
-6. [Rollback, Pause, or Fix Forward](#rollback-pause-or-fix-forward)
-7. [After the Action](#after-the-action)
-8. [Official References](#official-references)
+1. [Why Is Deployment Success Not Runtime Success?](#why-is-deployment-success-not-runtime-success)
+2. [How Long Should the Watch Window Last?](#how-long-should-the-watch-window-last)
+3. [How Do Metrics, Logs, and Traces Work Together?](#how-do-metrics-logs-and-traces-work-together)
+4. [How Do You Verify an ECS Deployment?](#how-do-you-verify-an-ecs-deployment)
+5. [How Do You Verify a Lambda Deployment?](#how-do-you-verify-a-lambda-deployment)
+6. [How Do You Choose Rollback, Pause, or Fix Forward?](#how-do-you-choose-rollback-pause-or-fix-forward)
+7. [How Does Runtime Operations Form a Feedback Loop?](#how-does-runtime-operations-form-a-feedback-loop)
+8. [What Is the Complete Verification Model?](#what-is-the-complete-verification-model)
+9. [References](#references)
 
-## The Watch Window Starts
-<!-- section-summary: Verification starts when production traffic reaches the candidate version. -->
+A deployment system can copy an image, start containers, update a Lambda function, and report `SUCCESS` while customers receive errors. Successful control-plane work proves that AWS created or activated what was requested. It does not prove that the resulting system is correct, fast, stable, or valuable.
 
-The release has moved traffic. `checkout-api:58` is now the primary ECS deployment, and the `checkout-handler` Lambda alias sends a small percentage of webhook traffic to version `17`. The deployment command returned success, but users have only just started touching the candidate. **Verification** is the watch period where the team proves the new runtime state behaves the way the release record promised.
+Before a deployment, production is in some known state `S0`. The change moves it toward `S1`, but `S1` is initially an assumption rather than a proven healthy state.
 
-A useful watch window has a time target and a sample target. For example, watch for 20 minutes and at least 500 checkout attempts. Time helps catch slow failures. Sample count helps during quiet traffic periods. The team should decide these numbers before traffic moves so nobody has to negotiate the rules during a problem.
+The sections below answer these questions in order:
 
-For this module, the watch window follows the same flow every time:
+1. **Why Is Deployment Success Not Runtime Success?**
+2. **How Long Should the Watch Window Last?**
+3. **How Do Metrics, Logs, and Traces Work Together?**
+4. **How Do You Verify an ECS Deployment?**
+5. **How Do You Verify a Lambda Deployment?**
+6. **How Do You Choose Rollback, Pause, or Fix Forward?**
+7. **How Does Runtime Operations Form a Feedback Loop?**
+8. **What Is the Complete Verification Model?**
 
-| Layer | Evidence | Continue when | Next action if bad |
-|---|---|---|---|
-| Smoke test | Health, version, and checkout path | Test calls pass with candidate version visible | Pause traffic and inspect logs before wider exposure |
-| Platform health | ECS deployments, ALB target health, Lambda alias and metrics | Runtime targets are healthy and alarms stay OK | Inspect service events, target reasons, throttles, or concurrency |
-| Application behavior | Logs, traces, business counters | Error rate, latency, and checkout success stay near baseline | Roll back, pause, or fix forward based on impact and rollback safety |
-| Side effects | Queues, S3 writes, database rows, payment events | Backlog and writes look expected | Clean up partial writes or replay failed work after recovery |
+## Why Is Deployment Success Not Runtime Success?
+<!-- section-summary: The deployment plane proves requested infrastructure state, while the runtime plane proves availability, correctness, latency, capacity, dependencies, data integrity, and business behavior. -->
 
-The rest of this article turns that table into commands and decisions. Each check should answer three things: what did we see, what does it mean, and what should we do next?
+Suppose a pipeline deploys API version 42 and reports:
 
-![The watch window board shows the release evidence a responder should keep visible after traffic starts moving](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/watch-window-evidence-board.png)
-
-*The watch window board shows the release evidence a responder should keep visible after traffic starts moving.*
-
-
-## Smoke Tests and User Journeys
-<!-- section-summary: Smoke tests prove the release can complete the important user path after traffic moves. -->
-
-A **smoke test** is a small production-safe test that checks the important path after deployment. For checkout, a useful smoke test confirms the API is alive, the running version is the candidate, and a test checkout can move through tax, payment sandbox mode, order creation, receipt writing, and logs.
-
-Start with small endpoint checks:
-
-```bash
-curl -fsS https://api.example.com/health
-
-curl -fsS https://api.example.com/version
+```text
+Image pushed       success
+Task definition    success
+ECS deployment     success
+Containers running success
 ```
 
-Example output:
+This proves the infrastructure could deploy v42. It does not prove that users can sign in, orders persist, payments succeed, latency remains acceptable, background work drains, memory remains stable, or database permission is correct.
 
-```json
-{
-  "status": "ok",
-  "dependencies": {
-    "database": "ok",
-    "payments": "ok"
-  }
-}
+Separate two planes:
+
+| Plane | Question |
+| --- | --- |
+| Deployment or control plane | Did AWS create and activate the requested resources and versions? |
+| Runtime or data plane | Does the resulting system work correctly for real users and workloads? |
+
+Define health from the properties the system must preserve:
+
+- **Availability:** legitimate work can be served.
+- **Correctness:** responses and side effects are correct.
+- **Latency:** work completes within its expected time.
+- **Capacity:** the system can sustain the workload.
+- **Data integrity:** data is not lost or corrupted.
+- **Dependency health:** databases, queues, caches, APIs, and other services continue to work.
+- **Business correctness:** users can complete checkout, upload, sign-up, payment, or another valuable outcome.
+
+Verification is not merely "did anything crash?" It asks whether the change violated any important invariant.
+
+Create an exact deployment marker on operational timelines. Attach service, version, deployment ID, task definition or Lambda version, environment, account, Region, configuration revision, and release time to metrics and logs.
+
+```text
+Errors
+  |
+  |                         rising failures
+  |                       /
+  |______________________/____________ time
+                        ^
+                   deploy v42
 ```
 
-```json
-{
-  "service": "checkout-api",
-  "version": "2026-06-24.3",
-  "taskDefinition": "checkout-api:58",
-  "imageDigest": "sha256:9d8b7f6a5e4c3b2a111111111111111111111111111111111111111111111111"
-}
+Without the marker, the spike is unexplained. With it, the team can immediately test the hypothesis that behavior changed with v42. Observability is more powerful when it answers "what changed?" as well as "what is broken?"
+
+## How Long Should the Watch Window Last?
+<!-- section-summary: Observation must cover the traffic volume and delayed failure modes relevant to the system rather than a ritual number of minutes. -->
+
+Five seconds of healthy behavior after traffic reaches a new version is not enough. Some failures require time or accumulated work:
+
+```text
+memory leak -> gradual growth -> limit -> out-of-memory kill
+
+slower database query -> connections accumulate -> pool exhausted -> failures
+
+Lambda processing regression -> retries -> queue grows -> dependency overload
 ```
 
-`-f` makes `curl` fail on HTTP error responses. `-sS` keeps normal progress output quiet while still printing errors. The health response shows the app and key dependencies are reachable. The version response ties the request to the candidate artifact and task definition. The next action is to run a user-journey smoke test through the same public path users use.
+A **watch window** begins when the new production state starts receiving meaningful workload:
 
-```bash
-curl -fsS -X POST https://api.example.com/test-checkout \
-  -H "content-type: application/json" \
-  -H "x-release-smoke: checkout-api-2026-06-24.3" \
-  -d '{"sku":"SMOKE-TEST-SKU","quantity":1,"paymentMode":"sandbox"}'
+```text
+old version ---- deployment marker ---- new version ---- observation ---->
 ```
 
-Example output:
+The window should cover relevant behaviors:
 
-```json
-{
-  "status": "accepted",
-  "orderId": "smoke_20260624_1012",
-  "paymentMode": "sandbox",
-  "receiptKey": "receipts-v2/smoke_20260624_1012.pdf",
-  "version": "2026-06-24.3"
-}
+- Startup and warm-up
+- Normal production traffic distribution
+- Autoscaling decisions
+- Background and queue processing
+- Cache fill, expiry, and eviction
+- Dependency interactions
+- Scheduled or batch code paths
+- Sustained resource use
+
+A high-volume synchronous API can reveal statistical problems quickly. A nightly batch needs enough time to execute the path at least once. A low-volume feature may need synthetic or targeted traffic because elapsed clock time without requests provides little evidence.
+
+Different failures have different timescales. Syntax and startup errors appear in seconds. A latency regression can appear in minutes. A connection leak may need an hour. Daily settlement code may not run until later. Select the window from plausible failure modes and observed workload rather than declaring that every deployment is safe after ten minutes.
+
+The watch window also continues after full rollout or recovery. Delayed feedback is still production evidence, and a system that returned to low error rates but retains a growing backlog has not fully recovered.
+
+### How Deep Should Verification Go?
+<!-- section-summary: Verification progresses from resource existence through application and dependency checks to user journeys, real traffic, and business outcomes. -->
+
+Use a hierarchy:
+
+```text
+Deployment completed
+  -> process, container, or function version exists
+  -> application responds
+  -> dependencies work
+  -> critical user journeys work
+  -> real traffic behaves normally
+  -> business outcomes remain normal
 ```
 
-The POST sends a safe test order with a marker header that logs can search later. The response proves the checkout path accepted the order, used sandbox payment mode, wrote the receipt to the v2 prefix, and returned the candidate version. The next action for this output is to record the order ID in the release log and check logs or traces for the same marker. If the request fails, pause the rollout before waiting for more users to hit the same path.
+Each level proves more than the previous one.
 
-Smoke tests should use safe test data, idempotency where the API supports it, and a cleanup or retention plan. The goal is a small test that operators trust enough to run during every release.
+#### Health checks are a foundation
 
-## CloudWatch, Logs, and Traces
-<!-- section-summary: Metrics, alarms, logs, and traces show whether the candidate behaves under real traffic. -->
+`GET /health -> 200` proves a process can answer that endpoint. It may not prove database authentication, payment credentials, Redis access, order writes, or business correctness. Design readiness checks to cover what is safe and inexpensive, but do not mistake them for full verification.
 
-CloudWatch metrics and alarms give the release a fast read on error rate, latency, throttles, queue depth, and resource pressure. Logs explain individual failures. Traces from AWS X-Ray or OpenTelemetry help when a checkout request crosses ECS, Lambda, DynamoDB, SQS, S3, and an external payment provider.
+#### Smoke tests find catastrophic failures cheaply
 
-Start by checking release alarms:
+A smoke test can verify DNS, load-balancer reachability, application response, authentication, and one representative request. For an online store:
 
-```bash
-aws cloudwatch describe-alarms \
-  --alarm-name-prefix checkout-api-prod \
-  --region eu-west-2 \
-  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Reason:StateReason}'
+```text
+GET /products
+-> HTTP 200
+-> valid JSON and expected schema
+-> response within a reasonable time
 ```
 
-Example output:
+The goal is to answer "is the application fundamentally usable?" quickly enough to run after every deployment, not to prove every feature.
 
-```json
-[
-  {
-    "Name": "checkout-api-prod-5xx-rate",
-    "State": "OK",
-    "Reason": "Recent datapoints stayed below the 1.0 threshold."
-  },
-  {
-    "Name": "checkout-api-prod-p95-latency",
-    "State": "OK",
-    "Reason": "Recent datapoints stayed below the 900.0 threshold."
-  }
-]
+#### User journeys verify outcomes across services
+
+A real unit of value is often a sequence:
+
+```text
+browse product -> add to cart -> authenticate -> checkout
+-> payment -> order persisted
 ```
 
-`State` should stay `OK` through the watch window. `ALARM` means the metric is breaching. `INSUFFICIENT_DATA` means CloudWatch lacks enough datapoints yet, which can happen early in a release or with quiet traffic. The next action for `OK` alarms is to keep watching application-level checks. The next action for `ALARM` is to read the metric, logs, and release decision rule before moving more traffic.
+Every individual endpoint can look healthy while order persistence fails at the end. Synthetic or automated journeys reveal whether the connected system produces a valuable user outcome.
 
-Logs should include version, request ID, route, treatment, and safe error fields. During a checkout release, search the recent window with the smoke marker or the risky operation:
+| Evidence | Main question |
+| --- | --- |
+| Health check | Is this process ready or alive? |
+| Smoke test | Is the application basically usable? |
+| User journey | Can a user accomplish something valuable? |
+| Production monitoring | Does it stay healthy under real workload? |
 
-```bash
-aws logs tail /ecs/prod/checkout-api \
-  --since 20m \
-  --region eu-west-2 \
-  --filter-pattern '"checkout"'
+These layers complement one another.
+
+#### Production traffic reduces residual uncertainty
+
+Staging approximates production. It does not have all real data distributions, permissions, network behavior, concurrency, caches, account configuration, dependency latency, and user behavior.
+
+Progressive delivery follows:
+
+```text
+tests -> staging -> deploy -> smoke test
+-> small production cohort -> observe -> expand
 ```
 
-Example output:
+The system is buying information while limiting blast radius.
 
-```console
-2026-06-24T10:12:07.111Z task/checkout-api/91d2 INFO checkout_completed orderId=smoke_20260624_1012 version=2026-06-24.3 treatment=v2 durationMs=184
-2026-06-24T10:13:28.402Z task/checkout-api/a84e ERROR checkout_failed orderId=ord_9921 version=2026-06-24.3 treatment=v2 error=PaymentEndpointRejected durationMs=221
+#### Verification is hypothesis testing
+
+The predeployment claim is "v42 is safe." Production supplies evidence from smoke tests, metrics, logs, traces, journeys, resources, and business results. Independent signals increase confidence:
+
+```text
+deployment complete
+tasks stable
+load balancer healthy
+smoke test passes
+errors and latency unchanged
+checkout journey passes
+business outcomes normal
 ```
 
-The first line supports the smoke test. The second line shows a candidate-version payment failure on treatment `v2`. The next action is to compare the error count with the release threshold and inspect configuration for the payment endpoint. If repeated candidate-only errors appear, pause or roll back according to the release plan.
+Verification cannot create mathematical certainty. It reduces uncertainty enough that accepting or rejecting the release becomes rational.
 
-Metrics show the pattern behind those individual lines. A focused metric check can confirm whether the alarm state matches recent datapoints:
+## How Do Metrics, Logs, and Traces Work Together?
+<!-- section-summary: Metrics reveal abnormal behavior, traces show which dependency or span caused it, and logs provide the detailed event or error context. -->
 
-```bash
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/ApplicationELB \
-  --metric-name HTTPCode_Target_5XX_Count \
-  --dimensions Name=TargetGroup,Value="$TARGET_GROUP_DIMENSION" Name=LoadBalancer,Value="$LOAD_BALANCER_DIMENSION" \
-  --statistics Sum \
-  --period 60 \
-  --start-time 2026-06-24T10:00:00Z \
-  --end-time 2026-06-24T10:20:00Z \
-  --region eu-west-2 \
-  --query 'Datapoints[].{Time:Timestamp,Errors:Sum}'
+Metrics compress many events into signals such as request rate, error rate, p95 latency, CPU, memory, queue depth, Lambda throttles, and business success. They answer, "Is something wrong?"
+
+A version comparison can immediately reveal:
+
+```text
+v41 errors: 0.2%
+v42 errors: 7.8%
 ```
 
-Example output:
+Logs answer, "What happened?" A log can show `DatabaseException: permission denied for relation orders` with the version and request ID.
 
-```json
-[
-  {
-    "Time": "2026-06-24T10:12:00+00:00",
-    "Errors": 1.0
-  },
-  {
-    "Time": "2026-06-24T10:13:00+00:00",
-    "Errors": 9.0
-  },
-  {
-    "Time": "2026-06-24T10:14:00+00:00",
-    "Errors": 11.0
-  }
-]
+Traces answer, "Where did the request spend time or fail?"
+
+```text
+Browser 40ms -> API 30ms -> Order service 55ms
+-> Payment service 3,200ms -> external payment API
 ```
 
-The datapoints show errors rising after the candidate received traffic. The next action is to decide whether the rise crosses the release stop rule. If it does, stop traffic movement and choose rollback, pause, or fix forward. If it stays under the threshold, keep watching until the window completes.
+The API is not the primary latency source; the downstream payment call is.
 
-Traces add one more layer when the symptom crosses services. If a trace shows most time spent in a payment provider segment, the next action is different from a trace showing slow database writes. The operational habit is to follow the failing request across service boundaries before changing unrelated resources.
+An investigation chain is:
 
-## ECS Runtime Checks
-<!-- section-summary: ECS evidence comes from service deployments, service events, target health, stopped tasks, logs, and resource metrics. -->
-
-For ECS, the service can report success at one layer and trouble at another. A task may be running while the load balancer marks it unhealthy. A target may be healthy while the app logs show candidate-only payment errors. Good verification reads the layers together.
-
-Start with the service deployment state:
-
-```bash
-aws ecs describe-services \
-  --cluster prod-web \
-  --services checkout-api \
-  --region eu-west-2 \
-  --query 'services[].{Events:events[0:5].message,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Running:runningCount,Pending:pendingCount,Rollout:rolloutState,Reason:rolloutStateReason}}'
+```text
+Metric detects:   something is wrong
+Trace localizes:  payment span is slow
+Log explains:     upstream API timeouts
 ```
 
-Example output:
+### Four signal categories reveal many incidents
 
-```json
-[
-  {
-    "Events": [
-      "(service checkout-api) has reached a steady state.",
-      "(service checkout-api) registered 4 targets in (target-group arn:aws:elasticloadbalancing:eu-west-2:123456789012:targetgroup/prod-checkout/abc123)."
-    ],
-    "Deployments": [
-      {
-        "Status": "PRIMARY",
-        "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/checkout-api:58",
-        "Running": 4,
-        "Pending": 0,
-        "Rollout": "COMPLETED",
-        "Reason": "ECS deployment ecs-svc/123 completed."
-      }
-    ]
-  }
-]
+| Signal | Question |
+| --- | --- |
+| Traffic | How much work is arriving? |
+| Errors | How much work is failing? |
+| Latency | How long does work take? |
+| Saturation | How close are resources to their limits? |
+
+A latency change from 100 to 200 ms can appear harmless, yet longer requests increase concurrency, consume more database connections and memory, cause pool saturation, timeouts, retries, and more traffic. Monitoring leading signals can stop the feedback loop before the final outage.
+
+### Compare with a baseline
+
+CPU at 72% has no universal meaning. If normal is 65–80%, it may be expected. If normal is 15–20% and it jumped at the deployment marker, it is significant.
+
+Compare postdeployment behavior with the predeployment baseline and, during a canary, candidate behavior with stable behavior. Look for changes correlated with the version rather than only static "high" or "low" thresholds.
+
+## How Do You Verify an ECS Deployment?
+<!-- section-summary: ECS verification crosses service, task, container, load-balancer, application, resource, and dependency layers and requires stable behavior over time. -->
+
+An ECS service with desired tasks 10 and running tasks 10 proves only that the scheduler currently has ten running tasks. All ten can return HTTP 500.
+
+Verify layer by layer:
+
+```text
+ECS deployment reached expected revision
+  -> candidate tasks started
+  -> containers stay running
+  -> readiness and health checks pass
+  -> load balancer marks targets healthy
+  -> production traffic reaches candidates
+  -> requests and user journeys succeed
+  -> resources and dependencies remain normal
 ```
 
-The output says ECS placed the candidate tasks, registered targets, and completed the deployment. The next action is to check target health and application evidence because ECS steady state only proves the service scheduler finished its work.
+| Layer | What to establish |
+| --- | --- |
+| ECS service | Intended task definition and count are active |
+| Tasks | Tasks remain stable instead of cycling |
+| Containers | Processes do not exit or hit resource limits |
+| Load balancer | Candidate targets are eligible and receiving traffic |
+| Application | Version-specific requests succeed with normal latency |
+| Resources | CPU, memory, networking, and scaling behave normally |
+| Dependencies | Database, queue, cache, and downstream APIs remain healthy |
 
-```bash
-aws elbv2 describe-target-health \
-  --target-group-arn "$TG_ARN" \
-  --region eu-west-2 \
-  --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
+A suspicious loop is:
+
+```text
+task starts -> health check fails -> ECS stops it
+-> replacement starts -> health fails -> replacement starts
 ```
 
-Example output:
+An instantaneous count can repeatedly show running tasks even though the service never reaches equilibrium. Verify stability over the watch window, task stop reasons, deployment events, and restart rate.
 
-```json
-[
-  {
-    "Target": "10.0.24.81",
-    "Port": 3000,
-    "State": "healthy",
-    "Reason": null,
-    "Description": null
-  },
-  {
-    "Target": "10.0.31.44",
-    "Port": 3000,
-    "State": "unhealthy",
-    "Reason": "Target.ResponseCodeMismatch",
-    "Description": "Health checks failed with these codes: [500]"
-  }
-]
+Separate scheduler and application questions:
+
+```text
+ECS scheduler: Can I keep the requested containers alive?
+Application:   Do those containers correctly serve users?
 ```
 
-One target is healthy and one target fails the health check with HTTP 500. The next action is to inspect the failing task logs and startup readiness path before allowing the rollout to continue. Common causes include a bad health endpoint, missing config, wrong container port, security group issue, slow startup, or a dependency required by readiness.
+`PAYMENT_API_URL=https://wrong-host` can allow a container to start, remain alive, pass a shallow health endpoint, and consume normal CPU while every payment fails. The scheduler cannot infer business semantics.
 
-If tasks stopped during the rollout, inspect stopped task reasons:
+## How Do You Verify a Lambda Deployment?
+<!-- section-summary: Lambda verification observes invocation outcomes, duration, concurrency, throttling, retry, event age, and downstream work rate rather than server uptime. -->
 
-```bash
-aws ecs list-tasks \
-  --cluster prod-web \
-  --service-name checkout-api \
-  --desired-status STOPPED \
-  --region eu-west-2 \
-  --query 'taskArns[0:3]'
+Lambda has no continuously running server to inspect. Ask what happens when the new function version is invoked.
+
+Useful signals include:
+
+```text
+Invocations
+Errors
+Duration
+Throttles
+Concurrency
+Retries
+Event age and queue backlog
+Downstream failures
+Dead-letter behavior
 ```
 
-Example output:
+Suppose errors remain at 0.1% while duration increases from 180 to 950 ms. The deployment has not failed yet, but fivefold duration increases concurrent executions. That can reach concurrency limits, produce throttling, cause retries, and grow backlog. Duration is a leading indicator.
 
-```json
-[
-  "arn:aws:ecs:eu-west-2:123456789012:task/prod-web/0f4b0c3d2a1e4f5a8b9c"
-]
+### Asynchronous work can be unhealthy without explicit errors
+
+An SQS-triggered function receives 1,000 messages per minute but after deployment completes only 700. The visible difference is:
+
+```text
+1,000 arrivals - 700 completions = 300 additional messages/minute
 ```
 
-The list gives task ARNs to inspect. The next action is to describe one stopped task:
+After one hour, backlog increases by 18,000. Individual invocations can mostly succeed while the system falls farther behind.
 
-```bash
-aws ecs describe-tasks \
-  --cluster prod-web \
-  --tasks arn:aws:ecs:eu-west-2:123456789012:task/prod-web/0f4b0c3d2a1e4f5a8b9c \
-  --region eu-west-2 \
-  --query 'tasks[].{StoppedReason:stoppedReason,Containers:containers[].{Name:name,ExitCode:exitCode,Reason:reason}}'
+For event-driven Lambda, ask whether work arrives faster than it finishes. Monitor queue depth, oldest-message or event age, retry volume, batch failures, DLQ messages, concurrency, throttles, and dependency capacity. A function success rate alone does not prove that the asynchronous system is meeting its timeliness obligation.
+
+If an alias or traffic-shifting mechanism exposes a candidate version, separate its duration, errors, and business outcome from the stable version rather than relying on the aggregate function metric.
+
+## How Do You Choose Rollback, Pause, or Fix Forward?
+<!-- section-summary: Choose the action with the lowest expected harm using active impact, blast radius, reversibility, and confidence in the proposed correction. -->
+
+When verification fails, the broad choices are rollback, pause, or fix forward. The objective during active impact is to restore a healthy system while adding the least risk, not to prove the exact root cause before acting.
+
+### Rollback restores a known-good state
+
+```text
+v41 healthy -> deploy v42 -> unhealthy -> restore v41
 ```
 
-Example output:
+The previous version has real production evidence, which often makes rollback safer than an emergency v43. Use rollback when impact is high, returning is compatible, and diagnosis or fix confidence is low.
 
-```json
-[
-  {
-    "StoppedReason": "Essential container in task exited",
-    "Containers": [
-      {
-        "Name": "checkout-api",
-        "ExitCode": 1,
-        "Reason": "CannotStartContainerError"
-      }
-    ]
-  }
-]
+Rollback safety depends on more than binaries. A v42 schema migration that drops `first_name` and `last_name` in favor of `full_name` can make v41 fail after return. Consider schema, transformed data, messages already published, external side effects, cached formats, and API contracts. Backward-compatible migrations preserve the option.
+
+### Pause contains uncertainty
+
+During a 10% canary, suspicious but inconclusive signals can justify stopping further traffic expansion:
+
+```text
+planned: 10% -> 25% -> 50% -> 100%
+actual:  10% -> PAUSE
 ```
 
-The task exited before it could serve traffic. The next action is to read container logs around startup and check image pull permissions, missing environment variables, secret access, and application startup validation. A stopped task reason gives direction, while logs usually give the exact failure.
+Pause buys investigation time without increasing blast radius. It is useful when a small cohort is affected and the signal needs confirmation.
 
-![The runtime checks compare container service evidence and function evidence before the team chooses rollback, pause, or repair](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/runtime-checks-services-functions.png)
+### Fix forward applies another correction
 
-*The runtime checks compare container service evidence and function evidence before the team chooses rollback, pause, or repair.*
+If v42 uses `PAYMENT_TIMEOUT=1` and the intended value is 10, a narrow high-confidence configuration change may be faster and safer than reversing the entire release. Fix forward can also be necessary after irreversible state change.
 
+It has a cost: another unproven change enters an already unhealthy system. Use it when the problem and correction are clear and rollback is riskier.
 
-## Lambda Runtime Checks
-<!-- section-summary: Lambda evidence comes from alias routing, invocation metrics, logs, throttles, concurrency, and event source state. -->
+### Use four decision variables
 
-For Lambda, first confirm the traffic pointer. If the release plan says the `prod` alias sends 10 percent to version `17`, the alias output should show that exact route:
+| Variable | Question |
+| --- | --- |
+| Impact | How badly are users affected? |
+| Blast radius | How much of the system is exposed? |
+| Reversibility | Can the old state safely operate now? |
+| Confidence | How certain is the proposed diagnosis and correction? |
 
-```bash
-aws lambda get-alias \
-  --function-name checkout-handler \
-  --name prod \
-  --region eu-west-2 \
-  --query '{Name:Name,FunctionVersion:FunctionVersion,RoutingConfig:RoutingConfig}'
+```text
+Large impact + safe rollback + uncertain diagnosis -> rollback
+Contained canary + uncertain signal               -> pause
+Small contained impact + obvious correction       -> fix forward
 ```
 
-Example output:
+Choose the shortest safe path with the lowest expected harm. During a severe outage, minimize `time × impact`. Restore service, verify recovery, then investigate deeply. Debugging elegance should not keep checkout unavailable when a tested rollback exists.
 
-```json
-{
-  "Name": "prod",
-  "FunctionVersion": "16",
-  "RoutingConfig": {
-    "AdditionalVersionWeights": {
-      "17": 0.1
-    }
-  }
-}
+### How Do You Verify Recovery and Find Secondary Damage?
+<!-- section-summary: Rollback changes production and therefore needs the same runtime proof, followed by checks for queues, caches, retries, workflows, and dependency load left by the incident. -->
+
+Rollback is another deployment. Do not verify v42 carefully and assume that a rollback command returning success means v41 is healthy.
+
+Verify:
+
+```text
+rollback initiated
+-> old version active
+-> tasks or function aliases stable
+-> traffic reaches old version
+-> errors and latency recover
+-> smoke tests and user journeys pass
 ```
 
-`FunctionVersion` is the primary alias target. `AdditionalVersionWeights` sends 10 percent to version `17`. The next action is to watch metrics and logs for both versions. If the alias points somewhere unexpected, fix the alias before interpreting application symptoms.
+The same control-plane-versus-runtime distinction applies after remediation.
 
-Check Lambda errors for the release window:
+#### Application version recovery is not complete system recovery
 
-```bash
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Errors \
-  --dimensions Name=FunctionName,Value=checkout-handler Name=Resource,Value=checkout-handler:prod \
-  --statistics Sum \
-  --period 60 \
-  --start-time 2026-06-24T10:00:00Z \
-  --end-time 2026-06-24T10:20:00Z \
-  --region eu-west-2 \
-  --query 'Datapoints[].{Time:Timestamp,Errors:Sum}'
+An incident can leave:
+
+- Failed messages waiting for retry
+- A large queue backlog
+- Caches with bad values
+- Stuck database connections
+- Clients continuing to retry
+- Dead-letter queues containing events
+- Partially completed workflows
+- Elevated autoscaling capacity
+- External side effects that need reconciliation
+
+If a broken Lambda accumulated 50,000 SQS messages, restoring the old function can create high catch-up concurrency, saturate the database, and cause another outage. Plan the drain rate, consumer concurrency, retry behavior, and dependency capacity instead of releasing the entire backlog at once.
+
+Ask, "What state did failure leave behind?" Application code can be healthy while queues, caches, data, and workflows remain damaged.
+
+#### Verification occurs twice
+
+The complete lifecycle is:
+
+```text
+CHANGE -> DEPLOY -> VERIFY
+                    |
+                healthy?
+              /          \
+            yes           no
+             |             |
+          OBSERVE        DECIDE
+                    rollback / pause / fix
+                             |
+                           VERIFY
+                             |
+                         HEALTHY STATE
+                             |
+                           LEARN
 ```
 
-Example output:
+After deployment, verification asks whether the change worked. After action, it asks whether recovery worked and whether secondary state is safe.
 
-```json
-[
-  {
-    "Time": "2026-06-24T10:10:00+00:00",
-    "Errors": 0.0
-  },
-  {
-    "Time": "2026-06-24T10:11:00+00:00",
-    "Errors": 6.0
-  },
-  {
-    "Time": "2026-06-24T10:12:00+00:00",
-    "Errors": 8.0
-  }
-]
+## How Does Runtime Operations Form a Feedback Loop?
+<!-- section-summary: Runtime operations connects change mechanisms, observability, diagnosis, corrective actions, and renewed verification into a control system. -->
+
+At the broadest level:
+
+```text
+Change -> Observe -> Detect -> Diagnose -> Act -> Verify -> repeat
 ```
 
-The errors start during the watch window. The next action is to filter logs by version or request marker and check whether version `17` has a different error pattern from version `16`. Also check `Duration`, `Throttles`, and concurrency if errors pair with slower runtime or capacity pressure.
+Observability is the sensory system. Deployment changes the plant. Rollback, traffic movement, configuration changes, and remediation are actuators. Runtime operations connects them with feedback.
 
-For queue-backed or stream-backed functions, verify the event source state because traffic rollback may stop new failures while old failed messages remain:
+Without feedback:
 
-```bash
-aws lambda list-event-source-mappings \
-  --function-name checkout-handler \
-  --region eu-west-2 \
-  --query 'EventSourceMappings[].{UUID:UUID,State:State,FunctionArn:FunctionArn,LastProcessingResult:LastProcessingResult}'
+```text
+deploy -> hope
 ```
 
-Example output:
+With feedback:
 
-```json
-[
-  {
-    "UUID": "6f0b3ac1-4fc3-4c40-a8f9-1f2d4b8c9012",
-    "State": "Enabled",
-    "FunctionArn": "arn:aws:lambda:eu-west-2:123456789012:function:checkout-handler:prod",
-    "LastProcessingResult": "OK"
-  }
-]
+```text
+deploy
+-> measure actual behavior
+-> compare with desired behavior
+-> correct deviations
+-> measure again
 ```
 
-`State` shows whether Lambda is polling the event source. `FunctionArn` shows the target the event source invokes. `LastProcessingResult` gives a quick status for recent polling. The next action is to check queue depth, iterator age, dead-letter queues, and failed batch behavior if errors rise or processing stalls.
+For an application with ALB, ECS API, database, Lambda, and SQS, the verification chain can be:
 
-Lambda verification should always match the trigger type. API-backed Lambda needs HTTP status and latency. SQS-backed Lambda needs queue age, batch failures, and dead-letter queue count. Stream-backed Lambda needs iterator age and retry behavior. Scheduled Lambda needs completion and downstream side effects.
-
-## Rollback, Pause, or Fix Forward
-<!-- section-summary: The response should match impact, confidence, and the safety of the previous state. -->
-
-Bad signals lead to one of three common actions. **Rollback** returns traffic to the previous known-good state. **Pause** holds the rollout at the current exposure while the team gathers evidence. **Fix forward** deploys a targeted correction when rollback would create more risk, such as after a one-way data migration or external event format change.
-
-The decision should include evidence, impact, action, and verification. A short note is enough:
-
-```yaml
-decision: rollback
-time: 2026-06-24T10:18:00Z
-trigger:
-  - checkout-api candidate 5XX rose above 4 percent
-  - smoke checkout failed payment authorization
-  - target health was green
-  - logs showed PaymentEndpointRejected on version 2026-06-24.3
-action:
-  - move ECS service back to task definition checkout-api:57
-verify:
-  - 5XX below 0.5 percent for 10 minutes
-  - smoke checkout passes
-  - payment rejection logs stop
+```text
+deployment state
+-> ECS tasks stable and Lambda invoked
+-> CPU, memory, concurrency, throttling
+-> errors and latency
+-> database, queue, and API dependencies
+-> synthetic checkout
+-> real user success
 ```
 
-The note explains why rollback is the right action. Target health stayed green, so the service was reachable. The application logs showed payment failures, so the candidate behavior was bad. The next action is to run the rollback command and verify recovery with the same checks that detected the problem.
+No one layer is sufficient. Together they create evidence about the actual production state.
 
-For ECS rollback:
+## What Is the Complete Verification Model?
+<!-- section-summary: A deployment is complete only when a controlled change has enough layered evidence, limited exposure, and verified reversibility to return production to an acceptable state. -->
 
-```bash
-aws ecs update-service \
-  --cluster prod-web \
-  --service checkout-api \
-  --task-definition checkout-api:57 \
-  --region eu-west-2 \
-  --query 'service.{Service:serviceName,TaskDefinition:taskDefinition,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Rollout:rolloutState}}'
+Every production change introduces uncertainty. Verification converts some uncertainty into evidence. Progressive rollout limits the damage that remaining uncertainty can cause. Observability detects unexpected behavior. Rollback or remediation provides reversibility. The watch window lets latent failure emerge.
+
+```text
+Safe deployment = controlled change
+                + observability
+                + layered verification
+                + limited blast radius
+                + reversibility
 ```
 
-Example output:
+Frequent deployment is not automatically reckless. Small, observable, progressively exposed, easily reversible changes can carry less risk than rare, large, opaque releases.
 
-```json
-{
-  "Service": "checkout-api",
-  "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/checkout-api:57",
-  "Deployments": [
-    {
-      "Status": "PRIMARY",
-      "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/checkout-api:57",
-      "Rollout": "IN_PROGRESS"
-    },
-    {
-      "Status": "ACTIVE",
-      "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/checkout-api:58",
-      "Rollout": "IN_PROGRESS"
-    }
-  ]
-}
+Think of every change as consuming a risk budget. Before deployment, the existing production behavior has accumulated evidence. The candidate is partly unknown. A small cohort spends little of that budget while metrics, traces, logs, journeys, and business results buy information. A global cutover spends the budget immediately. A long recovery path increases the cost of being wrong. This is why release size, exposure, watch quality, and reversibility belong in one decision rather than separate operational checklists.
+
+The same reasoning explains why independent signals matter. Ten running ECS tasks are evidence about scheduling. A passing smoke test is evidence about a small request path. Stable candidate error and latency metrics are evidence under traffic. A successful checkout is evidence about one important outcome. Normal order completion across real users and a full watch window adds further evidence. None proves absolute safety, but together they make acceptance substantially more rational than any single green status.
+
+Do not use this lifecycle:
+
+```text
+build -> deploy -> done
 ```
 
-The service points back to `checkout-api:57`, and ECS has started replacing candidate tasks. The next action is to watch service events, target health, logs, alarms, and smoke tests until the previous revision reaches steady state and the bad symptoms stop.
+Use:
 
-For Lambda rollback:
-
-```bash
-aws lambda update-alias \
-  --function-name checkout-handler \
-  --name prod \
-  --function-version 16 \
-  --routing-config '{"AdditionalVersionWeights":{}}' \
-  --region eu-west-2 \
-  --query '{Name:Name,FunctionVersion:FunctionVersion,RoutingConfig:RoutingConfig}'
+```text
+deploy -> production changed -> uncertainty
+       -> verify and observe -> evidence
+       -> expected? yes: accept and continue watching
+                    no: contain through rollback, pause, or fix
+                        -> verify again -> stable production
 ```
 
-Example output:
+The deployment is finished only when there is enough evidence that production has returned to a known, acceptable operating state. That one idea explains watch windows, deployment markers, smoke tests, user journeys, metrics, logs, traces, ECS and Lambda runtime checks, rollback design, secondary-damage inspection, and observation after corrective action.
 
-```json
-{
-  "Name": "prod",
-  "FunctionVersion": "16",
-  "RoutingConfig": {
-    "AdditionalVersionWeights": {}
-  }
-}
-```
+:::expand[Why Is Deployment Success Not Runtime Success?]{kind="recap"}
+The deployment plane proves requested infrastructure state, while the runtime plane proves availability, correctness, latency, capacity, dependencies, data integrity, and business behavior.
 
-The alias sends all `prod` traffic back to version `16` because the weighted candidate map is empty. The next action is to check Lambda errors, duration, throttles, logs, and any event source backlog. A rollback can stop new failures while old failed messages still need replay, dead-letter handling, or cleanup.
+Control-plane success proves AWS created the requested state. Runtime success proves availability, correctness, latency, capacity, data and dependency health, and valuable user outcomes. Both need explicit evidence.
+:::
 
-Fix forward needs a tighter bar than rollback. Use it when the candidate wrote data that requires new reader logic, when a rollback would duplicate external actions, or when a small config correction can restore service faster with less user impact. The release log should say why rollback was risky and which evidence proved the fix forward worked.
+:::expand[How Long Should the Watch Window Last?]{kind="recap"}
+Observation must cover the traffic volume and delayed failure modes relevant to the system rather than a ritual number of minutes.
 
-![The decision view shows when rollback, pause, or fix-forward is the safer operational response](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-deploying-and-updating-an-ecs-service/rollback-pause-fix-forward.png)
+Observe long enough and with enough traffic to reveal the system's plausible startup, scaling, backlog, cache, dependency, scheduled, and resource failures. A universal number of minutes cannot replace workload-specific evidence.
 
-*The decision view shows when rollback, pause, or fix-forward is the safer operational response.*
+Verification progresses from resource existence through application and dependency checks to user journeys, real traffic, and business outcomes.
 
+Progress from resource existence and health checks through smoke tests, dependencies, user journeys, real traffic, and business outcomes. Each layer proves something different, and no shallow signal replaces the higher-value ones.
+:::
 
-## After the Action
-<!-- section-summary: Runtime operations continue after success or rollback because partial side effects may remain. -->
+:::expand[How Do Metrics, Logs, and Traces Work Together?]{kind="recap"}
+Metrics reveal abnormal behavior, traces show which dependency or span caused it, and logs provide the detailed event or error context.
 
-After a successful rollout, close the release with evidence. After a rollback, keep operating until the system is actually recovered. The bad version may have written partial data, left failed queue messages, created S3 objects, changed feature flag exposure, or caused users to retry actions.
+Metrics detect abnormal traffic, errors, latency, or saturation. Traces localize the failing or slow span. Logs explain the detailed event and error. Compare candidate behavior with a predeployment or stable baseline.
+:::
 
-For ECS, confirm the service has settled on the expected revision:
+:::expand[How Do You Verify an ECS Deployment?]{kind="recap"}
+ECS verification crosses service, task, container, load-balancer, application, resource, and dependency layers and requires stable behavior over time.
 
-```bash
-aws ecs describe-services \
-  --cluster prod-web \
-  --services checkout-api \
-  --region eu-west-2 \
-  --query 'services[].deployments[].{Status:status,TaskDefinition:taskDefinition,Running:runningCount,Pending:pendingCount,Rollout:rolloutState}'
-```
+Confirm the intended service revision and count, task stability, container stop reasons, health checks, load-balancer eligibility, version-specific traffic, resources, dependencies, requests, and journeys. Scheduler health does not prove business health.
+:::
 
-Example output:
+:::expand[How Do You Verify a Lambda Deployment?]{kind="recap"}
+Lambda verification observes invocation outcomes, duration, concurrency, throttling, retry, event age, and downstream work rate rather than server uptime.
 
-```json
-[
-  {
-    "Status": "PRIMARY",
-    "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/checkout-api:57",
-    "Running": 4,
-    "Pending": 0,
-    "Rollout": "COMPLETED"
-  }
-]
-```
+Observe invocations, errors, duration, concurrency, throttles, retries, event age, backlog, DLQs, and dependency capacity. A slower event consumer can create a growing backlog even when most invocations succeed.
+:::
 
-One `PRIMARY` deployment with the expected task definition and `COMPLETED` rollout means ECS settled after rollback. The next action is to repeat the smoke test, confirm alarms return to `OK`, and inspect side effects from the failed candidate.
+:::expand[How Do You Choose Rollback, Pause, or Fix Forward?]{kind="recap"}
+Choose the action with the lowest expected harm using active impact, blast radius, reversibility, and confidence in the proposed correction.
 
-If checkout uses SQS for receipt jobs, check queue backlog after the action:
+Use impact, blast radius, reversibility, and correction confidence. Roll back large impact to a compatible known-good state, pause a contained uncertain canary, or fix forward when the narrow correction is highly credible and reversal is riskier.
 
-```bash
-aws sqs get-queue-attributes \
-  --queue-url "$RECEIPT_QUEUE_URL" \
-  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible ApproximateAgeOfOldestMessage \
-  --region eu-west-2
-```
+Rollback changes production and therefore needs the same runtime proof, followed by checks for queues, caches, retries, workflows, and dependency load left by the incident.
 
-Example output:
+Treat rollback as another deployment and repeat runtime checks. Then inspect backlog, retries, caches, connections, workflows, DLQs, autoscaling, data, and external side effects left by the failed version before declaring recovery.
+:::
 
-```json
-{
-  "Attributes": {
-    "ApproximateNumberOfMessages": "3",
-    "ApproximateNumberOfMessagesNotVisible": "0",
-    "ApproximateAgeOfOldestMessage": "42"
-  }
-}
-```
+:::expand[How Does Runtime Operations Form a Feedback Loop?]{kind="recap"}
+Runtime operations connects change mechanisms, observability, diagnosis, corrective actions, and renewed verification into a control system.
 
-`ApproximateNumberOfMessages` shows visible backlog. `ApproximateNumberOfMessagesNotVisible` shows messages currently being processed or waiting for visibility timeout. `ApproximateAgeOfOldestMessage` shows how stale the oldest visible message is in seconds. The next action is to decide whether the backlog will drain normally, needs replay, or contains messages from the bad candidate that require special handling.
+Deployment changes the system, observability senses the response, diagnosis identifies the deviation, an action adjusts production, and verification measures again. Operations is the closed loop that replaces deploy-and-hope.
+:::
 
-Finally, check that release alarms recovered:
+:::expand[What Is the Complete Verification Model?]{kind="recap"}
+A deployment is complete only when a controlled change has enough layered evidence, limited exposure, and verified reversibility to return production to an acceptable state.
 
-```bash
-aws cloudwatch describe-alarms \
-  --alarm-name-prefix checkout-api-prod \
-  --region eu-west-2 \
-  --query 'MetricAlarms[].{Name:AlarmName,State:StateValue,Reason:StateReason}'
-```
+A production change is complete only after layered evidence supports an acceptable state, remaining uncertainty has bounded exposure, and any remediation or rollback has itself been verified along with the state it left behind.
+:::
 
-Example output:
+## References
 
-```json
-[
-  {
-    "Name": "checkout-api-prod-5xx-rate",
-    "State": "OK",
-    "Reason": "Recent datapoints stayed below the 1.0 threshold."
-  },
-  {
-    "Name": "checkout-api-prod-p95-latency",
-    "State": "OK",
-    "Reason": "Recent datapoints stayed below the 900.0 threshold."
-  }
-]
-```
-
-`OK` alarms after rollback or completion support recovery, but they are only one layer. The next action is to close the release or incident with the decision, commands run, outputs observed, user impact, cleanup tasks, and one improvement for the next release. Good improvements are specific: add a startup validation, add the parameter version to release notes, label logs with feature treatment, or add a smoke test for the missed path.
-
-This is the complete release flow for the module: identify the artifact, place it in a runtime target, supply the right configuration and identity, move traffic carefully, verify with layered evidence, roll back or fix forward with a known path, and keep operating until the user-facing system is clean.
-
-## Official References
-
-- [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)
-- [Amazon ECS service load balancing](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html)
-- [Amazon ECS stopped task errors](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stopped-task-errors.html)
-- [Describe target health for Application Load Balancers](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/check-target-health.html)
-- [CloudWatch alarm concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html)
-- [View log data sent to CloudWatch Logs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html)
-- [Lambda aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)
-- [Lambda weighted aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuring-alias-routing.html)
-- [Monitoring and troubleshooting Lambda applications](https://docs.aws.amazon.com/lambda/latest/dg/lambda-monitoring.html)
-- [Using AWS Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
-- [Amazon SQS queue metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html)
+- [Amazon CloudWatch documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html)
+- [Amazon ECS documentation: Service deployment state and rollout](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html)
+- [AWS Lambda documentation: Monitoring functions](https://docs.aws.amazon.com/lambda/latest/dg/lambda-monitoring.html)
+- [Amazon SQS documentation: CloudWatch metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html)
+- [AWS X-Ray documentation](https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html)

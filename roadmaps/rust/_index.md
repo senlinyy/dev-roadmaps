@@ -6,5 +6,6 @@ category: language
 tags: ["Rust", "Computer Science", "Ownership", "Cargo", "Async"]
 icon: "Code2"
 order: 3
-available: true
+available: false
+hidden: true
 ---

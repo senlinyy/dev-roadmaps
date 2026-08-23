@@ -1,498 +1,504 @@
 ---
 title: "Mounted Config Files"
-description: "Mount ConfigMaps and Secrets as files when Kubernetes applications need configuration on disk instead of environment variables."
-overview: "Mounted config files let a Pod receive reviewable configuration as a filesystem view, which is useful for config formats, certificates, and tools that expect files."
+description: "Mount ConfigMap values as files and understand the separate projection, reload, release, and filesystem boundaries."
+overview: "Kubernetes can publish complete ConfigMap versions into a container filesystem, while the application still owns parsing and adopting those bytes."
 tags: ["kubernetes", "configmaps", "volumes", "files"]
 order: 4
 id: article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files
 ---
+
 ## Table of Contents
 
-1. [Files for Apps That Read Files](#files-for-apps-that-read-files)
-2. [Why Some Configuration Belongs on Disk](#why-some-configuration-belongs-on-disk)
-3. [ConfigMap Volumes as Directories](#configmap-volumes-as-directories)
-4. [Select and Rename Files with items](#select-and-rename-files-with-items)
-5. [File Modes and Read-Only Expectations](#file-modes-and-read-only-expectations)
-6. [Secret Files and Certificates](#secret-files-and-certificates)
-7. [The subPath Caveat](#the-subpath-caveat)
-8. [Update and Reload Behavior](#update-and-reload-behavior)
-9. [Mount Paths Can Hide Image Files](#mount-paths-can-hide-image-files)
-10. [Diagnostics from Pod to Process](#diagnostics-from-pod-to-process)
-11. [Choose Files or Environment Variables](#choose-files-or-environment-variables)
-12. [Assembled Example](#assembled-example)
-13. [Review Checklist](#review-checklist)
-14. [References](#references)
+1. [Why does some configuration fit a file better than environment variables?](#why-does-some-configuration-fit-a-file-better-than-environment-variables)
+2. [How does a ConfigMap key reach an application path?](#how-does-a-configmap-key-reach-an-application-path)
+3. [How does Kubernetes replace projected files safely?](#how-does-kubernetes-replace-projected-files-safely)
+4. [When does changed content affect application behaviour?](#when-does-changed-content-affect-application-behaviour)
+5. [Why does subPath follow a different update path?](#why-does-subpath-follow-a-different-update-path)
+6. [When does an immutable ConfigMap fit a release?](#when-does-an-immutable-configmap-fit-a-release)
+7. [How do permissions and diagnosis complete the design?](#how-do-permissions-and-diagnosis-complete-the-design)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Files for Apps That Read Files
-<!-- section-summary: Mounted config files let Kubernetes present ConfigMap or Secret data as normal files inside a container. -->
+A running program knows how to open a path, read bytes, and parse them. It does not need to understand ConfigMaps, Kubernetes manifests, or the Kubernetes API. Mounted configuration therefore begins with one concrete problem: how can Kubernetes make the desired bytes appear at the path the application already expects?
 
-Environment variables work well for small startup strings. Some applications and tools already expect a file path instead: a YAML routing file, a JSON policy, an Nginx snippet, a CA bundle, a TLS certificate, or a provider config file. Kubernetes can project ConfigMap and Secret data into the container filesystem so the application keeps that file-based contract.
+The complete path crosses several separate states:
 
-A **mounted config file** is a delivery path from a ConfigMap or Secret into the container filesystem. Plain files usually come from ConfigMaps. Sensitive files, such as TLS private keys or provider credentials, usually come from Secrets. Durable application data belongs on PersistentVolumeClaims, which is the next step in this module.
-
-For the Customer Notification Platform, the worker can read routing rules from `/etc/notification/routing.yaml`, while the API can read TLS files from a Secret mount. The path runs from source key to final file path, then adds file selection, permissions, update behavior, and diagnostics.
-
-The worker routing rules are a good first example because the structure matters. The file has indentation, channel names, and provider settings. Keeping that as one YAML file is easier to review than spreading the same shape across many environment variables.
-
-The basic path has four links:
-
-1. A ConfigMap or Secret key stores the file content.
-2. `volumes[]` points the Pod at that source object.
-3. `volumeMounts[]` attaches that volume to a container directory.
-4. The application reads the final file path inside the container.
-
-Here is the skeleton before the details:
-
-```yaml
-data:
-  routing.yaml: |
-    defaultChannel: email
----
-volumes:
-  - name: worker-config
-    configMap:
-      name: notification-worker-files
-containers:
-  - name: worker
-    volumeMounts:
-      - name: worker-config
-        mountPath: /etc/notification
-        readOnly: true
+```mermaid
+flowchart TD
+    ConfigMap[ConfigMap in API server] --> Kubelet[kubelet]
+    Kubelet --> Projection[Projected volume on node]
+    Projection --> Mount[Container mount]
+    Mount --> File[/etc/myapp/config.yaml]
+    File --> Parse[Application reads and parses file]
+    Parse --> Memory[In-memory application configuration]
 ```
 
-The skeleton shows the whole delivery path:
+A ConfigMap update, a projected-file update, and an application reload are different events. Seven questions make those boundaries explicit:
 
-- `data.routing.yaml` stores the file content in the source object.
-- `volumes[].configMap.name` points the Pod at that source object.
-- `volumeMounts[].mountPath` chooses the directory the container sees.
+1. **Why does some configuration fit a file better than environment variables?**
+2. **How does a ConfigMap key reach an application path?**
+3. **How does Kubernetes replace projected files safely?**
+4. **When does changed content affect application behaviour?**
+5. **Why does `subPath` follow a different update path?**
+6. **When does an immutable ConfigMap fit a release?**
+7. **How do permissions and diagnosis complete the design?**
 
-That skeleton produces the application path `/etc/notification/routing.yaml`. The key name supplies the filename, and `mountPath` supplies the directory.
+## Why does some configuration fit a file better than environment variables?
+<!-- section-summary: A file preserves structured configuration in the format and path an application already understands. -->
 
-One ConfigMap key can turn into one file:
+Configuration can reach a process through environment variables, command-line arguments, files, an API, or a combination of those interfaces. Files are especially useful when the application already expects formats such as `nginx.conf`, `application.yaml`, `prometheus.yml`, `log4j2.xml`, or `haproxy.cfg`.
 
-```yaml
-data:
-  routing.yaml: |
-    defaultChannel: email
-    retryLimit: 3
-```
-
-The Pod mount chooses the directory where that file appears:
+Consider this structured YAML:
 
 ```yaml
-volumeMounts:
-  - name: notification-routing
-    mountPath: /etc/notification
-    readOnly: true
+server:
+  port: 8080
+database:
+  host: postgres
+  pool:
+    min: 5
+    max: 20
 ```
 
-The mount tells the container where the file appears:
+It could be flattened into independent strings:
 
-- `name: notification-routing` matches the Pod volume name.
-- `mountPath: /etc/notification` supplies the directory part of the final file path.
-- `readOnly: true` records that the app consumes this config instead of writing to it.
-
-Inside the container, the file path is `/etc/notification/routing.yaml`. The application sees a normal file, while the configuration still lives in a reviewable Kubernetes object.
-
-## Why Some Configuration Belongs on Disk
-<!-- section-summary: Files fit structured configuration, certificates, and tools that already expect paths on disk. -->
-
-Environment variables are useful for small strings. Files fit configuration with structure, line breaks, permissions, or a standard path. YAML routing rules, JSON provider maps, Nginx snippets, CA bundles, TLS certificates, and application policy files all fit naturally on disk.
-
-This choice is about how the application already consumes configuration. If the worker library expects a YAML file, the clean Kubernetes path is to preserve that file shape and mount it into the container. The source object still lives in the API server for review and rollout, while the process receives a normal filesystem path that it can parse during startup or reload.
-
-The Customer Notification Platform has a `notification-worker` that sends messages through multiple channels. A few environment variables can hold `QUEUE_NAME` and `MAX_BATCH_SIZE`, but routing rules belong in YAML:
-
-```yaml
-defaultChannel: email
-providers:
-  email:
-    timeoutMs: 2500
-  sms:
-    timeoutMs: 4000
+```text
+SERVER_PORT=8080
+DATABASE_HOST=postgres
+DATABASE_POOL_MIN=5
+DATABASE_POOL_MAX=20
 ```
 
-A file keeps the structure readable:
+The file preserves the parent-child structure and the application's native configuration language. Kubernetes can focus on delivering the bytes while the application remains responsible for understanding their meaning.
 
-- The `providers` block groups channel-specific settings together.
-- Indentation makes relationships visible in a way that separate environment variables cannot.
+Files and environment variables also have different update lifecycles. ConfigMap-backed environment values are copied into the process at container startup and require a new Pod to change. Kubernetes can refresh the files in a mounted ConfigMap volume while the Pod continues running, although the application must still reread them.
 
-A mounted file keeps that shape intact. Reviewers can read indentation, keys, and grouped settings without mentally assembling many separate environment variables.
+ConfigMaps carry ordinary, non-confidential configuration and have a 1 MiB limit. Confidential values belong in Secrets, and larger content belongs in storage designed for larger files.
 
-![Mounted config directory view](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mounted-config-directory-view.png)
+Once a file is the right interface, the first mechanical question is how a named ConfigMap entry becomes the exact path the program opens.
 
-*A mounted ConfigMap or Secret turns named keys into files at predictable paths inside the container.*
+### Choose the interface the application already has
 
-## ConfigMap Volumes as Directories
-<!-- section-summary: Mounting a ConfigMap as a directory exposes each key as one file. -->
+Imagine an application whose documentation says, “start the process with `--config=/etc/myapp/config.yaml`.” Supplying four environment variables would force the deployment author to invent a translation from the file schema into variable names, and the application would still need code for that alternate interface. Mounting the file preserves the existing contract:
 
-A **ConfigMap volume** projects ConfigMap keys into the container filesystem. Kubernetes writes each key as one file by default. If the ConfigMap has `routing.yaml` and `limits.yaml`, the mounted directory contains two files.
+```text
+application contract: open /etc/myapp/config.yaml
+Kubernetes job:        place the intended bytes at that path
+application job:       parse and validate those bytes
+```
 
-This is the main delivery path for plain files. The ConfigMap is the source object, the Pod volume names that source, and the container mount chooses where the files appear. For `notification-worker`, this keeps routing and limit files close together in `/etc/notification`, while the image can stay focused on application code.
+This division also keeps types and structure where they belong. Kubernetes does not decide whether `pool.max: 20` is a number, whether `debug` is an allowed log level, or whether the database section is complete. It publishes strings and files. The application's configuration parser gives those bytes domain meaning.
 
-First define the ConfigMap:
+The choice is therefore not “files are always better.” A small independent startup value can be clear as an environment variable. A structured document, especially one already understood by the program, is usually clearer as a file. The rest of this article follows the file path because that path has update and filesystem behavior that operators must understand.
+
+## How does a ConfigMap key reach an application path?
+<!-- section-summary: The ConfigMap key supplies a filename and bytes, while the Pod volume and container mount supply the destination directory. -->
+
+Start with one key containing a complete file:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: notification-worker-files
-  namespace: customer-notifications
+  name: myapp-config
 data:
-  routing.yaml: |
-    defaultChannel: email
-  limits.yaml: |
-    maxBatchSize: 100
+  config.yaml: |
+    server:
+      port: 8080
+    logLevel: info
 ```
 
-Then mount it into the worker:
+The Pod defines a **volume**, a Pod-level data source backed by that ConfigMap:
 
 ```yaml
 volumes:
-  - name: worker-config
+  - name: config
     configMap:
-      name: notification-worker-files
-containers:
-  - name: worker
-    volumeMounts:
-      - name: worker-config
-        mountPath: /etc/notification
-        readOnly: true
+      name: myapp-config
 ```
 
-Follow the object chain in this manifest:
+The container then **mounts** the volume, making it visible at a filesystem location:
 
-- `data.routing.yaml` is the ConfigMap key that contains the file body.
-- `volumes[].configMap.name` connects the Pod to the ConfigMap source object.
-- `volumeMounts[].name` chooses the volume to mount into the `worker` container.
-- `mountPath: /etc/notification` makes the final files appear under that directory.
+```yaml
+volumeMounts:
+  - name: config
+    mountPath: /etc/myapp
+```
 
-The worker can read `/etc/notification/routing.yaml` and `/etc/notification/limits.yaml`. That path should be part of the application startup contract, just like an environment variable name would be.
+Unless `items` says otherwise, every ConfigMap key becomes a filename below `mountPath`. The basic equation is:
 
-## Select and Rename Files with items
-<!-- section-summary: items lets you expose only selected keys and choose the filename each key receives. -->
+```text
+application path = mountPath + "/" + ConfigMap key
+```
 
-The **items** field selects specific keys from a ConfigMap or Secret and maps them to file paths. Use it when the object has more keys than the container needs, or when the application expects a specific filename.
+Here, `config.yaml` appears as `/etc/myapp/config.yaml`, and the key's string value becomes the file contents.
 
-Selection makes the mount contract smaller. A shared source object might contain several file-like keys, but one container should receive only the files it reads. Renaming also helps when the Kubernetes key name is descriptive for reviewers while the application expects a legacy filename. The `items` list records that mapping directly in the Pod spec.
+The key and final filename do not have to match. `items` can select keys and assign relative paths:
+
+```yaml
+volumes:
+  - name: config
+    configMap:
+      name: myapp-config
+      items:
+        - key: config.yaml
+          path: application.yaml
+```
+
+With the same mount, the file appears at `/etc/myapp/application.yaml`. When `items` is present, only the selected keys enter the volume, and the mapping can also set per-file permissions.
+
+A filesystem mount takes over its target path. If the image already contains `defaults.yaml`, `templates/`, and `config.yaml` under `/etc/myapp`, mounting a ConfigMap at `/etc/myapp` hides those image files through that path. This is normal filesystem mount behavior. A dedicated configuration directory avoids unintentionally covering files supplied by the image.
+
+### Put the complete path together
+
+The ConfigMap and Pod can be read as one delivery contract:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myapp-config
+data:
+  config.yaml: |
+    server:
+      port: 8080
+    logLevel: info
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp
+spec:
+  containers:
+    - name: app
+      image: example/myapp:1.0
+      args: ["--config=/etc/myapp/config.yaml"]
+      volumeMounts:
+        - name: config
+          mountPath: /etc/myapp
+          readOnly: true
+  volumes:
+    - name: config
+      configMap:
+        name: myapp-config
+```
+
+Read it from the bottom upward. `configMap.name` chooses the API object. The volume gives that source the Pod-local name `config`. `volumeMounts.name` connects the container to that volume. `mountPath` chooses the visible directory. Finally, the argument tells the process which file to open. A name mismatch at any link breaks delivery even though every individual YAML block is valid.
+
+Now suppose the ConfigMap also contains `logging.yaml`, but `items` selects only `config.yaml` and renames it to `application.yaml`. The unselected logging key will not appear in the volume, and the application must open `/etc/myapp/application.yaml`. `items` is not just documentation: it changes the projected file set and therefore changes the application-facing filesystem contract.
+
+The path mapping explains where the bytes appear. The next mechanism explains how Kubernetes publishes a new multi-file version without exposing a half-written set.
+
+## How does Kubernetes replace projected files safely?
+<!-- section-summary: Kubelet prepares a complete hidden version and atomically switches the data link that visible files follow. -->
+
+Imagine a configuration volume with three related files:
+
+```text
+/config/
+├── database.yaml
+├── logging.yaml
+└── feature-flags.yaml
+```
+
+Overwriting them one at a time could expose a **torn configuration**: for a short period, one file might contain version 2 while the others still contain version 1. The set would represent neither complete version.
+
+Kubernetes uses an implementation called `AtomicWriter` for projected volumes. Rather than edit the visible files in place, kubelet builds a complete hidden version and then changes which version the visible paths resolve to.
+
+A simplified volume layout looks like this:
+
+```text
+/config/
+├── ..2026_08_20_14_30_00/
+│   └── config.yaml
+├── ..data -> ..2026_08_20_14_30_00/
+└── config.yaml -> ..data/config.yaml
+```
+
+A **symbolic link**, or symlink, is a filesystem entry that points to another path. The user-visible `config.yaml` points through `..data`, and `..data` points to the timestamped directory containing the current bytes.
+
+For an update, kubelet:
+
+1. Creates a new timestamped directory.
+2. Writes the complete payload and permissions into it.
+3. Creates a temporary `..data_tmp` link to that directory.
+4. Atomically renames that link to `..data`.
+
+The rename is the publication point. Before it, path lookups reach version 1; after it, they reach version 2. Kubernetes is publishing a complete configuration version rather than editing a file in place.
+
+“Atomic” applies to that filesystem-namespace switch. It does not make an application's own multi-file reads transactional. An application could open one path before the switch and another afterward. A **file descriptor**, the process's handle to an already opened file, also stays attached to the earlier filesystem object until the application closes and reopens it.
+
+Filesystem watchers must account for the symlink layout. Kubernetes' implementation notes that consumers can monitor the `..data` link for updates, then reopen the relevant paths. Watching only an old target file may miss the relationship when kubelet switches the published version.
+
+### Follow one update through the directory
+
+Suppose version 1 contains three mutually compatible files:
+
+```text
+..version-1/
+├── database.yaml      # schema A
+├── logging.yaml       # info
+└── feature-flags.yaml # checkout-v1
+```
+
+Kubelet receives version 2. It does not make `database.yaml` visible and then begin writing `logging.yaml`. It first prepares another complete directory:
+
+```text
+..version-2/
+├── database.yaml      # schema B
+├── logging.yaml       # debug
+└── feature-flags.yaml # checkout-v2
+```
+
+While that directory is being prepared, `..data` still points to version 1. Once all payload files and modes are ready, the publication rename makes `..data` point to version 2. A fresh lookup of any visible path now travels through the new link.
+
+The guarantee is deliberately narrow and useful: Kubernetes does not publish a directory that it is still constructing. It cannot control the order in which application code opens several files. If the application needs all three to form one logical transaction, it should detect the new version, open a complete candidate set, validate relationships between the files, and then replace its in-memory settings as one application operation.
+
+An already-open descriptor explains another common surprise. The process may have opened version 1's `config.yaml` once and retained that descriptor. Changing `..data` changes future path resolution; it does not detach that existing handle and attach it to version 2. A correct reload path normally closes or stops using the old handle and opens the public pathname again.
+
+Atomic projection gives Kubernetes a clean delivery boundary. Application reload begins after that boundary.
+
+Keeping that boundary visible prevents operators from blaming the API, kubelet, filesystem, and process as though they were one indivisible configuration mechanism.
+
+## When does changed content affect application behaviour?
+<!-- section-summary: Kubelet eventually publishes fresh bytes, while the application decides whether and when those bytes replace its in-memory configuration. -->
+
+Suppose `kubectl edit configmap myapp-config` changes `logLevel: info` to `logLevel: debug`. The change passes through several independent stages:
+
+```mermaid
+flowchart TD
+    API[API server stores debug] --> Observe[kubelet learns about debug]
+    Observe --> Files[Mounted filesystem publishes debug]
+    Files --> Notice[Application notices the change]
+    Notice --> Read[Application rereads configuration]
+    Read --> Apply[Application activates debug]
+```
+
+Kubernetes owns the first three stages. Kubelet periodically reconciles projected data, and its configured change-detection strategy determines how it learns about an updated ConfigMap. The default strategy uses watches. The normal delay relates to the kubelet sync period plus cache or watch propagation delay, so the file refresh is eventual rather than immediate.
+
+The application owns the remaining stages because Kubernetes does not know what `logLevel: debug` means. A process might read the file only at startup, poll it periodically, watch the directory, or wait for a signal such as `SIGHUP` or an explicit reload command.
+
+An application that loads once keeps the old parsed value in memory even after the file contains new bytes. When the application appears stale, the crucial question is whether the file is stale or application memory is stale. Those failures belong to different parts of the chain.
+
+A reload-capable application should reopen the paths, parse and validate a complete candidate, then replace its active in-memory configuration only after the candidate succeeds. If parsing fails, it can keep the last valid version rather than partially applying a broken configuration.
+
+### Separate delivery evidence from adoption evidence
+
+For the `info` to `debug` change, each boundary has a different proof:
+
+| Boundary | Question | Useful evidence |
+|---|---|---|
+| Desired object | Did the API accept `debug`? | ConfigMap YAML contains `debug` |
+| Pod wiring | Is this Pod using that object and path? | Pod spec names the ConfigMap and mount |
+| Filesystem delivery | Did kubelet publish the bytes? | `cat` inside the container prints `debug` |
+| Parsing | Did the application accept the file? | Reload or application logs report success |
+| In-memory adoption | Is the active setting now `debug`? | Application behaviour or its status endpoint changes |
+
+These proofs prevent a misleading restart loop. If the API object still contains `info`, restarting the Pod simply starts another process with the old source. If the mounted file contains `debug` but parsing rejects the document, waiting longer for kubelet changes nothing. Diagnosis advances only after the current boundary is proven.
+
+There are two valid operating models. In the **live-reload model**, kubelet refreshes the directory and the application deliberately adopts a valid new version. In the **release model**, the process reads once at startup and new Pods carry a new configuration identity. Trouble begins when a team expects live behavior from a startup-only application without defining which component performs the reload.
+
+This separation makes the next exception easier to understand: `subPath` changes the filesystem relationship, so the normal projection switch no longer moves the mounted application path.
+
+## Why does `subPath` follow a different update path?
+<!-- section-summary: A subPath mount pins the selected projected file instead of following later changes to the volume's data link. -->
+
+An application such as Nginx may require exactly `/etc/nginx/nginx.conf` while the image already contains other files under `/etc/nginx`. Mounting the entire ConfigMap over that directory would hide those files, so the Pod may select one file with `subPath`:
+
+```yaml
+volumeMounts:
+  - name: nginx-config
+    mountPath: /etc/nginx/nginx.conf
+    subPath: nginx.conf
+```
+
+The container receives a mount bound to the selected file from the projected volume. Later ConfigMap updates create a new timestamped directory and repoint `..data`, but the `subPath` mount remains attached to the filesystem object selected during container setup.
+
+```text
+Normal directory mount -> later path opens follow the new projection
+subPath file mount      -> selected file remains pinned for that Pod
+```
+
+Kubernetes therefore documents that ConfigMaps mounted through `subPath` do not receive normal ConfigMap updates. A new Pod is required to select the current file.
+
+Follow the timing carefully. When the container starts, the `subPath` mount selects the then-current projected `nginx.conf`. Editing the ConfigMap later causes the main projected volume to publish another version, but `/etc/nginx/nginx.conf` in that running container remains bound to the earlier selection. Deleting and replacing the Pod runs container setup again, so the new mount selects the current file.
+
+This yields a practical rule: use `subPath` when preserving the rest of a target directory matters and replacement is an acceptable update mechanism. Do not choose it while also expecting the running Pod to follow live ConfigMap projection changes. Those requirements describe different filesystem relationships.
+
+This is a filesystem consequence rather than an unrelated special rule. It also exposes a larger design choice: whether configuration should change beneath a running process at all.
+
+## When does an immutable ConfigMap fit a release?
+<!-- section-summary: An immutable, versioned ConfigMap makes configuration part of the Pod release and rollback identity. -->
+
+Hot updates fit dynamic feature flags, routing rules, log settings, and other configuration that the application can reload safely. A release-oriented model is often simpler for startup-only applications:
+
+```text
+code version + configuration version = release
+```
+
+Instead of editing `myapp-config` forever, create identifiable versions such as `myapp-config-a8172f`, `myapp-config-c92bd4`, and `myapp-config-f8100c`. The Pod template names the exact version:
 
 ```yaml
 configMap:
-  name: notification-worker-files
-  items:
-    - key: routing.yaml
-      path: provider-routing.yaml
+  name: myapp-config-c92bd4
 ```
 
-This mapping changes the filename only inside the mounted directory:
+A later release changes that reference to `myapp-config-f8100c`. Because the Pod template changed, the Deployment rolls out new Pods with the new configuration. Rollback changes the reference back to the previous name.
 
-- `key: routing.yaml` selects the ConfigMap entry.
-- `path: provider-routing.yaml` gives the application the filename it expects.
-
-This maps the ConfigMap key `routing.yaml` to `/etc/notification/provider-routing.yaml` when the mount path is `/etc/notification`. The application can keep its existing filename while the ConfigMap key remains clear in Kubernetes.
-
-If you list a key under `items` and that key is missing, the volume setup fails unless the reference is optional. Production config files usually need required keys. A missing routing file should stop the Pod before it sends messages through the wrong provider path.
-
-## File Modes and Read-Only Expectations
-<!-- section-summary: defaultMode controls projected file permissions, and mounted config should usually be read-only from the container view. -->
-
-Projected ConfigMap and Secret files have permissions. **defaultMode** sets the mode for files in the volume. Kubernetes YAML uses decimal numbers for file modes unless the parser supports octal notation, so examples often use `420` for `0644` and `256` for `0400`.
-
-Permissions are part of the delivery path because the file must be readable by the process user inside the container. A file can mount successfully and still fail at startup if the user, group, and mode do not line up. Treat `defaultMode`, `readOnly`, and the workload security context as one review topic, especially for Secret files.
+Kubernetes also supports immutable ConfigMaps:
 
 ```yaml
-volumes:
-  - name: worker-config
-    configMap:
-      name: notification-worker-files
-      defaultMode: 420
-```
-
-The mode value controls the projected file permissions:
-
-- `420` is the decimal form commonly used for `0644`.
-- The process user must still have permission to access the mounted files.
-
-The volume mount should include `readOnly: true`. A projected config volume is managed by Kubernetes, and application writes should go to a separate writable path such as `/tmp`, an `emptyDir`, or a PersistentVolumeClaim.
-
-For Secrets, use tighter modes when the application supports them:
-
-```yaml
-secret:
-  secretName: notification-webhook-tls
-  defaultMode: 256
-```
-
-This Secret mode is tighter:
-
-- `256` is the decimal form commonly used for `0400`.
-- The owner-read setting only works if the container user and file ownership line up.
-
-That mode gives owner-read permission. The container user and security context must line up with the file ownership and permissions, or the process may see a permission error at startup.
-
-## Secret Files and Certificates
-<!-- section-summary: Secret volumes are the usual file-based path for certificates, private keys, and credential files. -->
-
-A **Secret volume** projects Secret keys as files. This is common for TLS certificates, provider credential files, and tools that expect a path rather than an environment variable.
-
-This pattern keeps sensitive file formats out of the image and out of plain ConfigMaps. The Secret stores the certificate or key material, the Pod selects the file names, and the application opens the mounted path at runtime. That gives security teams a separate source of truth and gives operators a clear rotation point.
-
-The `notification-api` might serve an internal webhook endpoint with a certificate and private key:
-
-```yaml
-volumes:
-  - name: webhook-tls
-    secret:
-      secretName: notification-webhook-tls
-      items:
-        - key: tls.crt
-          path: server.crt
-        - key: tls.key
-          path: server.key
-```
-
-Mount the files read-only:
-
-```yaml
-volumeMounts:
-  - name: webhook-tls
-    mountPath: /etc/notification/tls
-    readOnly: true
-```
-
-The mounted directory now holds the selected Secret files:
-
-- `server.crt` and `server.key` appear under `/etc/notification/tls`.
-- The Secret stays the source of sensitive bytes, and the image stays free of private key material.
-
-The application reads `/etc/notification/tls/server.crt` and `/etc/notification/tls/server.key`. Avoid copying these files into image layers or writable paths. The Pod should receive them at runtime and drop them when the Pod is deleted.
-
-## The subPath Caveat
-<!-- section-summary: subPath can mount one file into a specific path, while ConfigMap and Secret updates require a Pod restart for that mount. -->
-
-**subPath** mounts one file or directory from a volume into a specific path inside the container. It can be handy when an application expects one exact file path and the image already has other files in the same directory.
-
-Use this path for compatibility with an existing image layout. For example, an older worker might read exactly `/app/config/routing.yaml`, while the image also ships `defaults.yaml` in `/app/config`. A `subPath` mount can place only the projected routing file at that path, preserving the rest of the directory view from the image.
-
-```yaml
-volumeMounts:
-  - name: worker-config
-    mountPath: /app/config/routing.yaml
-    subPath: routing.yaml
-    readOnly: true
-```
-
-The `subPath` mount is a compatibility choice:
-
-- `mountPath` names the exact file path the existing application expects.
-- `subPath` selects one file from the projected volume instead of replacing the whole directory.
-
-The caveat is important: `subPath` mounts keep the old file view after a ConfigMap or Secret update. If the routing file changes, the running container keeps the old file view until the Pod restarts.
-
-A full directory mount fits projected files that should refresh through kubelet. A `subPath` mount fits cases where restart-based updates are acceptable and the app image already has other files in the same directory.
-
-## Update and Reload Behavior
-<!-- section-summary: Projected files can update in place, while applications still need a reload or restart strategy to consume changed content. -->
-
-ConfigMap and Secret volumes can update after kubelet refreshes the projected volume. The file content in the container changes, but the application may not notice. Many programs read config once at startup and never reopen the file.
-
-The recovery plan for changed files has two halves. Kubernetes can refresh the projected content, and the application still needs a way to consume the new bytes. For notification routing rules, the team should decide whether a normal rollout is enough or whether the worker has a safe reload endpoint. That decision should appear in the release runbook.
-
-For `notification-worker`, there are three practical reload strategies:
-
-| Strategy | How it works | When it fits |
-|---|---|---|
-| Restart Pods | Roll the Deployment after changing the ConfigMap or Secret | Simple and reliable for most apps |
-| Application reload endpoint | A controller or operator tells the process to reload files | Apps with a safe reload feature |
-| File watcher | The process watches the mounted path and reloads on change | Apps designed for dynamic config |
-
-For normal releases, restart-based updates are the simplest:
-
-```bash
-kubectl rollout restart deployment/notification-worker -n customer-notifications
-kubectl rollout status deployment/notification-worker -n customer-notifications
-```
-
-The output should show a completed rollout:
-
-```console
-deployment "notification-worker" successfully rolled out
-```
-
-![Config file update flow](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/config-file-update-flow.png)
-
-*A mounted file can change on disk, but the process needs a reload or rollout path to use the new content.*
-
-## Mount Paths Can Hide Image Files
-<!-- section-summary: Mounting a volume over a directory replaces the container's view of that directory with the projected files. -->
-
-When you mount a volume at a directory, the mounted volume covers the files that the image had at that path. The files still exist in the image layer, but the process sees the mounted directory.
-
-This surprises beginners with paths such as `/app/config`. If the image already contains `defaults.yaml` there and the ConfigMap mount contains only `routing.yaml`, the running container sees only the projected content at `/app/config`.
-
-A safe pattern is to mount projected config under a dedicated path:
-
-```yaml
-mountPath: /etc/notification
-```
-
-That path is dedicated to Kubernetes-projected config:
-
-- It avoids covering files that the image already placed under `/app/config`.
-- The application can receive the path through a flag, env var, or documented startup default.
-
-Then tell the application to read that explicit path. If you must mount one file into an existing directory, `subPath` can preserve the other files, with the update caveat explained earlier.
-
-## Diagnostics from Pod to Process
-<!-- section-summary: Troubleshooting mounted config checks the Kubernetes object, then the Pod volume, then the file as the process sees it. -->
-
-The source object gives the first clue:
-
-Mounted-file debugging follows the same chain as the manifest. First check that the ConfigMap or Secret exists and has the expected number of keys. Then check that the Pod volume and mount path are present. Finally, inspect the file as the process sees it. This order separates source-object mistakes from mount-path mistakes and application parsing errors.
-
-For Secret-backed files, use the same chain but stop short of printing the contents. File names, modes, and safe application logs are usually enough.
-
-```bash
-kubectl get configmap notification-worker-files -n customer-notifications
-```
-
-Expected output:
-
-```console
-NAME                        DATA   AGE
-notification-worker-files   2      3m12s
-```
-
-Then inspect the mounted directory in a running Pod:
-
-```bash
-kubectl exec deploy/notification-worker -n customer-notifications -- ls -l /etc/notification
-```
-
-A healthy directory might look like this:
-
-```console
--rw-r--r-- 1 root root 22 Jun 28 11:04 limits.yaml
--rw-r--r-- 1 root root 26 Jun 28 11:04 routing.yaml
-```
-
-Finally, read a safe non-secret file:
-
-```bash
-kubectl exec deploy/notification-worker -n customer-notifications -- cat /etc/notification/routing.yaml
-```
-
-Example output:
-
-```console
-defaultChannel: email
-providers:
-  email: internal-email-gateway
-```
-
-Do not `cat` private keys, provider tokens, or database credential files during normal troubleshooting. For Secret files, check file names, permissions, and application logs that confirm presence without printing values.
-
-## Choose Files or Environment Variables
-<!-- section-summary: Choose environment variables for small startup strings and mounted files for structured content, certificates, and reloadable config. -->
-
-Environment variables and mounted files are both normal Kubernetes delivery paths. The right choice depends on how the application consumes the value and how operators need to change it.
-
-The notification platform can use both patterns in one workload. Small startup strings such as queue names and timeout values fit environment variables. Structured routing files and certificate material fit mounted files. Choosing per value keeps the manifest readable and prevents a large YAML policy from turning into scattered environment variables.
-
-| Need | Better fit | Example |
-|---|---|---|
-| Small string read at startup | Environment variable | `LOG_LEVEL=info` |
-| Secret credential for a framework | Environment variable or file | `DATABASE_URL` or provider JSON |
-| Structured config | Mounted file | `routing.yaml` |
-| TLS certificate and key | Mounted Secret files | `server.crt`, `server.key` |
-| Reload without restart | Mounted file plus app reload support | Provider routing rules |
-
-Do not force every setting into one style. The Customer Notification Platform can use environment variables for queue names and timeouts, ConfigMap files for routing rules, and Secret files for certificates.
-
-## Assembled Example
-<!-- section-summary: The full manifest mounts routing configuration and TLS files after the key concepts are introduced. -->
-
-Here is the assembled pattern for `notification-worker`. The routing file comes from a ConfigMap, and TLS files come from a Secret.
-
-This full example shows two source objects entering the same container through separate mounted directories. Plain routing configuration lands under a config path, while sensitive certificate material lands under a TLS path. The separation helps reviewers check file ownership, permissions, reload behavior, and diagnostics for each source.
-
-The worker can read both paths during startup, while operators can rotate or troubleshoot each source through its own Kubernetes object.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: notification-worker
-  namespace: customer-notifications
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: notification-worker
-  template:
-    metadata:
-      labels:
-        app: notification-worker
-    spec:
-      containers:
-        - name: worker
-          image: ghcr.io/customer-notifications/notification-worker:1.8.0
-          volumeMounts:
-            - name: worker-config
-              mountPath: /etc/notification/config
-              readOnly: true
-            - name: provider-tls
-              mountPath: /etc/notification/tls
-              readOnly: true
-      volumes:
-        - name: worker-config
-          configMap:
-            name: notification-worker-files
-            items:
-              - key: routing.yaml
-                path: routing.yaml
-        - name: provider-tls
-          secret:
-            secretName: notification-provider-tls
-            items:
-              - key: tls.crt
-                path: provider.crt
-              - key: tls.key
-                path: provider.key
+  name: myapp-config-c92bd4
+immutable: true
+data:
+  config.yaml: |
+    logLevel: info
 ```
 
-The full manifest keeps the file lanes separate:
+`immutable: true` prevents changes to `data` and `binaryData`. Kubernetes documents protection from accidental mutation and reduced API-server watch load as benefits. The broader principle is to treat configuration as an identifiable release artifact rather than mutable global state.
 
-- `worker-config` mounts plain routing configuration under `/etc/notification/config`.
-- `provider-tls` mounts sensitive certificate files under `/etc/notification/tls`.
-- Each `items` list exposes only the file keys the worker actually needs.
+An in-place change to a same-named ConfigMap does not change the Deployment's Pod template and therefore does not itself start a Deployment rollout. A versioned name makes the configuration identity part of the Pod specification.
 
-The application startup should check that the expected files exist, parse `routing.yaml`, and log a safe summary. For Secret files, the logs should confirm that a certificate loaded without printing private key material.
+### Make configuration history visible in the workload
 
-## Review Checklist
-<!-- section-summary: Mounted file reviews check path ownership, update behavior, permissions, and diagnostic safety. -->
+Consider two replicas during a controlled change. With one mutable name, both Pod specifications say `myapp-config`, even if one process still holds old in-memory values and another has reloaded the new file. The Pod template alone cannot distinguish their effective configuration generations.
 
-Use this checklist before merging mounted config changes:
+With versioned names, the old ReplicaSet refers to `myapp-config-c92bd4` and the new ReplicaSet refers to `myapp-config-f8100c`. Kubernetes can roll out the new Pod template, and an operator can answer which artifact each Pod was created to consume by inspecting its specification. The earlier object remains a clear rollback target.
 
-The checklist exists because file mounts can fail in several places that look similar from the application side. A missing key, an unexpected filename, a covered image directory, a permission mismatch, or a missing reload plan can all show up as "config file not found" or "permission denied." Review the source, path, mode, update behavior, and diagnostic plan together.
+The release sequence becomes concrete:
 
-That review should happen before the app depends on the mounted path for routing decisions or certificate loading.
+```text
+create and validate config-f8100c
+        ↓
+change Pod template reference
+        ↓
+Deployment creates replacement Pods
+        ↓
+new processes parse config-f8100c at startup
+        ↓
+readiness admits valid replicas
+        ↓
+retain config-c92bd4 for rollback
+```
 
-| Check | What to confirm |
-|---|---|
-| Path | The mount path is dedicated or the `subPath` restart behavior is accepted |
-| Source | Plain files come from ConfigMaps, sensitive files come from Secrets |
-| Selection | `items` exposes only the keys the container needs |
-| Permissions | `defaultMode`, `readOnly`, and container user settings allow safe reads |
-| Reload | The release plan uses restart, reload endpoint, or file watcher intentionally |
-| Diagnostics | Troubleshooting commands avoid printing Secret contents |
+Marking each generated object immutable prevents a later edit from silently changing the meaning of that recorded identity. The important guarantee comes from using a new identity and moving the Pod template, while `immutable: true` protects that model from accidental in-place mutation.
 
-![Mounted config decision map](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-mounted-config-files/mounted-config-decision-map.png)
+Whichever update model the team chooses, the file must still be readable by the application and separated from mutable runtime data.
 
-*The file delivery choice should connect the source object, mount path, permissions, reload behavior, and troubleshooting plan.*
+## How do permissions and diagnosis complete the design?
+<!-- section-summary: File modes and read-only boundaries govern access, while diagnosis follows each delivery stage until it finds the stale state. -->
+
+ConfigMap projected files use mode `0644` by default. A **file mode** describes read, write, and execute permissions for the owner, group, and others. Kubernetes accepts a volume-wide `defaultMode` and per-key modes through `items`:
+
+```yaml
+volumes:
+  - name: config
+    configMap:
+      name: myapp-config
+      defaultMode: 0440
+```
+
+YAML can express the mode in octal notation; JSON requires its decimal representation. Security-context settings such as `fsGroup` can affect the final permissions observed by the process.
+
+ConfigMap volumes are read-only configuration sources. An application should not expect to create `config.lock` or modify `runtime.db` beside a mounted configuration file. Separate the filesystem homes:
+
+```text
+/etc/myapp/config/ -> read-only configuration
+/var/lib/myapp/    -> mutable application state
+/var/run/myapp/    -> runtime sockets and PID files
+```
+
+If software insists on modifying its supplied configuration, an init container can copy the read-only source into a writable `emptyDir` volume before the main container starts. An **emptyDir** is temporary Pod storage. After the copy, kubelet's ConfigMap updates no longer change that writable copy, so the workload owns any later synchronization.
+
+The copy pattern has two clearly different volumes:
+
+```text
+ConfigMap volume (read-only) --init copy--> emptyDir (writable)
+                                              ↓
+                                       main application
+```
+
+The init container completes before the main application starts, giving the application a writable starting copy. That convenience changes the update contract: a later ConfigMap projection refresh affects only the source volume, not the bytes already copied into `emptyDir`. Treat the copy as startup assembly, not as automatic live synchronization.
+
+Diagnosis follows the same pipeline as delivery:
+
+```text
+desired configuration
+  -> ConfigMap object
+  -> Pod reference
+  -> kubelet projection
+  -> container filesystem
+  -> application read
+  -> application memory
+  -> observable behaviour
+```
+
+If the application still reports `logLevel=info` after a change to `debug`, inspect the source object first:
+
+```bash
+kubectl get configmap myapp-config -o yaml
+```
+
+If the ConfigMap says `debug`, inspect the Pod wiring and verify `volume.configMap.name`, `volumeMount.mountPath`, `items`, and `subPath`:
+
+```bash
+kubectl get pod mypod -o yaml
+```
+
+Then cross the container boundary:
+
+```bash
+kubectl exec mypod -- cat /etc/myapp/config.yaml
+```
+
+If the mounted file still says `info`, investigate kubelet delivery, refresh timing, and `subPath`. If the file says `debug` while the application reports `info`, Kubernetes has delivered the value and the remaining questions concern file reopening, parsing, validation, reload signals, filesystem watching, an old file descriptor, or a sidecar/reloader that failed to complete its handoff.
+
+The final model keeps the three states separate:
+
+1. The ConfigMap is the desired bytes in the control plane.
+2. The projected file is the version currently visible through the container filesystem.
+3. The application configuration is the parsed version currently held in process memory.
+
+Atomic projection prevents half-written published versions. Directory mounts can follow new projections, while `subPath` stays pinned. Read-only configuration belongs apart from mutable state, and immutable names can turn configuration changes into reproducible releases.
+
+## Check Your Answers
+<!-- section-summary: Revisit the seven questions that connect structured bytes, path mapping, atomic publication, reload, release identity, and diagnosis. -->
+
+:::expand[Why does some configuration fit a file better than environment variables?]{kind="recap"}
+A file preserves nested or repeated structure in the application's native configuration language. Kubernetes delivers the bytes to a path, while the application parses their meaning; environment variables remain useful for small independent startup values.
+:::
+
+:::expand[How does a ConfigMap key reach an application path?]{kind="recap"}
+The ConfigMap key supplies the default filename and contents, the Pod volume selects the object, and `mountPath` supplies the directory. `items` can select keys, rename relative paths, and assign per-file modes.
+:::
+
+:::expand[How does Kubernetes replace projected files safely?]{kind="recap"}
+Kubelet writes a complete timestamped directory and then atomically switches the `..data` symlink that visible files follow. Already opened descriptors may still refer to the earlier object, so applications reopen paths when reloading.
+:::
+
+:::expand[When does changed content affect application behaviour?]{kind="recap"}
+Kubelet eventually refreshes the projected filesystem, but the application must notice, reread, parse, validate, and activate the new bytes. A current file can therefore coexist with old in-memory settings.
+:::
+
+:::expand[Why does `subPath` follow a different update path?]{kind="recap"}
+A `subPath` mount stays attached to the selected file from container setup while the volume publishes new versions elsewhere through `..data`. The existing Pod remains on the old file, and replacement is the update path.
+:::
+
+:::expand[When does an immutable ConfigMap fit a release?]{kind="recap"}
+It fits when code and configuration should move as one identifiable release. A new ConfigMap name changes the Pod template and starts a rollout, while the previous name provides a reproducible rollback target.
+:::
+
+:::expand[How do permissions and diagnosis complete the design?]{kind="recap"}
+File modes, process identity, and the read-only mount determine whether the application can open the projected files. Diagnosis follows the ConfigMap, Pod reference, projection, filesystem, parser, and in-memory state until it finds the stale boundary.
+:::
 
 ## References
 
-- [Configure Pods to use ConfigMaps](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/)
-- [Distribute credentials securely using Secrets](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/)
-- [Volumes](https://kubernetes.io/docs/concepts/storage/volumes/)
+- [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
+- [Configure a Pod to Use a ConfigMap](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/)
+- [Volumes: ConfigMap and subPath](https://kubernetes.io/docs/concepts/storage/volumes/)
+- [ConfigMapVolumeSource API](https://kubernetes.io/docs/reference/kubernetes-api/config-and-storage-resources/volume/#ConfigMapVolumeSource)
+- [Kubernetes AtomicWriter Implementation](https://github.com/kubernetes/kubernetes/blob/master/pkg/volume/util/atomic_writer.go)

@@ -1,7 +1,7 @@
 ---
 title: "Public vs Private Subnets"
-description: "Understand how AWS public, private app, and data subnets behave through route tables, public addresses, load balancers, NAT, endpoints, and placement checks."
-overview: "Public and private subnet labels come from routing behavior and resource placement. This article follows the receipts app as the public load balancer, private API tier, database tier, NAT path, and AWS service endpoints land in the right subnet tiers."
+description: "Learn how routing, addressing, translation, and policy create public, private, and isolated subnet behavior."
+overview: "Public and private are not properties hidden inside a subnet's IP range. This article derives each subnet type from the communication paths a three-tier application actually needs."
 tags: ["aws", "vpc", "subnets", "route-tables", "internet-gateway", "nat-gateway", "alb"]
 order: 2
 id: article-cloud-providers-aws-networking-connectivity-public-private-subnets
@@ -9,145 +9,496 @@ aliases:
   - public-vs-private-subnets
   - public-private-subnets
 ---
+
 ## Table of Contents
 
-1. [The App Splits Into Places](#the-app-splits-into-places)
-2. [What Public Means](#what-public-means)
-3. [Public Addresses Are a Separate Choice](#public-addresses-are-a-separate-choice)
-4. [The Public Entry Tier](#the-public-entry-tier)
-5. [The Private App Tier](#the-private-app-tier)
-6. [The Data Tier](#the-data-tier)
-7. [Outbound Paths From Private Code](#outbound-paths-from-private-code)
-8. [A Guided Layout](#a-guided-layout)
-9. [References](#references)
+1. [What Makes a Subnet Public or Private?](#what-makes-a-subnet-public-or-private)
+2. [What Does a Public Subnet Make Possible?](#what-does-a-public-subnet-make-possible)
+3. [How Should a Public Entry Tier Work?](#how-should-a-public-entry-tier-work)
+4. [How Should the Private App and Data Tiers Work?](#how-should-the-private-app-and-data-tiers-work)
+5. [How Do Route Tables Express the Three Tiers?](#how-do-route-tables-express-the-three-tiers)
+6. [Which Outbound Paths Can Private Workloads Use?](#which-outbound-paths-can-private-workloads-use)
+7. [How Does IPv6 Change the Picture?](#how-does-ipv6-change-the-picture)
+8. [How Do You Design Subnets From Communication Requirements?](#how-do-you-design-subnets-from-communication-requirements)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## The App Splits Into Places
-<!-- section-summary: Public, private app, and data subnets separate the customer entry point from application code and database resources. -->
+The sections below answer these questions in order:
 
-The receipts app now has a VPC, and the team needs to decide where each part should live. Customers should reach the app over HTTPS. The API should run on private addresses. The database should receive traffic only from the API and should have the quietest network placement.
+1. **What Makes a Subnet Public or Private?**
+2. **What Does a Public Subnet Make Possible?**
+3. **How Should a Public Entry Tier Work?**
+4. **How Should the Private App and Data Tiers Work?**
+5. **How Do Route Tables Express the Three Tiers?**
+6. **Which Outbound Paths Can Private Workloads Use?**
+7. **How Does IPv6 Change the Picture?**
+8. **How Do You Design Subnets From Communication Requirements?**
 
-That gives us three subnet tiers. A **public subnet** holds resources that need a direct internet path, such as an internet-facing load balancer. A **private app subnet** holds workload code that receives traffic from trusted paths and starts controlled outbound calls. A **data subnet** holds databases and other stateful services that should avoid broad internet routes.
+Once those questions are separate, public entry, private application servers, databases, NAT gateways, and three-tier networks become consequences of system requirements rather than labels to memorize.
 
-The labels help only when the route tables and resource settings match them. Naming a subnet `private-a` expresses intent for humans. The subnet behavior comes from its route table, the addresses assigned to resources, and the security rules around those resources.
+## What Makes a Subnet Public or Private?
+<!-- section-summary: Subnet behavior comes from routing and connectivity, not from the name or private address range. -->
 
-The app story keeps the design grounded. Public subnets serve customer entry. Private app subnets serve API tasks and workers. Data subnets serve RDS or cache resources. Each tier exists because one part of the app needs a different kind of reachability.
+Suppose a VPC owns `10.0.0.0/16` and divides it into three ranges:
 
-## What Public Means
-<!-- section-summary: A subnet is public when its route table has a direct internet gateway route, while private and data subnets use NAT, endpoints, private routes, or only the local route. -->
+```text
+10.0.0.0/24 → subnet A
+10.0.1.0/24 → subnet B
+10.0.2.0/24 → subnet C
+```
 
-A subnet acts public when its associated route table has a default route to an **internet gateway**. For IPv4, that route usually looks like `0.0.0.0/0 -> igw-...`. For IPv6, it may look like `::/0 -> igw-...`. This route gives resources in that subnet a possible direct path to and from the internet.
+A subnet is fundamentally a range of IP addresses that shares a routing context. Nothing inside `10.0.1.0/24` declares, "I am private." All three examples use private IPv4 addresses. The public/private distinction comes mainly from the paths their route tables create.
 
-A private app subnet has a different route story. It keeps the local VPC route so the API can reach the database and other private resources. It may also route `0.0.0.0/0` to a NAT gateway for outbound IPv4 calls, and it may use VPC endpoint routes for AWS services such as S3.
+Three common patterns are:
 
-A data subnet usually keeps the route table small. It has the local VPC route, and it may have private routes for backups, monitoring, or private network connections if the design requires them. Broad internet egress needs a named requirement, because databases rarely need that path for normal managed-service operation.
+```text
+PUBLIC
+direct default route toward an internet gateway
 
-| Subnet tier | Typical route pattern | Typical resources | Review question |
-| --- | --- | --- | --- |
-| Public | Default route to internet gateway | Internet-facing ALB, NAT gateway | Which resources are supposed to face the internet? |
-| Private app | Local route, endpoint routes, optional NAT route | API tasks, workers, internal services | Which outbound dependencies does the app actually need? |
-| Data | Local and narrow private routes | RDS, cache, data services | Which app security group can connect to the data port? |
+PRIVATE
+no direct internet route for workloads;
+may use NAT, a proxy, or private endpoints for outbound access
 
-This is why route tables matter more than names. The next article goes deep on route tables, internet gateways, and NAT. Here, the goal is to place the app pieces into tiers that match the access they need.
+ISOLATED
+no general internet path
+```
+
+The terminology can vary between providers and organizations, but the connectivity difference is useful. A route table makes the intended path visible in a way that a subnet name cannot.
+
+This does not mean route tables answer every question. A complete connection also depends on the endpoint's address, network translation where required, security policy, and an application that is listening. Public/private is about possible paths, not a guarantee that every packet succeeds.
 
 ![The subnet type view shows how public, private app, and data subnets differ mainly by route path and public address exposure](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-public-private-subnets/subnet-type-routes.png)
 
-*The subnet type view shows how public, private app, and data subnets differ mainly by route path and public address exposure.*
+*Public, private, and isolated designs differ mainly in the paths their route tables create, while resource addresses and policy decide how each resource uses those paths.*
 
+## What Does a Public Subnet Make Possible?
+<!-- section-summary: A public subnet has a direct internet-gateway route, but each resource still needs suitable addressing, policy, and a listening service. -->
 
-## Public Addresses Are a Separate Choice
-<!-- section-summary: A public subnet gives a route path, while public IPv4 or IPv6 addressing decides whether a specific resource can use that path directly. -->
+Consider this simplified route table:
 
-The public route is only part of internet reachability. A resource also needs an address that internet clients can route to, and traffic rules must allow the packets. For IPv4, that usually means a public IPv4 address or Elastic IP on the resource or on a service such as a load balancer or NAT gateway.
-
-This distinction prevents a lot of beginner confusion. An EC2 instance in a public subnet needs a public IPv4 address before direct IPv4 internet traffic can reach it. An instance with a public IPv4 address in a private subnet still follows the private subnet route table, so the route table remains part of the path.
-
-For the receipts app, the public address belongs at the edge. The internet-facing Application Load Balancer has public-facing DNS and public subnet placement. The API tasks and database use private addresses, and customers reach the API through the load balancer rather than by connecting to task addresses directly.
-
-IPv6 needs the same care. IPv6 addresses are globally routable, so route tables and security rules carry a lot of responsibility. A dual-stack design should review IPv4 and IPv6 paths separately instead of assuming the IPv4 subnet label explains both.
-
-## The Public Entry Tier
-<!-- section-summary: The internet-facing load balancer belongs in public subnets across multiple Availability Zones and forwards to private targets. -->
-
-The receipts app accepts customer HTTPS, so the Application Load Balancer belongs in public subnets in at least two Availability Zones. The load balancer receives traffic on port `443`, applies its listener and certificate configuration, and forwards requests to private API targets on the application port.
-
-The API can stay private because the load balancer is the public entry point. The load balancer target group points to private IP targets, and the API security group allows traffic from the load balancer security group. That keeps the public surface small and gives the team one clear place for customer entry rules.
-
-A small Terraform example shows the important placement fields:
-
-```hcl
-resource "aws_lb" "receipts" {
-  name               = "receipts-prod"
-  load_balancer_type = "application"
-  internal           = false
-  subnets            = [aws_subnet.public_a.id, aws_subnet.public_b.id]
-  security_groups    = [aws_security_group.alb.id]
-}
+```text
+Destination       Next hop
+10.0.0.0/16       local
+0.0.0.0/0         internet gateway
 ```
 
-The `internal = false` field makes the load balancer internet-facing. The `subnets` field places load balancer nodes in public subnets across zones. The `security_groups` field attaches the rules that allow customer HTTPS into the load balancer and allow forwarding toward the private API tier.
+The local route handles destinations inside the VPC. The default route handles IPv4 destinations for which no more-specific route exists and sends them toward the internet gateway. In AWS, this direct route is the core property normally used to call the associated subnet public.
 
-## The Private App Tier
-<!-- section-summary: Private app subnets run workload code on private addresses while allowing controlled inbound traffic from the load balancer and controlled outbound dependencies. -->
+A public subnet does not automatically publish every machine in it. Suppose a virtual machine has only this address:
 
-The API tasks run in private app subnets. They receive requests from the load balancer, call the database, read secrets, write logs, and maybe call a payment provider. Customers reach the API through the load balancer, so private task addresses are enough.
+```text
+Private IP: 10.0.1.25
+```
 
-This tier still needs outbound planning. The API may pull container images from ECR, send logs to CloudWatch Logs, read database credentials from Secrets Manager, upload receipt files to S3, and call a public payment provider. Some of those dependencies are AWS services that can use VPC endpoints. Some are public internet destinations that may need NAT.
+The RFC 1918 ranges `10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16` are not globally routed across the public internet. An internet client cannot send a packet to `10.0.1.25` and expect the global network to locate your VPC.
 
-The private app tier is where quick fixes often create long-term risk. A startup script fails while reaching a dependency, and someone tries moving the task into a public subnet. A cleaner review names the missing dependency, then adds the right endpoint, NAT path, or private provider connection for that dependency.
+For direct IPv4 internet communication, the resource needs a publicly routable endpoint. Cloud infrastructure can map a public address such as `203.0.113.50` to the private address `10.0.1.25`.
 
-Security groups describe the app conversation. The API allows inbound traffic from the load balancer security group on the app port, such as `8080`. The API allows outbound traffic to the database security group on `5432`, to endpoint security groups for AWS APIs, and to approved public destinations through NAT if the design keeps outbound rules narrow.
+This creates two independent questions:
 
-## The Data Tier
-<!-- section-summary: Data subnets keep databases on private addresses and avoid broad default routes unless a specific data service needs a documented private or outbound path. -->
+```text
+Does the subnet have a direct internet route?
+                     AND
+Does this resource have a public endpoint or address?
+```
 
-The database tier should have the quietest network placement. For Amazon RDS, the DB subnet group should include private data subnets in at least two Availability Zones. RDS then places database network interfaces in those subnets and gives the database a private endpoint name.
+One VM in the subnet may have a public address while another does not. The route makes direct internet connectivity possible for the subnet; the public mapping determines whether a particular IPv4 resource can use that pattern directly.
 
-The database security group should allow only the API security group on the database port, such as PostgreSQL `5432` or MySQL `3306`. Subnet placement helps, but the security group relationship carries the precise workload permission. That relationship stays stable even when API tasks scale and receive new private IP addresses.
+Policy is another independent layer. A server can have a public address and route while its security rules permit only TCP `443`. Internet clients can potentially reach HTTPS but not SSH on `22`, PostgreSQL on `5432`, or Redis on `6379`.
 
-Data subnets usually avoid broad `0.0.0.0/0` routes. Managed database backups, patching, and service operations happen through the service control plane, so the database itself rarely needs public internet egress. If a database extension, replication path, or monitoring agent needs network access, that requirement should be named and reviewed as its own path.
+Direct exposure therefore needs all of these pieces:
 
-This tier gives the app a clear failure checklist. If the customer reaches the load balancer and the API times out on the database, the team reviews the private app subnet, the data subnet, the local VPC route, the API security group, the database security group, DNS, and the database listener.
+```text
+public endpoint or address
++ internet route
++ security policy allows the flow
++ application listens on the requested port
+= working connection
+```
 
-## Outbound Paths From Private Code
-<!-- section-summary: Private app subnets use NAT for public IPv4 destinations and VPC endpoints for supported AWS services. -->
+If any piece is absent, the connection can fail. "It is in a public subnet, so it is exposed" is therefore too broad. A public subnet creates a possible direct path; it does not automatically assign a public address, open a firewall, or start a service.
 
-Private workloads often need outbound calls. The receipts API may need software updates, payment provider calls, logs, secrets, image pulls, and S3 uploads. The subnet should stay private while those dependencies still work.
+### How Does a Private Subnet Reach the Internet?
+<!-- section-summary: A private IPv4 workload can send its default route to NAT, which translates outbound flows and returns their responses without providing a direct inbound endpoint. -->
 
-For public IPv4 destinations, the common pattern is a **NAT gateway** in a public subnet. Private app subnet route tables send internet-bound IPv4 traffic to the NAT gateway, and the outside service sees the NAT gateway's Elastic IP. Production designs often use one NAT gateway per Availability Zone so each zone's private workloads use local egress.
+Now consider an application subnet whose route table says:
 
-For supported AWS services, a **VPC endpoint** is often cleaner. An S3 gateway endpoint adds private S3 routes to selected route tables. Interface endpoints create private network interfaces for service APIs such as Secrets Manager, CloudWatch Logs, STS, ECR API, and ECR Docker. Endpoints reduce NAT traffic and give the team endpoint policies and endpoint security groups to review.
+```text
+Destination       Next hop
+10.0.0.0/16       local
+0.0.0.0/0         NAT gateway
+```
 
-IPv6 has its own pattern. Private IPv6-only outbound internet access can use an egress-only internet gateway. Dual-stack apps should test IPv4 and IPv6 separately because routes, DNS records, and security rules can differ between the two families.
+It has no direct default route from its workloads to an internet gateway. A server such as `10.0.2.25` can still start an outbound connection through **Network Address Translation**, or NAT.
 
-## A Guided Layout
-<!-- section-summary: A simple subnet layout gives each app tier a clear placement, route story, and review question. -->
+Suppose the server downloads an update from `198.51.100.20:443`. Before translation, the packet contains:
 
-A first layout for the receipts app can stay small and still be useful:
+```text
+Source:      10.0.2.25
+Destination: 198.51.100.20
+```
 
-| Tier | Zone A | Zone B | Route story |
-| --- | --- | --- | --- |
-| Public | `receipts-public-a` | `receipts-public-b` | Local VPC route plus default route to internet gateway |
-| Private app | `receipts-app-a` | `receipts-app-b` | Local VPC route plus endpoints and approved NAT egress |
-| Data | `receipts-data-a` | `receipts-data-b` | Local VPC route and narrow private routes only |
+The destination is outside `10.0.0.0/16`, so the default route selects the NAT gateway. NAT changes the source visible to the internet:
 
-The review follows the request path. Customer traffic reaches the public load balancer on `443`. The load balancer forwards to API tasks on private addresses. The API connects to the database on the data port. The API reaches AWS services through endpoints and reaches a public payment provider through NAT if that dependency is approved.
+```text
+Before NAT: source 10.0.2.25
+After NAT:  source 203.0.113.70
+```
 
-Before the next article, the important subnet idea is this: subnet names describe intent, and route tables prove behavior. A beginner design can be good while advanced enterprise features stay for later, as long as public entry, private app work, data placement, and outbound dependencies are separated deliberately.
+The outside server replies to `203.0.113.70`. The NAT system remembers the translation for the flow and maps the response back toward `10.0.2.25`.
+
+```text
+Private server initiates
+        ↓
+NAT gateway
+        ↓
+Internet service
+        ↓ response
+NAT remembers translation
+        ↓
+Private server
+```
+
+A random internet client cannot normally use that NAT mapping to start an unrelated new connection toward `10.0.2.25`. This makes the pattern useful for outbound internet access without directly publishing every private workload.
+
+The NAT gateway itself needs an internet path. In AWS's common architecture, it sits in a public subnet that can reach an internet gateway. The private server's default route selects NAT; NAT then uses its public placement to reach the internet.
+
+```text
+Private app subnet
+  └── default route → NAT gateway in public subnet
+                           └── internet gateway → internet
+```
+
+The private server is not directly using the internet gateway. It uses an intermediary that can. Keeping those two hops clear helps diagnose a private workload whose outbound connection fails.
+
+## How Should a Public Entry Tier Work?
+<!-- section-summary: A dedicated public load balancer can accept legitimate internet traffic and forward it to private application targets. -->
+
+A public-facing application needs an internet entry point, but its application servers do not necessarily need public addresses.
+
+Suppose users visit `https://shop.example.com`. A public load balancer can receive HTTPS and forward the request across the VPC to private application servers:
+
+```text
+Internet users
+      ↓
+public load balancer
+      ↓ private VPC traffic
+application servers
+```
+
+The public tier exists to receive traffic that legitimately originates outside the network. Depending on the system, public entry components can include a load balancer, reverse proxy, API gateway, VPN endpoint, bastion or jump host, and the NAT gateway used for egress. Those components have different jobs, but each may require internet connectivity.
+
+The useful design question is not, "This is a website, so which web servers get public IPs?" It is, **"What is the smallest intended component that internet users must reach?"** Often the answer is a load balancer.
+
+The load balancer then forwards to an application server such as `10.0.2.25:8080`. That server needs no public endpoint. Its security policy can allow TCP `8080` from the load balancer rather than from every address.
+
+```text
+Internet → load balancer → app     allowed
+Internet ───────────────X→ app     no direct path
+```
+
+This topology expresses intent. Normal users have a path to the public entry component, and that component has a specific path to the application. There is no requirement for an arbitrary internet host to connect directly to the app, so the network does not create that path.
 
 ![The guided layout shows a public load balancer sending traffic to private app tasks while the database remains in private data subnets](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-public-private-subnets/public-alb-private-api.png)
 
-*The guided layout shows a public load balancer sending traffic to private app tasks while the database remains in private data subnets.*
+*A public entry point can receive external requests while the application and data tiers remain on private addresses.*
+
+## How Should the Private App and Data Tiers Work?
+<!-- section-summary: Private application servers accept traffic from the entry tier, while the more restricted data tier accepts only the application flows it needs. -->
+
+The application tier typically needs to communicate with a load balancer, database, cache, internal APIs, cloud APIs, package repositories, and selected third-party services. Ask why an arbitrary machine anywhere on Earth should be allowed to start a direct connection to it. Usually there is no valid reason.
+
+The app tier can therefore remain private. It accepts the application port from the load balancer, starts database and internal-service connections, and uses a controlled outbound mechanism only where required.
+
+Add PostgreSQL as the data tier:
+
+```text
+Internet
+  ↓
+load balancer
+  ↓
+application
+  ↓ TCP 5432
+PostgreSQL
+```
+
+The database security policy can allow TCP `5432` only from the application tier. The database has no reason to receive arbitrary traffic from internet users, so it needs no direct internet entry.
+
+The data subnet can be more restricted than the app subnet. Compare their route tables:
+
+```text
+Private app subnet
+10.0.0.0/16 → local
+0.0.0.0/0   → NAT gateway
+
+Isolated data subnet
+10.0.0.0/16 → local
+```
+
+The first can start generic outbound internet connections through NAT. The second has no generic internet route. Both may be called private in casual conversation, but **isolated** communicates the stronger connectivity model.
+
+This layout is not aesthetic organization. It encodes which communication paths should exist:
+
+```text
+Internet → load balancer       required
+load balancer → application    required
+application → database         required
+Internet → application         not required
+Internet → database            not required
+```
+
+Why use separate subnets rather than one large subnet plus per-server firewall rules? Different subnets can share different connectivity models. The topology itself says that the public tier has an internet-gateway route, the application tier has a NAT route, and the database tier has no internet default route. Subnetting also supports address organization, fault-domain placement, segmentation, and clearer policy boundaries.
+
+## How Do Route Tables Express the Three Tiers?
+<!-- section-summary: Local and default routes make public, outbound-only, and isolated behavior visible for each subnet tier. -->
+
+For a VPC with `10.0.0.0/16`, use these three subnets:
+
+```text
+10.0.1.0/24 → public entry
+10.0.2.0/24 → private application
+10.0.3.0/24 → private or isolated data
+```
+
+The public route table can be:
+
+```text
+Destination       Target
+10.0.0.0/16       local
+0.0.0.0/0         internet gateway
+```
+
+The application route table can be:
+
+```text
+Destination       Target
+10.0.0.0/16       local
+0.0.0.0/0         NAT gateway
+```
+
+The data route table can be:
+
+```text
+Destination       Target
+10.0.0.0/16       local
+```
+
+Route selection uses **longest-prefix matching**. A packet for `10.0.3.25` matches the `/16` local route, which is more specific than `/0`, so it stays inside the VPC. A packet for `8.8.8.8` does not match `10.0.0.0/16`, so the default `0.0.0.0/0` route handles it where such a route exists.
+
+`0.0.0.0/0` therefore means, in practical terms, "For an IPv4 destination not covered by a more-specific route, use this target."
+
+Now trace four paths:
+
+1. A browser reaches the load balancer through the public internet path, and the load balancer forwards privately to the app.
+2. The app reaches the database through the local VPC route; no packet needs the internet.
+3. The app reaches a public dependency by following its NAT default route, then the NAT gateway's internet path.
+4. An internet client tries to connect directly to the database, but there is no public endpoint, intended inbound path, or permissive security policy.
+
+The route tables reveal much of the architecture, but remember the remaining layers: public addresses, translations, and security controls still decide whether a particular flow is usable.
+
+## Which Outbound Paths Can Private Workloads Use?
+<!-- section-summary: Private workloads can use NAT, a controlled proxy, or private service endpoints depending on the destination. -->
+
+Private application code often needs dependencies outside its subnet:
+
+- package repositories for `npm`, `apt`, or `yum`;
+- GitHub and container registries;
+- third-party APIs, payment processors, and email providers; and
+- cloud control-plane APIs and object storage.
+
+Private does not necessarily mean unable to communicate outside the VPC. It normally means the workload does not accept direct, unsolicited internet-originated connections.
+
+Several outbound designs are possible:
+
+```text
+Private workload → NAT → internet
+Private workload → HTTP proxy → internet
+Private workload → private endpoint → cloud service
+```
+
+The third path avoids a general internet route for a supported cloud service. Instead of sending object-storage traffic through NAT and the public internet path, the workload uses a private network endpoint for that service. When the provider supports it, this can reduce reliance on general-purpose internet egress.
+
+These mechanisms should follow the dependency. Public third-party services require an appropriate public or private provider connection. A supported cloud API may fit a private endpoint. A company may require outbound inspection through a proxy. "Private subnet" is the starting constraint; the named destination determines the deliberate exception.
+
+### Why Are NAT and Private Placement Not Security by Themselves?
+<!-- section-summary: NAT performs address translation, and private placement removes paths, but layered policy and application controls still protect the system. -->
+
+People sometimes say that the NAT gateway protects the application server. NAT's fundamental job is address and port translation:
+
+```text
+10.0.2.25:49152
+        ↓ translated to
+203.0.113.70:31241
+```
+
+The inability to start arbitrary inbound connections through the common NAT architecture is useful, but NAT is not a substitute for access-control policy.
+
+Keep three jobs separate:
+
+```text
+Routing  → where packets can travel
+NAT      → which addresses and ports are translated
+Firewall → which packets are permitted
+```
+
+Security groups, network ACLs, host firewalls, application authentication, and application authorization still matter.
+
+Private placement is also not a complete security claim. A compromised application server may be able to reach a database that accepts overly broad traffic from the entire app subnet. Neither system needed a public endpoint for the compromise to spread.
+
+Security is layered:
+
+```text
+internet-exposure choices
+        ↓
+network segmentation
+        ↓
+firewall permission
+        ↓
+identity and authentication
+        ↓
+application authorization
+        ↓
+encryption, patching, and hardening
+```
+
+A private subnet removes or restricts network paths. That is valuable, but it does not prove the workload, credentials, application, or permitted internal paths are safe.
+
+The four concepts that most often become mixed together should remain independent:
+
+```text
+subnet
+route
+public address
+firewall rule
+```
+
+When a connection fails or exposure is suspected, inspect each one instead of assuming the subnet label answers all four.
+
+## How Does IPv6 Change the Picture?
+<!-- section-summary: IPv6 can use globally routable addresses without IPv4-style NAT, so routing and policy become even clearer parts of private reachability. -->
+
+Most beginner explanations silently assume IPv4 and NAT. IPv6 changes the address-translation part of the picture.
+
+An IPv6 workload can have a globally routable address without IPv4-style NAT. That does not mean every internet client may connect. Route tables and security policy still decide whether an inbound path exists and which packets are permitted.
+
+Platforms can provide an **egress-only internet gateway** for IPv6:
+
+```text
+Private IPv6 workload
+       ↓ initiates connection
+egress-only internet gateway
+       ↓
+internet
+```
+
+The pattern reinforces the broader principle. Private describes intended reachability and connection initiation, not merely whether an address looks private. An address can be globally routable while routing and firewall configuration reject unwanted inbound access.
+
+## How Do You Design Subnets From Communication Requirements?
+<!-- section-summary: Listing who must initiate traffic toward whom produces the subnet and route design from first principles. -->
+
+Do not begin with, "AWS says I need three subnet types." Begin with the arrows your system requires.
+
+For a typical web application:
+
+```text
+Internet → load balancer       yes
+Internet → application server no
+Internet → database           no
+
+load balancer → application   yes
+application → database        yes
+application → internet        maybe
+database → internet           maybe, preferably limited
+```
+
+Now configure addressing, routing, translation, and policy to create those arrows and remove unnecessary ones.
+
+The result naturally has a public entry tier, a private application tier, and a private or isolated data tier. The load balancer is public because strangers are supposed to reach it. The app is private because designated internal components should reach it. The database is more restricted because usually only the app tier should initiate its data connection.
 
 ![The placement checks summarize the questions a reviewer asks before approving subnet placement for a production workload](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-public-private-subnets/subnet-placement-checks.png)
 
-*The placement checks summarize the questions a reviewer asks before approving subnet placement for a production workload.*
+*Review subnet placement by checking the intended initiator, destination, route, translation, and policy for every required communication path.*
 
+The model worth retaining is:
 
+```text
+Public subnet ≠ public IP
+Public IP ≠ open firewall
+Open firewall ≠ running service
+Private IP ≠ secure system
+NAT ≠ firewall
+```
+
+Public and private are not properties of what a machine does. They describe the connectivity paths you deliberately give it. Once you think in terms of who needs to initiate a packet toward whom, subnet design becomes a consequence of system requirements rather than a memorized diagram.
+
+## Check Your Answers
+<!-- section-summary: Review the independent roles of routes, public addresses, translation, policies, and application listeners. -->
+
+:::expand[What Makes a Subnet Public or Private?]{kind="recap"}
+Subnet behavior comes from routing and connectivity, not from the name or private address range.
+:::
+
+:::expand[What Does a Public Subnet Make Possible?]{kind="recap"}
+A public subnet has a direct internet-gateway route, but each resource still needs suitable addressing, policy, and a listening service.
+
+Its associated route table has a direct default path to an internet gateway. That route makes direct internet connectivity possible, but does not by itself give each resource a public address or allow traffic through its security policy.
+
+It may lack a public IPv4 endpoint, its security rules may reject the traffic, or no application may be listening. The subnet route, resource address, policy, and application state are independent requirements.
+
+A private IPv4 workload can send its default route to NAT, which translates outbound flows and returns their responses without providing a direct inbound endpoint.
+
+The server starts a connection and follows its default route to NAT. NAT replaces the private source with a public source, remembers the flow, and translates the reply back. This does not provide a direct endpoint for arbitrary new inbound connections.
+
+The private subnet sends internet-bound traffic to NAT, and NAT itself needs a route through an internet gateway. The private workload uses the intermediary rather than directly using the internet gateway.
+:::
+
+:::expand[How Should a Public Entry Tier Work?]{kind="recap"}
+A dedicated public load balancer can accept legitimate internet traffic and forward it to private application targets.
+
+Internet users can reach a dedicated public load balancer, which forwards over the private VPC to application targets. Only the public entry point needs direct internet reachability.
+:::
+
+:::expand[How Should the Private App and Data Tiers Work?]{kind="recap"}
+Private application servers accept traffic from the entry tier, while the more restricted data tier accepts only the application flows it needs.
+:::
+
+:::expand[How Do Route Tables Express the Three Tiers?]{kind="recap"}
+Local and default routes make public, outbound-only, and isolated behavior visible for each subnet tier.
+
+The private subnet can start generic outbound internet connections through its NAT default route. The isolated subnet has no generic internet route and normally contains only local or explicitly private destinations.
+
+A destination inside `10.0.0.0/16` uses the more-specific local route. Other IPv4 destinations fall back to the `/0` default route if one exists.
+:::
+
+:::expand[Which Outbound Paths Can Private Workloads Use?]{kind="recap"}
+Private workloads can use NAT, a controlled proxy, or private service endpoints depending on the destination.
+
+It can use NAT for public destinations, an outbound proxy, or a private endpoint for a supported cloud service. The correct path follows the named dependency and the organization's egress requirements.
+
+NAT performs address translation, and private placement removes paths, but layered policy and application controls still protect the system.
+
+NAT translates addresses and ports. Firewall mechanisms decide which traffic is allowed. The usual NAT flow has a useful inbound limitation, but security groups, ACLs, host controls, and application authentication still enforce policy.
+
+Private placement removes direct paths but does not prevent compromise through allowed internal traffic, weak credentials, excessive application authorization, missing encryption, or unpatched software. It is one layer in a larger security model.
+:::
+
+:::expand[How Does IPv6 Change the Picture?]{kind="recap"}
+IPv6 can use globally routable addresses without IPv4-style NAT, so routing and policy become even clearer parts of private reachability.
+
+IPv6 addresses can be globally routable without IPv4-style NAT. Routing and firewall policy can still prevent unwanted inbound access, and an egress-only internet gateway can support outbound-initiated connectivity.
+:::
+
+:::expand[How Do You Design Subnets From Communication Requirements?]{kind="recap"}
+Listing who must initiate traffic toward whom produces the subnet and route design from first principles.
+
+List who must initiate connections to which destinations. Then configure addresses, routes, translation, and policy to allow those arrows and omit the rest. The public, private, and isolated tiers follow from those requirements.
+:::
 
 ## References
 
-- [Amazon VPC documentation: VPCs and subnets](https://docs.aws.amazon.com/vpc/latest/userguide/how-it-works.html#vpc-subnets)
-- [Amazon VPC documentation: Route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)
-- [Amazon VPC documentation: NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)
-- [Amazon VPC documentation: VPC endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints.html)
-- [Elastic Load Balancing documentation: Availability Zones for your Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#availability-zones)
+- [VPCs and subnets](https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html) - Explains subnet address ranges and routing behavior in Amazon VPC.
+- [Route tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html) - Documents local, default, internet-gateway, and NAT targets.
+- [Internet gateways](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html) - Describes direct internet communication requirements for VPC resources.
+- [NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) - Explains outbound translation for resources in private subnets.
+- [VPC endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints.html) - Introduces private connectivity to supported services and resources.
+- [Egress-only internet gateways](https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html) - Describes outbound-only IPv6 internet communication.

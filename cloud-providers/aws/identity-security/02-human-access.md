@@ -1,7 +1,7 @@
 ---
 title: "Access for People and Applications"
-description: "Use IAM Identity Center, IAM roles, STS sessions, and runtime credential delivery so people and workloads can use AWS without permanent keys."
-overview: "After the IAM overview, the next question is how access is received. This article follows humans, applications, containers, servers, and CI/CD workflows as they get temporary AWS access through Identity Center and IAM roles."
+description: "Use IAM Identity Center, roles, STS sessions, runtime identities, federation, MFA, and audit evidence so people and workloads can access AWS without permanent keys."
+overview: "People, applications, CI jobs, and external servers begin with different identities, but AWS access converges on one model: a trusted caller obtains a temporary role session, makes signed requests, and leaves evidence."
 tags: ["iam", "identity-center", "roles", "credentials"]
 order: 2
 id: article-cloud-providers-aws-identity-security-human-access
@@ -26,486 +26,730 @@ aliases:
 
 ## Table of Contents
 
-1. [A Caller Needs Its Own Path](#a-caller-needs-its-own-path)
-2. [Human Access Through Identity Center](#human-access-through-identity-center)
-3. [Permission Sets and Account Assignments](#permission-sets-and-account-assignments)
-4. [CLI Sessions Without Static Keys](#cli-sessions-without-static-keys)
-5. [Application Access With IAM Roles](#application-access-with-iam-roles)
-6. [Runtime Credential Delivery](#runtime-credential-delivery)
-7. [CI/CD and External Workloads](#cicd-and-external-workloads)
-8. [MFA and Emergency Access](#mfa-and-emergency-access)
-9. [Caller Evidence During Incidents](#caller-evidence-during-incidents)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [How Does a Caller Receive AWS Access?](#how-does-a-caller-receive-aws-access)
+2. [Why Is the IAM Role the Central Access Identity?](#why-is-the-iam-role-the-central-access-identity)
+3. [How Do Permission Sets and Account Assignments Work?](#how-do-permission-sets-and-account-assignments-work)
+4. [How Does CLI Access Work Without Permanent Keys?](#how-does-cli-access-work-without-permanent-keys)
+5. [How Do Applications Receive Runtime Credentials?](#how-do-applications-receive-runtime-credentials)
+6. [How Do CI Jobs and External Workloads Federate?](#how-do-ci-jobs-and-external-workloads-federate)
+7. [How Do You Identify the Real Caller During an Incident?](#how-do-you-identify-the-real-caller-during-an-incident)
+8. [How Does the Complete Access Chain Fit Together?](#how-does-the-complete-access-chain-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## A Caller Needs Its Own Path
-<!-- section-summary: AWS access starts with the caller, because people, applications, servers, and pipelines need different credential paths. -->
+## How Does a Caller Receive AWS Access?
+<!-- section-summary: A long-lived identity authenticates, obtains a short-lived AWS session, signs a request, and then faces authorization policy evaluation. -->
 
-Every useful AWS action starts as a signed request. The signature tells AWS which **caller** is asking to read an object, write a database item, deploy a function, or change a production setting. A caller might be a person using the console, a laptop running the AWS CLI, a Lambda function processing an event, an ECS task serving an API, an EC2 instance running a repair script, or a deployment workflow pushing a new release.
+The cleanest way to understand access for people and applications is to start with one question: **when something asks AWS to perform an action, how does AWS decide whether to allow it?**
 
-The running example in this article is an image-sharing application. Maya is an application engineer who builds the upload API. Jordan is the on-call engineer who sometimes needs production read access. Priya is a security reviewer who checks access evidence. A Lambda function creates thumbnails, an ECS service reads image metadata from DynamoDB, an EC2 instance runs occasional batch repair jobs, and GitHub Actions deploys new versions. Lambda runs code without you managing servers. ECS runs containers. EC2 provides virtual machines. DynamoDB is AWS's managed table-like database. GitHub Actions is a CI/CD system, which means it runs automated build, test, and deployment workflows.
+Every request can be reduced to:
 
-A small demo can begin with one IAM user access key copied into every place that needs AWS. An **access key** is a pair of long-lived secret values used by the AWS CLI, SDKs, scripts, and applications to sign AWS API requests. The key often starts in a local file like this:
-
-```dotenv
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-AWS_REGION=us-east-1
+```text
+WHO is making the request?
+        ↓
+WHAT action are they requesting?
+        ↓
+ON WHICH resource?
+        ↓
+UNDER WHAT conditions?
+        ↓
+ALLOW or DENY
 ```
 
-The first two lines are the real AWS secret. `AWS_ACCESS_KEY_ID` identifies the access key, and `AWS_SECRET_ACCESS_KEY` proves the caller is allowed to use it. `AWS_REGION` only tells the SDK or CLI which Region to call by default, so it is configuration rather than a secret. The problem is the same either way: the secret values can be copied and keep working until someone disables or deletes the key.
+AWS calls the authenticated “who” a **principal**. A principal may represent a human, an application, an AWS service, a federated identity, or—very commonly—a role session. AWS recommends temporary credentials rather than long-lived access keys for both people and workloads in normal modern access paths.
 
-That key can make the first upload test succeed, and then it can quietly spread into a laptop, a container image, a CI/CD secret, a `.env` file, and a debugging screenshot. If the key leaks, CloudTrail records activity against the IAM user behind that key. CloudTrail is AWS's activity record for API calls, and its evidence is harder to read when the same permanent key was used by a human shell, application code, and a deployment job.
+The fundamental flow is:
 
-Different callers have different lifetimes. A person joins a team, changes teams, and eventually leaves. A laptop gets replaced. A Lambda function may run for seconds. A container task may be replaced several times a day. A deployment workflow should have production access only during the deployment window. One permanent key ignores those lifetimes and makes cleanup a manual hunt.
-
-The safer access model separates the callers and lets each caller receive credentials from the system that already knows who they are. The shape looks like this:
-
-| Caller | Normal access path | Permanent AWS key? |
-|---|---|---:|
-| Human engineer | IAM Identity Center account session | No |
-| Local CLI user | Identity Center profile and cached session | No |
-| Lambda function | Lambda execution role | No |
-| ECS task | ECS task role | No |
-| EC2 instance | Instance profile role | No |
-| EKS workload | Pod Identity or service-account role | No |
-| GitHub Actions workflow | OIDC federated role | No |
-| Legacy vendor tool | Narrow IAM user exception | Sometimes |
-
-The repeated pattern is **temporary credentials**. Temporary credentials are short-lived AWS credentials that expire automatically. AWS Security Token Service, usually shortened to **STS**, issues those credentials when a trusted caller assumes a role or uses federation. **Federation** means AWS trusts identity proof from another system, such as a company identity provider, Kubernetes, a CI/CD platform, or a certificate authority.
-
-
-Human access is the first practical place to apply this pattern because people are usually where static keys begin spreading. Once people receive temporary access cleanly, the team can apply the same idea to applications and automation.
-
-## Human Access Through Identity Center
-<!-- section-summary: IAM Identity Center gives workforce users one sign-in path into assigned AWS accounts instead of separate daily IAM users in each account. -->
-
-**IAM Identity Center** is AWS's workforce access service. It lets people sign in through one trusted identity source, choose the AWS accounts they are allowed to enter, and receive temporary role sessions for the jobs assigned to them. An **identity source** is the directory of people and groups AWS trusts for workforce sign-in, such as the built-in Identity Center directory, Microsoft Entra ID, Okta, Active Directory, or another supported identity provider.
-
-This matters as soon as the image service has more than a few people. Maya needs development access on Monday. Jordan needs production read access while on call. Priya needs security-audit access across accounts. A finance partner needs billing visibility. A contractor leaves the project on Friday. Those changes belong in the workforce directory and group assignments, where the company already handles joining, moving, and leaving.
-
-The daily sign-in path stays small:
-
-```mermaid
-flowchart LR
-    Person["Engineer"]
-    Source["Company sign-in"]
-    Center["IAM Identity Center"]
-    Dev["image-dev"]
-    Prod["image-prod"]
-    Audit["security"]
-
-    Person --> Source
-    Source --> Center
-    Center --> Dev
-    Center --> Prod
-    Center --> Audit
+```text
+identity
+   ↓ authentication
+session
+   ↓ receives temporary credentials
+signed AWS request
+   ↓ authorization
+IAM policy evaluation
+   ↓
+allow or deny
 ```
 
-The engineer signs in through the company system. Identity Center then shows only the AWS accounts and access packages assigned to that engineer. Development access appears for daily work, production read-only access appears for support, and billing stays outside the normal path unless the person has that assignment.
+Four words in that flow are frequently mixed together.
 
-An IAM user lives inside one AWS account and can have a long-lived password or access key. An Identity Center user signs in through the workforce system and receives a temporary account session. When a person leaves the company or leaves a group, they lose the ability to start new AWS sessions for that assignment.
+An **identity** answers “Who are you?” Alice in the corporate directory, a GitHub Actions workflow, an EC2 instance, and a Kubernetes workload are all possible starting identities.
 
-Identity Center gives people the entrance into AWS. The next layer decides which account they can enter, which job they can perform there, and how long the session should last.
+A **credential** proves identity or, in many AWS flows, proves possession of an already-created session. Temporary API credentials include an `AccessKeyId`, a `SecretAccessKey`, and a `SessionToken`. AWS STS issues many of these temporary credentials, and they expire automatically.
 
-![The account assignment view shows how a person receives access through a group, permission set, AWS account, and temporary role session](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/identity-center-account-assignments.png)
+A **permission** answers “What may this identity or session do?” A permission might allow `s3:GetObject` on objects under `arn:aws:s3:::company-reports/*`.
 
-*The account assignment view shows how a person receives access through a group, permission set, AWS account, and temporary role session.*
+A **session** is the temporary security identity that actually makes the AWS calls. Alice can remain a long-lived identity in Microsoft Entra ID without becoming a permanent IAM user. She authenticates through the corporate system, federates into AWS, assumes a role, and receives a temporary role session. An application can use the same pattern without an IAM user named after the service.
 
-
-## Permission Sets and Account Assignments
-<!-- section-summary: Groups, permission sets, and account assignments connect people to a specific job in a specific AWS account. -->
-
-Identity Center account access is built from three simple pieces: a **group**, a **permission set**, and an **account assignment**. The group names the people. The permission set names the job. The account assignment connects that group and job to one AWS account.
-
-A **permission set** is an access package such as `DeveloperAccess`, `ProductionReadOnly`, `SecurityAudit`, or `BillingView`. It contains IAM policies and a session duration. When Identity Center assigns a permission set to an account, AWS creates and manages an IAM role in that account for the assignment.
-
-For the image-sharing application, the assignments might look like this:
-
-| Group | Account | Permission set | Result |
-|---|---|---|---|
-| `aws-image-developers` | `image-dev` | `DeveloperAccess` | Build and test the service in development. |
-| `aws-image-developers` | `image-prod` | `ProductionReadOnly` | Inspect production while supporting incidents. |
-| `aws-platform-admins` | `image-prod` | `AdministratorAccess` | Perform rare production administration. |
-| `aws-security-auditors` | all accounts | `SecurityAudit` | Review configuration and evidence. |
-| `aws-billing-viewers` | billing account | `BillingView` | View cost data without infrastructure control. |
-
-The first row means members of `aws-image-developers` can enter the `image-dev` account with the `DeveloperAccess` permission set. That assignment gives them development access through one role session. Production write access, billing access, and security administration require separate assignments.
-
-Session duration belongs in the permission set because temporary credentials still work until they expire. For AWS account access through Identity Center, new permission sets default to one hour, and AWS supports permission set sessions up to twelve hours. A powerful production-admin session should usually be short. A weaker read-only audit session may be longer when the work requires it.
-
-Offboarding now has a clear shape. Removing the person from the identity source or from the AWS group stops new sessions for that assignment. Existing sessions can continue until their configured duration ends, which is one reason powerful permission sets should avoid all-day sessions.
-
-
-People can now use the AWS Console through temporary sessions. Engineers also need terminal access because real support work often happens in scripts, infrastructure tools, and diagnostic commands.
-
-## CLI Sessions Without Static Keys
-<!-- section-summary: AWS CLI profiles can use Identity Center sessions, so daily terminal work uses temporary credentials. -->
-
-Engineers rarely use only the browser. They run the AWS CLI, Terraform, SDK tools, deployment scripts, and diagnostic commands. The **AWS CLI** is the terminal tool for calling AWS APIs. Terraform is an infrastructure tool that creates and changes cloud resources from configuration files. An **SDK** is a programming library that lets application code call AWS.
-
-The older local pattern stores permanent keys in `~/.aws/credentials`. This works mechanically, but it puts a long-lived AWS secret on the laptop:
-
-```ini
-[default]
-aws_access_key_id = AKIAIOSFODNN7EXAMPLE
-aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```text
+long-lived identity
+        ↓
+prove identity
+        ↓
+short-lived AWS session
+        ↓
+perform work
 ```
 
-That file can sit on the laptop for months. It may also end up in a backup, a copied home directory, a screen share, or a dotfiles repository. Rotating the key helps only after someone finds every place the old value was copied.
+The sections below answer these questions in order:
 
-The Identity Center pattern stores profile instructions instead of AWS secrets. The file points the CLI at the right account and permission set, then the engineer signs in when they need a session:
+1. **How Does a Caller Receive AWS Access?**
+2. **Why Is the IAM Role the Central Access Identity?**
+3. **How Do Permission Sets and Account Assignments Work?**
+4. **How Does CLI Access Work Without Permanent Keys?**
+5. **How Do Applications Receive Runtime Credentials?**
+6. **How Do CI Jobs and External Workloads Federate?**
+7. **How Do You Identify the Real Caller During an Incident?**
+8. **How Does the Complete Access Chain Fit Together?**
 
-```ini
-[profile image-dev]
-sso_session = company
-sso_account_id = 111122223333
-sso_role_name = DeveloperAccess
-region = us-east-1
-output = json
+## Why Is the IAM Role the Central Access Identity?
+<!-- section-summary: A role is a reusable set of AWS permissions that a trusted person, workload, service, account, or federated identity can temporarily become. -->
 
-[sso-session company]
-sso_region = us-east-1
-sso_start_url = https://example.awsapps.com/start
-sso_registration_scopes = sso:account:access
+An **IAM role** is a reusable AWS identity that carries permissions but normally has no permanent password or access key. When an authorized caller assumes it, AWS creates a role session and gives that session temporary credentials.
+
+Every role must answer two separate questions:
+
+```text
+WHO may become this role?
 ```
 
-The `[profile image-dev]` block names the local CLI profile Maya uses for development. `sso_session = company` links the profile to the shared Identity Center sign-in settings. `sso_account_id` selects the AWS account, and `sso_role_name` selects the permission set role that Identity Center creates in that account. `region` is the default Region for AWS service calls, and `output = json` keeps command output easy to parse. The `[sso-session company]` block points the CLI at the Identity Center start URL and Region, and `sso_registration_scopes` tells the CLI it can request account access during the sign-in flow.
+and:
 
-A normal support workflow signs in and checks the active caller before touching anything risky:
+```text
+WHAT may the resulting role session do?
+```
+
+The role's **trust policy** controls who may assume it. Its permission policies control the actions available after assumption.
+
+```text
+                     IAM role
+              ┌──────────────────┐
+identity ────►│ trust policy     │
+              │ may assume?      │
+              ├──────────────────┤
+              │ permissions      │────► S3, EC2, DynamoDB, ...
+              │ may do what?     │
+              └──────────────────┘
+```
+
+The same structure supports several callers:
+
+```text
+GitHub Actions
+      ↓ trusted through OIDC
+DeploymentRole
+      ↓ permission
+ecs:UpdateService
+```
+
+```text
+EC2 service
+      ↓ trusted
+ApplicationRole
+      ↓ permission
+s3:GetObject
+```
+
+```text
+Alice
+      ↓ through Identity Center
+DatabaseAdminRole
+      ↓ permission
+RDS actions
+```
+
+The authentication mechanisms differ, but all three callers obtain a role session.
+
+Trust deserves the same scrutiny as permission. A deployment role may have reasonable permissions to update ECS, read one artifact, and operate a CloudFormation stack. If its trust relationship lets every GitHub repository assume it, the dangerous question becomes “Who may become DeploymentRole?” A narrowly permissioned role with an overly broad trust policy can still be dangerous. A tightly trusted role with excessive permissions is also dangerous.
+
+The risk is two-dimensional:
+
+```text
+assumption boundary × permission boundary
+```
+
+Secure role design narrows both.
+
+### How Do People Receive Temporary AWS Sessions?
+<!-- section-summary: Workforce users authenticate through a corporate identity source and IAM Identity Center rather than receiving a permanent IAM user in every AWS account. -->
+
+For employees, the first identity system usually lives outside IAM. It might be Microsoft Entra ID, Okta, Google Workspace, Active Directory, or IAM Identity Center's own directory.
+
+AWS IAM Identity Center connects that workforce identity source to AWS accounts:
+
+```text
+Alice
+  ↓
+corporate identity provider
+  ↓ authentication + MFA
+IAM Identity Center
+  ↓ assigned AWS account access
+IAM role in target account
+  ↓
+temporary AWS session
+```
+
+This separates two responsibilities:
+
+```text
+workforce identity system
+Is this really Alice?
+
+AWS access system
+What may Alice do in this AWS account?
+```
+
+The corporate directory can remain the source of truth for employment, password or passkey policy, MFA, groups, onboarding, and termination. AWS handles AWS-specific account and permission decisions.
+
+When Alice opens AWS, the conceptual sequence is:
+
+```text
+Alice signs in to the corporate identity provider
+        ↓
+MFA succeeds
+        ↓
+Identity Center recognizes Alice
+        ↓
+Identity Center finds her account assignments
+        ↓
+Alice selects Production / ReadOnly
+        ↓
+AWS creates a role session
+        ↓
+temporary credentials represent that session
+        ↓
+Alice operates as the role
+```
+
+AWS does not need to create an IAM user named Alice, a permanent AWS password, or a long-lived access key for this path. Alice's permanent workforce identity remains different from the temporary AWS session she uses for one account and access level.
+
+![The account assignment view shows how a person receives access through a workforce group, permission set, AWS account, and temporary role session](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/identity-center-account-assignments.png)
+
+*The human identity remains in the workforce system while the AWS session is temporary and account-specific.*
+
+## How Do Permission Sets and Account Assignments Work?
+<!-- section-summary: A permission set defines an access template, while an account assignment maps a user or group to that template in one AWS account. -->
+
+IAM Identity Center introduces a **permission set**, which is easiest to understand as a role blueprint. A `Developer` permission set might include EC2 development access, CloudWatch reads, S3 access to development buckets, and no IAM administration.
+
+The permission set is managed centrally in Identity Center. When it is assigned to an AWS account, Identity Center provisions and manages a corresponding IAM role in that account.
+
+```text
+permission set
+      │
+      │ provisions
+      ▼
+AWS account
+┌────────────────────────────────┐
+│ IAM role managed by            │
+│ IAM Identity Center            │
+└────────────────────────────────┘
+```
+
+The permission set describes access. The role in the destination account implements that access.
+
+A permission set alone gives nobody access. An **account assignment** connects three values:
+
+```text
+(user or group, AWS account, permission set)
+```
+
+For example:
+
+```text
+Developers group
+    + Development account
+    + Developer permission set
+```
+
+can grant development access, while a different assignment gives the same group `ReadOnly` in production.
+
+Alice can therefore hold different access by account:
+
+```text
+Development → Developer
+Staging     → Developer
+Production  → ReadOnly
+Security    → no assignment
+```
+
+The access portal shows only the accounts and permission sets assigned to her. In a larger organization, assignments normally target groups instead of individual people. Alice joins `PlatformEngineers`, and that group carries `Production / ReadOnly` and `Development / PowerUser` assignments. Onboarding can become a group-membership change instead of a repeated set of IAM user operations.
+
+The separation between identity and privilege is intentional. The workforce directory says who Alice is and which groups she belongs to. The account assignment says which AWS account and role blueprint those groups may use.
+
+## How Does CLI Access Work Without Permanent Keys?
+<!-- section-summary: The AWS CLI can authenticate through Identity Center, cache a temporary session, and reveal the current assumed-role identity before work begins. -->
+
+Older CLI setup commonly used `aws configure` and stored permanent credentials in `~/.aws/credentials`:
+
+```text
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
+```
+
+The values can be copied, committed to a repository, left on an old laptop, or forgotten. Identity Center lets the CLI retrieve temporary credentials instead.
+
+An engineer can configure an Identity Center profile and sign in:
 
 ```bash
-aws sso login --profile image-dev
-aws sts get-caller-identity --profile image-dev
+aws configure sso --profile development
+aws sso login --profile development
 ```
 
-The first command starts the Identity Center sign-in flow for the `image-dev` profile. The browser opens the company sign-in page, and the CLI stores a cached temporary session after sign-in succeeds:
-
-```console
-Attempting to automatically open the SSO authorization page in your default browser.
-Successfully logged into Start URL: https://example.awsapps.com/start
-```
-
-The second command prints the AWS account and role that the CLI will use. A safe support workflow checks that output before running a command that changes resources:
-
-```console
-{
-  "UserId": "AROA123456789EXAMPLE:Maya",
-  "Account": "111122223333",
-  "Arn": "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_DeveloperAccess_a1b2c3d4e5f6/Maya"
-}
-```
-
-The `Account` value should match the intended account. The `Arn` should show an `assumed-role` session created by Identity Center, not an IAM user ARN such as `arn:aws:iam::111122223333:user/maya`. If Jordan is handling a production incident, the profile and output should name the production account and the production read-only permission set before any diagnostic command runs.
-
-A clean laptop setup should also make stale sessions easy to clear. If an engineer changes teams, loses an assignment, or needs to switch from a production read-only session back to development, they can remove cached Identity Center sessions and sign in again:
+The login starts an authentication flow through Identity Center. After authentication, the CLI obtains temporary credentials for the account and role represented by the profile. Normal commands then use that session:
 
 ```bash
-aws sso logout
-aws sso login --profile image-dev
+aws s3 ls --profile development
 ```
 
-The terminal profile, the account number, and the role ARN should match the ticket before any command changes AWS. If they do not match, fix the session first instead of adding permissions to whatever caller happened to be active. These checks catch many wrong-account mistakes before a migration, deploy, or cleanup command changes real infrastructure. Human access now has a browser path and a terminal path, both based on temporary credentials.
+Console access and CLI access are different clients using the same security path:
 
-The image application still needs AWS access while it runs. That is where workload roles enter the story.
-
-![The comparison shows why temporary sessions are safer than copied access keys for daily console and CLI work](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/static-key-vs-temporary-sessions.png)
-
-*The comparison shows why temporary sessions are safer than copied access keys for daily console and CLI work.*
-
-
-## Application Access With IAM Roles
-<!-- section-summary: IAM roles give running software temporary AWS access, so application code can call AWS without storing permanent keys. -->
-
-Application code that calls AWS is holding real authority. It might read an S3 object, write a DynamoDB item, publish an SQS message, decrypt a secret, or update infrastructure if its credentials allow that. S3 is AWS object storage for files such as images, exports, reports, and backups. SQS is AWS's managed queue service for passing messages between systems.
-
-The thumbnail Lambda function in the image application has a narrow job. It reads original images from one input bucket and writes resized images into one output bucket. The ECS metadata service reads and updates image rows in one DynamoDB table. The EC2 repair worker reads failed upload records and rewrites a small batch of objects. Each workload has a different job, so each workload should have a different role.
-
-| Workload | Role name | Job |
-|---|---|---|
-| Thumbnail Lambda | `ImageThumbnailLambdaRole` | Read originals and write thumbnails. |
-| Metadata ECS service | `ImageMetadataTaskRole` | Read and update image metadata in DynamoDB. |
-| Repair EC2 worker | `ImageRepairInstanceRole` | Run controlled batch repairs on failed uploads. |
-| GitHub deploy workflow | `ImageProdDeployRole` | Deploy application changes during the release window. |
-
-If static access keys are pasted into function configuration, the function settings turn into a permanent secret store and CloudTrail activity points back to the copied key.
-
-An **IAM role** gives the workload an AWS identity without a password or permanent access key. A role has two important policy parts. The **trust policy** says who may assume the role. The **permission policy** says what the role session may do after it has been assumed.
-
-For a Lambda thumbnailer, the trust policy allows the Lambda service to assume the role. This policy answers the entry question for the role:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "lambda.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
+```text
+browser console                     AWS CLI
+      │                                │
+      └────── authentication ──────────┘
+                      ↓
+              IAM Identity Center
+                      ↓
+                  IAM role
+                      ↓
+                 role session
+                      ↓
+                AWS API request
 ```
 
-The trust statement has only one job. `Principal.Service` names Lambda as the AWS service trusted to use the role. `Action` is `sts:AssumeRole`, which is the STS operation Lambda uses behind the scenes to receive temporary credentials for the execution role. This statement does not give the function S3 access; it only lets Lambda enter the role.
-
-The permission policy grants only the S3 access the function needs. This policy answers the action question after the role has been assumed:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::image-input-prod/uploads/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::image-output-prod/thumbs/*"
-    }
-  ]
-}
-```
-
-Both policies matter. The trust policy lets Lambda enter the role. The permission policy lets the resulting role session read from the input path and write to the output path. `s3:GetObject` applies to objects under `image-input-prod/uploads/*`, and `s3:PutObject` applies to objects under `image-output-prod/thumbs/*`. The role cannot list every bucket, delete originals, or write outside the thumbnails prefix unless another policy grants that access.
-
-This role belongs to the thumbnailer. The ECS image-metadata service should have its own role for DynamoDB reads. The EC2 repair worker should have its own role for the batch actions it performs. Each workload gets an identity that matches its job, and each identity can be inspected in CloudTrail when something behaves strangely.
-
-Role design is only useful when the running code can receive the role credentials safely. The next practical detail is how AWS runtimes deliver those temporary credentials to application code.
-
-## Runtime Credential Delivery
-<!-- section-summary: AWS runtimes deliver role credentials through platform paths, so SDK code can use the standard credential provider chain. -->
-
-The cleanest AWS application code creates a service client and lets the runtime plus SDK find credentials through the standard **credential provider chain**. A credential provider chain is the ordered list of places an AWS SDK or tool checks for credentials, such as environment variables, shared config files, Identity Center sessions, container endpoints, web identity tokens, process helpers, and EC2 instance metadata.
-
-For Node.js, using the default chain can be this plain. The application asks for an S3 client, and the runtime supplies credentials through the provider chain:
-
-```javascript
-import { S3Client } from "@aws-sdk/client-s3";
-
-const s3 = new S3Client({});
-```
-
-The constructor stays empty because credentials come from the runtime environment. The application code chooses the AWS service client, and the SDK searches the provider chain for credentials. In Lambda, ECS, EC2, or EKS, the platform can expose temporary credentials for the role attached to that runtime. The SDK finds those credentials and refreshes them when the provider supports refresh.
-
-A copied environment variable can still cause confusion. Environment variables are part of the credential provider story for many SDKs and tools, so an old `AWS_ACCESS_KEY_ID` can supply the credential source even though a platform role also exists. The application may still work, but CloudTrail points at the static key and rotation returns to manual work.
-
-Each runtime has its own normal delivery path:
-
-| Runtime | Role attachment | Credential path | Common mistake |
-|---|---|---|---|
-| EC2 | Instance profile | Instance Metadata Service | Using one server role for every app on the instance. |
-| Lambda | Execution role | Lambda runtime credentials | Adding static keys to function settings. |
-| ECS | Task role | Container credential endpoint | Confusing the task role with the task execution role. |
-| EKS | Pod Identity or IRSA | Container credential provider | Letting pods fall back to the node role. |
-| CI/CD | Federated role | Web identity token exchange | Trusting every workflow instead of one repo, branch, or environment. |
-
-ECS has a split that deserves a careful look. The **task execution role** belongs to the ECS agent or Fargate platform. Fargate is the ECS option where AWS runs the container host for you. The execution role pulls private images, writes logs, and fetches startup secrets. The **task role** belongs to the application code inside the container. If the task cannot pull its image, the execution role is the likely place to inspect. If the application receives `AccessDenied` from S3 or DynamoDB, the task role is the likely place to inspect.
-
-EKS has the same goal with Kubernetes-shaped pieces. With **EKS Pod Identity**, an IAM role can be associated with a Kubernetes service account, and pods using that service account receive credentials through the container provider path. **IRSA**, or IAM Roles for Service Accounts, is the older service-account role pattern many EKS teams still use. Both patterns let a payments pod and an image-thumbnail pod use different AWS identities even when they run in the same cluster. Pod-level identity also works best when access to the EC2 instance metadata service is restricted, so pods do not accidentally use the node role.
-
-
-The useful first question during a workload failure is which runtime identity actually made the AWS call. A policy change on the role you expected to use cannot fix a request that was signed by an old environment variable, a broad node role, or a different task role. The caller check moves the investigation from guesswork to evidence.
-
-Applications inside AWS now have role-based access. Some important callers still run outside AWS.
-
-![The runtime path shows how EC2, ECS, Lambda, and EKS workloads receive short-lived credentials from their assigned roles](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/runtime-role-credential-delivery.png)
-
-*The runtime path shows how EC2, ECS, Lambda, and EKS workloads receive short-lived credentials from their assigned roles.*
-
-
-## CI/CD and External Workloads
-<!-- section-summary: External workloads can prove their identity through federation, so CI systems and outside platforms avoid AWS access keys. -->
-
-A deployment workflow may run in GitHub Actions. A build agent may run in another cloud. A scanner may run in a data center. These callers still need AWS access, and copying an IAM user key into the outside system brings back the permanent-secret problem.
-
-For CI/CD, the stronger pattern is **OIDC federation**. OIDC, or OpenID Connect, is a standard way for one system to prove identity to another. In a deployment workflow, an OIDC token can prove which organization, repository, branch, tag, or environment produced the run. AWS STS can exchange that proof for a temporary role session.
-
-The production deploy role should trust the GitHub OIDC provider and then pin the caller to the intended repository and branch or environment. A compact trust policy looks like this:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:ExampleOrg/image-service:ref:refs/heads/main"
-        }
-      }
-    }
-  ]
-}
-```
-
-Now the repository stores no AWS secret. The workflow receives temporary credentials only when the token matches the expected audience and subject. A feature branch, another repository, or a copied workflow from a different organization fails the trust check because the token facts do not match the conditions.
-
-For servers outside AWS that cannot use OIDC, **IAM Roles Anywhere** can provide temporary credentials from certificate-based identity. A **certificate authority** is a system that signs certificates so other systems can verify identity. Roles Anywhere lets AWS trust a certificate authority as a trust anchor, map certificate identity to a role profile, and let a credential helper request temporary credentials for the outside workload.
-
-Some legacy tools still support only long-term access keys. Treat those as exceptions with a named owner, a narrow policy, a rotation schedule, monitoring, and a review date. An exception should be easy to find because it is unusual, documented, and smaller than normal access.
-
-Humans, workloads, and external automation now have temporary access paths. The remaining paths are the rare ones used when normal sign-in breaks or a high-risk recovery task has to happen.
-
-## MFA and Emergency Access
-<!-- section-summary: MFA protects normal human sign-in, while emergency access stays rare, monitored, and separate from daily work. -->
-
-**Multi-factor authentication**, usually shortened to **MFA**, means sign-in requires a second proof beyond the password. That second proof may be a passkey, a hardware security key, or a one-time code. For AWS workforce access, MFA is usually handled by the identity source when a company uses an external identity provider.
-
-Phishing-resistant MFA is strongest for AWS access. A passkey or hardware security key is bound to the real sign-in domain, so a fake login page has a much harder time collecting a reusable proof. One-time code apps are still much better than password-only sign-in, but they can be tricked in real time by a convincing proxy login flow.
-
-Emergency access has a different purpose from daily administration. **Break-glass access** exists for failures in the normal identity system, account recovery, or rare administrator tasks that cannot wait for the usual path to be restored. A good break-glass plan has very few identities, strong MFA, controlled password storage, alerts on every sign-in, and regular tests so the emergency path works when it is needed.
-
-Root stays outside daily work. The root user owns the account and may be needed for rare account-level recovery, so it should be locked away with MFA and no daily access keys. Emergency IAM users, if they exist, should be tightly scoped and tightly monitored. Identity Center is daily human access. Workload roles are daily software access. Break-glass is the tested exception.
-
-Good access design also makes incidents easier to read. When something fails or behaves strangely, the first question is the caller.
-
-## Caller Evidence During Incidents
-<!-- section-summary: During access failures and investigations, the active caller should be identified before policies are changed. -->
-
-Access problems often look like missing permissions, but the first useful question is simpler: **which identity made the request?** A developer may think they are using the development account while their terminal is still pointed at production read-only. An ECS service may look like it has the right policy while the code is actually using an old static key from an environment variable.
-
-For a local terminal, `aws sts get-caller-identity` shows who the next AWS command will act as:
+Before doing significant work, ask “Who am I right now?” The command is:
 
 ```bash
-aws sts get-caller-identity --profile image-prod-readonly
+aws sts get-caller-identity
 ```
 
-```json
-{
-  "UserId": "AROA999999999EXAMPLE:Jordan",
-  "Account": "999900001111",
-  "Arn": "arn:aws:sts::999900001111:assumed-role/AWSReservedSSO_ProductionReadOnly_0a1b2c3d4e5f6a7b/Jordan"
-}
+For a role session, the ARN may look like:
+
+```text
+arn:aws:sts::123456789012:assumed-role/Developer/alice-session
 ```
 
-The account number, role name, and session name all matter. If the account is wrong, the profile or sign-in session is wrong. If the role is wrong, the Identity Center assignment or assume-role configuration produced a different session than the engineer expected. In this output, Jordan has a temporary production read-only session, so a write command should wait for a different approval path.
+This output distinguishes the durable IAM role from the temporary session:
 
-For an application, the same idea moves through runtime configuration and CloudTrail. A Lambda function should show activity from its execution role. An ECS task should show the task role when application code calls S3 or DynamoDB. A GitHub Actions deploy should show an assumed role session created through web identity federation.
+```text
+role
+arn:aws:iam::123456789012:role/Developer
 
-For Lambda, the configured execution role can be checked without reading code or environment variables:
-
-```bash
-aws lambda get-function-configuration \
-  --function-name image-thumbnailer-prod \
-  --query '{FunctionName:FunctionName,Role:Role}' \
-  --output json
+session
+arn:aws:sts::123456789012:assumed-role/Developer/alice-session
 ```
 
-```json
-{
-  "FunctionName": "image-thumbnailer-prod",
-  "Role": "arn:aws:iam::999900001111:role/ImageThumbnailLambdaRole"
-}
+The role is persistent configuration. The session is ephemeral. Alice is currently operating as one session of the Developer role, and the account ID in that identity should match the account she intends to change.
+
+![The comparison shows why a temporary Identity Center session is safer than a copied access key for daily console and CLI work](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/static-key-vs-temporary-sessions.png)
+
+*A profile identifies the desired account and role; the resulting session expires instead of becoming a permanent laptop secret.*
+
+## How Do Applications Receive Runtime Credentials?
+<!-- section-summary: AWS compute environments prove workload identity, expose temporary role credentials, and let SDKs discover and refresh those credentials automatically. -->
+
+Replace Alice with an application on EC2 that must read `s3://company-config/`. Creating an IAM user, generating an access key, and putting it in an environment variable recreates the long-lived-secret problem. The team must rotate the key, distribute it to every instance, update new Auto Scaling instances, and find every copy after a leak.
+
+The AWS-native model gives the execution environment a role:
+
+```text
+application
+    ↓ runs on
+EC2 instance
+    ↓ associated with
+IAM role
+    ↓
+temporary credentials
+    ↓
+S3
 ```
 
-This output says Lambda will use `ImageThumbnailLambdaRole` when the function runs. If CloudTrail shows S3 calls from a different IAM user or role, the request did not come from the normal Lambda execution path.
+The role might allow only `s3:GetObject` under `company-config/*`.
 
-For ECS, the task definition shows the two role fields that people often mix up:
+The application still signs AWS requests with credentials. The difference is that AWS manages their lifecycle:
 
-```bash
-aws ecs describe-task-definition \
-  --task-definition image-metadata:42 \
-  --query 'taskDefinition.{TaskRole:taskRoleArn,ExecutionRole:executionRoleArn}' \
-  --output json
+```text
+AWS creates temporary credentials
+        ↓
+AWS exposes them to the runtime
+        ↓
+AWS SDK discovers them
+        ↓
+application signs requests
+        ↓
+credentials expire
+        ↓
+new temporary credentials become available
 ```
 
-```json
-{
-  "TaskRole": "arn:aws:iam::999900001111:role/ImageMetadataTaskRole",
-  "ExecutionRole": "arn:aws:iam::999900001111:role/ImageMetadataExecutionRole"
-}
+For EC2, the runtime exposes role credentials through instance metadata, and AWS SDKs know how to retrieve and refresh them. Other compute platforms implement the same principle in platform-specific ways:
+
+```text
+EC2            → instance role
+ECS            → task role
+Lambda         → execution role
+Kubernetes/EKS → workload or pod identity mechanism
 ```
 
-`TaskRole` is the identity application code uses for AWS API calls. `ExecutionRole` is for the ECS platform work such as pulling images and writing logs. If the application gets `AccessDenied` from DynamoDB, the first policy to inspect is usually `ImageMetadataTaskRole`.
+The application code can use the SDK's normal credential discovery:
 
-This habit prevents a common failure loop. Teams sometimes add permissions to the role they expected to use, rerun the workload, and still get `AccessDenied` because the real caller was different. Identifying the caller first points the fix at the smallest policy that actually applies to the request.
-
-Now the full access story can be arranged by caller.
-
-## Putting It All Together
-<!-- section-summary: The finished access model gives humans, workloads, external systems, and emergency paths their own temporary access flows. -->
-
-Return to the image-sharing application. The first version had one static key copied everywhere. The finished model has more pieces, but each piece matches a real caller and a real job.
-
-```mermaid
-flowchart TB
-    People["People"]
-    Source["Identity source"]
-    Center["IAM Identity Center"]
-    Cli["CLI profiles"]
-    Apps["Applications"]
-    Runtime["AWS runtime"]
-    External["External workflows"]
-    Proof["OIDC or certificate"]
-    Roles["IAM roles"]
-    STS["STS temporary credentials"]
-    AWS["AWS requests"]
-    Emergency["Emergency access"]
-
-    People --> Source
-    Source --> Center
-    Center --> Cli
-    Center --> STS
-    Cli --> STS
-    Apps --> Runtime
-    Runtime --> Roles
-    External --> Proof
-    Proof --> Roles
-    Roles --> STS
-    STS --> AWS
-    Emergency --> AWS
+```python
+s3 = boto3.client("s3")
 ```
 
-Engineers sign in through the workforce identity source. Groups and permission sets decide which accounts and jobs they can choose. CLI profiles use Identity Center sessions, so laptops do not need permanent AWS access keys for daily work.
+It should not need to embed a key:
 
-The thumbnail function receives a Lambda execution role. The container service receives an ECS task role. EC2 workloads use instance profiles. EKS workloads use pod-level identity patterns. SDKs discover temporary credentials through standard provider chains, so application code can avoid storing AWS secrets.
+```python
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id="...",
+    aws_secret_access_key="..."
+)
+```
 
-The GitHub deployment workflow proves its repository and branch through OIDC before STS issues a role session. Outside servers can use federation or Roles Anywhere when they need temporary AWS access beyond AWS runtimes.
+The application asks, “Which AWS role am I running as?” rather than, “Where did somebody hide the AWS password?”
 
-Emergency access stays small and monitored. Root is locked away. Long-term IAM user keys remain only for narrow legacy exceptions with owners, rotation, monitoring, and review dates.
+The human and application paths now converge:
 
-The access model now matches the caller. People receive workforce sessions. Applications receive runtime roles. Pipelines receive federated sessions. Emergency users stay outside daily work. The copied key disappears, and with it the incident question nobody wants to ask: where else did that secret end up?
+```text
+HUMAN
+Alice → corporate IdP → Identity Center → IAM role
+      → role session → temporary credentials → AWS API
 
-![The summary separates human access, workload access, CI/CD access, emergency access, and incident evidence into reviewable lanes](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/access-path-summary.png)
+APPLICATION
+EC2 / ECS / Lambda runtime → IAM role
+      → role session → temporary credentials → AWS API
+```
 
-*The summary separates human access, workload access, CI/CD access, emergency access, and incident evidence into reviewable lanes.*
+The left side differs, while the right side is almost identical. AWS access architecture is largely the process of deciding who may obtain which role session.
 
+![The runtime path shows how EC2, ECS, Lambda, and EKS workloads obtain short-lived credentials from assigned roles](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/runtime-role-credential-delivery.png)
 
+*The runtime owns credential delivery and refresh, while the role defines the workload's AWS permissions.*
 
-## What's Next
+## How Do CI Jobs and External Workloads Federate?
+<!-- section-summary: OIDC and certificate-based federation let external jobs prove identity and exchange that proof for temporary AWS role credentials. -->
 
-People and software can now receive AWS access without permanent keys. The next question is what AWS does with each signed request after those credentials are presented.
+CI/CD systems such as GitHub Actions and GitLab CI often run outside the AWS compute environment. A historical design stores `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as CI secrets. Those permanent keys work until somebody rotates or deletes them.
 
-The next article follows one request through IAM policy evaluation. Then it uses that request flow to design least-privilege policies without guessing.
+When the platform supports it, federation gives the job temporary access. With OpenID Connect, or **OIDC**, the flow is:
 
----
+```text
+CI job
+   ↓ receives
+signed OIDC token
+   ↓
+AWS validates the trusted OIDC provider
+   ↓
+STS AssumeRoleWithWebIdentity
+   ↓
+deployment role session
+   ↓
+temporary credentials
+   ↓
+deployment
+```
 
-**References**
+The token can carry claims that identify the repository, environment, workflow, or subject. The role trust policy can require that the token comes from the trusted issuer and represents the intended deployment workflow.
 
-- [What is IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html) - Describes centralized workforce access, permission assignments, and temporary AWS account sessions.
-- [Manage your identity source](https://docs.aws.amazon.com/singlesignon/latest/userguide/manage-your-identity-source.html) - Explains Identity Center identity sources, external identity providers, Active Directory options, and the built-in directory.
-- [Manage AWS accounts with permission sets](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html) - Explains permission sets, generated IAM roles, policy attachments, and account access behavior.
-- [Assign user or group access to AWS accounts](https://docs.aws.amazon.com/singlesignon/latest/userguide/assignusers.html) - Documents group-based access assignment, permission set selection, and account assignment workflow.
-- [Configuring IAM Identity Center authentication with the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html) - Shows SSO profile configuration, `aws sso login`, credential caching, and profile-based CLI use.
-- [Set session duration for AWS accounts](https://docs.aws.amazon.com/singlesignon/latest/userguide/howtosessionduration.html) - Documents permission set session duration defaults, minimums, maximums, and console or CLI impact.
-- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html) - Defines IAM roles, trust policies, permission policies, temporary role sessions, and common role assumption patterns.
-- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html) - Explains STS temporary credentials, expiration, and federation use cases.
-- [Request temporary security credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_request.html) - Documents STS operations, OIDC web identity role assumption, and temporary credential fields.
-- [AWS SDKs and Tools standardized credential providers](https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html) - Describes credential provider chains, automatic refresh, container credentials, web identity credentials, process credentials, and IMDS credentials.
-- [IAM roles for Amazon EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html) - Documents instance profiles and EC2 role credential delivery through instance metadata.
-- [Defining Lambda function permissions with an execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html) - Explains Lambda execution roles, service trust, and least-privilege guidance for functions.
-- [Amazon ECS task IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html) - Documents ECS task roles, container credential delivery, CloudTrail task context, and isolation caveats.
-- [Amazon ECS task execution IAM role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html) - Explains the startup role used by ECS and Fargate agents.
-- [Learn how EKS Pod Identity grants pods access to AWS services](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) - Documents service-account role associations, credential isolation, and SDK credential delivery for EKS workloads.
-- [Create a role for OpenID Connect federation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html) - Provides trust policy guidance and condition examples for OIDC roles.
-- [What is IAM Roles Anywhere](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html) - Explains trust anchors, certificates, profiles, and temporary credentials for non-AWS workloads.
+```text
+trust this OIDC issuer
+AND only accept a token for this deployment identity
+```
+
+This is stronger than trusting anything that possesses one permanent AWS key. Federation moves much of the security boundary into the trust decision, so the issuer and token claims should be as specific as practical.
+
+External servers can also avoid static AWS keys. An on-premises system, another-cloud virtual machine, or specialized build agent may use **IAM Roles Anywhere**:
+
+```text
+external server
+      ↓ proves possession of
+X.509 certificate
+      ↓
+IAM Roles Anywhere
+      ↓
+IAM role
+      ↓
+temporary AWS credentials
+```
+
+The certificate provides the external workload's identity proof, and the resulting role session uses temporary AWS credentials. Running outside AWS does not automatically require an IAM user with a permanent access key.
+
+### How Do MFA, Emergency Access, and Root Differ?
+<!-- section-summary: MFA strengthens the normal identity proof, emergency access provides an independent recovery path, and root remains reserved for root-specific account ownership tasks. -->
+
+**Multi-factor authentication**, or **MFA**, answers “How confident are we that this is really Alice?” It does not answer “What may Alice do?” The policy and role still define authorization.
+
+For workforce federation, MFA is often enforced by the corporate identity provider or Identity Center:
+
+```text
+password, passkey, or MFA
+          ↓
+authentication succeeds
+          ↓
+Identity Center
+          ↓
+permission assignment
+          ↓
+IAM role session
+```
+
+AWS recommends MFA and favors phishing-resistant factors such as passkeys or security keys where practical.
+
+MFA on one path does not protect another path that bypasses it. If Alice uses MFA for console sign-in but also owns a permanent administrator access key, stealing that key may bypass the human login flow. Reducing permanent credentials remains part of the MFA design.
+
+**Emergency access**, sometimes called break-glass access, exists for the case where the normal corporate identity provider or Identity Center path is unavailable. AWS recognizes emergency access as a narrow situation in which an IAM user may be appropriate, and it also documents a separate emergency federation architecture.
+
+The principle is:
+
+```text
+primary authentication path fails
+            ↓
+independent, strongly protected path exists
+            ↓
+temporary emergency administrative access
+```
+
+Emergency access should be rare, monitored, strongly authenticated, protected from casual use, and tested before an incident. It is not a second daily administrator path.
+
+The AWS account's **root user** is separate again. Root represents ultimate account ownership and can perform some operations that ordinary IAM principals cannot. It should use MFA, should have no root access keys, and should not participate in ordinary operational work. Organizations can centrally secure or remove root credentials for member accounts.
+
+The three paths are:
+
+```text
+normal administrator
+federated identity → administrator role
+
+emergency administrator
+independent, protected emergency access path
+
+root
+account-owner mechanism for root-specific situations
+```
+
+## How Do You Identify the Real Caller During an Incident?
+<!-- section-summary: Investigations should identify the exact temporary role session, how it was created, and which policies applied rather than stopping at a shared role name. -->
+
+Authentication creates a role session, but authorization still happens on each request. AWS constructs context that can include the principal, action, resource, Region, source attributes, session data, tags, and network-related facts. It then evaluates applicable policies.
+
+The simplified rule remains:
+
+```text
+default = deny
+applicable Allow is required
+applicable explicit Deny wins
+```
+
+Identity policies, resource policies, session policies, permissions boundaries, Organizations service control policies, resource control policies, and other relevant controls may all affect the result. Attaching `AdministratorAccess` does not prove that the request will succeed if another guardrail or explicit deny blocks it.
+
+During an incident, identify the **session**, not only the role. A role such as `ProductionAdmin` may be assumed legitimately by twenty engineers and several automations:
+
+```text
+durable role: ProductionAdmin
+      ├── session 1: Alice
+      ├── session 2: Bob
+      ├── session 3: automation
+      └── session 4: attacker?
+```
+
+CloudTrail's `userIdentity` information can contain the assumed role, session issuer, role-session name, temporary access-key identifier, session creation time, and source identity when it is configured. An event may identify:
+
+```text
+arn:aws:sts::123456789012:assumed-role/ProductionAdmin/alice
+```
+
+This is stronger evidence than the sentence “ProductionAdmin deleted the resource.”
+
+### Source identity preserves origin
+
+AWS STS supports **source identity**, which attaches an original identity value to an assumed-role session. Consider a role chain:
+
+```text
+Alice
+  ↓ assumes Developer
+  ↓ sourceIdentity = alice@example
+Developer session
+  ↓ assumes ProductionReadOnly
+ProductionReadOnly session
+```
+
+Without session attribution, the downstream evidence may only say that `ProductionReadOnly` performed an action. With source identity, investigators can trace the session toward Alice. CloudTrail also records the STS role-assumption event separately from the later API calls made with the temporary credentials, allowing an investigation to reconstruct how the session was obtained.
+
+The operational question becomes: **which session performed the request, which identity created that session, and which trust and permission decisions allowed it?**
+
+## How Does the Complete Access Chain Fit Together?
+<!-- section-summary: Human and application access share the same identity, authentication, trust, role, session, temporary credential, authorization, resource, and audit sequence. -->
+
+The human path is:
+
+```text
+Alice
+  │ authenticates + MFA
+  ▼
+corporate identity provider
+  ▼
+IAM Identity Center
+  │ account assignment
+  │ (user or group, account, permission set)
+  ▼
+IAM role
+  │ assume
+  ▼
+role session
+  │ temporary credentials
+  ▼
+AWS API
+  │ policy evaluation
+  ▼
+resource
+
+CloudTrail records evidence through the path
+```
+
+The application path is:
+
+```text
+application or CI job
+       │ proves workload identity
+       ├── EC2 / ECS / Lambda runtime
+       ├── OIDC token
+       └── X.509 certificate
+       ▼
+IAM role trust decision
+       ▼
+role session
+       │ temporary credentials
+       ▼
+AWS API
+       │ policy evaluation
+       ▼
+resource
+
+CloudTrail records evidence through the path
+```
+
+Most of the paths are identical after the caller proves identity. The reusable chain is:
+
+```text
+identity
+   ↓
+authentication
+   ↓
+trust decision
+   ↓
+role
+   ↓
+session
+   ↓
+temporary credentials
+   ↓
+signed request
+   ↓
+authorization
+   ↓
+resource
+   ↓
+audit evidence
+```
+
+For a human, the identity is the workforce user, authentication comes from the identity provider and MFA, the access decision comes from Identity Center assignments, and the account role is created from a permission set.
+
+For an AWS application, the identity begins with the workload runtime, the AWS compute environment proves it, and the role trust relationship selects the workload role.
+
+For CI/CD, the pipeline job is the identity, OIDC provides the proof, token issuer and claim conditions define trust, and STS creates the deployment-role session.
+
+![The summary separates human access, AWS workload access, external federation, emergency access, and audit evidence into clear paths](/content-assets/articles/article-cloud-providers-aws-identity-security-human-access/access-path-summary.png)
+
+*Different callers prove identity differently, then converge on temporary role sessions and normal authorization.*
+
+The design rules are:
+
+1. Humans should normally federate instead of receiving an IAM user in every account.
+2. Applications should normally use roles instead of embedded access keys.
+3. Permission sets are reusable access templates, and account assignments connect users or groups to them in particular accounts.
+4. Role trust deserves the same scrutiny as role permissions.
+5. Temporary credentials should be the normal choice for console, CLI, applications, CI/CD, and external workloads.
+6. MFA strengthens authentication, least privilege and guardrails restrict authorization, and emergency access uses an independent protected path.
+7. Incident investigations should identify the actual role session and its origin rather than stopping at the shared role name.
+
+Identity Center, STS, IAM roles, OIDC, runtime credential delivery, MFA, Roles Anywhere, and CloudTrail are pieces of one system. Together they answer: **who may obtain a temporary security session, what may that session do, and can the organization later prove who used it?**
+
+## Check Your Answers
+
+:::expand[How Does a Caller Receive AWS Access?]{kind="recap"}
+A long-lived identity authenticates, obtains a short-lived AWS session, signs a request, and then faces authorization policy evaluation.
+
+A long-lived person or workload identity authenticates, obtains a short-lived AWS session, uses temporary credentials to sign a request, and then faces IAM authorization for the requested action and resource.
+:::
+
+:::expand[Why Is the IAM Role the Central Access Identity?]{kind="recap"}
+A role is a reusable set of AWS permissions that a trusted person, workload, service, account, or federated identity can temporarily become.
+
+A role is a reusable permission identity with no permanent credentials. Its trust policy controls who may assume it, and its permission policies control what the temporary session may do.
+
+Workforce users authenticate through a corporate identity source and IAM Identity Center rather than receiving a permanent IAM user in every AWS account.
+
+People authenticate through a workforce identity source and IAM Identity Center, choose an assigned account and access level, and receive a temporary role session instead of a permanent IAM user in every account.
+:::
+
+:::expand[How Do Permission Sets and Account Assignments Work?]{kind="recap"}
+A permission set defines an access template, while an account assignment maps a user or group to that template in one AWS account.
+
+A permission set is a centrally managed role blueprint. An account assignment maps a user or group, AWS account, and permission set, causing Identity Center to provision and expose the corresponding account role.
+:::
+
+:::expand[How Does CLI Access Work Without Permanent Keys?]{kind="recap"}
+The AWS CLI can authenticate through Identity Center, cache a temporary session, and reveal the current assumed-role identity before work begins.
+
+The CLI authenticates through an Identity Center profile and caches temporary credentials. `aws sts get-caller-identity` confirms the account and assumed-role session currently making requests.
+:::
+
+:::expand[How Do Applications Receive Runtime Credentials?]{kind="recap"}
+AWS compute environments prove workload identity, expose temporary role credentials, and let SDKs discover and refresh those credentials automatically.
+
+EC2, ECS, Lambda, and EKS runtimes connect workloads to IAM roles and expose temporary credentials through platform-specific mechanisms that AWS SDKs can discover and refresh.
+:::
+
+:::expand[How Do CI Jobs and External Workloads Federate?]{kind="recap"}
+OIDC and certificate-based federation let external jobs prove identity and exchange that proof for temporary AWS role credentials.
+
+CI jobs can exchange an OIDC token for a trusted role session, while external servers can use certificate-based IAM Roles Anywhere. Both approaches avoid permanent AWS access keys.
+
+MFA strengthens the normal identity proof, emergency access provides an independent recovery path, and root remains reserved for root-specific account ownership tasks.
+
+MFA strengthens normal identity proof, emergency access provides a separate and tested path when normal federation fails, and root remains protected for account-owner operations that specifically require it.
+:::
+
+:::expand[How Do You Identify the Real Caller During an Incident?]{kind="recap"}
+Investigations should identify the exact temporary role session, how it was created, and which policies applied rather than stopping at a shared role name.
+
+Inspect the assumed-role session, session issuer, role-session name, source identity, and the earlier STS assumption event. A shared role name alone does not identify the human, workload, or automation behind one request.
+:::
+
+:::expand[How Does the Complete Access Chain Fit Together?]{kind="recap"}
+Human and application access share the same identity, authentication, trust, role, session, temporary credential, authorization, resource, and audit sequence.
+
+Identity leads to authentication, a trust decision, a role, a temporary session, signed AWS requests, authorization, resource access, and audit evidence. Human and workload access differ mainly in how identity is proved.
+:::
+
+## References
+
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html)
+- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html)
+- [Manage AWS accounts with permission sets](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
+- [Configure access to AWS accounts](https://docs.aws.amazon.com/singlesignon/latest/userguide/manage-your-accounts.html)
+- [Configure IAM Identity Center authentication for the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
+- [AWS STS get-caller-identity](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html)
+- [IAM roles for Amazon EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html)
+- [AWS JSON policy element: Principal](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html)
+- [What is IAM Roles Anywhere?](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html)
+- [Create an IAM user for emergency access](https://docs.aws.amazon.com/IAM/latest/UserGuide/getting-started-emergency-iam-user.html)
+- [Set up emergency access for IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/emergency-access.html)
+- [Root user best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html)
+- [IAM policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html)
+- [CloudTrail userIdentity element](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html)
+- [Monitor actions taken with assumed roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_control-access_monitor.html)
+- [Log IAM and STS API calls with CloudTrail](https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html)

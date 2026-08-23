@@ -19,21 +19,31 @@ aliases:
 
 ## Table of Contents
 
-1. [The First Metric Question](#the-first-metric-question)
-2. [What a CloudWatch Metric Stores](#what-a-cloudwatch-metric-stores)
-3. [Namespaces, Dimensions, Units, and Resolution](#namespaces-dimensions-units-and-resolution)
-4. [Standard Metrics and Custom Metrics](#standard-metrics-and-custom-metrics)
-5. [Publish Application Metrics Safely](#publish-application-metrics-safely)
-6. [Query Fleets With Metrics Insights](#query-fleets-with-metrics-insights)
-7. [Build Dashboards for Triage](#build-dashboards-for-triage)
-8. [Alarms as State Machines](#alarms-as-state-machines)
-9. [Thresholds, Missing Data, and Anomaly Detection](#thresholds-missing-data-and-anomaly-detection)
-10. [Composite Alarms and Recommended Alarms](#composite-alarms-and-recommended-alarms)
-11. [Cross-Account Operations](#cross-account-operations)
-12. [Putting It All Together](#putting-it-all-together)
-13. [What's Next](#whats-next)
+1. [What Should You Measure First?](#what-should-you-measure-first)
+2. [How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?](#how-do-namespaces-dimensions-units-and-resolution-define-a-metric)
+3. [When Do You Need AWS Metrics or Custom Metrics?](#when-do-you-need-aws-metrics-or-custom-metrics)
+4. [How Do You Query a Changing Fleet?](#how-do-you-query-a-changing-fleet)
+5. [How Do You Build a Dashboard for Triage?](#how-do-you-build-a-dashboard-for-triage)
+6. [How Do You Choose Thresholds, Missing-Data Rules, and Anomaly Detection?](#how-do-you-choose-thresholds-missing-data-rules-and-anomaly-detection)
+7. [How Do Composite, Suppressed, and Recommended Alarms Help?](#how-do-composite-suppressed-and-recommended-alarms-help)
+8. [How Does the Complete CloudWatch Measurement System Fit Together?](#how-does-the-complete-cloudwatch-measurement-system-fit-together)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## The First Metric Question
+CloudWatch Metrics, Dashboards, and Alarms are successive parts of one measurement system. Metrics turn workload behavior into numerical evidence. Dashboards arrange that evidence for human investigation. Alarms evaluate it continuously and change operational state when a configured condition is satisfied. Notifications or automation come after that state change.
+
+The sections below answer these questions in order:
+
+1. **What Should You Measure First?**
+2. **How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?**
+3. **When Do You Need AWS Metrics or Custom Metrics?**
+4. **How Do You Query a Changing Fleet?**
+5. **How Do You Build a Dashboard for Triage?**
+6. **How Do You Choose Thresholds, Missing-Data Rules, and Anomaly Detection?**
+7. **How Do Composite, Suppressed, and Recommended Alarms Help?**
+8. **How Does the Complete CloudWatch Measurement System Fit Together?**
+
+## What Should You Measure First?
 <!-- section-summary: Metrics give the fast production overview that tells a team whether customers are affected and which part of the system is under pressure. -->
 
 During an incident, logs are tempting because logs contain the exact error. The problem is timing. If a flash sale sends thousands of shoppers through checkout, the log stream might contain millions of events. Searching all of that first can burn the first ten minutes of the incident.
@@ -53,10 +63,14 @@ Let's keep using the same checkout service from the previous article. A customer
 
 That first view tells the team where to look next. If completed checkouts drop and ALB 5xx errors rise, the checkout API path needs attention. If completed checkouts are stable but SQS message age rises, customer payment might work while confirmation emails lag. Metrics make that difference visible.
 
-## What a CloudWatch Metric Stores
+### What Does a CloudWatch Metric Store?
 <!-- section-summary: A CloudWatch metric is a named time-series made from datapoints, timestamps, optional units, and a stable identity. -->
 
 In CloudWatch, a **metric** is a time-ordered set of datapoints. Each datapoint has a timestamp and a value. It can also have a unit such as `Count`, `Seconds`, `Milliseconds`, `Bytes`, or `Percent`. CloudWatch aggregates datapoints over a **period**, such as 60 seconds, and returns statistics such as average, sum, minimum, maximum, sample count, or percentile.
+
+Keep three concepts separate. A **sample** is an observation that was published. A **period** is the time window represented by one returned datapoint. A **statistic** is the function used to reduce the observations inside that period. If a minute contains latency samples of `100`, `110`, `120`, `150`, and `900` milliseconds, the average is `276`, the minimum is `100`, the maximum is `900`, the sample count is `5`, and the sum is `1380`. Each statistic answers a different question about the same samples.
+
+Counters such as requests and errors normally use `Sum` over the period. A gauge such as CPU, memory, or queue depth may use `Average` or `Maximum`, depending on whether sustained behavior or a peak matters. A latency distribution often needs p50, p95, or p99 so a slow minority is not hidden inside an average. Metric math can turn `SUM(Errors)` and `SUM(Requests)` into an error rate rather than forcing the application to publish every derived number separately.
 
 The identity of a metric has three main parts: **namespace**, **metric name**, and **dimensions**. A namespace groups related metrics. A metric name says what is being measured. Dimensions are name/value pairs that split one metric into useful series.
 
@@ -136,7 +150,7 @@ CloudWatch cannot delete a metric directly. A metric stops appearing in normal m
 *The visual shows why dimensions matter so much. The namespace and metric name start the address, but dimensions decide the exact time series CloudWatch stores and alarms on.*
 
 
-## Namespaces, Dimensions, Units, and Resolution
+## How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?
 <!-- section-summary: Metric identity choices control how CloudWatch stores, filters, aggregates, bills, and alarms on time-series data. -->
 
 A **namespace** is the top-level container for metrics. AWS service namespaces usually use the `AWS/ServiceName` pattern, such as `AWS/EC2`, `AWS/Lambda`, `AWS/RDS`, `AWS/ECS`, and `AWS/ApplicationELB`. Custom application namespaces should be clear and stable, such as `DevPolaris/Checkout` or `Custom/Checkout`.
@@ -154,11 +168,11 @@ This is the important design rule:
 
 Low-cardinality dimensions have a small and predictable set of values. High-cardinality dimensions grow with users, requests, sessions, or orders. Put high-cardinality values in logs and traces. Keep metrics for stable operational coordinates.
 
-**Resolution** controls how frequently datapoints are stored. Standard CloudWatch metrics have one-minute granularity. High-resolution custom metrics can be stored at one-second granularity and read at periods such as 1, 5, 10, or 30 seconds. High-resolution metrics can help for fast-moving workloads, but they cost more because each `PutMetricData` call and high-resolution alarm can add charges.
+**Resolution** is the finest available granularity. Standard CloudWatch metrics have one-minute granularity. High-resolution custom metrics can be stored at one-second granularity and read at periods such as 1, 5, 10, or 30 seconds. A single one-second metric could feed a ten-second alarm and a five-minute dashboard graph. Resolution describes what is available; period describes what the current query requests. High-resolution metrics help only when waiting a minute would materially hurt detection, and they add publishing and alarm cost.
 
 For our checkout service, one-minute metrics are enough for most dashboard and paging alarms. A high-resolution metric might make sense for a short-lived flash-sale admission gate where the system needs to react inside a minute. It would be wasteful for a daily invoice job.
 
-## Standard Metrics and Custom Metrics
+## When Do You Need AWS Metrics or Custom Metrics?
 <!-- section-summary: AWS service metrics show infrastructure and managed-service health, while custom metrics show application and business outcomes. -->
 
 AWS services publish many metrics automatically. That gives you a starting point before your application emits anything. The load balancer publishes request count, target response time, target errors, and healthy host count. ECS publishes CPU and memory utilization. RDS publishes CPU, connections, storage, I/O, and latency metrics. SQS publishes queue depth and message age.
@@ -182,7 +196,7 @@ For custom metrics, AWS now recommends OpenTelemetry for new implementations. Op
 
 The main design choice is ownership. Platform teams often own standard infrastructure dashboards. Application teams should own business and application metrics because they understand what success means for their service.
 
-## Publish Application Metrics Safely
+### How Do You Publish Application Metrics Safely?
 <!-- section-summary: Custom metric publishing needs stable names, low-cardinality dimensions, correct units, and a clear path for either OpenTelemetry, PutMetricData, or embedded metric format. -->
 
 There are three common ways to publish custom application metrics to CloudWatch: OpenTelemetry, the CloudWatch API, and embedded metric format. Each one fits a different operational style.
@@ -240,7 +254,11 @@ The dimensions are stable. `Environment`, `Service`, and `PaymentProvider` have 
 
 In this event, `requestId` and `traceId` are present for log search and trace correlation, but they are excluded from `Dimensions`. That detail saves money and keeps the metric useful. AWS documentation warns that EMF extraction creates a custom metric for each unique dimension combination, so high-cardinality dimensions can produce a surprising bill.
 
-## Query Fleets With Metrics Insights
+Safe publishing also requires two less obvious choices. First, **zero is not missing**. `Errors=0` says the publisher reported and observed no errors. No datapoint says only that CloudWatch received no evidence; perhaps there was no traffic, or perhaps the application or telemetry path failed. A continuously expected signal may need explicit zeros so an alarm can distinguish health from silence.
+
+Second, preserve the distribution when percentiles matter. A statistic set containing only count, sum, minimum, and maximum generally cannot reconstruct p95 or p99. Value/count pairs can batch repeated values while retaining percentile capability. Pre-aggregating too aggressively can permanently remove the latency question you later need to ask.
+
+## How Do You Query a Changing Fleet?
 <!-- section-summary: Metrics Insights uses SQL-like queries to group, filter, rank, and alarm on large metric fleets without hand-picking every resource. -->
 
 CloudWatch Metrics Insights is a SQL-like query engine for CloudWatch metrics. It helps when the team needs to ask fleet questions instead of selecting one metric at a time. The `GROUP BY` clause can split results into time series by dimension, and `ORDER BY` plus `LIMIT` can produce top-N views.
@@ -307,12 +325,16 @@ The age value is in seconds. `checkout-email-prod` has messages that are about t
 
 Metrics Insights is especially useful for dynamic environments. If an Auto Scaling group adds instances or ECS launches a new service, a query-based widget can catch new resources without someone editing a dashboard by hand. CloudWatch can also create alarms on Metrics Insights queries, which helps with fleet-level alarms that track changing resources.
 
+Be precise about the fleet question. A query without `GROUP BY InstanceId` can return one aggregate series such as average CPU across the fleet. A query grouped by `InstanceId` returns individual series and can identify the hottest members. CloudWatch can monitor multiple series returned by a query as individual contributors, adapting as resources appear and disappear. Aggregate fleet health and per-resource fleet health are different questions even when they start from the same metric.
+
 In cross-account observability, Metrics Insights can group or filter by `AWS.AccountId`. That helps a platform team answer questions such as, "Which production account has the hottest ECS service right now?" without switching accounts.
 
-## Build Dashboards for Triage
+## How Do You Build a Dashboard for Triage?
 <!-- section-summary: A useful dashboard starts with customer impact, then moves down through ingress, compute, data, async work, alarms, and runbook context. -->
 
-A CloudWatch dashboard is a shared page made from widgets. Widgets can show metrics, alarms, logs, text, and other operational context. The dashboard body is JSON, so teams can manage important dashboards with infrastructure as code or deploy them from a repository.
+A CloudWatch dashboard is a shared page made from widgets. Widgets can show metrics, alarms, logs, text, and other operational context. It is a pull-based investigation surface: a human opens it and interprets the evidence. An alarm is push-based: the service evaluates continuously and changes state. A graph on a dashboard is therefore not automatically an alerting control.
+
+The dashboard body is JSON, so teams can manage important dashboards with infrastructure as code or deploy them from a repository.
 
 The main dashboard design rule is order. Put customer impact first, then show the request path. During an incident, the on-call engineer should be able to scan from top to bottom and see where the signal changes.
 
@@ -394,7 +416,9 @@ aws cloudwatch put-dashboard \
 
 An empty `DashboardValidationMessages` list means CloudWatch accepted the body without validation warnings. If validation messages appear, fix the named widget or metric before treating the dashboard as release evidence. A dashboard can still render with a broken widget, so the validation output deserves the same attention as a build warning.
 
-CloudWatch dashboards can include cross-account and cross-Region widgets by using `accountId` and `region` in dashboard JSON. That helps teams build one high-level view across production accounts and Regions. The dashboard should still stay readable. A dashboard with fifty charts and no order usually slows response because every chart asks for attention at once.
+CloudWatch dashboards can include cross-account and cross-Region widgets by using `accountId` and `region` in dashboard JSON. Dashboard variables can replace properties such as `FunctionName`, `InstanceId`, or `Region` across widgets. One variable-driven dashboard can cover a class of 80 Lambda functions instead of requiring 80 separately maintained copies.
+
+The dashboard should still stay readable. A dashboard with fifty charts and no order usually slows response because every chart asks for attention at once. It should support a reasoning chain from when customer impact began, to its scope by operation or Availability Zone, to the dependency that changed at the same time.
 
 Alarm history is useful after the first page because it shows state changes and the reason CloudWatch evaluated. During triage, a responder can pull recent state transitions before changing thresholds:
 
@@ -428,7 +452,7 @@ If the alarm flips between `OK` and `ALARM` every few minutes, the issue may be 
 *A dashboard should guide the responder's eyes. Customer impact comes first, then the path through edge, application, data, async work, and recent changes.*
 
 
-## Alarms as State Machines
+### How Does a CloudWatch Alarm Decide Its State?
 <!-- section-summary: A CloudWatch alarm evaluates metric data over time and changes state only when the configured evaluation rule is satisfied. -->
 
 A CloudWatch alarm is a state machine attached to a metric, metric math expression, Metrics Insights query, anomaly detection model, or PromQL query. The alarm state is one of `OK`, `ALARM`, or `INSUFFICIENT_DATA`. It changes state based on the datapoints CloudWatch evaluates.
@@ -490,11 +514,11 @@ Example output:
 
 This confirms the alarm is watching the two-second threshold with a `3 out of 5` rule and `notBreaching` missing-data behavior. `State: OK` only describes the current metric state. Teams usually test notification routing separately in a safe environment because alarm definition and notification delivery are separate pieces of the response loop.
 
-This is an **M out of N** alarm. `datapoints-to-alarm` is M. `evaluation-periods` is N. A `3 out of 5` alarm can catch sustained pain while giving the system room for a short spike. A `5 out of 5` alarm waits for five consecutive breaches. A `1 out of 1` alarm fires quickly and can create noise.
+This is an **M out of N** alarm. `datapoints-to-alarm` is M. `evaluation-periods` is N. A `3 out of 5` alarm can catch sustained pain while giving the system room for a short spike, and the breaching points do not need to be consecutive. A `5 out of 5` alarm waits for every evaluated period to breach. A `1 out of 1` alarm fires quickly and can create noise. M-out-of-N is therefore a deliberate balance between detection speed and resistance to transient false positives.
 
 Percentile latency alarms should usually watch a customer-impacting percentile such as p95 or p99. Average latency can hide a painful tail where a smaller group of users waits several seconds. CloudWatch supports percentile statistics, and the alarm can decide how to behave with low sample counts for percentile-based alarms.
 
-## Thresholds, Missing Data, and Anomaly Detection
+## How Do You Choose Thresholds, Missing-Data Rules, and Anomaly Detection?
 <!-- section-summary: Good alarms choose thresholds from user impact, handle missing data intentionally, and use anomaly detection for patterns that shift by hour or day. -->
 
 A threshold should express a condition that deserves action. A checkout p95 latency threshold of two seconds might come from a product requirement, an SLO, or historical data showing that conversion drops beyond that point. A CPU threshold of 80% might be useful for a worker service if the team has seen queue age rise above that level. The threshold needs a reason.
@@ -516,7 +540,11 @@ For checkout, anomaly detection can help with `CompletedCheckouts`. A static thr
 
 Anomaly detection still needs judgment. A launch day, pricing change, or planned marketing campaign can shift normal behavior. CloudWatch lets teams exclude time periods from model training, and AWS notes that new models can take time to train. Treat anomaly alarms as production signals that need review, tuning, and runbook context.
 
-## Composite Alarms and Recommended Alarms
+Do not confuse **unusual** with **bad**. Black Friday traffic may be far outside the historical band and still be welcome. A 900-millisecond latency may be historically normal while violating a 500-millisecond objective. Anomaly detection asks whether behavior is surprising; a static threshold asks whether behavior is unacceptable. Some signals need both.
+
+Pages should favor customer symptoms. A resource condition that may create future risk can become a lower-urgency ticket, while purely diagnostic context can remain on the dashboard. Not every metric deserves an alarm, and not every alarm should wake a human.
+
+## How Do Composite, Suppressed, and Recommended Alarms Help?
 <!-- section-summary: Composite alarms reduce noise by combining lower-level alarms, while AWS recommended alarms provide service-specific starting points. -->
 
 Real systems can produce many alarms. During one checkout incident, the load balancer latency alarm, API 5xx alarm, ECS CPU alarm, and payment failure alarm might all change state. If each one pages separately, the team receives noise instead of clarity.
@@ -531,13 +559,17 @@ aws cloudwatch put-composite-alarm \
   --alarm-actions arn:aws:sns:us-east-1:111122223333:checkout-critical-alerts
 ```
 
-Composite alarms are useful for paging because they can reduce alarm noise. They have limits. AWS documentation notes that composite alarms can send SNS notifications and create investigations, Systems Manager OpsItems, or incidents, but they cannot perform EC2 actions or Auto Scaling actions. Keep automation on the metric alarm that owns the scaling signal, and keep composite alarms for incident routing and context.
+Composite alarms are useful for paging because they can reduce alarm noise. Their Boolean rules can use `AND`, `OR`, `NOT`, and alarm-state tests to describe a situation such as `(CheckoutErrorRateHigh OR CheckoutLatencyHigh) AND NOT DeploymentInProgress`.
+
+CloudWatch also supports composite-alarm action suppression. A maintenance or deployment alarm can suppress actions during an expected disruptive period without deleting the underlying detection rules. The condition remains visible; only its operational action is held back. Scope suppression carefully so a stale maintenance state cannot hide a real incident.
+
+Composite alarms have limits. AWS documentation notes that they can send SNS notifications and create investigations, Systems Manager OpsItems, or incidents, but they cannot perform EC2 actions or Auto Scaling actions. Keep automation on the metric alarm that owns the scaling signal, and keep composite alarms for incident routing and context.
 
 AWS also publishes **recommended alarms** for many AWS service metrics. In the CloudWatch console, the alarm recommendations filter can show metrics that have AWS recommended alarm settings. For some metrics, CloudWatch can pre-fill the intent, threshold, period, evaluation periods, and datapoints. The console can also download infrastructure-as-code alarm definitions for recommended alarms.
 
-Recommended alarms are a starting point for the AWS service layer. They fit service basics such as Lambda errors, SQS dead-letter queue movement, RDS storage or memory pressure, and EKS pod CPU or memory pressure. The application team still adds service-specific business alarms such as checkout completions, payment failure rate, and order confirmation delay.
+Recommended alarms are a starting point for the AWS service layer. Their useful lifecycle is baseline, deploy, observe the real workload, and tune. A suggested 80 percent threshold is not universally correct merely because AWS supplied it. Recommended alarms fit service basics such as Lambda errors, SQS dead-letter queue movement, RDS storage or memory pressure, and EKS pod CPU or memory pressure. The application team still adds service-specific business alarms such as checkout completions, payment failure rate, and order confirmation delay.
 
-## Cross-Account Operations
+### How Do Metrics Work Across Accounts and Regions?
 <!-- section-summary: Cross-account observability lets a central monitoring account view and alarm on metrics from linked source accounts. -->
 
 Production AWS environments often use separate accounts for each environment, workload, or team. That account structure helps security and ownership, but it can split telemetry across many places. During a checkout incident, the application account might hold ECS metrics, the shared networking account might hold load balancer metrics, and the central operations team might work from another account.
@@ -556,7 +588,15 @@ LIMIT 10
 
 CloudWatch can also create alarms that watch metrics in other accounts when cross-account functionality is enabled. AWS documents a few limitations: cross-account composite alarms are unavailable, and some metric math functions are unavailable for cross-account alarms. The safe operating pattern is to keep a small number of central customer-impact alarms in the monitoring account and keep workload-specific automation close to the source account that owns the resource.
 
-## Putting It All Together
+Region remains part of a traditional metric's location even when it is not an explicit dimension:
+
+```text
+Account -> Region -> Namespace -> Metric identity
+```
+
+A dashboard can display metrics from several Regions, but an alarm in one Region does not directly evaluate a metric in another Region. For organizations that need central copies rather than central visibility alone, CloudWatch metrics centralization can copy selected metrics into a destination account with source-account and source-Region metadata. Cross-account observability, cross-account/cross-Region dashboards, and metrics centralization solve related but distinct problems.
+
+## How Does the Complete CloudWatch Measurement System Fit Together?
 <!-- section-summary: A production metric system connects business metrics, AWS service metrics, dashboards, alarms, anomaly detection, composite routing, and cross-account visibility. -->
 
 Let's build the checkout operating path from the first signal to the response.
@@ -571,6 +611,8 @@ Let's build the checkout operating path from the first signal to the response.
 8. Cross-account observability lets the monitoring account inspect production metrics without account switching.
 
 That gives the on-call engineer a useful path. The page says customer impact. The dashboard shows scope. Metrics Insights highlights the hottest dependency. Logs and traces provide detail after metrics narrow the search. The runbook tells the team which rollback, scaling, or dependency escalation is approved.
+
+Seen from first principles, each layer compresses information. Millions of requests become error-rate and latency series. Hundreds of series become a dashboard conclusion such as "checkout is degraded in one Region." Thousands of datapoints become `ALARM`. Several states become a composite `CheckoutCustomerImpact` situation. The final message to a human is a short action rather than the entire raw system.
 
 The production checklist is:
 
@@ -588,14 +630,93 @@ The production checklist is:
 *The summary image connects metric design to incident response. A number helps only after the alarm state reaches the right route and the runbook action is clear.*
 
 
-## What's Next
-<!-- section-summary: The following observability work adds deeper log and trace practices so metrics can lead into exact evidence. -->
+## What Should You Remember?
+<!-- section-summary: CloudWatch reduces workload behavior into numerical evidence, an investigative view, evaluated state, and an operational action. -->
 
-Metrics, dashboards, and alarms tell you when the checkout system is unhealthy and where the pressure appears. The next layer is detailed evidence. Logs show exact events and error fields, and traces show the path of one request across services and dependencies. Together, those signals turn a metric spike into a root-cause investigation.
+Metrics, dashboards, and alarms form a measurement-to-action system. Keep these distinctions clear:
 
----
+| Concept | Plain meaning |
+|---|---|
+| Metric | Named numerical evidence changing over time |
+| Namespace | The family or organizational boundary for metrics |
+| Dimensions | The key-value set that completes a metric identity |
+| Cardinality | How many distinct series the dimensions create |
+| Resolution | The finest time granularity available |
+| Period | The time window represented by one result point |
+| Statistic | The function applied to observations in that window |
+| Metrics Insights | A query over a changing resource population |
+| Dashboard | A human-oriented investigation view |
+| Alarm | A continuous evaluator that produces operational state |
+| M-out-of-N | A balance between fast detection and noise resistance |
+| Missing data | A semantic choice rather than an automatic zero |
+| Anomaly detection | A test for surprising behavior |
+| Static threshold | A test for unacceptable behavior |
+| Composite alarm | A rule that combines alarms into a situation |
+| Cross-account observability | A way to see telemetry beyond one account |
 
-**References**
+Metrics record what happened numerically. Dashboards help people interpret the evidence. Alarms decide whether the current situation requires action. Logs and traces then provide the request-level detail needed for deeper investigation.
+
+:::expand[What Should You Measure First?]{kind="recap"}
+Metrics give the fast production overview that tells a team whether customers are affected and which part of the system is under pressure.
+
+Start with the customer or operational condition you need to know about and the decision you will make. Measure availability, latency, throughput, and saturation in that order of meaning rather than beginning with infrastructure values merely because they are easy to collect.
+
+A CloudWatch metric is a named time-series made from datapoints, timestamps, optional units, and a stable identity.
+:::
+
+:::expand[How Do Namespaces, Dimensions, Units, and Resolution Define a Metric?]{kind="recap"}
+Metric identity choices control how CloudWatch stores, filters, aggregates, bills, and alarms on time-series data.
+
+Namespace, metric name, and the complete dimension set identify a traditional CloudWatch metric. Resolution is the finest available granularity, period is the time represented by one result point, and statistic is the function that reduces the observations inside that period.
+:::
+
+:::expand[When Do You Need AWS Metrics or Custom Metrics?]{kind="recap"}
+AWS service metrics show infrastructure and managed-service health, while custom metrics show application and business outcomes.
+
+Custom metric publishing needs stable names, low-cardinality dimensions, correct units, and a clear path for either OpenTelemetry, PutMetricData, or embedded metric format.
+
+Use stable, bounded dimensions; distinguish explicit zero from absent telemetry; and retain the underlying value distribution when percentiles matter. Use logs or traces for unique request, order, customer, and trace identifiers.
+:::
+
+:::expand[How Do You Query a Changing Fleet?]{kind="recap"}
+Metrics Insights uses SQL-like queries to group, filter, rank, and alarm on large metric fleets without hand-picking every resource.
+
+Its SQL-like query selects a population, filters it, groups it at fleet or individual-resource level, and orders or limits the result. Query-based widgets and alarms can therefore follow resources that appear or disappear without hardcoded lists.
+:::
+
+:::expand[How Do You Build a Dashboard for Triage?]{kind="recap"}
+A useful dashboard starts with customer impact, then moves down through ingress, compute, data, async work, alarms, and runbook context.
+
+Put customer impact first, then scope, likely dependencies or causes, and finally runbook and ownership context. Variables can reuse the view across resource instances. A dashboard supports human investigation, while an alarm performs continuous detection.
+
+A CloudWatch alarm evaluates metric data over time and changes state only when the configured evaluation rule is satisfied.
+
+CloudWatch evaluates a metric or query with a statistic, period, threshold, evaluation window, M-out-of-N rule, and missing-data policy. The result is `OK`, `ALARM`, or `INSUFFICIENT_DATA`; actions happen because of state transitions.
+:::
+
+:::expand[How Do You Choose Thresholds, Missing-Data Rules, and Anomaly Detection?]{kind="recap"}
+Good alarms choose thresholds from user impact, handle missing data intentionally, and use anomaly detection for patterns that shift by hour or day.
+
+Use a static threshold when a value is unacceptable regardless of history, such as an SLO boundary. Use anomaly detection when unexpected departure from a changing baseline matters. Unusual and bad are different questions, so some signals need both.
+:::
+
+:::expand[How Do Composite, Suppressed, and Recommended Alarms Help?]{kind="recap"}
+Composite alarms reduce noise by combining lower-level alarms, while AWS recommended alarms provide service-specific starting points.
+
+Composite rules combine lower-level states into one operational situation and reduce duplicate pages. Suppression keeps detection visible while holding back actions during an expected deployment, maintenance period, or known incident.
+
+Cross-account observability lets a central monitoring account view and alarm on metrics from linked source accounts.
+
+Cross-account observability lets a monitoring account view source-account telemetry. Dashboards can visualize several accounts and Regions. Metrics centralization copies selected metrics into a destination for central querying and alarming, while traditional alarm evaluation remains Regional.
+:::
+
+:::expand[How Does the Complete CloudWatch Measurement System Fit Together?]{kind="recap"}
+A production metric system connects business metrics, AWS service metrics, dashboards, alarms, anomaly detection, composite routing, and cross-account visibility.
+
+Workload behavior becomes samples, statistics and queries organize them, dashboards create a human view, alarms compress evidence into state, and routes or automation turn a state transition into response. Each layer reduces complexity into a smaller operational decision.
+:::
+
+## References
 
 - [Metrics concepts - Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html) - Documents metrics, namespaces, dimensions, Region behavior, retention, timestamps, resolution, units, periods, aggregation, and percentiles.
 - [Publish custom metrics - Amazon CloudWatch](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/publishingMetrics.html) - Documents publishing custom metrics with OpenTelemetry, CloudWatch OTLP endpoints, PromQL querying, `PutMetricData`, namespaces, names, and dimensions.

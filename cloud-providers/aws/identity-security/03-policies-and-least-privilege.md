@@ -1,7 +1,7 @@
 ---
 title: "Policies and Least Privilege"
-description: "Learn how AWS evaluates IAM policies and how to turn real application workflows into narrow, testable least-privilege permissions."
-overview: "AWS credentials prove who is calling, but IAM policies decide what that caller can do. This article follows one production receipt export through policy documents, policy evaluation, S3, KMS, PassRole, permission ceilings, evidence, and AccessDenied debugging."
+description: "Learn how AWS evaluates IAM policies and how to turn a real workload into narrow actions, resources, conditions, trust, and permission ceilings."
+overview: "Treat IAM as a proof system: principal P wants action A on resource R under context C. Follow a receipt export through policy statements, S3 and KMS, PassRole, boundaries, least privilege, and evidence-based AccessDenied debugging."
 tags: ["iam", "policies", "least-privilege", "authorization"]
 order: 3
 id: article-cloud-providers-aws-identity-security-policy-evaluation
@@ -21,537 +21,1029 @@ aliases:
 
 ## Table of Contents
 
-1. [A Request Needs a Policy Decision](#a-request-needs-a-policy-decision)
-2. [What a Policy Statement Says](#what-a-policy-statement-says)
-3. [Identity Policies and Resource Policies](#identity-policies-and-resource-policies)
-4. [How AWS Evaluates a Request](#how-aws-evaluates-a-request)
-5. [Write the Receipt Export Role](#write-the-receipt-export-role)
-6. [Add Conditions for Real Boundaries](#add-conditions-for-real-boundaries)
-7. [S3 and KMS Need Matching Permissions](#s3-and-kms-need-matching-permissions)
-8. [PassRole and Permission Boundaries](#passrole-and-permission-boundaries)
-9. [Move From Broad Access to Least Privilege](#move-from-broad-access-to-least-privilege)
-10. [Debug AccessDenied With Evidence](#debug-accessdenied-with-evidence)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [How Does IAM Evaluate One API Request?](#how-does-iam-evaluate-one-api-request)
+2. [What Does a Policy Statement Mean?](#what-does-a-policy-statement-mean)
+3. [How Do Trust, Permissions, Resources, and Conditions Work Together?](#how-do-trust-permissions-resources-and-conditions-work-together)
+4. [Why Can One Operation Need Both S3 and KMS Permission?](#why-can-one-operation-need-both-s3-and-kms-permission)
+5. [How Do PassRole, Boundaries, and Organization Guardrails Limit Access?](#how-do-passrole-boundaries-and-organization-guardrails-limit-access)
+6. [How Do You Build a Least-Privilege Role From Workload Behavior?](#how-do-you-build-a-least-privilege-role-from-workload-behavior)
+7. [How Do You Debug AccessDenied With Evidence?](#how-do-you-debug-accessdenied-with-evidence)
+8. [How Does the Complete Authorization Design Fit Together?](#how-does-the-complete-authorization-design-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## A Request Needs a Policy Decision
-<!-- section-summary: Temporary credentials answer who is calling, and IAM policies answer what that caller may do. -->
+## How Does IAM Evaluate One API Request?
+<!-- section-summary: IAM treats authorization as a proof about one principal, action, resource, and request context. -->
 
-The previous article focused on access paths for people, applications, servers, containers, and CI/CD workflows. Those callers should receive **temporary credentials** through IAM Identity Center, IAM roles, and federation. Temporary credentials prove who is making a signed AWS request, and they expire automatically after a session window.
+Think of AWS IAM as a **proof system**. Every signed AWS API request is asking one question:
 
-Now the next question arrives. A caller has credentials, but AWS still has to decide whether that caller may perform the requested action. The answer comes from **IAM policies**, which are JSON rules that describe allowed and denied API actions. JSON is a structured text format that AWS uses for policy documents.
+> May principal **P** perform action **A** on resource **R**, given context **C**?
 
-A concrete production workflow makes this easier to follow. A payments application creates monthly customer receipt files. A Lambda function named `ReceiptExportFunction` reads finalized payment records, writes receipt PDFs into an S3 bucket named `payments-prod-receipts`, and uses an AWS KMS key to encrypt those receipt objects. Lambda runs code without managing servers. S3 stores objects such as files, exports, reports, and backups. KMS manages cryptographic keys used to protect sensitive data.
+For example:
 
-The function runs with an IAM role named `ReceiptExportRole`. The role gives the function an AWS identity, and the policies attached to that role describe what the function may do. If the policy grants broad S3 access, the function can touch more receipt data than it needs. If the policy misses one required action, the export job fails with `AccessDenied`.
+```text
+Principal: arn:aws:sts::123456789012:assumed-role/ReceiptExportRole/my-lambda
+Action:    s3:GetObject
+Resource:  arn:aws:s3:::company-receipts/2026/receipt-123.pdf
+Context:   Region, source service, tags, VPC endpoint,
+           encryption context, time, and other request facts
+```
 
-Policies turn a vague sentence like "the receipt job needs S3 access" into a specific authorization decision. The rest of this article follows that receipt export until the policy is narrow, testable, and understandable during an incident.
+IAM evaluates the request and returns `ALLOW` or `DENY`. The fundamental rules are:
 
+```text
+everything starts denied
+an applicable permission must introduce an Allow
+an applicable explicit Deny always wins
+```
 
-## What a Policy Statement Says
-<!-- section-summary: A policy statement names the effect, action, resource, and optional request conditions for one authorization rule. -->
+AWS services expose APIs. When a user runs:
 
-An **IAM policy** is a JSON document with one or more statements. Each statement describes one rule. The rule usually says whether a caller can perform certain actions on certain resources, and it can add conditions that must match the request.
+```bash
+aws s3 cp receipt.pdf s3://company-receipts/
+```
 
-The first policy statement can stay very small. In the receipt export case, it only needs to describe one S3 object write. The example looks like this:
+the CLI is not asking for vague “S3 access.” It is making one or more concrete API requests. Depending on the exact operation, those requests can include `s3:PutObject`, `s3:GetObject`, and `s3:ListBucket`.
+
+IAM does not fundamentally understand an organizational sentence such as “Finance administrator,” “can work with receipts,” or “needs S3 access.” It evaluates statements much closer to:
+
+```text
+s3:GetObject
+on
+arn:aws:s3:::company-receipts/incoming/*
+```
+
+That difference is the foundation of least privilege. Broad thinking asks which service the application uses. Precise thinking asks which API operations it makes, which resources those operations target, and which request circumstances must be true.
+
+The sections below answer these questions in order:
+
+1. **How Does IAM Evaluate One API Request?**
+2. **What Does a Policy Statement Mean?**
+3. **How Do Trust, Permissions, Resources, and Conditions Work Together?**
+4. **Why Can One Operation Need Both S3 and KMS Permission?**
+5. **How Do PassRole, Boundaries, and Organization Guardrails Limit Access?**
+6. **How Do You Build a Least-Privilege Role From Workload Behavior?**
+7. **How Do You Debug AccessDenied With Evidence?**
+8. **How Does the Complete Authorization Design Fit Together?**
+
+## What Does a Policy Statement Mean?
+<!-- section-summary: A statement combines an effect, API action, resource set, and optional condition into one authorization rule. -->
+
+Consider one policy statement:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "WriteReceiptObjects",
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::payments-prod-receipts/exports/*"
-    }
-  ]
-}
-```
-
-The `Version` field names the policy language version. Most modern IAM policies use `2012-10-17`. This value describes the language rules, so it stays the same even when the policy was written in 2026.
-
-The `Statement` array holds the actual rules. `Sid` is a statement identifier that gives the rule a readable name. AWS can make the decision without `Sid`. People still need it when they review policies, search CloudTrail events, or explain why a role has a permission.
-
-The review question for this small statement is concrete: should `ReceiptExportRole` write every object under `exports/*`, or should the path be narrower, such as `exports/monthly/*`? A reviewer should point at the business workflow and explain why the action, prefix, and account belong together.
-
-The important statement fields work together as one rule. The same pieces appear again and again in IAM policies. This table uses the receipt export as the example:
-
-| Element | Simple meaning | Receipt export example |
-|---|---|---|
-| **Effect** | Whether the rule allows or denies | `Allow` |
-| **Action** | Which AWS API action is covered | `s3:PutObject` |
-| **Resource** | Which AWS resource the action can touch | `arn:aws:s3:::payments-prod-receipts/exports/*` |
-| **Condition** | Which request facts must match | only a specific prefix, tag, network path, or service |
-| **Principal** | Who the rule talks about in resource policies | a role, account, service, or federated caller |
-
-An **action** maps to an AWS API permission. `s3:PutObject` allows an object write request to S3. `kms:GenerateDataKey` allows a caller or AWS service to ask KMS for a data key that can encrypt new data. `lambda:UpdateFunctionConfiguration` allows a caller to change a Lambda function's settings.
-
-A **resource** is usually named by an ARN, which stands for Amazon Resource Name. An ARN is the full AWS address of a resource. The S3 object ARN above means every object under the `exports/` prefix inside the `payments-prod-receipts` bucket.
-
-A **condition** checks details from the request context. The request context contains facts such as the caller, action, resource, source IP address, requested Region, MFA state, tags, and service-specific values. Conditions let the policy say "this action is allowed only when these facts are true."
-
-The policy statement has enough pieces to describe one rule. The next step is knowing where that rule can live, because AWS has several policy types.
-
-![The policy decision view shows how action, resource, principal, and conditions turn a business request into an AWS authorization result](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/request-policy-decision.png)
-
-*The policy decision view shows how action, resource, principal, and conditions turn a business request into an AWS authorization result.*
-
-
-## Identity Policies and Resource Policies
-<!-- section-summary: Identity policies attach to callers, while resource policies attach to resources and name who may use them. -->
-
-The receipt export role needs an **identity-based policy**. An identity-based policy attaches to an IAM user, group, or role. It says what that identity can do after it has authenticated or assumed the role. The principal is already known because the policy sits on the identity, so identity-based policies do not include a `Principal` element.
-
-The S3 bucket can also have a **resource-based policy**. A resource-based policy attaches to a resource and names the principals that may use that resource. S3 bucket policies, SQS queue policies, KMS key policies, VPC endpoint policies, and IAM role trust policies are common examples. The `Principal` field appears here because the resource policy must say who the resource trusts.
-
-The receipt export has several policy layers around one workflow. The role policy and bucket policy both matter. The KMS key policy joins the same path:
-
-```mermaid
-flowchart LR
-    Function["ReceiptExportFunction"]
-    Role["ReceiptExportRole<br/>identity policy"]
-    Bucket["payments-prod-receipts<br/>bucket policy"]
-    Key["receipt KMS key<br/>key policy"]
-
-    Function --> Role
-    Role --> Bucket
-    Role --> Key
-```
-
-The role policy can allow `s3:PutObject` on the receipt bucket. The bucket policy can deny insecure requests or allow only approved role ARNs. The KMS key policy can decide whether the role or the account can use that encryption key. A successful encrypted S3 write may need all of these policy layers to line up.
-
-IAM also has different packaging choices for identity policies. An **AWS managed policy** is created and maintained by AWS. It can help a team get started, but AWS designs it for broad common use cases. A **customer managed policy** is created by your team and can be attached to more than one identity. An **inline policy** lives inside one specific identity and gets deleted with that identity.
-
-For production least privilege, customer managed policies are usually the clean long-term shape. They can have names, versions, review history, and repeated use across similar roles. Inline policies still make sense for one-off rules that must stay bound to a single identity, but they are harder to compare and update when several roles need similar access.
-
-The receipt export role now has policy documents in the right places. AWS still has to combine them for each request.
-
-## How AWS Evaluates a Request
-<!-- section-summary: AWS evaluates the caller, action, resource, and context, then lets explicit denies and missing allows decide the outcome. -->
-
-AWS authorization happens one request at a time. The receipt function calls `PutObject`. AWS gathers the **principal** from the temporary role session, the **action** from the API request, the **resource** from the bucket and object ARN, and the **context** from request details such as encryption, network path, tags, and service-specific fields.
-
-The policy decision follows a few rules that show up constantly in real debugging. The first rule is **explicit deny wins**. If any applicable policy has a matching `Deny`, AWS denies the request even when another policy has a matching `Allow`.
-
-The second rule is **missing allow means deny**. AWS starts from no access. A request needs a matching allow from the relevant policy path. If the receipt export role tries to delete a receipt object and no policy allows `s3:DeleteObject`, AWS denies the delete request.
-
-The third rule is **permission ceilings can reduce allowed access**. A permissions boundary, a session policy, or an AWS Organizations service control policy can leave an identity with fewer effective permissions than its identity policy appears to grant. Service control policies are covered in the next article, but the idea is simple: a lower policy can allow an action, and a higher ceiling can still keep that action unavailable.
-
-The same-account S3 write has several checks in the path. AWS may need to consider more than one policy layer. The diagram shows that path:
-
-```mermaid
-flowchart TD
-    Request["PutObject request"]
-    Identity["Identity policy on ReceiptExportRole"]
-    Resource["Bucket policy on payments-prod-receipts"]
-    Boundary["Boundary or session policy"]
-    Kms["KMS key policy and IAM policy"]
-    Decision["Final decision"]
-
-    Request --> Identity
-    Request --> Resource
-    Request --> Boundary
-    Request --> Kms
-    Identity --> Decision
-    Resource --> Decision
-    Boundary --> Decision
-    Kms --> Decision
-```
-
-Policy debugging often surprises beginners at first. The role might allow S3 writes while the bucket policy denies non-TLS traffic. The role might allow KMS usage while the key policy leaves that role outside the trusted path. The deployment role might create the Lambda function while lacking `iam:PassRole` for the execution role.
-
-
-A safer writing process follows the workflow step by step. The receipt export role is the first piece because the Lambda function uses that role for its AWS calls.
-
-![The evaluation layers show how identity policies, resource policies, boundaries, SCPs, and explicit denies combine during authorization](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/evaluation-layers.png)
-
-*The evaluation layers show how identity policies, resource policies, boundaries, SCPs, and explicit denies combine during authorization.*
-
-
-## Write the Receipt Export Role
-<!-- section-summary: A least-privilege role starts from the actual workflow: which service writes which objects with which key. -->
-
-The `ReceiptExportRole` belongs to the Lambda function. It should have only the permissions needed to export receipt files. That means the role needs to write objects under one S3 prefix and use the one KMS key that protects those objects.
-
-The role can begin with the S3 permissions. This policy gives the function the object write and prefix list access it needs. The two statements cover different S3 resource shapes:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "WriteReceiptExports",
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::payments-prod-receipts/exports/*"
-    },
-    {
-      "Sid": "ListReceiptExportPrefix",
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::payments-prod-receipts",
-      "Condition": {
-        "StringLike": {
-          "s3:prefix": "exports/*"
-        }
-      }
-    }
-  ]
-}
-```
-
-Notice the two S3 resource shapes. `s3:PutObject` works on object ARNs, so it uses `arn:aws:s3:::payments-prod-receipts/exports/*`. `s3:ListBucket` works on the bucket itself, so it uses `arn:aws:s3:::payments-prod-receipts`. This bucket-versus-object split causes many real `AccessDenied` errors.
-
-The list permission has a prefix condition because the function only needs to see the export area. The prefix condition does not create folders in S3. S3 object keys are strings, and `exports/2026-06/customer-123.pdf` is one object key. The condition simply limits which key names the list request may inspect.
-
-The review question for the S3 statements is whether the workflow needs both operations. `PutObject` supports the actual receipt write. `ListBucket` supports code that checks existing export keys, handles retries, or avoids duplicate names. If the function never lists the prefix, remove `ListBucket` instead of keeping it because it feels harmless.
-
-The function also needs KMS permission for encrypted object writes. The exact key ARN keeps the statement tied to one encryption key. The KMS statement can be small:
-
-```json
-{
-  "Sid": "UseReceiptExportKey",
   "Effect": "Allow",
-  "Action": "kms:GenerateDataKey",
-  "Resource": "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::company-receipts/incoming/*"
 }
 ```
 
-For a role that only writes new encrypted receipt objects, `kms:GenerateDataKey` is the important KMS permission because S3 needs a data key for object encryption. If the same role later reads encrypted receipts, it will also need `kms:Decrypt`. That action belongs in the policy only when the workflow actually reads the objects.
+Read it as: allow the principal to which this permission applies to call `s3:GetObject` against objects under `company-receipts/incoming/`.
 
-The review question for the KMS statement is whether this one role should use this one key for this one export path. A wildcard such as `arn:aws:kms:us-east-1:123456789012:key/*` may look convenient during development, but it lets the role use every key in that account and Region. Receipt exports should name the receipt-export key unless there is a documented reason for a wider key set.
+A statement answers three main questions:
 
-This role policy now describes the happy path. Real production access usually needs one more layer: conditions that match how the request should arrive.
-
-## Add Conditions for Real Boundaries
-<!-- section-summary: Conditions narrow a broad-looking allow by matching request facts such as prefixes, encryption, service path, tags, or MFA. -->
-
-A **condition** makes a policy statement depend on facts from the request. Conditions are powerful because they let a team keep the action list readable while still controlling how the action can happen. For the receipt export, useful conditions might require a specific S3 prefix, a specific encryption key, secure transport, or a request that comes through an approved service path.
-
-The S3 bucket can deny requests that arrive without TLS. TLS is the encryption protocol behind HTTPS. This kind of deny belongs on the bucket because it protects the bucket regardless of which role, user, or service tries to call it.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyInsecureTransport",
-      "Effect": "Deny",
-      "Principal": "*",
-      "Action": "s3:*",
-      "Resource": [
-        "arn:aws:s3:::payments-prod-receipts",
-        "arn:aws:s3:::payments-prod-receipts/*"
-      ],
-      "Condition": {
-        "Bool": {
-          "aws:SecureTransport": "false"
-        }
-      }
-    }
-  ]
-}
+```text
+Effect    Should a matching request be allowed or denied?
+Action    Which AWS API operation does it match?
+Resource  Which AWS object or set of objects does it match?
 ```
 
-This deny works as a guard on the resource. If a caller somehow has broad S3 permissions elsewhere, the bucket still rejects insecure transport. The deny also explains itself during review: receipt objects should only move over encrypted connections.
+It can add a fourth question:
 
-The important fields in this bucket policy are different from an identity policy. `Principal` is `*` because the resource policy protects the bucket from every caller. `Action` is `s3:*` because insecure transport should fail for reads, writes, lists, and policy changes. The two resources cover the bucket itself and the objects inside it. The review question is whether any legitimate workflow still uses non-TLS access; for receipt data, the expected answer should be no.
+```text
+Condition Under which request circumstances does it match?
+```
 
-Tags can also keep writes in one business lane. The role policy can require S3 object tagging during upload, so every receipt export carries an ownership tag. The condition checks the requested object tag:
+For example:
 
 ```json
 {
-  "Sid": "RequireReceiptExportTag",
   "Effect": "Allow",
-  "Action": [
-    "s3:PutObject",
-    "s3:PutObjectTagging"
-  ],
-  "Resource": "arn:aws:s3:::payments-prod-receipts/exports/*",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::company-receipts/incoming/*",
   "Condition": {
     "StringEquals": {
-      "s3:RequestObjectTag/project": "receipt-export"
+      "aws:RequestedRegion": "eu-west-2"
     }
   }
 }
 ```
 
-This pattern is useful when storage, audit, and lifecycle rules depend on tags. The application must upload the object with the expected tag. Because S3 treats object tagging as an extra permission on tagged uploads, the statement includes `s3:PutObjectTagging` with `s3:PutObject`. If the tag is missing, AWS denies the write even though the action and resource match.
+The request must target `eu-west-2` as well as matching the action and resource. A compact model is:
 
-The review question for the tag condition is whether the application actually sends that tag on every write path, including retries and backfills. A condition can be correct for security and still break production if one worker path forgets to include the tag header.
-
-Conditions should stay tied to a real reason. A condition copied from another policy can silently block a valid workflow because the request context differs between services. For example, a condition that works for direct S3 calls from a CLI profile may fail when the same write comes through Lambda or another AWS service.
-
-The receipt export now has action, resource, and condition rules. The most common next surprise is that S3 and KMS each have their own permission paths.
-
-## S3 and KMS Need Matching Permissions
-<!-- section-summary: Encrypted S3 access succeeds only when the S3 permissions and KMS key permissions both allow the same workflow. -->
-
-S3 and KMS often appear together because many production buckets use customer managed KMS keys for encryption. That gives teams control over the key policy, key rotation settings, access review, and CloudTrail evidence for key usage. It also means a receipt export can fail even when the S3 policy looks correct.
-
-An encrypted object write has two permission families. S3 needs permission to write the object into the bucket. KMS needs permission to use the key for encryption. The role policy can include both, but the KMS key policy must also permit the account or role path that uses the key.
-
-This is the key point for KMS: every KMS key has exactly one **key policy**, and the key policy is the primary control for that key. IAM policies can help grant KMS permissions only when the key policy allows IAM policies to participate. If the key policy blocks the path, adding `kms:GenerateDataKey` to the role policy will not rescue the write.
-
-KMS resource names have their own detail. In an IAM policy statement for KMS key usage, the policy should name the KMS key ARN. This is the resource shape to look for:
-
-```json
-"arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+```text
+Statement = Effect(Action, Resource, Conditions)
 ```
 
-An alias name like `alias/receipt-export-key` is friendly for humans and deployment code, but it is not the same resource identifier for key usage in an IAM policy. Alias ARNs apply to alias-management operations. Key usage statements should point at the key ARN, or at a carefully limited wildcard for keys in one trusted account and Region.
+### Permission belongs to an API action
 
-The review can use a small table. These rows connect each workflow step to the permission family that supports it. The common missing piece appears in the last column:
+S3 permissions are not one on/off capability. `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, and `s3:GetBucketLocation` are separate actions.
 
-| Workflow step | Permission family | Common missing piece |
-|---|---|---|
-| Write receipt object | S3 object permission | `s3:PutObject` on the object ARN |
-| List export prefix | S3 bucket permission | `s3:ListBucket` on the bucket ARN |
-| Encrypt object | KMS key usage | `kms:GenerateDataKey` on the key ARN |
-| Read encrypted object later | KMS key usage | `kms:Decrypt` on the key ARN |
-| Let IAM policy affect the key | KMS key policy | key policy enables the account or role path |
+```json
+"Action": "s3:*"
+```
 
-This table shows why least privilege has to follow the real workflow rather than a service name. "S3 access" is too vague. A receipt export that writes encrypted objects needs a specific S3 object path and a specific KMS key path.
+matches a very large set of IAM-controlled S3 operations. It is much broader than:
 
+```json
+"Action": [
+  "s3:GetObject",
+  "s3:PutObject"
+]
+```
 
-Now the application role can write receipt files. The deployment pipeline still needs permission to attach that role to the Lambda function.
+Least-privilege design replaces “Which service does the application use?” with “Which API calls does the application actually need?”
 
-![The S3 and KMS view shows why encrypted object access often needs permission to both the object path and the encryption key](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/s3-kms-permission-match.png)
+### Resource scope narrows the second dimension
 
-*The S3 and KMS view shows why encrypted object access often needs permission to both the object path and the encryption key.*
+If a receipt exporter only reads incoming receipts, `s3:GetObject` on `Resource: "*"` may reach objects far beyond that workload. Naming the bucket is smaller:
 
+```json
+"Resource": "arn:aws:s3:::company-receipts/*"
+```
 
-## PassRole and Permission Boundaries
-<!-- section-summary: PassRole controls which execution roles builders can attach to services, and boundaries cap delegated permission creation. -->
+Naming the required prefix is smaller again:
 
-`iam:PassRole` is the permission that lets a caller hand an IAM role to an AWS service. The caller is not assuming the role for itself. The caller is configuring a service, such as Lambda or EC2, so that the service can use the role later.
+```json
+"Resource": "arn:aws:s3:::company-receipts/incoming/*"
+```
 
-In the receipt export workflow, the deployment pipeline updates `ReceiptExportFunction`. The pipeline needs Lambda permissions to update the function, and it also needs `iam:PassRole` for `ReceiptExportRole`. Without that permission, the pipeline may create most of the function configuration and then fail when it tries to attach the execution role.
+The allowed set shrinks step by step:
 
-The PassRole statement can stay narrow. This version names the receipt export role and limits role passing to Lambda. The condition keeps the role tied to the intended AWS service:
+```text
+all actions on all resources
+        ↓
+S3 actions on all resources
+        ↓
+GetObject on all resources
+        ↓
+GetObject on the receipt bucket
+        ↓
+GetObject on the incoming receipt prefix
+```
+
+Least privilege keeps reducing the set of requests that would receive `ALLOW` until that set matches the legitimate workload.
+
+![The policy decision view turns a business request into an action, resource, principal, context, and result](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/request-policy-decision.png)
+
+*A policy becomes reviewable when each field maps to one part of the real request.*
+
+### Where Do Identity and Resource Policies Apply?
+<!-- section-summary: Identity policies state what a caller may do, while resource policies state which principals a resource owner accepts. -->
+
+An **identity-based policy** attaches to an IAM user, group, or role. Suppose this policy attaches to `ReceiptExportRole`:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "PassOnlyReceiptExportRoleToLambda",
       "Effect": "Allow",
-      "Action": [
-        "iam:GetRole",
-        "iam:PassRole"
-      ],
-      "Resource": "arn:aws:iam::123456789012:role/ReceiptExportRole",
-      "Condition": {
-        "StringEquals": {
-          "iam:PassedToService": "lambda.amazonaws.com"
-        }
-      }
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::company-receipts/incoming/*"
     }
   ]
 }
 ```
 
-This statement names the exact role and the exact service. The deployment pipeline can pass `ReceiptExportRole` to Lambda. It cannot pass an administrator role to Lambda, and it cannot pass the receipt role to another service.
+The policy says what that identity may do. It has no `Principal` field because the attachment point already identifies the principal.
 
-PassRole deserves careful review because it can create an indirect privilege jump. Suppose a developer has no direct permission to read receipt objects. If that developer can pass a powerful role to a Lambda function and update the function code, the service can read the objects on their behalf. Scoped PassRole keeps service configuration from turning into a side door around the normal permissions.
-
-The review question for PassRole is sharper than "does deployment need this permission?" Review the exact service that may receive the execution role, and review who can change the code or configuration that uses that role. A narrow `iam:PassedToService` condition helps, but the deployment role still needs review with the Lambda update permissions beside it.
-
-`iam:PassRole` is also special in CloudTrail evidence. It is a permission, not an API call. CloudTrail records the service operation that used the role, such as `CreateFunction` or `UpdateFunctionConfiguration`, and that event shows which role was passed.
-
-**Permissions boundaries** solve a different delegation problem. A permissions boundary is a managed policy that sets the maximum permissions an IAM user or role can receive from identity-based policies. The entity can use only actions that both its identity policy and boundary allow.
-
-For example, a platform team may let application teams create Lambda execution roles in a development account. The boundary can say that app-created roles may use logging, selected S3 prefixes, and selected KMS keys, but may not manage IAM, change Organizations settings, or use production receipt buckets. The app team can still build roles inside that ceiling, and the ceiling prevents accidental or intentional expansion past the approved range.
-
-PassRole controls which role can be handed to which service. Boundaries control how much power delegated identities can receive. Together, they keep role creation and service configuration inside a reviewable lane.
-
-## Move From Broad Access to Least Privilege
-<!-- section-summary: Least privilege improves through a cycle of temporary broad access, observed usage, generated policy drafts, testing, and review. -->
-
-**Least privilege** means granting only the permissions required for a task. In AWS, that means naming the actions, resources, and conditions that support the workflow, then removing access that the workflow does not use. The receipt export role should write receipt files, use one KMS key, and write logs. It should not delete buckets, read unrelated customer uploads, manage IAM, or decrypt every key in the account.
-
-Real teams often do not know the final action list on the first day. AWS also recommends a practical path: use broader permissions while exploring the use case, then reduce permissions as the workflow matures. The important safety detail is where and how that broad access is used. A temporary broad policy in a development account with a review date is very different from a permanent broad policy in production.
-
-The receipt export process can move in stages. A team can turn rough access into reviewed access. This table shows the loop:
-
-| Stage | What the team does | Result |
-|---|---|---|
-| Prototype | Use a short-lived broader policy in a sandbox | The workflow proves which services are involved |
-| Observe | Run normal export paths and collect CloudTrail evidence | The team sees which actions the role actually used |
-| Generate | Use IAM Access Analyzer policy generation | A draft policy appears from access activity |
-| Review | Add missing intentional actions and remove broad wildcards | The policy matches the business workflow |
-| Test | Run the export, failure path, retry path, and deployment path | The team catches missing permissions before production |
-| Maintain | Review last accessed information on a cadence | Old access gets removed as the workflow changes |
-
-IAM Access Analyzer can generate a policy from CloudTrail activity for an IAM user or role. That gives reviewers a starting point based on observed actions rather than guesses. The generated policy still needs human review because some actions may be missing from the generated result, and some observed actions may come from a test path that production should not keep.
-
-Two limitations matter for this article's example. Access Analyzer policy generation does not identify action-level activity for all data events, and `iam:PassRole` does not appear as a standalone CloudTrail API event. The policy draft can still be useful, but reviewers must handle S3 data access and PassRole intentionally.
-
-Least privilege also needs naming discipline. A policy named `ReceiptExportWriteOnly` should match what it grants. A role named `ReceiptExportRole` should belong to the receipt export function. A condition named `RequireReceiptExportTag` should check the receipt-export tag. Clear names help people catch permissions that drift away from their original reason.
-
-After the team narrows the policy, the next daily skill is debugging. That matters because AWS errors often name the symptom before they reveal the policy layer that caused it.
-
-![The least-privilege map turns real workflow evidence into narrower actions, resources, conditions, tests, and review steps](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/least-privilege-policy-map.png)
-
-*The least-privilege map turns real workflow evidence into narrower actions, resources, conditions, tests, and review steps.*
-
-
-## Debug AccessDenied With Evidence
-<!-- section-summary: AccessDenied debugging works best when you identify the caller, action, resource, context, and policy layer that made the request fail. -->
-
-`AccessDenied` means AWS rejected the authorization request. The rejection can come from an explicit deny, a missing allow, a condition mismatch, a permissions boundary, a session policy, a resource policy, a KMS key policy, a VPC endpoint policy, or an Organizations guardrail. Guessing from the service name usually wastes time because the failed request needs the same four facts AWS evaluated: principal, action, resource, and context.
-
-The caller comes first. A human can run `aws sts get-caller-identity` before retrying a CLI request. For a Lambda function, CloudTrail and logs can show the assumed role session. The caller should be `ReceiptExportRole`, rather than a personal IAM user, old access key, or a different role from another environment.
-
-The action and resource come next. The error message often names the missing action, such as `s3:PutObject`, `kms:GenerateDataKey`, or `iam:PassRole`. The resource ARN matters just as much. A policy that allows object writes under `exports/*` will not allow a write under `archive/*`.
-
-The policy layers then need a steady order. A compact path helps the team avoid guessing from the service name alone. This table gives the common checks:
-
-| Check | What to look for | Receipt export example |
-|---|---|---|
-| Caller | The active principal is the expected role session | `ReceiptExportRole` |
-| Identity allow | The role policy allows the action and resource | `s3:PutObject` on `exports/*` |
-| Resource policy | The bucket or key policy leaves the path open | no bucket deny, key policy permits IAM path |
-| Conditions | Request facts match the condition keys | tag, prefix, TLS, Region, service path |
-| Permission ceilings | Boundaries, session policies, and SCPs leave the action available | boundary allows S3 and KMS usage |
-| PassRole | Deployment caller can pass only approved roles | pipeline can pass the Lambda role |
-
-The IAM policy simulator can help test identity-based policies and permissions boundaries. It is useful when you want to ask, "Would this role policy allow this action on this ARN?" It may not fully answer resource policy, KMS key policy, service-specific context, or VPC endpoint questions, so treat it as one tool in the evidence path.
-
-For the receipt export role, a simulator check can focus on the exact caller, action, and ARN that failed:
-
-```bash
-aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::123456789012:role/ReceiptExportRole \
-  --action-names s3:PutObject kms:GenerateDataKey \
-  --resource-arns arn:aws:s3:::payments-prod-receipts/exports/2026-06/customer-123.pdf arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555 \
-  --context-entries ContextKeyName=s3:x-amz-server-side-encryption,ContextKeyValues=aws:kms,ContextKeyType=string
-```
-
-The command asks AWS to evaluate the named role against two actions and two exact resources. `--policy-source-arn` is the role being tested. `--action-names` is the list of API actions from the failed workflow. `--resource-arns` uses the real object path and KMS key ARN instead of broad placeholders. `--context-entries` adds request facts that conditions may require, such as the server-side encryption header.
-
-The response is long, but the useful part usually looks like this:
+A **resource-based policy** attaches to a resource and states which principals may use it. An S3 bucket policy can include:
 
 ```json
 {
-  "EvaluationResults": [
+  "Effect": "Allow",
+  "Principal": {
+    "AWS": "arn:aws:iam::123456789012:role/ReceiptExportRole"
+  },
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::company-receipts/incoming/*"
+}
+```
+
+The relationship can be described from either side:
+
+```text
+identity policy
+ReceiptExportRole → I may read receipts
+
+resource policy
+company-receipts bucket → ReceiptExportRole may read me
+```
+
+S3 bucket policies, KMS key policies, SQS queue policies, SNS topic policies, Secrets Manager resource policies, and IAM role trust policies are examples of resource-side controls.
+
+#### Cross-account access needs both owners
+
+Suppose account A owns the bucket and account B owns the workload. There are two security domains:
+
+```text
+Account B                           Account A
+
+identity policy                     bucket policy
+I want to make this request         I trust this external principal
+```
+
+Cross-account access generally requires cooperation. Account B permits its principal to call `s3:GetObject`; account A accepts that external principal on its bucket. Authorization is not always only “What may the caller do?” It can also be “Whom does the resource owner trust?”
+
+## How Do Trust, Permissions, Resources, and Conditions Work Together?
+<!-- section-summary: A role trust policy controls who may obtain credentials, working policies control what those credentials may do, and resource shapes and conditions narrow matching requests. -->
+
+IAM evaluation starts with implicit deny. If AWS has no applicable allow for `alice → s3:GetObject → secret.pdf`, the result is `DENY`. No blanket deny statement is required to create that state.
+
+If an applicable policy allows `s3:GetObject` under `company-receipts/*`, a matching request can become allowed unless an applicable policy explicitly denies it. If another policy denies `s3:DeleteObject`, that deny overrides a broad `s3:*` allow.
+
+```text
+1. Applicable explicit Deny?
+   yes → DENY
+
+2. Sufficient applicable Allow?
+   no  → DENY
+   yes → ALLOW
+```
+
+AWS may gather identity policies, resource policies, session policies, permissions boundaries, Organizations guardrails, and service-specific rules. Identity and resource policies can contribute possible permissions. Boundaries, session policies, and organizational controls can restrict those possibilities. An explicit deny remains decisive.
+
+![The evaluation layers show how grants, ceilings, guardrails, and explicit denies combine](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/evaluation-layers.png)
+
+*An attached allow is only one input to the final request decision.*
+
+### A role has an entry side and a working side
+
+For a Lambda receipt exporter, the trust policy can allow the Lambda service to assume the role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
     {
-      "EvalActionName": "s3:PutObject",
-      "EvalResourceName": "arn:aws:s3:::payments-prod-receipts/exports/2026-06/customer-123.pdf",
-      "EvalDecision": "allowed",
-      "MatchedStatements": [
-        {
-          "SourcePolicyId": "ReceiptExportWritePolicy",
-          "StartPosition": {
-            "Line": 6,
-            "Column": 7
-          },
-          "EndPosition": {
-            "Line": 12,
-            "Column": 8
-          }
-        }
-      ]
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+This statement answers “Who may become `ReceiptExportRole`?” It does not grant S3 access. The role's working policy separately allows the session to read input and write output:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadIncomingReceipts",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::company-receipts/incoming/*"
     },
     {
-      "EvalActionName": "kms:GenerateDataKey",
-      "EvalResourceName": "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555",
-      "EvalDecision": "implicitDeny",
-      "MissingContextValues": []
+      "Sid": "WriteDailyExports",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::company-receipt-exports/daily/*"
     }
   ]
 }
 ```
 
-The useful output sits under `EvaluationResults`. Each result has `EvalActionName`, `EvalResourceName`, and `EvalDecision`. `allowed` means the simulated identity policy path permits that action on that resource. `implicitDeny` means no matching allow was found. `explicitDeny` means a deny statement matched, and that deny wins over allows.
+Trust controls who can acquire the role. Permissions control what the acquired credentials can do.
 
-In this output, the S3 object write is allowed by the role policy, but KMS usage is still denied. The next review step is the KMS statement and the KMS key policy, not another broad S3 permission. `MatchedStatements` points at the policy document that matched, which helps a reviewer connect the decision back to the exact statement.
+### The API determines the resource shape
 
-The output should be read as a clue, not as the whole verdict. If the simulator says the identity policy allows `s3:PutObject`, but the real request still fails, the next checks are the bucket policy, KMS key policy, SCPs, VPC endpoint policy, and the request context that the service actually sent.
-
-CloudTrail gives the historical evidence. For a failed receipt export, look for the S3, KMS, Lambda, or IAM event around the failure time. The event can show the role session, source IP, request parameters, error code, and sometimes the policy type involved in the denial.
-
-For a quick account-level lookup, a reviewer can search recent CloudTrail management events by event name. S3 data events need a configured trail or event data store, but this command still shows the shape of an evidence-first workflow:
-
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=GenerateDataKey \
-  --max-results 1 \
-  --output json
-```
+If the exporter lists incoming receipts, it also needs `s3:ListBucket`. A common mistake attaches that action to an object ARN:
 
 ```json
 {
-  "Events": [
+  "Effect": "Allow",
+  "Action": "s3:ListBucket",
+  "Resource": "arn:aws:s3:::company-receipts/incoming/*"
+}
+```
+
+`ListBucket` operates on the bucket resource, so the correct resource is:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:ListBucket",
+  "Resource": "arn:aws:s3:::company-receipts"
+}
+```
+
+`s3:GetObject` operates on object resources and therefore uses the object-prefix ARN. The correct resource scope follows the semantics of the API operation. Actions within one AWS service do not necessarily use the same resource shape.
+
+### Conditions narrow context that the ARN cannot express
+
+The bucket-level list permission can be narrowed to the incoming prefix:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:ListBucket",
+  "Resource": "arn:aws:s3:::company-receipts",
+  "Condition": {
+    "StringLike": {
+      "s3:prefix": [
+        "incoming",
+        "incoming/*"
+      ]
+    }
+  }
+}
+```
+
+The statement now matches only when the requested S3 prefix is `incoming` or below it. Other condition keys can represent source service, source account, VPC, VPC endpoint, IP address, resource tags, principal tags, requested Region, TLS, MFA, time, and KMS encryption context.
+
+Without conditions, the policy says “P may do A to R.” With conditions, it says “P may do A to R only when C is true.” A permission can be viewed as a region in a multidimensional space:
+
+```text
+Principal × Action × Resource × Context
+```
+
+Least privilege cuts that volume down to the expected principal, actions, resources, and context.
+
+Prefer a small positive allow boundary, such as one prefix ARN, to a giant allow plus a complicated set of deny exceptions. Explicit deny is valuable for clear invariants and guardrails; it should not compensate for an unnecessarily broad allow.
+
+## Why Can One Operation Need Both S3 and KMS Permission?
+<!-- section-summary: Reading or writing an SSE-KMS object crosses S3 authorization and KMS authorization, and both resource owners must permit their part. -->
+
+Suppose the incoming receipts are encrypted with an AWS KMS customer-managed key. The role already has `s3:GetObject`, but the operation fails with `AccessDenied`.
+
+The logical read crosses two authorization systems:
+
+```text
+1. Ask S3 for the object.
+2. S3 obtains the encrypted data.
+3. KMS authorizes decryption.
+4. Plaintext becomes available to the caller.
+```
+
+The request therefore needs both:
+
+```text
+S3 authorization
+  s3:GetObject on the input object
+
+AND
+
+KMS authorization
+  kms:Decrypt on the receipt key
+```
+
+The role may need:
+
+```json
+{
+  "Sid": "DecryptReceiptObjects",
+  "Effect": "Allow",
+  "Action": "kms:Decrypt",
+  "Resource": "arn:aws:kms:eu-west-2:123456789012:key/RECEIPT-KEY-ID"
+}
+```
+
+Writing output protected by server-side encryption with KMS may also require `kms:Encrypt` and `kms:GenerateDataKey`, depending on the workflow. S3 permission does not imply KMS permission, and KMS permission does not grant S3 object access.
+
+### The KMS key has its own resource policy
+
+Customer-managed KMS keys have key policies. Even if the role's identity policy allows `kms:Decrypt` on the key ARN, the key's authorization configuration must permit that usage path.
+
+```text
+caller-side policy                key-owner policy
+May I decrypt?                    May this principal use this key?
+```
+
+Both sides of the security boundary matter. This is the same caller-owner cooperation seen in cross-account bucket access, expressed through KMS's key policy model.
+
+### KMS conditions can narrow how the key is used
+
+A bare `kms:Decrypt` permission on one key allows decryption wherever the remaining KMS authorization permits it. The receipt exporter may only need the key through S3 and for the receipt data's expected encryption context.
+
+Conceptually, a more restricted permission says:
+
+```text
+Allow kms:Decrypt
+ONLY WHEN
+the expected key is used
+AND the request comes through S3
+AND the encryption context matches receipt data
+```
+
+If the role credentials are stolen, those context requirements reduce where the KMS capability can be used. Good least privilege constrains actions, resources, and context together.
+
+![The S3 and KMS view shows why encrypted object access needs permission to both the object path and the encryption key](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/s3-kms-permission-match.png)
+
+*One application operation can create several independently authorized AWS API requests.*
+
+## How Do PassRole, Boundaries, and Organization Guardrails Limit Access?
+<!-- section-summary: PassRole controls which role a caller may assign to a service, while boundaries and SCPs cap the permissions that delegated identities and accounts can receive. -->
+
+Suppose a deployment principal creates a Lambda function and assigns `ReceiptExportRole` as its execution role. AWS must decide whether that principal may tell Lambda to operate as the role. The controlling permission is `iam:PassRole`.
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "iam:PassRole",
+  "Resource": "arn:aws:iam::123456789012:role/ReceiptExportRole"
+}
+```
+
+`PassRole` does not allow the deployment principal to assume the role itself. It allows the principal to configure an AWS service to use that role later.
+
+### PassRole can create indirect privilege escalation
+
+A developer may only have permission to create Lambda functions. If the same developer can pass any role in the account, the developer could configure Lambda to run under a powerful administrator role and then place privileged code in the function.
+
+```text
+developer
+  │ create or update function
+  │ PassRole: *
+  ▼
+Lambda function
+  │ runs as
+  ▼
+SuperAdminRole
+```
+
+Restrict the role and, where appropriate, the receiving service:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "iam:PassRole",
+  "Resource": "arn:aws:iam::123456789012:role/ReceiptExportRole",
+  "Condition": {
+    "StringEquals": {
+      "iam:PassedToService": "lambda.amazonaws.com"
+    }
+  }
+}
+```
+
+The principal may pass one specific role and only to Lambda.
+
+`PassRole` and trust solve opposite sides:
+
+```text
+deployment principal
+       │ iam:PassRole
+       ▼
+ReceiptExportRole
+       ▲
+       │ trust policy allows sts:AssumeRole
+       │
+     Lambda
+```
+
+`PassRole` asks whether the deployer may configure Lambda with the role. The role trust policy asks whether Lambda may assume that role. Both must agree with the intended design.
+
+### A permissions boundary creates a maximum envelope
+
+A platform team may let application teams create IAM roles. Without a limit, a developer could create a role with `Action: "*"` and `Resource: "*"`. A **permissions boundary** sets the maximum permissions the delegated role or user can receive from identity policies.
+
+```text
+permissions requested by role policies
+                 │
+                 ▼
+          intersection with
+          permissions boundary
+                 │
+                 ▼
+      possible identity permissions
+```
+
+If the role policy allows `s3:*`, `ec2:*`, and `iam:*`, while the boundary allows only `s3:GetObject` and `s3:PutObject`, the effective identity permissions remain within the smaller S3 envelope.
+
+A boundary does not grant permissions. If the boundary permits `s3:GetObject` but no identity policy grants `s3:GetObject`, the role does not receive it.
+
+```text
+effective identity permission
+≈ identity-policy Allow ∩ boundary Allow
+```
+
+The intersection matters, not the union.
+
+### SCPs set an organization-level ceiling
+
+AWS Organizations service control policies can impose a ceiling across accounts. An organization can prohibit disabling CloudTrail. A platform boundary can limit application roles to S3 and SQS. The workload policy can narrow one exporter to the receipt prefix.
+
+```text
+organization guardrail
+  → organization-wide maximum
+
+account or platform boundary
+  → delegated-role maximum
+
+application policy
+  → workload-specific permission
+```
+
+These layers create defense in depth at different ownership levels.
+
+## How Do You Build a Least-Privilege Role From Workload Behavior?
+<!-- section-summary: Start with the program's steps, translate each step into an API action, map each action to its exact resource, and only then write policy JSON. -->
+
+Do not begin with IAM JSON. Begin with what the receipt exporter actually does:
+
+```text
+1. Discover files under s3://company-receipts/incoming/.
+2. Read those files.
+3. Decrypt them with ReceiptKey.
+4. Produce an export.
+5. Write exports under s3://company-receipt-exports/daily/.
+6. Encrypt output with ExportKey.
+```
+
+Translate behavior into API actions:
+
+```text
+list input     → s3:ListBucket
+read object    → s3:GetObject
+decrypt input  → kms:Decrypt
+write object   → s3:PutObject
+encrypt output → KMS operations required by the SSE-KMS workflow
+```
+
+Then map each action to its resource shape:
+
+```text
+s3:ListBucket
+  → company-receipts bucket
+
+s3:GetObject
+  → company-receipts/incoming/*
+
+kms:Decrypt
+  → ReceiptKey
+
+s3:PutObject
+  → company-receipt-exports/daily/*
+
+KMS output operations
+  → ExportKey
+```
+
+Only after those mappings are explicit should the team write the policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
     {
-      "EventTime": "2026-06-12T16:18:44+00:00",
-      "EventName": "GenerateDataKey",
-      "Username": "ReceiptExportRole",
-      "Resources": [
-        {
-          "ResourceType": "AWS::KMS::Key",
-          "ResourceName": "arn:aws:kms:us-east-1:123456789012:key/11111111-2222-3333-4444-555555555555"
+      "Sid": "ListIncomingReceipts",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::company-receipts",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "incoming",
+            "incoming/*"
+          ]
         }
+      }
+    },
+    {
+      "Sid": "ReadIncomingReceipts",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::company-receipts/incoming/*"
+    },
+    {
+      "Sid": "WriteDailyExports",
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::company-receipt-exports/daily/*"
+    },
+    {
+      "Sid": "DecryptReceipts",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:eu-west-2:123456789012:key/RECEIPT-KEY-ID"
+    },
+    {
+      "Sid": "EncryptExports",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:GenerateDataKey"
       ],
-      "CloudTrailEvent": "{\"eventSource\":\"kms.amazonaws.com\",\"eventName\":\"GenerateDataKey\",\"userIdentity\":{\"type\":\"AssumedRole\",\"arn\":\"arn:aws:sts::123456789012:assumed-role/ReceiptExportRole/ReceiptExportFunction\"},\"errorCode\":\"AccessDenied\",\"errorMessage\":\"User is not authorized to perform: kms:GenerateDataKey\"}"
+      "Resource": "arn:aws:kms:eu-west-2:123456789012:key/EXPORT-KEY-ID"
     }
   ]
 }
 ```
 
-This output gives three facts to carry back to the policy: the failing action is `kms:GenerateDataKey`, the resource is the specific KMS key ARN, and the caller is the `ReceiptExportRole` session. The fix should target that KMS path instead of widening the whole role.
+The policy does not contain `s3:*`, `kms:*`, `Resource: "*"`, or `AdministratorAccess`. It describes the application's actual behavior rather than its importance to the organization.
 
-Good debugging also improves the policy. If the export needs `kms:Decrypt` because it now reads an existing encrypted template, add that action to the specific key and record why. If the function writes to a new `archive/` prefix, decide whether that is a real workflow change or a bug in the object key. Every fix should make the policy clearer, not merely broader.
+Policies describe a set of independently allowed requests. This document does not require `GetObject` to happen before `Decrypt` and `PutObject`. IAM is not a workflow engine. The application chooses the sequence, and IAM decides whether each request belongs to the allowed set.
 
-## Putting It All Together
-<!-- section-summary: A production IAM policy works when each layer matches the workflow and each future reviewer can explain the access. -->
+### What Does Least Privilege Actually Measure?
+<!-- section-summary: Least privilege measures the number and impact of unintended requests that would still succeed, then reduces that blast radius throughout the permission lifecycle. -->
 
-The receipt export started as a simple sentence: "the function needs S3 access." The team turned that sentence into a real AWS permission design only after the workflow had names. The caller is `ReceiptExportRole`. The action is `s3:PutObject`. The resource is the `exports/*` prefix in `payments-prod-receipts`. The encryption key is one KMS key in one account and Region. The deployment pipeline can pass the role only to Lambda.
+Least privilege is not a contest to create the shortest policy. One action can be extremely powerful:
 
-The final design has several policy layers. Each one has a different job. The layers line up like this:
+```json
+{
+  "Effect": "Allow",
+  "Action": "iam:PassRole",
+  "Resource": "*"
+}
+```
 
-| Layer | Role in the design |
-|---|---|
-| Trust policy | Lets Lambda assume `ReceiptExportRole` |
-| Identity policy | Lets the role write receipt objects and use the receipt KMS key |
-| Bucket policy | Protects the bucket with resource-level denies or approved principal rules |
-| KMS key policy | Allows the key path needed for encrypted receipt writes |
-| PassRole policy | Lets the deployment pipeline attach only the approved execution role |
-| Boundary or guardrail | Keeps delegated role creation inside an approved ceiling |
+Another legitimate service integration may need twenty ordinary read actions. Line count and action count do not measure security.
 
-This is the practical version of least privilege. The policy can stay plain and readable. It needs to match the work, name the right resources, include the conditions that matter, and leave a reviewer able to explain why each permission exists.
+The stronger question is: **How many unintended requests would still succeed if these credentials were compromised?**
 
-Policy design also connects directly to operations. CloudTrail shows which requests happened. Access Analyzer can help generate policy drafts from observed activity. Last accessed information can show permissions that have gone stale. `AccessDenied` debugging follows a path through caller, action, resource, context, and policy layer.
+Compare two policies. A credential with `s3:*` on `*` may allow an attacker to read, modify, or delete data across unrelated buckets. A credential with `s3:GetObject` only under `company-receipts/incoming/*` has a much smaller capability set.
 
+Least privilege assumes that credentials may eventually fail and designs the permission so one credential compromise does not become a whole-infrastructure compromise.
 
-At this point, the IAM model is ready for one account and one workflow. The next problem is scale: many accounts, many teams, central guardrails, cross-account access, and evidence that survives local changes.
+#### Broad access should be a temporary discovery state
 
-## What's Next
+In a controlled development environment, a team may temporarily begin with broad access because it does not yet know the required APIs. That state should have a refinement path:
 
-The next article moves above individual policies and into account-level operations. It covers AWS Organizations, service control policies, cross-account roles, CloudTrail, Access Analyzer, credential reports, and review cadence.
+```text
+* / *
+  ↓
+s3:* / *
+  ↓
+GetObject + ListBucket
+  ↓
+specific bucket
+  ↓
+specific prefix
+  ↓
+expected network, service, and encryption context
+```
 
-That is where policy decisions join a wider access system. Local IAM grants the workflow. Organization guardrails limit what accounts can ever do. Evidence helps the team prove what access exists and remove permissions that no longer belong.
+Observe actual calls, identify required services, reduce to required actions, reduce to required resources, and then add required conditions. Broad permissions are a discovery state, not the permanent production architecture.
 
----
+The movement between stages should be visible to reviewers. If the first development policy allows every action on every resource, record why that scope is temporary and which workflow will provide evidence. Run the normal receipt export, an empty-input run, a retry after partial failure, and the deployment path. Each path can reveal a different API call. A policy based on one happy path may omit a permission needed for safe recovery, while a policy based on every action ever observed may preserve unrelated debugging activity.
 
-**References**
+Ask two questions about every observed action:
 
-- [Policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html) - Documents how AWS evaluates identity policies, resource policies, boundaries, SCPs, and explicit denies.
-- [IAM JSON policy element reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html) - Defines the main JSON policy elements used in IAM policies.
-- [IAM JSON policy elements: Principal](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html) - Explains how principals work in resource-based policies and trust policies.
-- [IAM JSON policy elements: Condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html) - Explains request context and condition matching.
-- [Identity-based policies and resource-based policies](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_identity-vs-resource.html) - Compares policy types that attach to identities and resources.
-- [Managed policies and inline policies](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-vs-inline.html) - Describes AWS managed, customer managed, and inline IAM policies.
-- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Covers least privilege, managed-policy starting points, Access Analyzer, and permissions reviews.
-- [IAM Access Analyzer policy generation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-generation.html) - Describes generating policies from CloudTrail activity and key limitations.
-- [Required permissions for Amazon S3 API operations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html) - Maps S3 API operations to required IAM permissions.
-- [Policies and permissions in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-policy-language-overview.html) - Explains S3 bucket and user policies, resources, and policy elements.
-- [Key policies in AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html) - Explains KMS key policies and how they control access to KMS keys.
-- [Using IAM policies with AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/iam-policies.html) - Explains how IAM policies work with KMS key policies.
-- [Specifying KMS keys in IAM policy statements](https://docs.aws.amazon.com/kms/latest/developerguide/cmks-in-iam-policies.html) - Documents key ARN requirements for KMS policy statements.
-- [Grant a user permissions to pass a role to an AWS service](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html) - Explains `iam:PassRole`, `iam:PassedToService`, and CloudTrail behavior for passed roles.
-- [Permissions boundaries for IAM entities](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) - Defines permissions boundaries and effective permission behavior.
-- [Troubleshoot access denied error messages](https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html) - Documents explicit and implicit denies and common access-denied troubleshooting paths.
-- [IAM policy testing with the IAM policy simulator](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html) - Explains testing and troubleshooting identity-based policies and permissions boundaries.
+```text
+Did the workload actually call this API?
+AND
+Should the production workload be allowed to call it?
+```
+
+The first question is factual and can be answered with CloudTrail and service evidence. The second is a design decision. A development run may show `s3:DeleteObject` because somebody cleaned up an object with the same role. That event proves usage, but it does not prove that deletion belongs in the production exporter.
+
+Move from evidence to production permission deliberately:
+
+```text
+observed API calls
+      ↓
+classify each call as required, accidental, or development-only
+      ↓
+map required calls to exact resource shapes
+      ↓
+add context that must remain true
+      ↓
+test success and failure paths
+      ↓
+remove the temporary broad policy
+```
+
+The final removal matters. Adding a narrow policy while leaving the discovery policy attached does not reduce effective access. IAM evaluates all applicable policies, so the older broad allow can continue authorizing requests that the new policy deliberately excludes.
+
+#### Design from forbidden capabilities
+
+Write the negative requirements:
+
+```text
+must not delete receipts
+must not read outside incoming/
+must not write outside daily/
+must not use other KMS keys
+must not manage IAM
+must not create infrastructure
+must not pass roles
+```
+
+Most of these do not require explicit deny. “Must not delete receipts” can be achieved by never allowing `s3:DeleteObject`. A small allow set is simpler to audit than a broad allow repaired by many deny statements.
+
+Ask what an attacker or faulty program could do that the application never intends to do. Can it overwrite arbitrary receipts, read HR data, write elsewhere in the export bucket, decrypt unrelated ciphertext, create IAM users, pass a more powerful role, or assume another role? Every unexpected “yes” identifies permission to reconsider.
+
+#### Capability should follow the process, not the job title
+
+“Finance app” is not a useful machine permission boundary. “Read objects from X, decrypt with Y, and write objects to Z” is. Batch workloads usually have small deterministic capability sets and are good candidates for tight policies.
+
+Human and machine identities should also look different. A developer may need to inspect logs, read metrics, redeploy services, and debug infrastructure. The receipt execution role needs only its runtime operations. Deployment permission and runtime permission should remain separate:
+
+```text
+Developer or CI role
+    │ deploy + iam:PassRole
+    ▼
+Lambda configuration
+    │ references
+    ▼
+ReceiptExportRole
+    │ runtime API calls
+    ▼
+S3 and KMS
+```
+
+The deployment role may update function code and configuration and pass the approved execution role. The execution role may get and put objects and use the required keys. A compromised runtime should not inherit the capability to redeploy or modify itself.
+
+#### Permissions require continuous review
+
+Permissions accumulate when feature A needs one action, feature B adds another, temporary debugging adds a third, and nobody removes the first or third after the features disappear.
+
+Treat least privilege as a lifecycle:
+
+```text
+observe
+  ↓
+grant
+  ↓
+measure
+  ↓
+review
+  ↓
+remove unused permissions
+  ↓
+repeat
+```
+
+CloudTrail, IAM Access Analyzer, access-last-used information, and policy simulation can contribute evidence. Permissions become technical debt when they no longer have a current justification.
+
+The review must also follow application change. If a later feature moves input from `incoming/*` to `approved/*`, changes the output key, or removes encrypted templates, update the policy with the same change. Otherwise the old prefix and `kms:Decrypt` permission can survive after the code stops using them. A reviewer should be able to connect every surviving statement to a current behavior, resource owner, and failure or recovery path.
+
+![The least-privilege map turns workflow evidence into narrower actions, resources, conditions, tests, and recurring review](/content-assets/articles/article-cloud-providers-aws-identity-security-policy-evaluation/least-privilege-policy-map.png)
+
+*The policy should continue changing as the application's legitimate request set changes.*
+
+## How Do You Debug AccessDenied With Evidence?
+<!-- section-summary: AccessDenied debugging identifies the actual principal, exact API action, exact resource, request context, applicable allows, guardrails, and any downstream authorization system. -->
+
+A damaging IAM debugging pattern is:
+
+```text
+AccessDenied
+    ↓
+add s3:*
+    ↓ still denied
+add kms:*
+    ↓ still denied
+attach AdministratorAccess
+```
+
+The application may eventually work while the team learns nothing about the missing dependency and creates a much larger attack surface.
+
+Treat `AccessDenied` as evidence. Ask which principal made the request, which API action failed, which resource it targeted, whether an allow was missing or an explicit deny matched, and which authorization layer rejected it.
+
+### Confirm the principal first
+
+The role you expect is not always the caller AWS sees. For CLI or SDK debugging:
+
+```bash
+aws sts get-caller-identity
+```
+
+You may expect the `ReceiptExportRole`, while AWS shows an assumed session of another role. Never debug an IAM policy until you know which principal actually made the request.
+
+### Find the exact API and resource
+
+“Could not download receipt” may represent `s3:GetObject`, `kms:Decrypt`, `sts:AssumeRole`, or `s3:ListBucket`. Each needs a different permission and resource shape.
+
+CloudTrail and service logs can provide `eventSource`, `eventName`, `userIdentity`, request parameters, resource, error code, and error message. The useful evidence looks like:
+
+```text
+Principal: ReceiptExportRole session
+Action:    kms:Decrypt
+Resource:  arn:aws:kms:eu-west-2:123456789012:key/abc
+Result:    AccessDenied
+```
+
+Now the problem is a concrete authorization tuple rather than a guess about S3.
+
+### Walk the policy layers in order
+
+```text
+request denied
+     │
+     ▼
+which principal made it?
+     │
+     ▼
+which exact action failed?
+     │
+     ▼
+which resource was targeted?
+     │
+     ▼
+applicable Allow exists?
+   ┌─┴─┐
+  no  yes
+   │    │
+find   inspect explicit Deny
+allow   and guardrails
+```
+
+Relevant layers can include identity policies, resource policies, the role trust policy, permissions boundary, session policy, SCP, KMS key policy, bucket policy, VPC endpoint policy, and service-specific conditions.
+
+Sometimes the denial is correct. If the exporter unexpectedly calls `s3:DeleteObject`, its specification still says “read receipts and write exports.” The correct fix may be to repair the software instead of expanding the policy. Authorization failures can reveal application bugs and false assumptions.
+
+### Follow the dependency graph
+
+Suppose Lambda starts, `ListBucket` succeeds, and `GetObject` fails. Successful startup suggests that role trust worked. Successful listing proves that credentials exist and the list permission matches. Investigate `s3:GetObject`, the object ARN, bucket policy, boundary, and organization guardrails.
+
+If `GetObject` begins working but KMS returns a denial, S3 authorization succeeded. Continue downstream to `kms:Decrypt`, the actual key ARN, key policy, and encryption context. Do not widen unrelated S3 permissions.
+
+This is the difference between guessing and following the request's authorization dependencies one edge at a time.
+
+## How Does the Complete Authorization Design Fit Together?
+<!-- section-summary: The receipt export separates deployer permission, role trust, runtime permissions, S3 and KMS resource acceptance, and higher permission ceilings into independent authorization edges. -->
+
+A mature design has several layers of “should not” and “cannot.” The application should not delete receipts by design. The runtime role cannot delete them because it lacks `s3:DeleteObject`. A permissions boundary can prevent a developer-created role from exceeding the platform envelope. An SCP can prevent accounts from disabling required security services.
+
+```text
+application
+I will not do that.
+
+IAM role
+I cannot do that.
+
+permissions boundary
+Even if my identity policy changes, I cannot exceed this envelope.
+
+organization guardrail
+Even account administration remains inside this invariant.
+```
+
+The complete Receipt Export design contains several separate authorization arrows:
+
+```text
+                 DEPLOYER
+                    │
+               iam:PassRole
+                    │
+                    ▼
+           ReceiptExportRole
+                    ▲
+                    │ trust policy
+                    │ sts:AssumeRole
+                 Lambda
+                    │
+          temporary credentials
+                    │
+         ┌──────────┴───────────┐
+         │                      │
+         ▼                      ▼
+ company-receipts        company-receipt-exports
+ incoming/*                    daily/*
+         │                      │
+    s3:GetObject            s3:PutObject
+         │                      │
+         ▼                      ▼
+   Receipt KMS key          Export KMS key
+     kms:Decrypt       kms:Encrypt / GenerateDataKey
+```
+
+Four questions are hidden in the diagram:
+
+1. Can Lambda acquire the role credentials? The trust policy answers.
+2. Can the deployer assign the role to Lambda? `iam:PassRole` answers.
+3. What can the temporary credentials do? The role's identity policies answer, within boundaries and guardrails.
+4. Will S3 buckets and KMS keys accept those requests? Resource policies and service-specific authorization answer.
+
+Conditions can also correlate identity and resources. Roles tagged `Department=Finance` and resources tagged the same way can support attribute-based access rules in which a principal attribute must match a resource attribute. This moves part of the decision from a fixed list of principal and resource ARNs into request context.
+
+Condition keys must exist for the relevant action and service. A condition is a predicate:
+
+```python
+if action_matches and resource_matches and condition_is_true:
+    statement_matches
+```
+
+If the required context is absent, many operators do not match. Deny statements with `IfExists`, `Null`, negated operators, `NotAction`, or `NotResource` need particular care because an unexpectedly broad deny cannot be rescued by another allow. Use explicit deny for well-understood invariants rather than as a substitute for a clear allow design.
+
+For any IAM problem, reconstruct the request:
+
+```text
+Principal P wants Action A on Resource R under Context C.
+```
+
+Then ask:
+
+1. Who exactly is the principal: user, role, assumed-role session, or AWS service?
+2. What exact API action is requested?
+3. What exact resource does that action use: bucket, object, key, or role?
+4. Which context applies: tags, source account, Region, VPC endpoint, or encryption context?
+5. Where can an allow come from: identity policy or resource policy?
+6. What can restrict it: boundary, session policy, SCP, or resource guardrail?
+7. Does an explicit deny match?
+8. Does the operation trigger another authorization system, as S3 plus KMS does?
+9. For a role, who may assume it?
+10. Who may assign that role to a service through `iam:PassRole`?
+
+The final decision remains:
+
+```text
+                    REQUEST
+                       │
+                       ▼
+          P ─── does A ───► R
+                       │
+                       C
+                 request context
+                       │
+                       ▼
+        ┌─────────────────────────┐
+        │ applicable IAM policies │
+        └────────────┬────────────┘
+                     │
+          explicit Deny anywhere?
+              ┌──────┴──────┐
+             yes            no
+              │              │
+            DENY      sufficient Allow?
+                         ┌────┴────┐
+                        no        yes
+                         │          │
+                       DENY       ALLOW
+```
+
+IAM begins with deny. Policies create narrow exceptions in terms of principal, action, resource, and condition. Identity policies describe what a caller may do. Resource policies describe which callers the resource trusts. Roles separate assumption from working permissions. Boundaries and organization policies create maximum envelopes. PassRole controls role assignment to services. S3 and KMS show how one application operation can cross several authorization systems.
+
+Least privilege is the repeated process of shrinking all possible API requests down to exactly the requests the workload legitimately needs while assuming that its credentials may one day be stolen.
+
+## Check Your Answers
+
+:::expand[How Does IAM Evaluate One API Request?]{kind="recap"}
+IAM treats authorization as a proof about one principal, action, resource, and request context.
+
+IAM evaluates whether principal P may perform action A on resource R under context C. Requests begin denied, need sufficient permission, and remain denied when an applicable explicit deny matches.
+:::
+
+:::expand[What Does a Policy Statement Mean?]{kind="recap"}
+A statement combines an effect, API action, resource set, and optional condition into one authorization rule.
+
+A statement combines an allow or deny effect with API actions, resource expressions, and optional conditions. Least privilege narrows the action set and resource set to the workload's real requests.
+
+Identity policies state what a caller may do, while resource policies state which principals a resource owner accepts.
+
+Identity policies attach to users, groups, or roles and state what the identity may do. Resource policies attach to buckets, keys, queues, topics, secrets, or roles and state which principals the owner accepts.
+:::
+
+:::expand[How Do Trust, Permissions, Resources, and Conditions Work Together?]{kind="recap"}
+A role trust policy controls who may obtain credentials, working policies control what those credentials may do, and resource shapes and conditions narrow matching requests.
+
+A role trust policy controls who may acquire the role, working policies control what the session may do, the API defines the correct resource shape, and conditions restrict matching request context.
+:::
+
+:::expand[Why Can One Operation Need Both S3 and KMS Permission?]{kind="recap"}
+Reading or writing an SSE-KMS object crosses S3 authorization and KMS authorization, and both resource owners must permit their part.
+
+An encrypted object operation can require S3 permission for the object and KMS permission for the encryption key. The role policies and the KMS key's resource-side authorization must all permit their part.
+:::
+
+:::expand[How Do PassRole, Boundaries, and Organization Guardrails Limit Access?]{kind="recap"}
+PassRole controls which role a caller may assign to a service, while boundaries and SCPs cap the permissions that delegated identities and accounts can receive.
+
+PassRole controls which role a principal may assign to an AWS service. A permissions boundary caps a delegated identity's maximum permissions without granting them, and SCPs set organization-level ceilings.
+:::
+
+:::expand[How Do You Build a Least-Privilege Role From Workload Behavior?]{kind="recap"}
+Start with the program's steps, translate each step into an API action, map each action to its exact resource, and only then write policy JSON.
+
+List the workload steps, translate each step into an exact API action, map every action to the correct resource, add required context, and only then write policy JSON.
+
+Least privilege measures the number and impact of unintended requests that would still succeed, then reduces that blast radius throughout the permission lifecycle.
+
+Least privilege measures the unintended requests and damage still possible after compromise, not policy length. Keep discovery access temporary, separate deployment from runtime, design negative requirements, and remove stale permissions continually.
+:::
+
+:::expand[How Do You Debug AccessDenied With Evidence?]{kind="recap"}
+AccessDenied debugging identifies the actual principal, exact API action, exact resource, request context, applicable allows, guardrails, and any downstream authorization system.
+
+Confirm the real principal, failed API action, target resource, and request context. Then inspect missing allows, explicit denies, ceilings, resource policies, conditions, and downstream authorization systems in order.
+:::
+
+:::expand[How Does the Complete Authorization Design Fit Together?]{kind="recap"}
+The receipt export separates deployer permission, role trust, runtime permissions, S3 and KMS resource acceptance, and higher permission ceilings into independent authorization edges.
+
+The deployer, Lambda trust, runtime role, S3 buckets, KMS keys, boundaries, and SCPs form separate authorization edges. Each edge must match the intended principal, action, resource, and context.
+:::
+
+## References
+
+- [IAM policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html)
+- [IAM JSON policy elements](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html)
+- [IAM JSON policy element: Principal](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html)
+- [IAM JSON policy element: Condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html)
+- [Identity-based and resource-based policies](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_identity-vs-resource.html)
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+- [Required permissions for S3 API operations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html)
+- [Policies and permissions in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-policy-language-overview.html)
+- [Key policies in AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html)
+- [Use IAM policies with AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/iam-policies.html)
+- [Pass a role to an AWS service](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html)
+- [Permissions boundaries for IAM entities](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html)
+- [Troubleshoot access denied errors](https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html)

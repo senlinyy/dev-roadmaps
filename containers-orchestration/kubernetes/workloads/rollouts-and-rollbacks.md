@@ -1,395 +1,483 @@
 ---
 title: "Rollouts and Rollbacks"
 description: "Update Kubernetes workloads safely, inspect rollout progress, and roll back a bad Deployment revision."
-overview: "Rollouts move a Deployment from one Pod template to another. A `notification-api` image update shows progress checks, stuck-release diagnosis, and rollback boundaries."
+overview: "Deployment rollouts move from one Pod template to another through old and new ReplicaSets, while pacing, readiness, revision history, and recovery boundaries determine how safely the change reaches users."
 tags: ["rollouts", "rollback", "deployments", "kubectl"]
 order: 6
 id: article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks
 ---
+
 ## Table of Contents
 
-1. [A New Image Without Stopping Traffic](#a-new-image-without-stopping-traffic)
-2. [The Small Rollout Shape](#the-small-rollout-shape)
-3. [Revisions and the Pod Template Hash](#revisions-and-the-pod-template-hash)
-4. [RollingUpdate Pacing](#rollingupdate-pacing)
-5. [Readiness and Traffic Safety](#readiness-and-traffic-safety)
-6. [Starting and Watching a Release](#starting-and-watching-a-release)
-7. [Diagnosing a Stuck Rollout](#diagnosing-a-stuck-rollout)
-8. [History, Undo, and Restart](#history-undo-and-restart)
-9. [Pause, Resume, and Release Runbooks](#pause-resume-and-release-runbooks)
-10. [Rollback Caveats](#rollback-caveats)
-11. [What's Next](#whats-next)
-12. [References](#references)
+1. [What changes when a Deployment rolls out a new Pod template?](#what-changes-when-a-deployment-rolls-out-a-new-pod-template)
+2. [Why does a Deployment keep old and new ReplicaSets during replacement?](#why-does-a-deployment-keep-old-and-new-replicasets-during-replacement)
+3. [How do maxSurge, maxUnavailable, readiness, and minReadySeconds control the pace?](#how-do-maxsurge-maxunavailable-readiness-and-minreadyseconds-control-the-pace)
+4. [How can you tell whether a rollout is progressing, complete, or stalled?](#how-can-you-tell-whether-a-rollout-is-progressing-complete-or-stalled)
+5. [When should you patch forward, pause, restart, or roll back?](#when-should-you-patch-forward-pause-restart-or-roll-back)
+6. [What does a Deployment rollback restore, and which changes need separate recovery?](#what-does-a-deployment-rollback-restore-and-which-changes-need-separate-recovery)
+7. [How do you verify the workload and the user-facing behavior after a release or rollback?](#how-do-you-verify-the-workload-and-the-user-facing-behavior-after-a-release-or-rollback)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## A New Image Without Stopping Traffic
-<!-- section-summary: A rollout replaces old Deployment Pods with new-template Pods while readiness and strategy settings keep traffic on healthy replicas. -->
+At first principles, a Kubernetes rollout changes the desired Pod template and safely replaces one population of Pods with another. Kubernetes does not open each running container and update its image in place.
 
-A Deployment owns a Pod template, manages ReplicaSets, and keeps the requested number of replicas available. A **rollout** happens after that Pod template changes. Kubernetes creates Pods from the new template and retires Pods from the old template according to the Deployment strategy.
+The controller relationship is:
 
-For the Customer Notification Platform, the release is `notification-api` image `2026.06.14-2`. The running service already has three Pods on image `2026.06.14-1` serving password reset emails, delivery updates, and account alerts. The new image improves provider retry handling and needs a `NOTIFICATION_EVENT_TOPIC` value. Kubernetes has to introduce those new Pods while old Pods keep serving traffic until replacement capacity is ready.
+> **Deployment → old and new ReplicaSets → old and new Pods**
 
-A **rollback** uses the same replacement machinery in the other direction. If `2026.06.14-2` fails readiness checks or starts returning bad notification responses, the team can ask Kubernetes to restore a previous Deployment revision. Kubernetes then creates Pods from that earlier template and scales down the broken one.
+A Deployment says that the desired template is now `v2`. One ReplicaSet still represents template `v1`, while another represents template `v2`. The Deployment controller gradually moves capacity from the old ReplicaSet to the new one.
 
-Release control has a practical order: understand the rollout fields, track ReplicaSet revisions, watch pacing and readiness, use status commands, diagnose stuck progress, then decide whether to patch forward, restart, pause, resume, or roll back.
+Only a change under `.spec.template` creates a new rollout revision. Changing `.spec.replicas` asks the current template for a different number of Pods, so that change is scaling.
 
-![Rollout replacement flow infographic showing a Deployment creating new v2 Pods, waiting for readiness, removing old v1 Pods, using maxSurge one, and sending traffic only to ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollout-replacement-flow.png)
+The central model is:
 
-*A rollout replaces Pods gradually so readiness can protect traffic while the new version proves it can serve.*
+> **A rollout changes the desired Pod template. ReplicaSets preserve template generations. Readiness tells the controller when new capacity is useful.**
 
-_This infographic shows that a rollout replaces Pods as units, while readiness decides when a new Pod can join traffic._
+The model separates three changes that are easy to confuse:
 
-## The Small Rollout Shape
-<!-- section-summary: The rollout fields get a small Deployment slice before the full application template appears elsewhere. -->
+```text
+scale replicas 4 → 6     → same template generation, larger population
+change image v1 → v2     → new template generation and rollout
+restart current template → new Pod instances without choosing an older application template
+```
 
-The full Deployment has many fields. Release behavior comes from a small set of settings. For the notification API, the team wants three Pods in normal service, a short history for rollback, a deadline that exposes stalled progress, and a strategy that adds replacement capacity before removing old capacity. Reading these fields first helps the later commands connect to the exact manifest settings that control the release path.
+All three may create or delete Pods, but the desired-state reason and recovery meaning are different.
+
+The article follows seven questions:
+
+1. **What changes when a Deployment rolls out a new Pod template?**
+2. **Why does a Deployment keep old and new ReplicaSets during replacement?**
+3. **How do maxSurge, maxUnavailable, readiness, and minReadySeconds control the pace?**
+4. **How can you tell whether a rollout is progressing, complete, or stalled?**
+5. **When should you patch forward, pause, restart, or roll back?**
+6. **What does a Deployment rollback restore, and which changes need separate recovery?**
+7. **How do you verify the workload and the user-facing behavior after a release or rollback?**
+
+## What changes when a Deployment rolls out a new Pod template?
+<!-- section-summary: A new Pod template creates a new ReplicaSet and a replacement population of Pods. -->
+
+### A release replaces a population instead of editing processes in place
+
+Start with a four-replica Deployment:
 
 ```yaml
 spec:
-  replicas: 3
-  revisionHistoryLimit: 5
-  progressDeadlineSeconds: 300
+  replicas: 4
+  template:
+    spec:
+      containers:
+        - name: api
+          image: my-api:v1
+```
+
+Changing the image to `my-api:v2` changes `.spec.template`. Existing Pods still represent `v1`, so the Deployment creates new Pods from `v2` and retires the old Pods over time.
+
+Before the change, one ReplicaSet owns four `v1` Pods. Early in the rollout, that old ReplicaSet may still own all four while a new ReplicaSet starts one `v2` Pod. At completion, the old ReplicaSet has zero desired replicas and the new ReplicaSet owns four available `v2` Pods.
+
+This gives each object a precise role:
+
+| Object | What it represents |
+|---|---|
+| Deployment | the desired release and replica count |
+| ReplicaSet | one concrete Pod-template generation |
+| Pod | one running instance of that generation |
+
+The Deployment controller therefore solves a population-replacement problem: the cluster currently has instances of template `v1`, desired state now says `v2`, and the change should happen without losing too much working capacity.
+
+## Why does a Deployment keep old and new ReplicaSets during replacement?
+<!-- section-summary: Separate ReplicaSets let Kubernetes represent two template generations at the same time and move capacity between them. -->
+
+### ReplicaSets make both generations explicit
+
+Kubernetes needs both generations during a rolling release. With four desired replicas, the populations might move through states like these:
+
+| Stage | Old ReplicaSet `v1` | New ReplicaSet `v2` |
+|---|---:|---:|
+| Before rollout | 4 | 0 |
+| New generation begins | 4 | 1 starting |
+| Handoff | 3 | 2 |
+| Later handoff | 2 | 3 |
+| Complete | 0 | 4 |
+
+The Deployment controller changes ReplicaSet replica counts. Each ReplicaSet controller then creates or deletes Pods until its own actual population matches that count.
+
+Each distinct Pod template receives a `pod-template-hash`. This hash labels the ReplicaSet and its Pods so the generations do not become mixed. It also makes the ownership visible when you inspect ReplicaSets and Pods.
+
+After a successful rollout, the old ReplicaSet usually remains with zero replicas. Keeping the object preserves an earlier Pod-template revision and provides the history used by Deployment rollback. The Deployment's `revisionHistoryLimit` controls how many old ReplicaSets are retained; its default is 10. Setting it to 0 allows old history to be removed after cleanup and removes the Deployment's ability to return to those revisions.
+
+### Read the Deployment as an orchestrator of populations
+
+The Deployment controller does not directly keep every Pod count by itself. It assigns desired sizes to generation-specific ReplicaSets:
+
+```text
+Deployment: desired template v2, desired population 4
+├─ ReplicaSet for hash of v1 → shrink toward 0
+└─ ReplicaSet for hash of v2 → grow toward 4
+```
+
+Each ReplicaSet controller then reconciles its assigned population. The hash labels keep a v1 Pod from being mistaken for a v2 Pod even when both match the application's stable Service selector.
+
+Retained zero-sized ReplicaSets are therefore more than clutter. They connect revision history to concrete Pod templates. Before relying on rollback, verify that the intended revision remains inside `revisionHistoryLimit`; a revision pruned from history cannot be reconstructed by the Deployment controller merely because the image still exists somewhere.
+
+![A four-replica Deployment moving desired capacity from an old ReplicaSet with v1 Pods to a new ReplicaSet with v2 Pods while a Service uses ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollout-replacement-flow.png)
+
+*Old and new ReplicaSets coexist so Kubernetes can replace a population gradually.*
+
+## How do maxSurge, maxUnavailable, readiness, and minReadySeconds control the pace?
+<!-- section-summary: Surge and unavailability define the rollout's capacity envelope, while readiness defines when new capacity can be trusted. -->
+
+### Capacity limits define the safe operating region
+
+`maxSurge` answers how much extra capacity Kubernetes may create during the handoff. `maxUnavailable` answers how much desired capacity may temporarily be unavailable.
+
+For this strategy:
+
+```yaml
+spec:
+  replicas: 4
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
-      maxUnavailable: 0
+      maxUnavailable: 1
 ```
 
-`replicas: 3` says the normal desired count is three Pods. `revisionHistoryLimit: 5` keeps up to five old ReplicaSets around for history and rollback. `progressDeadlineSeconds: 300` tells Kubernetes when a rollout has stopped making progress long enough to report a failed condition.
+the rollout normally works inside this envelope:
 
-The strategy section says how replacement should happen. `RollingUpdate` replaces Pods gradually. `maxSurge: 1` allows one extra Pod above the desired count during the update. `maxUnavailable: 0` tells Kubernetes not to intentionally drop below three available Pods while replacing them.
+```text
+Minimum available capacity: 4 - 1 = 3 Pods
+Maximum normal Pod count:    4 + 1 = 5 Pods
+```
 
-The rollout fields answer separate release questions:
+Kubernetes can create a fifth Pod because the surge budget is one. Once that new Pod supplies safe capacity, the controller can remove an old Pod without dropping below three available replicas. The two settings are safety rails around the replacement loop.
 
-- `replicas` sets the normal steady-state Pod count.
-- `revisionHistoryLimit` controls how many previous ReplicaSets stay available for history and rollback.
-- `progressDeadlineSeconds` gives Kubernetes a time window for rollout progress before reporting a failed condition.
-- `strategy.type: RollingUpdate` chooses gradual replacement.
-- `maxSurge` controls temporary extra capacity during replacement.
-- `maxUnavailable` controls planned availability loss during replacement.
+When percentages are used, Kubernetes currently defaults both settings to 25%. Percentage `maxUnavailable` rounds down, while percentage `maxSurge` rounds up. Terminating Pods may remain alive during their grace period, so actual resource consumption can temporarily exceed the simple `replicas + maxSurge` number.
 
-The image change lives deeper in the Pod template:
+Creation alone does not prove that a Pod can serve requests. A new process may need to start a runtime, establish database connections, load configuration, warm caches, and open its listener. Kubernetes distinguishes several states:
+
+| State | What it proves |
+|---|---|
+| created | the Pod object exists |
+| scheduled | a node has been selected |
+| `Running` | at least one container process is running |
+| `Ready` | the configured readiness checks say the Pod can receive traffic |
+| available | the Deployment can count the Pod as stable capacity |
+
+A readiness probe supplies the feedback signal:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  periodSeconds: 5
+```
+
+When readiness fails, the Pod can keep running, but matching Services stop treating it as a ready endpoint. The Deployment also avoids retiring too much proven old capacity.
+
+`minReadySeconds` adds a stability period:
+
+```yaml
+minReadySeconds: 30
+```
+
+The Pod must remain ready for that time before the Deployment counts it as available. The resulting control loop is straightforward: create a new Pod, wait for it to become ready and available, retire safe old capacity, and repeat.
+
+### Readiness is the controller's evidence that replacement capacity is useful
+
+A `Running` container proves that a process exists, not that it can serve users. During a safe handoff, an old Ready Pod remains useful while a new Pod starts but is not Ready. Only after the new Pod becomes Ready—and remains so for `minReadySeconds` when configured—does the controller have evidence that it can retire more old capacity.
+
+If new Pods stay unhealthy while old Pods remain, the apparent lack of progress is often the availability guardrail doing its job. The controller refuses to trade proven serving capacity for an unproven replacement.
+
+### Walk the four-replica safety envelope step by step
+
+With four desired replicas, surge one, and unavailable one, start at four Ready v1 Pods. Kubernetes may create one v2 Pod, making five total. While that Pod is starting, available capacity remains four because the old Pods still serve. Once v2 is Ready and satisfies `minReadySeconds`, the controller can remove old capacity while staying above the minimum of three.
+
+```text
+old available  new available  total Pods  interpretation
+4              0              5           one v2 is starting under surge
+4              1              5           new capacity has been proven
+3              1              4           one old Pod can retire safely
+3              1              5           another v2 begins
+...                                         repeat toward 0 old, 4 new
+```
+
+If the first v2 Pod never becomes Ready, the new ReplicaSet exists and a container may even be Running, but no replacement capacity has been proven. Keeping v1 is correct. Weakening readiness merely to advance the rollout would trade a visible stalled release for user traffic sent to an unhealthy process.
+
+Resource capacity participates too. The fifth Pod's requests must fit somewhere. A safe surge policy without cluster headroom produces a Pending Pod and cannot provide the availability evidence needed for the next handoff.
+
+## How can you tell whether a rollout is progressing, complete, or stalled?
+<!-- section-summary: Observe the Deployment, its ReplicaSets, and the new Pods to locate where replacement is progressing or blocked. -->
+
+### Find the first blocked step in the desired-state chain
+
+Changing the image with either a command or an updated manifest changes the desired Pod template:
+
+```bash
+kubectl set image deployment/api api=myregistry/api:v2
+kubectl apply -f deployment.yaml
+```
+
+Watch the Deployment until it completes:
+
+```bash
+kubectl rollout status deployment/api
+```
+
+During progress, the command reports how many updated replicas are available. Successful completion returns exit code 0, which also makes the command useful in a CI/CD step.
+
+Watch the mechanism directly in another terminal:
+
+```bash
+kubectl get rs -w
+```
+
+You should see the old ReplicaSet shrink and the new ReplicaSet grow. The Deployment is complete when all desired replicas are updated and available and no old replicas remain running.
+
+When progress stops, follow the object chain rather than treating the Deployment as one opaque object:
+
+```bash
+kubectl get deploy api
+kubectl get rs
+kubectl get pods
+kubectl describe deployment api
+```
+
+Classify the first visible symptom:
+
+| Symptom | Layer to inspect next |
+|---|---|
+| New ReplicaSet never appears | Deployment update or API admission |
+| ReplicaSet exists but no Pods appear | quota, admission, or permissions |
+| Pods remain `Pending` | scheduling, requested resources, volumes |
+| `ImagePullBackOff` | image name, tag, credentials, registry access |
+| `CrashLoopBackOff` | application startup or configuration |
+| `Running` but not ready | readiness endpoint and application dependencies |
+| Ready but not yet available | `minReadySeconds` |
+| New Pods are unhealthy while old Pods remain | availability protection is preserving old capacity |
+
+`progressDeadlineSeconds` controls how long Kubernetes waits before reporting that progress has stalled. Its default is currently 600 seconds. A Deployment condition may then show `Progressing=False` with reason `ProgressDeadlineExceeded`.
+
+That condition reports failure; the Deployment controller does not automatically choose a rollback. A delivery system, GitOps controller, operator, or person must decide whether the right response is a forward fix, a restart, or an older template.
+
+This separates detection from recovery. `ProgressDeadlineExceeded` says that the new population did not make sufficient progress in time. It does not establish that the previous revision is still compatible with current configuration, data, or dependencies, so Kubernetes cannot safely infer rollback on its own.
+
+### Diagnose from controller intent toward one new Pod
+
+Use the object hierarchy as a narrowing sequence:
+
+```text
+Did the Deployment accept the new template and create a revision?
+→ Did a new ReplicaSet appear with the expected hash and template?
+→ Did that ReplicaSet create a Pod object?
+→ Did admission accept the Pod and the scheduler place it?
+→ Did the kubelet pull the image and start the container?
+→ Did startup complete and readiness become true?
+→ Did readiness remain true long enough to become available?
+```
+
+The first “no” owns the next evidence. `Insufficient cpu` on a new Pod does not indicate a bad readiness probe. `ImagePullBackOff` does not improve by raising `progressDeadlineSeconds`. A Ready Pod waiting through `minReadySeconds` is making progress even though availability has not yet advanced.
+
+The deadline should cover a legitimately slow but healthy release while still reporting a genuinely stalled one. It is an observation threshold, not a repair mechanism. When it expires, preserve the conditions and Pod events before changing desired state so the cause is not erased by recovery.
+
+## When should you patch forward, pause, restart, or roll back?
+<!-- section-summary: Different rollout commands change the desired template, group edits, recreate current Pods, or restore an earlier template. -->
+
+These actions solve different problems.
+
+### Patch forward
+
+Use a forward change when you know the correct desired configuration. If `my-api:v2-broken` should be `my-api:v2.0.1`, update the image:
+
+```bash
+kubectl set image deployment/api api=my-api:v2.0.1
+```
+
+The patch changes `.spec.template`, creates another revision, and lets reconciliation replace the broken desired state with the corrected one.
+
+### Pause and resume
+
+Pause when several Pod-template edits should become one release destination:
+
+```bash
+kubectl rollout pause deployment/api
+```
+
+You can change the image, resources, environment, and probes while paused. Then resume:
+
+```bash
+kubectl rollout resume deployment/api
+```
+
+Kubernetes can create one ReplicaSet from the combined edits instead of rolling through several intermediate templates. Pausing temporarily stops reconciliation of those template changes. It is not a backup, and a paused Deployment must be resumed before it can be rolled back.
+
+### Restart
+
+Restart when the current desired image and configuration remain correct but you need fresh Pod instances:
+
+```bash
+kubectl rollout restart deployment/api
+```
+
+The desired application version stays the same while Kubernetes creates replacement Pods. This is useful when process state needs clearing or a process only reads some configuration at startup.
+
+### Roll back
+
+Inspect the retained revisions first:
+
+```bash
+kubectl rollout history deployment/api
+```
+
+Then select the previous revision or a particular one:
+
+```bash
+kubectl rollout undo deployment/api
+kubectl rollout undo deployment/api --to-revision=7
+```
+
+Rollback makes an earlier Pod template desired again. Choose it when that earlier template is the compatible recovery target.
+
+## What does a Deployment rollback restore, and which changes need separate recovery?
+<!-- section-summary: Deployment rollback restores an earlier Pod template; state and objects outside that template follow separate lifecycles. -->
+
+### Rollback restores a template, not an earlier universe
+
+Suppose revision 7 used this Pod template:
 
 ```yaml
 template:
   spec:
     containers:
-      - name: api
-        image: ghcr.io/customer-notification/notification-api:2026.06.14-2
+      - image: api:v1
         env:
-          - name: NOTIFICATION_EVENT_TOPIC
-            value: notifications.requests.v2
+          - name: FEATURE
+            value: "off"
 ```
 
-That small snippet is the release itself. The strategy above controls how Kubernetes moves from the old template to this new template.
+Revision 8 changed the image and environment value. Undoing to revision 7 restores the earlier `.spec.template` fields and starts replacement Pods from that template.
 
-## Revisions and the Pod Template Hash
-<!-- section-summary: Deployment revisions and template hashes help Kubernetes and operators separate old Pods from new Pods during a rollout. -->
+The boundary matters. Deployment rollback does not restore every part of an application system:
 
-A **Deployment revision** is a recorded version of the Deployment's Pod template. Kubernetes creates a new revision when the template changes. For `notification-api`, revision 1 might represent image `2026.06.14-1` with `NOTIFICATION_EVENT_TOPIC=notifications.requests.v1`. Revision 2 might represent image `2026.06.14-2` with `NOTIFICATION_EVENT_TOPIC=notifications.requests.v2`.
+| Restored through the earlier Pod template | Requires separate compatibility or recovery |
+|---|---|
+| image reference | live `ConfigMap` or `Secret` contents |
+| template environment values | `Service` objects |
+| probes | database schema and persistent data |
+| container resources | external APIs and side effects |
+| template volume references | replica count changed separately |
+| Pod labels and annotations | other Deployments and cluster configuration |
 
-The **pod template hash** is a label the Deployment controller adds to Pods and ReplicaSets so it can separate one template from another. You will often see a ReplicaSet name such as `notification-api-6f8f7b9d88`. The last part comes from the template hash. Treat that label as Kubernetes-owned.
+For example, imagine `v2` removes a database column that `v1` still reads. Kubernetes can restore the `v1` Pod template perfectly, yet the old process can still fail against the changed database. Application recovery has to account for compute version, configuration, schema, persistent data, and external compatibility.
 
-This command shows the ReplicaSets that belong to the API:
+A rollback is another forward reconciliation. Desired state moves from template `T1` to `T2`, then to `T1` again. Time does not run backwards. The controller scales the `T1` ReplicaSet up and the `T2` ReplicaSet down using the same readiness, surge, and availability rules as any rollout.
+
+This also means rollback can stall. If the old image now depends on a service that no longer exists, its Pods may start and fail readiness. Requesting rollback proves that the desired template changed; it does not prove that recovery succeeded.
+
+The important equation is therefore broader than the Deployment revision:
+
+```text
+recoverable application
+= compatible compute version
++ compatible configuration
++ compatible schema and persistent data
++ compatible external services and side effects
+```
+
+Kubernetes owns only the Pod-template portion of that recovery. The remaining components need explicit compatibility or a separate recovery plan.
+
+### Treat rollback as a release that must pass the same gates
+
+Undoing revision 8 to revision 7 changes the desired template to the earlier image, environment values embedded in the template, probes, resources, volumes, labels, and annotations. The old ReplicaSet can grow again while revision 8 shrinks, but surge, unavailability, scheduling, readiness, and availability still govern the handoff.
+
+That produces several possible recovery failures. The old image may be unavailable from the registry. Its resource request may no longer fit. Its readiness probe may depend on a removed endpoint. A referenced ConfigMap may now contain new-format data. The database may have migrated beyond what the old binary understands.
+
+Before rollback, state the compatibility assumption for each external boundary. After rollback starts, observe it exactly like a new rollout. “Undo command accepted” proves only that desired template changed. Recovery is successful when the older population becomes available and performs correctly with current configuration, data, and dependencies.
+
+## How do you verify the workload and the user-facing behavior after a release or rollback?
+<!-- section-summary: Verify controller completion, ready endpoints, the intended template, and representative application behavior. -->
+
+### Controller completion and application correctness are separate proofs
+
+Verification has several layers. Begin with controller completion:
 
 ```bash
-$ kubectl get rs -n notifications -l app.kubernetes.io/name=notification-api
-NAME                         DESIRED   CURRENT   READY   AGE
-notification-api-6f8f7b9d88  3         3         3       2d
-notification-api-7c9d4c685b  0         0         0       15m
+kubectl rollout status deployment/api
+kubectl get deployment api
 ```
 
-You can see the same separation on Pods:
+A completed four-replica Deployment should show four ready, up-to-date, and available replicas. Then inspect generations and Pods:
 
 ```bash
-$ kubectl get pods -n notifications \
-  -l app.kubernetes.io/name=notification-api -L pod-template-hash
-NAME                               READY   STATUS    HASH
-notification-api-6f8f7b9d88-8fkwd  1/1     Running   6f8f7b9d88
-notification-api-6f8f7b9d88-lk2qp  1/1     Running   6f8f7b9d88
-notification-api-7c9d4c685b-m8vnn  0/1     Running   7c9d4c685b
+kubectl get rs
+kubectl get pods -l app=api
+kubectl describe deployment api
 ```
 
-During a production issue, the hash lets you say which Pods came from the old template and which Pods came from the new template.
+The current ReplicaSet should own the desired population, old ReplicaSets should be at zero replicas, and the Pods should be ready. A completed Deployment gets `Progressing=True` with reason `NewReplicaSetAvailable`.
 
-## RollingUpdate Pacing
-<!-- section-summary: RollingUpdate settings decide how much extra capacity Kubernetes can create and how much existing capacity it may remove during replacement. -->
+Next, confirm that the expected image and template values actually reached the Pods. Then verify that the Service has ready backends and sends traffic to them. Kubernetes-level health establishes that the requested workload exists and satisfies the configured health checks.
 
-**RollingUpdate pacing** is the rate at which Kubernetes can add new Pods and remove old Pods during a Deployment update. The two main knobs are `maxSurge` and `maxUnavailable`.
+Application behavior needs its own evidence. Send a representative request, check that the response is correct, and compare error rate, latency, and saturation with the pre-release baseline. Also exercise paths affected by current configuration, data, or external dependencies—especially after a rollback.
 
-`maxSurge` controls extra temporary Pods. With three replicas and `maxSurge: 1`, Kubernetes can create a fourth Pod during the rollout. That new Pod must still schedule, pull the image, start, and pass readiness.
+The full verification sequence is:
 
-`maxUnavailable` controls how many desired Pods can be unavailable during replacement. With `maxUnavailable: 0`, Kubernetes keeps the old Pods serving until new capacity is ready. That is a common setting for small user-facing APIs when the cluster has room for one surge Pod.
+1. Deployment reconciliation completed.
+2. Desired replicas are updated and available.
+3. The expected image and template values are running.
+4. Matching Service endpoints are ready.
+5. Representative requests return correct results.
+6. Errors, latency, and saturation remain acceptable.
+7. Data, configuration, and external integrations remain compatible.
 
-Here is the pacing table for the notification API:
+Kubernetes can confirm the controller's state and the health signal you configured. It cannot judge whether a business operation is semantically correct. Release and recovery are complete only when both layers have evidence.
 
-| Desired replicas | maxSurge | maxUnavailable | Maximum Pods during update | Minimum available Pods |
-|---|---|---|---|---|
-| 3 | 1 | 0 | 4 | 3 |
-| 3 | 25% | 25% | 4 | 2 |
-| 10 | 30% | 10% | 13 | 9 |
+### Use the old version as a baseline, not merely a fallback
 
-Percentages are useful for larger services. Small services often use explicit numbers so the behavior is obvious to the person watching the release.
+Before changing traffic, capture the v1 baseline for request success, latency, saturation, dependency errors, and the business paths affected by v2. During rollout, correlate those outcomes with old and new Pod-template hashes so mixed populations do not hide a candidate regression inside aggregate metrics.
 
-Capacity can still block a careful strategy. If every node is already full according to requested CPU and memory, the surge Pod may stay Pending. The Deployment has a safe strategy, but the cluster has no room to execute it.
+After completion or rollback, send the same representative requests through the Service rather than directly to an isolated Pod. This proves selector and EndpointSlice membership as well as application behavior. Confirm that no old serving Pods remain when the rollout should be complete, and that the intended older generation owns serving capacity when recovery was the goal.
 
-## Readiness and Traffic Safety
-<!-- section-summary: Readiness decides when a new Pod can receive Service traffic, so rollout safety depends on probes that check real serving conditions. -->
+For state-changing operations, verify outcomes rather than only HTTP status. A payment endpoint can return success while duplicating a charge; a schema rollback can make reads succeed while corrupting writes. Kubernetes readiness is necessary release feedback, but business correctness completes the proof.
 
-A **readiness probe** asks whether a container should receive traffic. During a rollout, readiness is the gate that tells Kubernetes when a new Pod can count as available.
+## Check Your Answers
+<!-- section-summary: Revisit template replacement, ReplicaSet generations, pacing, progress, recovery choices, rollback boundaries, and verification. -->
 
-For `notification-api`, readiness should check the dependencies needed for real requests. The process may be running, but sending a notification request still needs database access, queue publishing, template loading, and provider routing configuration. A readiness endpoint should return success only after the app can handle ordinary user traffic.
+:::expand[What changes when a Deployment rolls out a new Pod template?]{kind="recap"}
+A change under `.spec.template` creates a new revision and a new ReplicaSet. Kubernetes starts new Pods from that template and gradually retires Pods from the previous generation. A replica-count change alone is scaling.
+:::
 
-This matters during the image update because Kubernetes may create a new Pod before it has any proof that the API can serve customers. The readiness probe gives the rollout a traffic gate: the old Pods keep serving while the new Pod starts, loads config, checks dependencies, and reports that it can handle the Service contract.
+:::expand[Why does a Deployment keep old and new ReplicaSets during replacement?]{kind="recap"}
+Each ReplicaSet represents one Pod-template generation. Keeping both generations lets the Deployment preserve working capacity while the new population starts and also retains revision history for rollback.
+:::
 
-```yaml
-readinessProbe:
-  httpGet:
-    path: /health/ready
-    port: http
-  periodSeconds: 5
-  timeoutSeconds: 2
-  failureThreshold: 3
-```
+:::expand[How do maxSurge, maxUnavailable, readiness, and minReadySeconds control the pace?]{kind="recap"}
+`maxSurge` budgets extra Pods, and `maxUnavailable` budgets temporary loss of available capacity. Readiness tells the controller when a Pod can serve, while `minReadySeconds` requires that readiness to remain stable before the Pod counts as available.
+:::
 
-If readiness is too shallow, Kubernetes may route traffic to a Pod that cannot send notifications yet. If readiness is too strict, a temporary provider outage may remove every Pod from traffic even though the API could still accept and queue requests. A good readiness check matches what the Service actually promises to callers.
+:::expand[How can you tell whether a rollout is progressing, complete, or stalled?]{kind="recap"}
+Watch Deployment status, old and new ReplicaSet counts, and the state of new Pods. `ProgressDeadlineExceeded` means progress remained stalled beyond the deadline; it reports the failure without choosing the recovery action.
+:::
 
-`minReadySeconds` can add one more safety check:
+:::expand[When should you patch forward, pause, restart, or roll back?]{kind="recap"}
+Patch when you know the corrected desired template, pause when several edits should form one revision, restart when the current desired version needs fresh instances, and roll back when an earlier retained Pod template is the compatible target.
+:::
 
-```yaml
-spec:
-  minReadySeconds: 10
-```
+:::expand[What does a Deployment rollback restore, and which changes need separate recovery?]{kind="recap"}
+Rollback restores an earlier Pod template. Live configuration objects, Services, data schemas, persistent data, external effects, separately changed replicas, and other workloads require their own compatibility or recovery plan.
+:::
 
-This asks Kubernetes to keep a new Pod ready for at least 10 seconds before treating it as available during the rollout. It helps catch Pods that pass one probe and immediately crash or turn unready.
-
-## Starting and Watching a Release
-<!-- section-summary: A release starts with a template change, then operators watch rollout status, controller state, image identity, and application smoke tests. -->
-
-The notification team wants to move from image `2026.06.14-1` to `2026.06.14-2`. The command changes the Deployment template, and verification finishes the release.
-
-Starting a release means changing the Deployment template. Watching a release means checking both Kubernetes progress and application behavior. For this notification API release, the team needs to see the new ReplicaSet grow, confirm the Deployment template records the new image, and run a business smoke test that exercises a real notification path before calling the rollout complete. Each check answers a separate release question, and together they keep the team from treating a template patch as a verified production release.
-
-```bash
-$ kubectl set image deployment/notification-api -n notifications \
-  api=ghcr.io/customer-notification/notification-api:2026.06.14-2
-deployment.apps/notification-api image updated
-```
-
-That command patches the Deployment template. The Deployment controller creates a new ReplicaSet and begins the RollingUpdate process.
-
-Watch the rollout:
-
-```bash
-$ kubectl rollout status deployment/notification-api -n notifications --timeout=5m
-Waiting for deployment "notification-api" rollout to finish: 1 out of 3 new replicas have been updated...
-Waiting for deployment "notification-api" rollout to finish: 2 of 3 updated replicas are available...
-deployment "notification-api" successfully rolled out
-```
-
-Then verify the live image:
-
-```bash
-$ kubectl get deployment notification-api -n notifications \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-ghcr.io/customer-notification/notification-api:2026.06.14-2
-```
-
-Finish with a business smoke test:
-
-```bash
-$ curl -fsS https://notify.devpolaris.example/internal/smoke/template-preview
-{"status":"ok","channel":"email","template":"password-reset"}
-```
-
-The Kubernetes rollout proves the new Pods are available. The smoke test proves a real notification path still works.
-
-## Diagnosing a Stuck Rollout
-<!-- section-summary: A stuck rollout should be debugged from Deployment progress to ReplicaSets, Pods, events, and application logs. -->
-
-The Deployment field **progressDeadlineSeconds** tells Kubernetes how long a rollout can go without progress before the Deployment reports a failed progress condition. In the API manifest, that deadline is 300 seconds. When the deadline passes, Kubernetes sets a condition with the reason `ProgressDeadlineExceeded`. The controller keeps reconciling afterward, so this condition is an alert signal and a debugging entry point.
-
-The debug path should follow what changed. A new image can fail to pull, crash on startup, miss a required environment variable, fail readiness, or fit poorly on the available nodes. The notification API example below keeps the old Pods healthy while the new template gets stuck, so the team can inspect evidence before deciding between a forward fix and rollback.
-
-Rollout status gives the first high-level signal:
-
-```bash
-$ kubectl rollout status deployment/notification-api -n notifications --timeout=60s
-Waiting for deployment "notification-api" rollout to finish: 1 out of 3 new replicas have been updated...
-error: timed out waiting for the condition
-```
-
-Describe the Deployment:
-
-```bash
-$ kubectl describe deployment notification-api -n notifications
-Conditions:
-  Type           Status  Reason
-  Available      True    MinimumReplicasAvailable
-  Progressing    False   ProgressDeadlineExceeded
-Events:
-  Normal   ScalingReplicaSet  Scaled up replica set notification-api-7c9d4c685b to 1
-```
-
-Now inspect the Pods by template hash:
-
-```bash
-$ kubectl get pods -n notifications \
-  -l app.kubernetes.io/name=notification-api -L pod-template-hash
-NAME                               READY   STATUS             HASH
-notification-api-6f8f7b9d88-8fkwd  1/1     Running            6f8f7b9d88
-notification-api-6f8f7b9d88-lk2qp  1/1     Running            6f8f7b9d88
-notification-api-6f8f7b9d88-zp4hz  1/1     Running            6f8f7b9d88
-notification-api-7c9d4c685b-m8vnn  0/1     CrashLoopBackOff   7c9d4c685b
-```
-
-The new Pod is crashing. The previous logs give the application clue:
-
-```bash
-$ kubectl logs -n notifications notification-api-7c9d4c685b-m8vnn --previous --tail=40
-Error: NOTIFICATION_EVENT_TOPIC must be one of notifications.requests.v1, notifications.requests.v2
-```
-
-At this point the team chooses a repair. A forward fix may patch the variable to the accepted value. A rollback may be faster if users are affected and the previous revision is known good.
-
-![Stuck rollout debug path infographic showing ProgressDeadlineExceeded, rollout status, Deployment, ReplicaSet, Pod events, logs, patch fix, and rollback](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/stuck-rollout-debug-path.png)
-
-*A stuck rollout should move from rollout status to ReplicaSets, Pod events, logs, a small fix, or rollback.*
-
-_This infographic turns a stuck rollout into an evidence ladder, so the team can decide whether to patch the template forward or roll back from a known cause._
-
-## History, Undo, and Restart
-<!-- section-summary: Rollout history shows previous revisions, undo restores an older Pod template, and restart recreates Pods without changing the image. -->
-
-A rollback decision needs two pieces of evidence: which revision was last known good, and what the current broken revision changed. History gives the revision list, annotations add human context, and undo asks Kubernetes to restore an earlier Pod template. Restart uses the rollout path too, but it keeps the same template and simply creates fresh Pods for the current release. The commands below separate those operations so the runbook names the right action.
-
-```bash
-$ kubectl rollout history deployment/notification-api -n notifications
-deployment.apps/notification-api
-REVISION  CHANGE-CAUSE
-1         notification-api 2026.06.14-1 provider retry baseline
-2         notification-api 2026.06.14-2 retry policy release
-```
-
-Kubernetes can store a change cause annotation:
-
-```bash
-$ kubectl annotate deployment/notification-api -n notifications \
-  kubernetes.io/change-cause="notification-api 2026.06.14-2 retry policy release" \
-  --overwrite
-deployment.apps/notification-api annotated
-```
-
-To roll back to a known good revision:
-
-```bash
-$ kubectl rollout undo deployment/notification-api -n notifications --to-revision=1
-deployment.apps/notification-api rolled back
-
-$ kubectl rollout status deployment/notification-api -n notifications --timeout=5m
-deployment "notification-api" successfully rolled out
-```
-
-Verify the image and application behavior afterward:
-
-```bash
-$ kubectl get deployment notification-api -n notifications \
-  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-ghcr.io/customer-notification/notification-api:2026.06.14-1
-```
-
-`kubectl rollout restart` is different from rollback. It asks Kubernetes to recreate Pods from the current template. Use it when the template is still correct but Pods need to restart, such as after a mounted Secret refresh pattern or a stuck process.
-
-```bash
-$ kubectl rollout restart deployment/notification-api -n notifications
-deployment.apps/notification-api restarted
-```
-
-A restart keeps the same Deployment template and creates fresh Pods from it. Use rollout undo only if the goal is to return to an earlier image or template.
-
-## Pause, Resume, and Release Runbooks
-<!-- section-summary: Pause and resume help group multiple template edits, while a runbook keeps release and rollback decisions concrete. -->
-
-`kubectl rollout pause` tells the Deployment controller to stop rolling out new template changes. This helps when a fix needs multiple template edits. Suppose the API release needs both a new image and a new `NOTIFICATION_EVENT_TOPIC` value. Applying the image first could create a broken revision. Pausing lets an operator group the changes:
-
-Pause and resume are emergency tools for controlling the sequence of template edits. In the normal path, a reviewed manifest should include the image and matching configuration together. During a live repair, pausing can keep Kubernetes from rolling a half-finished template while the operator applies the remaining field changes.
-
-```bash
-$ kubectl rollout pause deployment/notification-api -n notifications
-deployment.apps/notification-api paused
-
-$ kubectl set image deployment/notification-api -n notifications \
-  api=ghcr.io/customer-notification/notification-api:2026.06.14-2
-deployment.apps/notification-api image updated
-
-$ kubectl set env deployment/notification-api -n notifications \
-  NOTIFICATION_EVENT_TOPIC=notifications.requests.v2
-deployment.apps/notification-api env updated
-
-$ kubectl rollout resume deployment/notification-api -n notifications
-deployment.apps/notification-api resumed
-```
-
-In a steady delivery workflow, a reviewed manifest change gives the same safety with a stronger audit trail. Pause and resume still help during emergency command-line work, especially when you need to avoid several partial revisions during a live production issue.
-
-A practical release runbook for `notification-api` can stay concrete:
-
-1. Confirm the manifest uses an immutable image tag or digest for the release.
-2. Confirm the Deployment has readiness probes, resource requests, and rollout settings with enough surge capacity.
-3. Apply the manifest through the normal pipeline.
-4. Watch `kubectl rollout status deployment/notification-api -n notifications --timeout=5m`.
-5. Check Deployment, ReplicaSets, and Pods if the rollout waits longer than expected.
-6. Run the readiness URL and one business smoke test after Kubernetes reports success.
-7. Watch error rate, latency, restarts, queue publish failures, and provider retry counts.
-8. Roll back if the new revision fails readiness, fails smoke tests, or causes user-facing errors beyond the agreed threshold.
-
-The rollback runbook should be just as concrete:
-
-1. Capture history with `kubectl rollout history deployment/notification-api -n notifications`.
-2. Save the failing Pod logs and events before they disappear.
-3. Run `kubectl rollout undo deployment/notification-api -n notifications --to-revision=<known-good-revision>`.
-4. Watch rollout status until the old template is available again.
-5. Verify the image, readiness URL, business smoke test, and production dashboard.
-6. Open a follow-up fix that explains why the bad template failed and how the next rollout will avoid the same failure.
-
-Runbooks prevent improvisation during pressure. They also make the limits of Kubernetes rollback visible before database changes, mutable tags, and external systems enter the recovery plan.
-
-## Rollback Caveats
-<!-- section-summary: Kubernetes rollback restores a previous Pod template, while data changes, external systems, and mutable artifacts need separate recovery planning. -->
-
-A Kubernetes rollback restores a Deployment Pod template. That is powerful, but the surrounding release may include changes outside that template. Production teams plan for those boundaries before they need the rollback.
-
-The first caveat is database migration. If release `2026.06.14-2` changed the notification table in a way that older code cannot read, rolling the Pods back to `2026.06.14-1` may restore old containers while leaving the database in the new shape. Safer release plans use backward-compatible migrations: add columns before code uses them, write code that tolerates both shapes during the transition, and remove old columns in a later release.
-
-The second caveat is configuration. A rollback restores environment variables written directly in the template. If the template references a ConfigMap or Secret by a stable name, and someone changed that object separately, the old Deployment revision may still point at the new data. Many teams version configuration names or let GitOps manage Deployment and configuration together so the release can return to a known set of files.
-
-The third caveat is image identity. A mutable tag like `latest` or `prod` can point to different images over time. Rollback needs immutable tags or image digests because revision history should lead back to the exact artifact that previously ran. Store the image digest, commit SHA, build ID, and Deployment revision together.
-
-The fourth caveat is external side effects. If the bad release published duplicate notification jobs, sent the same SMS twice, or changed data in another service, a Deployment rollback only changes future Pods. The recovery may still need data repair, message deduplication, provider reconciliation, or a compensating workflow.
-
-Use Kubernetes rollback to recover the workload template quickly, then keep investigating the full release. The rollback gets healthy Pods back into service. The follow-up review handles the database, configuration, artifact, and business effects.
-
-![Rollback boundary map infographic showing rollback restores the Pod template, image, and env, while database, ConfigMap, image tag, and external effects need separate recovery](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-rollouts-and-rollbacks/rollback-boundary-map.png)
-
-*A Deployment rollback restores the Pod template, while data, external effects, and some configuration changes need separate recovery.*
-
-_This infographic draws the rollback boundary clearly: Kubernetes can restore an earlier Pod template, while data changes, mutable configuration, artifacts, and business effects need their own recovery plan._
-
-## What's Next
-<!-- section-summary: The next article explains why resource requests and limits affect scheduling, rollout speed, and failure behavior. -->
-
-Rollouts depend on capacity. A safe `maxSurge: 1` setting only helps if the cluster has room for one extra Pod. A readiness probe only gets a chance to pass if the Pod can schedule and start. CPU pressure can make a new version slow to report ready, and memory limits can restart a Pod right as the Deployment waits for it to report available.
-
-The next topic is **resource requests and limits**. The same `notification-api` service shows how Kubernetes decides where Pods fit, why CPU and memory behave differently, and how bad resource settings can turn a normal rollout into a confusing production issue.
+:::expand[How do you verify the workload and the user-facing behavior after a release or rollback?]{kind="recap"}
+Confirm controller completion, current ReplicaSet ownership, ready Pods, the expected image and template, and ready Service endpoints. Then test representative behavior and check application errors, latency, saturation, data, configuration, and external compatibility.
+:::
 
 ## References
+<!-- section-summary: Kubernetes documentation for Deployment revisions, rolling updates, readiness, history, and rollback. -->
 
-- [Kubernetes Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) - Explains Deployment rollouts, ReplicaSets, revisions, progress deadlines, rollback behavior, and rolling update configuration.
-- [kubectl rollout](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/) - Lists rollout subcommands such as status, history, undo, restart, pause, and resume.
-- [kubectl rollout status](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) - Documents how rollout status watches the latest rollout and supports timeouts and revision selection.
-- [kubectl rollout undo](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/) - Documents rolling back to a previous rollout revision.
-- [kubectl rollout restart](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/) - Documents restarting workloads through rollout machinery.
-- [kubectl rollout pause](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_pause/) and [kubectl rollout resume](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_resume/) - Document pausing and resuming Deployment rollout reconciliation.
-- [Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/concepts/workloads/pods/probes/) - Defines readiness probes and their role in deciding whether a container can receive traffic.
-- [Pod lifecycle: Pod readiness](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/) - Documents Pod readiness gates and how custom Pod conditions affect the Ready condition.
-- [Update a Deployment without downtime](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/) - Walks through rolling updates, monitoring progress, pausing, resuming, and rolling back.
+- [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) — template-triggered revisions, ReplicaSet replacement, update calculations, progress conditions, history, and rollback scope.
+- [Update a Deployment During a Rolling Release](https://kubernetes.io/docs/tasks/run-application/update-deployment-rolling/) — rollout monitoring, pause, resume, history, and undo.
+- [`kubectl rollout status`](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_status/) — rollout watching and exit behavior.
+- [`kubectl rollout history`](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_history/) — retained revision inspection.
+- [`kubectl rollout undo`](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_undo/) — restoring an earlier Deployment revision.
+- [`kubectl rollout restart`](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_rollout/kubectl_rollout_restart/) — recreating Pods from the current desired configuration.
+- [Configure Liveness, Readiness and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) — readiness behavior and probe configuration.

@@ -1,39 +1,113 @@
 ---
 title: "Environment Variables"
-description: "Pass Kubernetes runtime configuration into containers through clear, validated environment variables."
-overview: "Environment variables are the startup contract between a Pod spec and the process inside the container, so they need careful sources, validation, and rollout behavior."
+description: "Understand how Kubernetes assembles a container's startup environment from named string values."
+overview: "A container starts with a snapshot of named strings; Kubernetes resolves their sources before startup, and the application interprets and validates them."
 tags: ["kubernetes", "environment", "configmaps", "secrets"]
 order: 3
 id: article-containers-orchestration-kubernetes-configuration-storage-environment-variables
 ---
+
 ## Table of Contents
 
-1. [Startup Values Delivered Key by Key](#startup-values-delivered-key-by-key)
-2. [The Environment as a Startup Contract](#the-environment-as-a-startup-contract)
-3. [Literal Values in a Pod Template](#literal-values-in-a-pod-template)
-4. [ConfigMap and Secret Sources](#configmap-and-secret-sources)
-5. [Explicit env and Bulk envFrom](#explicit-env-and-bulk-envfrom)
-6. [Variable Expansion](#variable-expansion)
-7. [Pod Metadata Through the Downward API](#pod-metadata-through-the-downward-api)
-8. [Validation in Application Code](#validation-in-application-code)
-9. [Rollouts and Changed Values](#rollouts-and-changed-values)
-10. [Troubleshooting Startup Errors](#troubleshooting-startup-errors)
-11. [Assembled Example](#assembled-example)
-12. [Review Checklist](#review-checklist)
-13. [References](#references)
+1. [What is an environment variable in Kubernetes?](#what-is-an-environment-variable-in-kubernetes)
+2. [Where can a container's values come from?](#where-can-a-containers-values-come-from)
+3. [How do env and envFrom resolve overlaps?](#how-do-env-and-envfrom-resolve-overlaps)
+4. [How does variable expansion work?](#how-does-variable-expansion-work)
+5. [How can a container learn its Pod identity?](#how-can-a-container-learn-its-pod-identity)
+6. [What happens when a source value changes?](#what-happens-when-a-source-value-changes)
+7. [How does an application validate the startup contract?](#how-does-an-application-validate-the-startup-contract)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Startup Values Delivered Key by Key
-<!-- section-summary: Environment variables are the named startup values Kubernetes places into a container process. -->
+The simplest mental model for Kubernetes environment variables is this:
 
-ConfigMaps and Secrets give runtime values a source object. Environment variables are one common way to deliver selected keys from those objects into the process. The container starts, the application reads named strings such as `LOG_LEVEL`, `DATABASE_URL`, or `REQUEST_TIMEOUT_MS`, and startup validation decides whether the process is safe to run.
+> A container starts a process with a snapshot of named strings. Kubernetes constructs that snapshot before the process starts.
 
-An **environment variable** is a named string placed into the container process when it starts. It can come from a literal value in the Pod template, a selected ConfigMap key, a selected Secret key, or selected Pod metadata. The source matters because ordinary settings, sensitive values, and platform metadata have different review and security expectations.
+That model connects `env`, `envFrom`, ConfigMaps, Secrets, the Downward API, expansion, updates, and validation through seven questions:
 
-In the Customer Notification Platform, environment variables form the startup contract between the manifests and the `notification-api` or `notification-worker` code. The manifest promises to provide names. The code promises to parse and validate those names before serving traffic or consuming queued work.
+1. **What is an environment variable in Kubernetes?**
+2. **Where can a container's values come from?**
+3. **How do env and envFrom resolve overlaps?**
+4. **How does variable expansion work?**
+5. **How can a container learn its Pod identity?**
+6. **What happens when a source value changes?**
+7. **How does an application validate the startup contract?**
 
-A direct value makes the startup behavior visible. At process launch, the `notification-api` binary reads `LOG_LEVEL`, configures logging, and then opens its HTTP listener. The value must exist before startup finishes.
+## What is an environment variable in Kubernetes?
+<!-- section-summary: Kubernetes resolves named strings before container startup, and the process keeps that startup snapshot. -->
 
-Here is the smallest useful fragment. It gives the `notification-api` container one safe literal value.
+Begin below Kubernetes, at the operating-system process boundary. A **process** is a running instance of a program, and its **environment** is a collection of named values supplied when it starts:
+
+```text
+PORT=8080
+LOG_LEVEL=info
+DATABASE_HOST=postgres.default.svc
+```
+
+An **environment variable** is one `NAME=value` entry in that collection. Every value is a string. The operating system does not know that `PORT="8080"` should become an integer or that `DEBUG="false"` should become a Boolean; application code must interpret those characters.
+
+The environment belongs to the process. Kubernetes objects provide source data, and the **kubelet**, the Kubernetes agent on the Pod's node, resolves that data before starting the container process:
+
+```mermaid
+flowchart TD
+    Sources[Kubernetes objects and image defaults] --> Kubelet[kubelet constructs environment]
+    Kubelet --> Process[Container process starts]
+    Process --> Snapshot["PORT=8080<br/>LOG_LEVEL=info<br/>DATABASE_HOST=postgres"]
+```
+
+Once the process is running, Kubernetes does not continuously synchronize that environment table. Environment variables are startup configuration rather than live configuration.
+
+Kubernetes does not create a special new kind of variable. The Pod specification simply says which `NAME=value` pairs to place into the container process:
+
+```yaml
+containers:
+  - name: api
+    image: my-api:1.0
+    env:
+      - name: LOG_LEVEL
+        value: "info"
+      - name: PORT
+        value: "8080"
+```
+
+The application receives `LOG_LEVEL=info` and `PORT=8080`. The `env` list is a recipe for constructing that startup environment, not a database to which the process remains connected.
+
+Once that snapshot model is clear, the next question is where Kubernetes can obtain each string.
+
+### Constructing the snapshot is a startup operation
+
+The timeline matters. Before the process exists, Kubernetes has Pod configuration and references to other API objects. The kubelet resolves those references, applies override rules, performs supported expansion, and hands the resulting strings to the container runtime as part of process creation.
+
+```text
+Pod specification and referenced objects
+-> kubelet resolves NAME=value entries
+-> container process starts with that environment
+-> application parses and validates the strings
+-> application becomes Ready
+```
+
+After process creation, the environment belongs to that process. Updating a ConfigMap changes a Kubernetes object, not the memory of an already-running process. This is the same reason a normal operating-system process does not receive a rewritten environment merely because the file or command that originally supplied a value later changes.
+
+The snapshot model also explains why two replicas can temporarily have different environments during a rollout. An older process may have started from configuration `v42`, while its replacement starts from `v43`. Kubernetes does not transform the old process into the new one; it replaces the population through the workload controller.
+
+## Where can a container's values come from?
+<!-- section-summary: Image defaults, literals, configuration objects, Pod facts, resources, and service information can all contribute startup strings. -->
+
+An application might expect `PORT`, `LOG_LEVEL`, `DATABASE_HOST`, `DATABASE_PASSWORD`, `POD_NAME`, and `MEMORY_LIMIT`. Those values can come from different owners:
+
+| Source | Kubernetes mechanism | Typical purpose |
+|---|---|---|
+| Container image | Dockerfile `ENV` | Image defaults |
+| Literal Pod configuration | `env.value` | Small deployment-specific values |
+| ConfigMap | `configMapKeyRef` | Non-secret configuration |
+| Secret | `secretKeyRef` | Credentials or tokens |
+| Entire ConfigMap | `envFrom.configMapRef` | Bulk ordinary configuration |
+| Entire Secret | `envFrom.secretRef` | Bulk sensitive configuration |
+| Pod metadata | `fieldRef` | Pod name, namespace, IP, or node |
+| Container resources | `resourceFieldRef` | CPU or memory requests and limits |
+| Services | Kubelet-generated service variables | Legacy discovery for Services that existed before the Pod started |
+
+A literal places the string directly in the Pod definition:
 
 ```yaml
 env:
@@ -41,176 +115,207 @@ env:
     value: "info"
 ```
 
-This fragment keeps the contract small:
-
-- `name: LOG_LEVEL` is the key the application reads during startup.
-- `value: "info"` is the literal string Kubernetes places into the process environment.
-
-The container receives `LOG_LEVEL=info` when it starts. If the Pod keeps running for three days, that process keeps the same value for three days unless the application changes it internally. Kubernetes leaves the running process environment alone after startup.
-
-## The Environment as a Startup Contract
-<!-- section-summary: Environment variables form a contract between the Kubernetes manifest and the application startup code. -->
-
-The Customer Notification Platform has two main workloads. `notification-api` accepts customer requests and writes work to a queue. `notification-worker` consumes queued jobs and sends email, SMS, or push notifications through provider integrations.
-
-Each container needs a small startup contract. `notification-api` needs `PORT`, `LOG_LEVEL`, `DATABASE_URL`, and `REQUEST_TIMEOUT_MS`. `notification-worker` needs `QUEUE_NAME`, `MAX_BATCH_SIZE`, provider credentials, and retry settings.
-
-The contract has two sides. The Kubernetes manifest supplies names and values. The application startup code reads those names, parses strings into the right types, and fails with a clear message when a required value is missing or invalid.
-
-![Environment startup contract](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/environment-startup-contract.png)
-
-*The Pod spec supplies named strings, and the application startup code validates them before serving traffic.*
-
-This startup contract keeps accidental defaults out of production. A notification system should not quietly switch to a sandbox provider, retry forever, or listen on the wrong port after a missing environment variable.
-
-## Literal Values in a Pod Template
-<!-- section-summary: Literal env values fit small, non-secret settings that belong directly to one workload. -->
-
-A **literal env value** is written directly in the Pod template. Use it for simple non-secret settings that are tightly tied to the workload and unlikely to vary through a shared configuration object.
-
-Literal values are the shortest delivery path because the Pod template itself is the source. That works for small constants that belong to the workload shape, such as a metrics path or fixed container port. For the notification API, reviewers can see the value right next to the container definition, and no separate ConfigMap has to be created for a setting that rarely changes.
+A ConfigMap reference selects one ordinary value:
 
 ```yaml
-env:
-  - name: PORT
-    value: "8080"
-  - name: METRICS_PATH
-    value: "/metrics"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  database-host: postgres.default.svc
 ```
 
-These literals belong to the workload shape:
-
-- `PORT` matches the port the process should bind inside the container.
-- `METRICS_PATH` gives monitoring tools a stable endpoint path without creating a separate ConfigMap.
-
-Literal values are easy to read during review. The limitation is reuse. If staging and production need different values, a ConfigMap or Helm/Kustomize value usually gives a cleaner environment-specific path.
-
-Never put credentials in literal environment values. A literal `DATABASE_URL` with a password would appear in Deployment YAML, review tools, cluster API output, and possibly debug snapshots. Use a Secret reference for sensitive values.
-
-## ConfigMap and Secret Sources
-<!-- section-summary: valueFrom pulls one environment variable from a ConfigMap, Secret, or Pod metadata source. -->
-
-**valueFrom** tells Kubernetes to fill an environment variable from another source. For plain configuration, use `configMapKeyRef`. For credentials, use `secretKeyRef`.
-
-This path separates the source object from the delivery into the process. The ConfigMap or Secret stores the value under a named key, and the Pod template chooses which key should fill which environment variable. That gives ordinary settings and sensitive values different review boundaries while the application still reads simple startup names.
-
-For the worker, this means `QUEUE_NAME` can be reviewed openly while `EMAIL_PROVIDER_TOKEN` follows the tighter Secret path.
-
-Pull `QUEUE_NAME` from a ConfigMap:
-
 ```yaml
 env:
-  - name: QUEUE_NAME
+  - name: DATABASE_HOST
     valueFrom:
       configMapKeyRef:
-        name: notification-worker-config
-        key: QUEUE_NAME
+        name: api-config
+        key: database-host
 ```
 
-The ConfigMap reference has a narrow job:
+The source key `database-host` and process variable `DATABASE_HOST` can have different names. The Pod maps the configuration owner's key to the public interface expected by the application.
 
-- `name: QUEUE_NAME` names the environment variable inside the process.
-- `configMapKeyRef.name` points to the ConfigMap source object.
-- `configMapKeyRef.key` selects one key from that object.
-- Missing required keys stop container startup, which is safer than silently using a wrong queue.
-
-Pull `EMAIL_PROVIDER_TOKEN` from a Secret:
+A Secret reference uses the same shape for a sensitive value:
 
 ```yaml
 env:
-  - name: EMAIL_PROVIDER_TOKEN
+  - name: DATABASE_PASSWORD
     valueFrom:
       secretKeyRef:
-        name: notification-worker-secrets
-        key: EMAIL_PROVIDER_TOKEN
+        name: database-credentials
+        key: password
 ```
 
-The Secret reference has a tighter review boundary:
+Inside the process, that value is simply a usable string. Its Secret origin is provenance known to the deployment, not a protective property retained by the process. The application must not log it, and the cluster still needs encryption at rest because Secret objects are not necessarily encrypted in storage by default.
 
-- The Deployment shows that the worker needs `EMAIL_PROVIDER_TOKEN`.
-- The token value stays in the Secret source path and should not appear in normal manifest review.
+A reference is required unless it sets `optional: true`. If a required ConfigMap, Secret, or selected key is missing, kubelet cannot construct the container's startup environment, so the container does not successfully start. Marking a reference optional changes the contract from “this value is required” to “this value may be absent”; the application then needs a safe behavior for the missing variable.
 
-The separation is important in review. ConfigMap references should point to values that can be read openly. Secret references should point to values where read access is limited and rotation is planned.
+### Source type records provenance, not runtime type
 
-![Environment source map](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/environment-source-map.png)
+`env.value`, `configMapKeyRef`, `secretKeyRef`, `fieldRef`, and `resourceFieldRef` answer where Kubernetes should obtain a string. They do not create different kinds of value inside the process. Once startup completes, the application sees one environment map.
 
-*Environment variables can come from literals, ConfigMaps, Secrets, and Pod metadata, and each source has a different review boundary.*
+For example, `DATABASE_PASSWORD` may come from a Secret, but the running program receives the usable password string. The Secret boundary helps Kubernetes and operators control how that input is stored and granted; it does not prevent the process from logging or mishandling the value. `PORT` may come from a ConfigMap, but it is still the string `"8080"` until application code parses and validates it.
 
-When a referenced ConfigMap or Secret key is missing, the container fails before startup unless the reference is marked optional. Required references are the safer default for production. Optional references fit feature flags where the application has an intentional fallback.
+This separates two responsibilities:
 
-## Explicit env and Bulk envFrom
-<!-- section-summary: Explicit env references are clearer, while envFrom is compact for one-purpose ConfigMaps or Secrets. -->
-
-The **env** list maps each variable one at a time. It gives reviewers a precise view of the container contract and makes accidental extra values less likely.
-
-Use explicit entries for the values that define whether the process can start safely. A worker that needs `MAX_BATCH_SIZE`, `QUEUE_NAME`, and one provider token should show those names directly in the manifest. That makes the contract clear to the application team, the platform reviewer, and the person debugging a failed rollout at the Pod event level.
-
-```yaml
-env:
-  - name: MAX_BATCH_SIZE
-    valueFrom:
-      configMapKeyRef:
-        name: notification-worker-config
-        key: MAX_BATCH_SIZE
+```text
+Kubernetes: resolve provenance and construct strings
+Application: interpret meaning and protect sensitive values
 ```
 
-This explicit entry records one required setting:
+Selecting sources one by one is explicit. `envFrom` provides a bulk path, which introduces ordering and precedence rules.
 
-- The worker receives `MAX_BATCH_SIZE` at startup.
-- A missing ConfigMap key stops the container before it processes work with an unsafe default.
+## How do env and envFrom resolve overlaps?
+<!-- section-summary: envFrom imports groups of keys, while explicit env entries and later sources take precedence over earlier values. -->
 
-The **envFrom** field imports all valid keys from a ConfigMap or Secret. It is compact when one object exists only to feed one container.
+`envFrom` imports all selected key-value pairs from a ConfigMap or Secret:
 
 ```yaml
 envFrom:
   - configMapRef:
-      name: notification-worker-config
+      name: api-config
 ```
 
-This bulk delivery path needs a clear contract:
+If `api-config` contains these values:
 
-- Every valid key in `notification-worker-config` can enter the process environment.
-- The source object should belong to this one workload, not a shared grab bag of settings.
-- Secret bulk imports need extra review because future Secret keys would enter the process automatically.
+```yaml
+data:
+  DATABASE_HOST: postgres.default.svc
+  LOG_LEVEL: info
+```
 
-With Secrets, `envFrom` deserves extra review. If a teammate adds a new credential key to the Secret, the container receives it automatically. For sensitive values, explicit `secretKeyRef` usually creates a cleaner review trail.
+the process receives both `DATABASE_HOST=postgres.default.svc` and `LOG_LEVEL=info`.
 
-Kubernetes skips keys that are invalid environment variable names and records an event. A ConfigMap key named `retry-limit` can exist as data, but `envFrom` will skip it during environment delivery. Prefer names such as `RETRY_LIMIT` when environment delivery is the plan.
+A prefix can place the imported names under a common application namespace:
 
-## Variable Expansion
-<!-- section-summary: Kubernetes can expand previously defined environment variables inside later values using the $(NAME) syntax. -->
+```yaml
+envFrom:
+  - prefix: APP_
+    configMapRef:
+      name: api-config
+```
 
-Kubernetes supports simple expansion in environment variable values. A later variable can reference an earlier variable with `$(NAME)`.
+Source keys `HOST` and `PORT` then become `APP_HOST` and `APP_PORT` in the container.
 
-Expansion is a small convenience for derived startup strings. It keeps related values in one place when a URL or path is assembled from a base name. The important constraint is that Kubernetes expands values before the process starts, using variables that already appeared earlier in the list. It is not a runtime templating system inside the application.
+When several sources define the same name, Kubernetes applies two central rules:
 
-Use it for small derived strings that reviewers can understand in the Pod template, not for large or sensitive configuration.
+1. Among several `envFrom` sources, the later source wins.
+2. An explicit `env` entry wins over every `envFrom` value of the same name.
+
+Both `env` and `envFrom` also override a value baked into the container image. Consider this construction:
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: defaults
+  - configMapRef:
+      name: production
+env:
+  - name: LOG_LEVEL
+    value: "debug"
+```
+
+If `defaults` provides `LOG_LEVEL=info` and `PORT=8080`, while `production` provides `LOG_LEVEL=warn` and `DATABASE_HOST=postgres`, the final environment is:
+
+```text
+PORT=8080
+DATABASE_HOST=postgres
+LOG_LEVEL=debug
+```
+
+The layers are image defaults, earlier bulk sources, later bulk sources, then explicit entries. This can express base defaults, environment-specific defaults, and a small explicit exception. Too many overlapping layers make it difficult to answer where a value came from, which is why important application dependencies often benefit from explicit `env` mappings.
+
+The contract also differs in breadth. `env.valueFrom` says that the application depends on one selected value. `envFrom` says that the application accepts the entire key set in that source. Importing a large Secret when the process needs only one password widens the sensitive-data boundary. Prefixes can organize a deliberate bulk contract, but shorter YAML is not by itself a reason to use it.
+
+### Reconstruct one conflicting name from bottom to top
+
+Suppose the image contains `LOG_LEVEL=error`. The first `envFrom` ConfigMap sets it to `info`; a later production ConfigMap sets it to `warn`; and explicit `env` sets it to `debug`. The effective value is `debug` because each later layer replaces the earlier value of the same name.
+
+That worked example gives a practical debugging order. Inspect the explicit `env` list first because it has the strongest precedence, then the later `envFrom` sources in reverse order, then earlier sources, and finally image defaults. Reading only the first place where the name appears can produce the wrong answer.
+
+Layering is useful when it expresses ownership—image defaults, environment defaults, then one explicit exception. It becomes harmful when several sources redefine the same names without a clear reason, because the final startup contract becomes difficult to review.
+
+After Kubernetes selects the values and resolves overlaps, it can compose a later value from names already available.
+
+## How does variable expansion work?
+<!-- section-summary: Kubernetes substitutes previously available variables into later values using its own ordered $(NAME) syntax. -->
+
+An explicit `env.value` can refer to previously available variables with `$(NAME)`:
 
 ```yaml
 env:
-  - name: SERVICE_HOST
-    value: "notification-api.customer-notifications.svc.cluster.local"
-  - name: HEALTH_URL
-    value: "http://$(SERVICE_HOST):8080/healthz"
+  - name: HOST
+    value: "postgres"
+  - name: PORT
+    value: "5432"
+  - name: ADDRESS
+    value: "$(HOST):$(PORT)"
 ```
 
-The derived value depends on order:
+The process receives `ADDRESS=postgres:5432`. Kubernetes uses `$(VAR_NAME)`, rather than shell forms such as `$VAR_NAME` or `${VAR_NAME}`. An unresolved reference remains unchanged, and `$$(VAR_NAME)` escapes substitution so the process receives literal `$(VAR_NAME)` text.
 
-- `SERVICE_HOST` appears before `HEALTH_URL`, so Kubernetes can substitute it.
-- The expanded `HEALTH_URL` is still a startup string, not a live template inside the application.
+Ordering matters because only previously available variables can be expanded. This works:
 
-The order matters. `SERVICE_HOST` appears first, so Kubernetes can expand it in `HEALTH_URL`. If a name is unknown, Kubernetes leaves the reference unresolved in the value.
+```yaml
+env:
+  - name: PROTOCOL
+    value: "https"
+  - name: URL
+    value: "$(PROTOCOL)://example.com"
+```
 
-Expansion fits small derived values. Large structured configuration belongs in mounted files, especially when the app needs routing rules that reviewers should read and test as YAML or JSON.
+Reversing those entries leaves `$(PROTOCOL)` unresolved when Kubernetes processes `URL`.
 
-## Pod Metadata Through the Downward API
-<!-- section-summary: The Downward API exposes selected Pod and container metadata as environment variables without hardcoding it in the manifest. -->
+Kubelet processes `envFrom` first, then evaluates explicit `env` entries in order while adding each resolved value for later entries. That makes this composition possible:
 
-The **Downward API** exposes selected Kubernetes metadata to the container. It can provide the Pod name, namespace, labels, annotations, node name, and some resource information.
+```yaml
+envFrom:
+  - configMapRef:
+      name: database
+env:
+  - name: DATABASE_URL
+    value: "postgres://$(DATABASE_HOST):$(DATABASE_PORT)/app"
+```
 
-This delivery path is useful when the application needs to describe where it is running. The Pod name and namespace are assigned by Kubernetes, so hardcoding them in an image or ConfigMap would age badly. By pulling metadata through `fieldRef`, each replica can log its own identity and support teams can connect application logs back to Kubernetes objects.
+If the ConfigMap supplies `DATABASE_HOST=db` and `DATABASE_PORT=5432`, Kubernetes creates `DATABASE_URL=postgres://db:5432/app`.
 
-`notification-api` can use the Pod name and namespace in logs:
+The ConfigMap itself is not a recursive template. If an imported value contains `postgres://$(HOST):5432`, kubelet loads that text directly. Put the composition in an explicit `env.value`, `command`, or `args` field where Kubernetes performs the expansion step.
+
+Kubernetes expansion and shell expansion are separate interpreters at separate times. This uses Kubernetes substitution while preparing the container command:
+
+```yaml
+args:
+  - "$(NAME)"
+```
+
+This explicitly starts a shell, which later expands `$NAME` inside the running container:
+
+```yaml
+command: ["/bin/sh", "-c"]
+args:
+  - 'echo "$NAME"'
+```
+
+Kubernetes does not insert a shell automatically. That timing distinction keeps command construction predictable.
+
+### Expansion is ordered substitution, not a general template engine
+
+Kubelet first makes `envFrom` names available, then walks explicit `env` entries from top to bottom. When it reaches `DATABASE_URL`, it can substitute `DATABASE_HOST` and `DATABASE_PORT` only if those names are already available. A later definition cannot travel backward and repair an earlier unresolved reference.
+
+The same boundary explains why text stored inside a ConfigMap is not recursively rendered. Importing `DATABASE_URL=postgres://$(HOST):5432` through `envFrom` imports that literal value. Moving the composed value into explicit `env.value` tells kubelet to evaluate it at the supported expansion stage.
+
+If a shell is explicitly launched, another interpreter runs later inside the container. Kubernetes `$(NAME)` substitution happens while constructing the command; shell `$NAME` substitution happens after `/bin/sh` starts. Keeping the syntax and timing separate prevents a value from being expanded by the wrong layer—or left literal unexpectedly.
+
+Static configuration explains what the program should do. The Downward API adds facts about the particular Pod Kubernetes created.
+
+## How can a container learn its Pod identity?
+<!-- section-summary: The Downward API places selected Pod fields and container resource values into the startup environment. -->
+
+A Deployment can create several Pods from the same image, each with a different generated name, IP address, and node assignment. The **Downward API** lets information flow from Kubernetes' view of a Pod down into the container without giving the application Kubernetes API credentials.
+
+`fieldRef` selects Pod fields:
 
 ```yaml
 env:
@@ -222,200 +327,247 @@ env:
     valueFrom:
       fieldRef:
         fieldPath: metadata.namespace
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
 ```
 
-The Downward API example has two important parts:
+The process might receive:
 
-- `fieldRef.fieldPath: metadata.name` reads the live Pod name assigned by Kubernetes.
-- `fieldRef.fieldPath: metadata.namespace` reads the namespace where the Pod is running.
-- The application can log those values without baking a namespace or Pod name into the image.
-
-The application can include those values in structured logs:
-
-```console
-level=info service=notification-api pod=notification-api-7d875d8cc5-s4vfx namespace=customer-notifications
+```text
+POD_NAME=api-7cc9f7c869-x7p4q
+POD_NAMESPACE=production
+POD_IP=10.42.7.19
+NODE_NAME=worker-03
 ```
 
-This helps support teams connect an application log line to a Kubernetes Pod. It also avoids hardcoding the namespace in the image or application config.
+The Downward API can expose the Pod name, namespace, UID, selected labels and annotations, ServiceAccount, node name, Pod IP, and host IP.
 
-Resource requests can also be exposed, which is useful when a worker chooses concurrency from its CPU or memory limit:
+`resourceFieldRef` selects the container's declared CPU or memory request or limit:
 
 ```yaml
 env:
-  - name: CPU_LIMIT
+  - name: MEMORY_LIMIT
     valueFrom:
       resourceFieldRef:
-        resource: limits.cpu
+        resource: limits.memory
+  - name: CPU_REQUEST
+    valueFrom:
+      resourceFieldRef:
+        resource: requests.cpu
 ```
 
-This resource reference comes from the Pod's own container limits:
+A **request** describes the resource amount used for scheduling, while a **limit** describes the maximum configured for the container. These values let the application answer who it is, where it runs, and what resources it was given without calling the Kubernetes API.
 
-- `resourceFieldRef.resource` selects the resource value Kubernetes should expose.
-- The application should still clamp any concurrency choice with its own maximum setting.
+Downward API values delivered through environment variables join the same startup snapshot. That returns the discussion to the central lifecycle question: what happens when any source object changes afterward?
 
-Keep resource-based behavior conservative. A worker that auto-scales concurrency from CPU limits should still have a maximum value in normal configuration so a manifest mistake cannot create too much provider traffic.
+### Pod identity does not require API credentials
 
-## Validation in Application Code
-<!-- section-summary: Kubernetes can inject strings, while the application must validate required names, types, ranges, and safe defaults. -->
+The Downward API is useful because it exposes a controlled set of facts without giving the application a token and asking it to query the Kubernetes API. A replica can label logs with its Pod name, namespace, or Node, and it can inspect its declared resource budget through ordinary environment values.
 
-Kubernetes injects strings without understanding the business meaning. The application must know that `MAX_BATCH_SIZE` is an integer and that `REQUEST_TIMEOUT_MS` should stay under five seconds, then handle type parsing and business validation.
+Those facts still follow snapshot semantics. A generated Pod name and assigned Node naturally remain associated with that Pod, while a resource value delivered through the startup environment does not become a live subscription. The mechanism is information delivery, not general access to cluster state.
 
-Validation is the application side of the startup contract. Kubernetes can prove that a key exists, but it cannot know whether `MAX_BATCH_SIZE=ten` is wrong for the worker or whether a timeout is too large for provider calls. The process should check required names, parse types, enforce ranges, and exit with a safe message before accepting traffic.
+## What happens when a source value changes?
+<!-- section-summary: Running processes keep their startup environment, while new Pods resolve the current source values. -->
 
-Good startup validation checks four things:
+Suppose a ConfigMap originally contains `LOG_LEVEL=info`, and the container starts with that value. If someone changes the ConfigMap to `LOG_LEVEL=debug`, the API object now says `debug` while the running process still holds `info`.
 
-| Check | Example |
-|---|---|
-| Required names | `DATABASE_URL` and `QUEUE_NAME` must exist |
-| Type parsing | `MAX_BATCH_SIZE` parses as an integer |
-| Range | `MAX_BATCH_SIZE` stays between `1` and `500` |
-| Allowed values | `LOG_LEVEL` is one of `debug`, `info`, `warn`, `error` |
+ConfigMaps and Secrets consumed through environment variables follow this same rule. Changing the source cannot mutate the environment of an already-running process. New Pods must start to receive the new snapshot.
 
-The error message should name the variable and the expected shape without printing secrets. A safe startup error might say:
+Normal ConfigMap and Secret volume files have a different contract: Kubernetes can eventually refresh those projected files, and the application can reread them. A `subPath` mount is an exception and does not receive those automatic file updates.
 
-```console
-configuration error: MAX_BATCH_SIZE must be an integer from 1 to 500
+This distinction creates a practical choice:
+
+```text
+Setting remains fixed for one process lifetime -> environment variable
+Setting may change while the process runs      -> mounted file plus application reload
 ```
 
-For `DATABASE_URL`, avoid printing the full value. A safe error can say `DATABASE_URL is required` or `DATABASE_URL host is invalid`, while leaving the password out of logs.
+Requiring a restart for environment configuration can be useful. With twenty replicas, uncontrolled live propagation could leave some processes on the old value and others on the new value. A controlled Deployment rollout makes the two generations visible:
 
-## Rollouts and Changed Values
-<!-- section-summary: Environment variable changes require new Pods because running processes keep the values they started with. -->
-
-A running process keeps the environment it received at startup. If you update a ConfigMap or Secret referenced by environment variables, existing Pods keep the old values.
-
-This behavior shapes the release plan. Changing the source object alone updates Kubernetes data, but the process environment inside existing containers stays the same. The team needs a rollout so new Pods receive the new startup contract. For the notification worker, that means queue names, batch sizes, and tokens all move together through a visible Deployment rollout.
-
-Restart the Deployment after changing environment-backed configuration:
-
-```bash
-kubectl rollout restart deployment/notification-worker -n customer-notifications
-kubectl rollout status deployment/notification-worker -n customer-notifications
+```text
+Pod generation A: image=v17, config=v42
+Pod generation B: image=v17, config=v43
 ```
 
-The output should confirm the new Pods reached a healthy state:
+The Deployment replaces generation A with generation B according to its rollout behavior. Teams commonly connect a configuration change to the Pod template or a configuration hash so Kubernetes creates that new generation.
 
-```console
-deployment "notification-worker" successfully rolled out
+The deeper rule is:
+
+> Configuration version and application version together define the program that is actually running.
+
+### Restarting turns configuration into a visible generation change
+
+With twenty replicas, live mutation could leave twelve processes using an old in-memory value while eight have reloaded a new one. Startup configuration makes the transition explicit instead: one Pod generation runs image `v17` with config `v42`; the next runs the same image with config `v43`.
+
+The workload controller can then apply its normal readiness and availability behavior while replacing the population. Operators can observe which generation is Ready, stop a failing rollout, and return the Pod template to the earlier configuration reference. Requiring new processes is therefore a consistency tool, not only a limitation of environment variables.
+
+Kubernetes can construct a consistent snapshot, but it cannot decide whether the strings form a valid application configuration. That responsibility belongs at process startup.
+
+## How does an application validate the startup contract?
+<!-- section-summary: The application parses, validates, and safely reports its startup strings before becoming ready. -->
+
+Linux accepts strings such as `PORT=banana`, `LOG_LEVEL=LOUD`, `DATABASE_URL=`, and `REQUEST_TIMEOUT=-3`. Kubernetes can deliver them, but it does not know the application's domain rules.
+
+A well-designed application treats its environment as a startup interface:
+
+```mermaid
+flowchart TD
+    Environment[Read environment] --> Parse[Parse types]
+    Parse --> Validate[Validate constraints]
+    Validate -->|invalid| Error[Report a clear error and exit nonzero]
+    Validate -->|valid| Start[Start the server]
+    Start --> Ready[Become Ready]
 ```
 
-Helm, Kustomize, and GitOps workflows often add a checksum annotation to the Pod template. When a ConfigMap or Secret changes, the annotation changes, the Pod template changes, and Kubernetes performs a normal rollout. That gives configuration changes the same visibility as image changes.
+The application can require `DATABASE_HOST`, parse `PORT` as an integer from 1 to 65535, require a positive request timeout, allow only known log levels, and require `DATABASE_PASSWORD`. It should perform those checks before accepting traffic. Bad configuration then makes the container exit and prevents the rollout from completing successfully, rather than failing later during a customer request.
 
-![Environment rollout flow](/content-assets/articles/article-containers-orchestration-kubernetes-configuration-storage-environment-variables/environment-rollout-flow.png)
+Diagnostics should name invalid variables without printing sensitive values:
 
-*Environment-backed configuration changes should move through a rollout so every Pod receives the new startup contract.*
-
-## Troubleshooting Startup Errors
-<!-- section-summary: Environment variable problems show up as Pod events, CreateContainerConfigError, skipped envFrom keys, or application startup failures. -->
-
-When Kubernetes cannot resolve a required environment reference, the Pod may show `CreateContainerConfigError`. Pod events usually explain that wiring failure before application logs have anything useful to say.
-
-The event path is usually faster than guessing from application logs. If kubelet cannot build the container configuration, the process never starts, so the error sits in Pod status and events. After Kubernetes references are resolved, application startup validation handles the next layer: wrong type, invalid range, unsafe default, or a missing business-specific value.
-
-That order keeps the debug path clean: Kubernetes wiring first, then application parsing and business validation. A `kubectl describe pod` command shows the events for the failing Pod:
-
-```bash
-kubectl describe pod notification-worker-845b9c47b5-nx7t9 -n customer-notifications
+```text
+Invalid configuration:
+  PORT: expected integer between 1 and 65535
+  DATABASE_PASSWORD: required variable is missing
+  LOG_LEVEL: expected debug|info|warn|error
 ```
 
-A missing ConfigMap key can look like this:
+The order of startup work should make that report possible before traffic arrives:
 
-```console
-Warning  Failed  kubelet  Error: couldn't find key MAX_BATCH_SIZE in ConfigMap customer-notifications/notification-worker-config
-```
+| Step | Example responsibility | Failure behavior |
+|---|---|---|
+| Read | Obtain `PORT`, `LOG_LEVEL`, and database names from the environment | Report which required name is absent |
+| Parse | Convert `PORT` from text into an integer and a timeout into a duration | Report the expected type without echoing secrets |
+| Validate | Check the port range, positive timeout, and allowed log levels | Exit nonzero with the violated constraint |
+| Initialize | Build connection pools and other state from the validated configuration | Remain unready if initialization cannot complete |
+| Serve | Start accepting requests only after the startup contract succeeds | Become Ready |
 
-After the Pod starts, inspect safe environment values from a non-production Pod or a temporary debugging environment:
+This sequence converts a bad deployment input into immediate, attributable evidence. `PORT=banana` fails while the new container is starting, so the rollout does not replace healthy capacity with a process that will fail later on a customer request. Kubernetes reports the container behavior; the application supplies the domain-specific explanation.
 
-```bash
-kubectl exec deploy/notification-worker -n customer-notifications -- printenv LOG_LEVEL QUEUE_NAME
-```
+Sensitive inputs need the same validation with safer output. The program can report that `DATABASE_PASSWORD` is missing or empty, but printing the resolved password would move a Secret into logs. The diagnostic contract should reveal the variable name and failed rule while withholding its confidential value.
 
-Sample output:
+Readiness completes the handoff: Kubernetes should route work only after the process has accepted this startup interface. A container that merely stays running has not yet proved that its assembled environment is usable.
 
-```console
-info
-notifications.outbound
-```
+That final signal connects configuration correctness to controlled rollout progress across every replica safely.
 
-Avoid printing all environment variables in production. A full `printenv` can expose tokens, database URLs, and provider credentials.
-
-## Assembled Example
-<!-- section-summary: The complete example combines ConfigMap values, Secret values, Downward API metadata, and application validation expectations. -->
-
-Here is the full environment variable pattern after the pieces are clear. Plain settings come from a ConfigMap, credentials come from a Secret, and Pod metadata comes from the Downward API.
-
-The assembled manifest shows the three source lanes feeding one process. The ConfigMap supplies reviewable worker settings, the Secret supplies sensitive provider access, and the Downward API supplies live Pod identity. Keeping those lanes separate helps the team change a timeout, rotate a token, or trace one replica without mixing all values into one source.
+The complete source-resolution example brings every rule together:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Pod
 metadata:
-  name: notification-worker
-  namespace: customer-notifications
+  name: payments-api
 spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: notification-worker
-  template:
-    metadata:
-      labels:
-        app: notification-worker
-    spec:
-      containers:
-        - name: worker
-          image: ghcr.io/customer-notifications/notification-worker:1.8.0
-          env:
-            - name: QUEUE_NAME
-              valueFrom:
-                configMapKeyRef:
-                  name: notification-worker-config
-                  key: QUEUE_NAME
-            - name: MAX_BATCH_SIZE
-              valueFrom:
-                configMapKeyRef:
-                  name: notification-worker-config
-                  key: MAX_BATCH_SIZE
-            - name: EMAIL_PROVIDER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: notification-worker-secrets
-                  key: EMAIL_PROVIDER_TOKEN
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+  containers:
+    - name: api
+      image: payments-api:v17
+      envFrom:
+        - configMapRef:
+            name: payments-defaults
+      env:
+        - name: LOG_LEVEL
+          value: "info"
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: payments-database
+              key: password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: MEMORY_LIMIT
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.memory
+        - name: DATABASE_URL
+          value: "postgres://$(DATABASE_HOST):$(DATABASE_PORT)/payments"
 ```
 
-The complete manifest keeps each source lane separate:
+Mentally execute the assembly. Image defaults come first. `payments-defaults` supplies `DATABASE_HOST`, `DATABASE_PORT`, and perhaps `LOG_LEVEL=warn`. The explicit literal overrides that log level with `info`. The Secret supplies the password, the Downward API supplies Pod identity, `resourceFieldRef` supplies the memory limit, and the final entry expands the previously available database host and port.
 
-- ConfigMap keys supply plain worker settings such as queue name and batch size.
-- Secret keys supply sensitive provider access.
-- Downward API fields supply live Pod metadata for logging and support.
+At startup, the process sees one map of strings:
 
-This manifest is only the Kubernetes side of the contract. The worker still needs startup validation so `MAX_BATCH_SIZE` is parsed safely and credentials never print in logs.
+```text
+DATABASE_HOST=postgres
+DATABASE_PORT=5432
+LOG_LEVEL=info
+DATABASE_PASSWORD=...
+POD_NAME=payments-api
+POD_NAMESPACE=default
+MEMORY_LIMIT=...
+DATABASE_URL=postgres://postgres:5432/payments
+```
 
-## Review Checklist
-<!-- section-summary: Environment variable reviews should check sensitivity, source, validation, restart behavior, and diagnostic safety. -->
+The process no longer sees ConfigMap, Secret, Downward API, `envFrom`, or `valueFrom` as separate mechanisms. It receives `Map<String, String>` and owns the interpretation and safe handling of every entry.
 
-Use this checklist before merging an environment variable change:
+The complete mental model is:
 
-The checklist is a compact review of the whole startup contract. It asks whether each value has the right source, whether sensitive values stay out of plain YAML, whether the application validates what Kubernetes injects, and whether the rollout plan refreshes running Pods. The diagnostic line matters because `printenv` can reveal much more than the one value a support person meant to inspect.
+```mermaid
+flowchart TD
+    Image[Image defaults] --> Kubelet[kubelet]
+    ConfigMaps[ConfigMaps] --> Kubelet
+    Secrets[Secrets] --> Kubelet
+    PodFields[Pod fields] --> Kubelet
+    Resources[Resource fields] --> Kubelet
+    Services[Service information] --> Kubelet
+    Kubelet --> Resolve["Resolve sources<br/>apply overrides<br/>expand variables"]
+    Resolve --> Process["Container process starts<br/>Map of strings"]
+    Process --> Validate[Application parses and validates]
+    Validate -->|valid| Ready[Become Ready]
+    Validate -->|invalid| Exit[Exit with clear error]
+```
 
-For the notification worker, that review should cover queue names, batch limits, provider tokens, and metadata values together.
+Three ideas are worth retaining:
 
-| Check | What to confirm |
-|---|---|
-| Sensitivity | Secrets use `secretKeyRef`, not literals or ConfigMaps |
-| Source | Plain settings come from literals or ConfigMaps with clear ownership |
-| Names | Environment variable names are valid and consistent |
-| Validation | The application validates required values, types, ranges, and allowed values |
-| Rollout | The release process restarts Pods after environment-backed changes |
-| Diagnostics | Support commands avoid printing every environment variable in production |
+1. Environment variables are a snapshot; source changes do not mutate a running process.
+2. Kubernetes resolves provenance, while the application resolves meaning.
+3. The environment is a versioned startup API between deployment and application, not a collection of unrelated strings.
+
+## Check Your Answers
+<!-- section-summary: Revisit the seven questions that connect source values to one validated process snapshot. -->
+
+:::expand[What is an environment variable in Kubernetes?]{kind="recap"}
+It is one named string in the environment Kubernetes constructs before a container process starts. The process keeps that startup snapshot, and the application decides how to interpret every string.
+:::
+
+:::expand[Where can a container's values come from?]{kind="recap"}
+Values can come from image defaults, Pod literals, individual or whole ConfigMaps and Secrets, Pod fields, resource fields, and legacy Service information. Required references must resolve before startup unless the Pod explicitly makes them optional.
+:::
+
+:::expand[How do env and envFrom resolve overlaps?]{kind="recap"}
+Later `envFrom` sources override earlier bulk sources, explicit `env` overrides `envFrom`, and both override image values. `envFrom` imports a broad group, while explicit `env` entries document individual dependencies.
+:::
+
+:::expand[How does variable expansion work?]{kind="recap"}
+Kubernetes expands `$(NAME)` from previously available variables, leaves unresolved references unchanged, and uses `$$(NAME)` for a literal reference. This ordered Kubernetes substitution is separate from shell `$NAME` expansion inside a launched shell.
+:::
+
+:::expand[How can a container learn its Pod identity?]{kind="recap"}
+The Downward API uses `fieldRef` for Pod facts and `resourceFieldRef` for container requests or limits. Those values enter the same startup environment without requiring the application to call the Kubernetes API.
+:::
+
+:::expand[What happens when a source value changes?]{kind="recap"}
+Existing processes retain their startup values, while newly created Pods resolve the current ConfigMap or Secret. A controlled rollout can move the workload from one image-and-configuration generation to another.
+:::
+
+:::expand[How does an application validate the startup contract?]{kind="recap"}
+The application checks required names, parses types, validates ranges and allowed values, and exits with a safe error before becoming ready when the contract is invalid. Diagnostics name missing or malformed settings without logging credentials.
+:::
 
 ## References
 
-- [Define environment variables for a container](https://kubernetes.io/docs/tasks/inject-data-application/define-environment-variable-container/)
-- [Define dependent environment variables](https://kubernetes.io/docs/tasks/inject-data-application/define-interdependent-environment-variables/)
-- [Expose Pod information through environment variables](https://kubernetes.io/docs/tasks/inject-data-application/environment-variable-expose-pod-information/)
+- [Define Environment Variables for a Container](https://kubernetes.io/docs/tasks/inject-data-application/define-environment-variable-container/)
+- [Pod API Reference: env and envFrom](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/)
+- [Define Dependent Environment Variables](https://kubernetes.io/docs/tasks/inject-data-application/define-interdependent-environment-variables/)
+- [Expose Pod Information Through Environment Variables](https://kubernetes.io/docs/tasks/inject-data-application/environment-variable-expose-pod-information/)
+- [ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
 - [Secrets](https://kubernetes.io/docs/concepts/configuration/secret/)

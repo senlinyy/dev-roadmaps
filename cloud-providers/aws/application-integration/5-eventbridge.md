@@ -1,8 +1,8 @@
 ---
-title: "EventBridge"
-description: "Route AWS, application, and SaaS events with EventBridge event buses, rules, targets, retries, archives, schedules, and cross-account delivery."
-overview: "EventBridge is AWS's managed event router. This article follows the lesson publishing platform as it publishes facts to an event bus, matches them with rules, sends them to targets, handles failed delivery, archives and replays events, routes selected events across accounts, and chooses between EventBridge, SNS, and SQS."
-tags: ["aws", "eventbridge", "events", "application-integration"]
+title: "Amazon EventBridge"
+description: "Learn how EventBridge routes facts from producers to targets through event buses, content-based rules, retries, dead-letter queues, archives, and cross-account boundaries."
+overview: "Build a first-principles model of event-driven decoupling, event envelopes, buses, patterns, targets, delivery reliability, replay, SaaS integration, and EventBridge with SQS."
+tags: ["aws", "eventbridge", "event-driven", "event-bus", "application-integration"]
 order: 5
 id: article-cloud-providers-aws-application-integration-event-driven-architecture
 aliases:
@@ -10,396 +10,605 @@ aliases:
   - 3-event-driven-architecture
   - eventbridge
   - 5-eventbridge
+  - amazon-eventbridge
+  - cloud-providers/aws/application-integration/eventbridge.md
   - cloud-providers/aws/application-integration/3-event-driven-architecture.md
   - cloud-providers/aws/application-integration/5-eventbridge.md
 ---
 
 ## Table of Contents
 
-1. [From Topic Fanout to Event Routing](#from-topic-fanout-to-event-routing)
-2. [Events Are Facts](#events-are-facts)
-3. [Event Buses, Rules, and Targets](#event-buses-rules-and-targets)
-4. [Create a Custom Event Bus](#create-a-custom-event-bus)
-5. [Publish an Event with PutEvents](#publish-an-event-with-putevents)
-6. [Match Events with Rules](#match-events-with-rules)
-7. [Send Events to Targets](#send-events-to-targets)
-8. [Retries, DLQs, Archives, and Replay](#retries-dlqs-archives-and-replay)
-9. [Cross-Account and SaaS Events](#cross-account-and-saas-events)
-10. [EventBridge, SNS, and SQS](#eventbridge-sns-and-sqs)
-11. [Putting It Together](#putting-it-together)
-12. [What's Next](#whats-next)
-13. [References](#references)
+1. [Why Do Applications Need an Event Router?](#why-do-applications-need-an-event-router)
+2. [What Is the Difference Between an Event and a Command?](#what-is-the-difference-between-an-event-and-a-command)
+3. [What Does an EventBridge Event Look Like?](#what-does-an-eventbridge-event-look-like)
+4. [How Do Applications Publish and Match Events?](#how-do-applications-publish-and-match-events)
+5. [How Do Archives and Replay Differ from Retries and DLQs?](#how-do-archives-and-replay-differ-from-retries-and-dlqs)
+6. [How Does EventBridge Cross Accounts and SaaS Boundaries?](#how-does-eventbridge-cross-accounts-and-saas-boundaries)
+7. [How Do You Build a Complete EventBridge Architecture?](#how-do-you-build-a-complete-eventbridge-architecture)
+8. [How Should You Design Event Contracts?](#how-should-you-design-event-contracts)
+9. [References](#references)
 
-## From Topic Fanout to Event Routing
-<!-- section-summary: EventBridge fits larger event routing where teams need rules, targets, archives, replay, and account boundaries. -->
+Amazon EventBridge starts from one distributed-systems question: **Something happened in one part of the system. How do other parts that care find out without the producer knowing who they are?** It answers with a managed event router. Producers publish facts to an event bus, rules independently match those facts, and matching events are delivered to targets.
 
-The SNS article gave Northstar Learn a fanout topic. The lesson service publishes `LessonPublished`, and subscribers such as email, search, analytics, and mobile notifications receive their own copies. That is a clean notification pattern.
+The sections below answer these questions in order:
 
-Now the platform has a broader integration need. Lesson publishing events should reach analytics in another account. Some events should start a Step Functions workflow. Some should land in a data lake loader. Product teams want to route events by source, event type, course category, and tenant. Operations wants an archive so events can be replayed after a consumer bug.
+1. **Why Do Applications Need an Event Router?**
+2. **What Is the Difference Between an Event and a Command?**
+3. **What Does an EventBridge Event Look Like?**
+4. **How Do Applications Publish and Match Events?**
+5. **How Do Archives and Replay Differ from Retries and DLQs?**
+6. **How Does EventBridge Cross Accounts and SaaS Boundaries?**
+7. **How Do You Build a Complete EventBridge Architecture?**
+8. **How Should You Design Event Contracts?**
 
-This is the EventBridge moment. **Amazon EventBridge** is AWS's managed event router. Applications, AWS services, and SaaS partners publish events. EventBridge evaluates rules and sends matching events to targets.
+## Why Do Applications Need an Event Router?
+<!-- section-summary: EventBridge moves consumer knowledge and content-based routing out of the producer, reducing knowledge and temporal coupling. -->
 
-The main shift is from topic fanout to event routing. SNS is excellent when a publisher owns a topic and subscribers need copies. EventBridge is strong when event buses, routing rules, target ownership, archive, replay, SaaS events, or cross-account delivery are part of the design.
+Imagine an online store where placing an order must affect payment, inventory, email, fraud, and analytics:
 
-## Events Are Facts
-<!-- section-summary: A useful event says what already happened and carries stable identifiers that consumers can use safely. -->
+```text
+Order service
+  ├── Payment service
+  ├── Inventory service
+  ├── Email service
+  ├── Fraud service
+  └── Analytics service
+```
 
-An **event** is a JSON record that describes something that already happened. `LessonPublished` is a fact. It tells consumers that the lesson is available. The event should avoid asking another service to do a job by name because each consumer should own its own reaction.
+The order application can directly call all five. At first, that is easy to read. It also creates two forms of coupling.
 
-EventBridge events have an envelope. The fields used most often are `source`, `detail-type`, `detail`, `time`, `resources`, `account`, and `region`. Custom publishers provide the key routing fields when they call `PutEvents`.
+**Knowledge coupling** means the order service knows every consumer, how to contact it, and often how to respond to its failures. Adding a recommendation or compliance consumer requires changing producer code or configuration.
 
-Here is a lesson publishing event in the EventBridge shape:
+**Temporal coupling** means downstream services may need to be available while the producer is completing its operation. A slow or unavailable nonessential consumer can delay order placement.
+
+The stable domain fact is simpler:
+
+```text
+Order 7821 was placed.
+```
+
+The order service does not necessarily need to decide everything that happens because of that fact. Other systems can independently decide whether they care.
+
+An SNS topic is one way to decouple the producer and fan a publication out. This works well when the organizing question is, "Who subscribes to this topic?" SNS subscriptions can also filter messages.
+
+As a system grows, however, it may produce many event types—orders, payments, shipments, customers, refunds, file uploads, and AWS service state changes. Consumers may want combinations such as:
+
+```text
+Fraud:          OrderPlaced where total >= 1000
+Rewards:        OrderPlaced where customerTier = gold
+Operations:     PaymentFailed
+Analytics:      every commerce event
+Security:       selected security-sensitive events
+```
+
+The central problem is now content-based routing rather than simple topic fanout. Introduce a neutral event bus and predicates:
+
+```text
+Order service -----+
+Payment service ---+-> EVENT BUS -> rules -> targets
+AWS services ------+
+SaaS source -------+
+```
+
+Conceptually:
+
+```text
+for each event E on bus B:
+  for each rule R attached to B:
+    if R.pattern matches E:
+      deliver E to R's target
+```
+
+That is the core of EventBridge. A single event can match several rules or none. The producer publishes once; later routing is independently configured.
+
+## What Is the Difference Between an Event and a Command?
+<!-- section-summary: An event states an immutable past fact, while a command asks a particular action to occur. -->
+
+An event says that something already happened. Good names are commonly past tense:
+
+```text
+OrderPlaced
+PaymentCompleted
+PaymentFailed
+InventoryReserved
+CustomerRegistered
+FileUploaded
+EC2InstanceStopped
+```
+
+Commands such as `ChargeCustomer`, `SendEmail`, and `ReserveInventory` have a different meaning: someone should perform this action.
+
+Compare:
+
+```text
+Command: Charge the customer for order 7821.
+Event:   Order 7821 was placed.
+```
+
+An order event can contain:
 
 ```json
 {
-  "version": "0",
-  "id": "7f4b3341-0f2b-48b7-8ec0-b8f2d2e7ad11",
-  "detail-type": "LessonPublished",
-  "source": "com.northstar.lessons",
-  "account": "123456789012",
-  "time": "2026-06-27T10:15:00Z",
-  "region": "us-east-1",
-  "resources": [
-    "arn:aws:dynamodb:us-east-1:123456789012:table/lessons"
-  ],
+  "type": "OrderPlaced",
+  "orderId": "7821",
+  "customerId": "C42",
+  "total": 125.00
+}
+```
+
+The producer is not directly instructing payment, fraud, analytics, and email. Each consumer assigns its own meaning to the fact:
+
+```text
+OrderPlaced
+  ├── Payment decides to begin payment work
+  ├── Fraud decides to inspect the order
+  └── Analytics decides to record the sale
+```
+
+This inversion of responsibility is central to event-driven design. The producer owns the truth of what happened. Consumers own their reactions.
+
+An event shaped as `TellPaymentServiceToProcessOrder` leaks today's orchestration and destination into the contract. `OrderPlaced` remains useful to consumers that do not exist yet. Loose coupling comes from publishing durable domain reality rather than a hidden list of commands.
+
+Events do not eliminate all coordination. Producers and consumers must agree on event meaning, schema, identifiers, compatibility, sensitivity, and whether a later update or correction creates a new event. The decoupling is about deployment and routing knowledge, not the absence of contracts.
+
+### How Do Event Buses, Rules, and Targets Work?
+<!-- section-summary: The bus receives events, each rule asks whether an event matches, and a target receives the selected event or transformed input. -->
+
+Three concepts explain most of EventBridge:
+
+| Concept | First-principles meaning |
+| --- | --- |
+| Event bus | The boundary where events arrive |
+| Rule | A predicate that asks whether this event is relevant |
+| Target | The destination for a matching event |
+
+Suppose this event arrives:
+
+```json
+{
+  "source": "com.shop.orders",
+  "detail-type": "Order Placed",
   "detail": {
-    "eventId": "evt-01JZ0ZAT9QW5WQHC8B1RGX5G9S",
-    "lessonId": "lesson-1042",
-    "courseId": "course-aws-foundations",
-    "tenantId": "tenant-learning",
-    "courseLevel": "beginner",
-    "publishedBy": "instructor-77",
-    "correlationId": "req-9ef0d6c8"
+    "orderId": "7821",
+    "total": 1250,
+    "customerTier": "gold"
   }
 }
 ```
 
-`source` identifies the publishing application or service area. `detail-type` names the business fact. `detail` carries the business payload. `eventId` gives consumers a stable application-level idempotency key for retries and replay.
+Three rules can evaluate it independently:
 
-Events can live in archives, logs, queues, and target systems. That makes payload discipline important. Keep private data out of broad events unless every target, archive, and replay path is allowed to hold it.
-
-![The event envelope makes the event fields visible so source, detail type, time, ID, and detail do not feel like abstract JSON noise](/content-assets/articles/article-cloud-providers-aws-application-integration-event-driven-architecture/event-as-fact.png)
-
-*The event envelope makes the event fields visible so source, detail type, time, ID, and detail do not feel like abstract JSON noise.*
-
-
-## Event Buses, Rules, and Targets
-<!-- section-summary: An EventBridge bus receives events, rules select matching events, and targets receive the selected events. -->
-
-An **event bus** is the place where events are received and evaluated. AWS accounts have a default event bus, and teams can create custom event buses for application domains. Northstar Learn can use a custom bus named `northstar-publishing` for lesson publishing events.
-
-A **rule** contains an event pattern. The pattern matches fields in the event. For example, one rule can match `source=com.northstar.lessons` and `detail-type=LessonPublished`. Another rule can match only beginner courses or only one tenant.
-
-A **target** is the destination for matching events. EventBridge can send events to Lambda, SQS, Step Functions, Kinesis, API destinations, event buses in another account, and many other targets. A rule can have multiple targets, but each target should still have a clear owner and failure path.
-
-The simple shape looks like this:
-
-| EventBridge part | Northstar example | Owner |
-|---|---|---|
-| Event bus | `northstar-publishing` | Platform or publishing team |
-| Published event | `LessonPublished` from `com.northstar.lessons` | Lesson service |
-| Rule | `lesson-published-to-analytics` | Analytics team |
-| Target | Analytics SQS queue or Lambda function | Analytics team |
-| Archive | `lesson-publishing-archive` | Platform or publishing team |
-
-This ownership map matters because event-driven systems can spread quickly. A bus without owners, payload contracts, target owners, and alarms can turn into a quiet integration tangle.
-
-## Create a Custom Event Bus
-<!-- section-summary: A custom bus gives application events a clear routing boundary separate from the account default bus. -->
-
-The command below creates a custom event bus for Northstar publishing events:
-
-```bash
-aws events create-event-bus \
-  --name northstar-publishing
+```text
+Rule A: source=com.shop.orders and type=Order Placed -> match
+Rule B: detail.total >= 1000                         -> match
+Rule C: detail-type=Order Cancelled                  -> no match
 ```
 
-Example output:
+The event can therefore go to both a payment queue and fraud workflow. The cancellation target receives nothing.
+
+#### A bus is a routing domain, not a queue
+
+An event bus routes. If no rule matches, no target action occurs. Events do not sit on the bus waiting for a future consumer as SQS messages do. Historical retention requires an archive configured for that purpose.
+
+This is why EventBridge and SQS are commonly composed:
+
+```text
+Producer -> EventBridge -> matching rule -> SQS -> workers
+```
+
+EventBridge decides where the fact belongs. SQS lets that consumer process the routed copy at its own rate.
+
+#### Targets can be different AWS or external capabilities
+
+Targets include Lambda, SQS, SNS, Step Functions, Kinesis, API Gateway, another event bus, and API destinations, among others. EventBridge must have the correct permission to invoke or write to each target.
+
+An input transformer can reduce or reshape the original event for one target. A full order event might contain customer, currency, warehouse, and total fields, while a fraud target needs only:
 
 ```json
 {
-  "EventBusArn": "arn:aws:events:us-east-1:123456789012:event-bus/northstar-publishing"
+  "orderId": "7821",
+  "amount": 1250
 }
 ```
 
-The ARN is the full bus identifier. Producers use the bus name or ARN when they call `PutEvents`. Rules and archives also refer to this bus.
+One rule can have several targets, but the source guidance recommends one target per rule when practical so each consumer's pattern, permission, transformation, retry, and failure handling can evolve independently.
 
-The default event bus is useful for many AWS service events. A custom bus gives application events a named home and clearer permissions. The lesson service can receive permission to publish to `northstar-publishing` without receiving broader permissions on every event bus in the account.
+## What Does an EventBridge Event Look Like?
+<!-- section-summary: The standard envelope separates routing and provenance metadata from producer-specific domain detail. -->
 
-## Publish an Event with PutEvents
-<!-- section-summary: PutEvents sends custom application events to a bus and returns per-entry success or failure details. -->
+An EventBridge event uses an envelope like this:
 
-The lesson service publishes events with `PutEvents`. The command below sends one `LessonPublished` entry. `Detail` is a JSON string because EventBridge accepts the business payload as a string field in the request.
+```json
+{
+  "version": "0",
+  "id": "event-id",
+  "detail-type": "Order Placed",
+  "source": "com.shop.orders",
+  "account": "123456789012",
+  "time": "2026-08-23T12:00:00Z",
+  "region": "eu-west-2",
+  "resources": [],
+  "detail": {
+    "orderId": "7821",
+    "customerId": "C42",
+    "total": 125
+  }
+}
+```
+
+Think of it as two layers:
+
+```text
+Routing and provenance:
+source, detail-type, account, region, time, resources
+
+Domain data:
+detail { ... }
+```
+
+AWS service events use the same general envelope while `detail` varies by producing service. For application events, specific naming such as `source=com.example.orders` and `detail-type=Order Placed` is more useful than `source=app` and `detail-type=event1`. Routing metadata becomes part of the integration contract.
+
+Every account has a **default event bus**, where many AWS service events appear. Applications can create **custom buses** such as `commerce`, `security`, or `platform` and control who can send with resource-based policies.
+
+```text
+default bus  -> AWS service events
+commerce bus -> order, payment, shipping events
+security bus -> security events
+platform bus -> internal platform events
+```
+
+A separate bus is not required for every microservice. A bus is better understood as an integration boundary or routing domain with coherent ownership and policy.
+
+## How Do Applications Publish and Match Events?
+<!-- section-summary: Producers send facts with PutEvents, while consumers or platform owners declare content-based event patterns without changing producer code. -->
+
+Custom applications publish with the `PutEvents` API. An entry can be:
+
+```json
+[
+  {
+    "EventBusName": "commerce",
+    "Source": "com.shop.orders",
+    "DetailType": "Order Placed",
+    "Detail": "{\"orderId\":\"7821\",\"total\":1250}"
+  }
+]
+```
+
+Send it with:
 
 ```bash
 aws events put-events \
-  --entries '[
-    {
-      "EventBusName": "northstar-publishing",
-      "Source": "com.northstar.lessons",
-      "DetailType": "LessonPublished",
-      "Detail": "{\"eventId\":\"evt-01JZ0ZAT9QW5WQHC8B1RGX5G9S\",\"lessonId\":\"lesson-1042\",\"courseId\":\"course-aws-foundations\",\"tenantId\":\"tenant-learning\",\"courseLevel\":\"beginner\",\"publishedBy\":\"instructor-77\",\"correlationId\":\"req-9ef0d6c8\"}"
-    }
-  ]'
+  --entries file://events.json
 ```
 
-Example output:
+The order service chooses the fact and event bus. It does not choose the fraud Lambda, payment queue, analytics pipeline, or email service.
+
+### Rules use event patterns
+
+A high-value-order rule can look like:
 
 ```json
 {
-  "FailedEntryCount": 0,
-  "Entries": [
-    {
-      "EventId": "7f4b3341-0f2b-48b7-8ec0-b8f2d2e7ad11"
-    }
-  ]
-}
-```
-
-`FailedEntryCount` is the first field to check. A value of `0` means EventBridge accepted the entry. The returned `EventId` identifies the EventBridge event, while the `detail.eventId` inside the payload remains the application-level idempotency key used by consumers.
-
-In production code, a failed `PutEvents` call needs retry handling. Many teams use an outbox pattern around domain events so a database commit and event publication can recover cleanly if one side succeeds and the other side fails.
-
-## Match Events with Rules
-<!-- section-summary: Event patterns select events by envelope fields and detail fields before delivery to targets. -->
-
-An **event pattern** is JSON that tells EventBridge which events a rule should match. The pattern below matches lesson-published events for beginner courses.
-
-```json
-{
-  "source": [
-    "com.northstar.lessons"
-  ],
-  "detail-type": [
-    "LessonPublished"
-  ],
+  "source": ["com.shop.orders"],
+  "detail-type": ["Order Placed"],
   "detail": {
-    "courseLevel": [
-      "beginner"
+    "total": [
+      {
+        "numeric": [">=", 1000]
+      }
     ]
   }
 }
 ```
 
-`source` and `detail-type` match the EventBridge envelope. `detail.courseLevel` matches a field inside the business payload. This is why event field names should stay stable and documented.
+Patterns follow the general structure of the event and can inspect top-level metadata and nested `detail` fields. An order worth 125 does not match; an order worth 2,500 does.
 
-The test command below checks the pattern against a sample event before the rule is created:
+Routing rules conceptually belong to the consumers or owning integration domain. If analytics wants every order, it can create a rule for the order source. If security later wants orders above 5,000, it adds a rule and target. The order service remains unchanged.
 
-```bash
-aws events test-event-pattern \
-  --event-pattern file://lesson-published-beginner-pattern.json \
-  --event file://lesson-published-event.json
+This is **declarative routing**: the pattern states what facts a consumer cares about rather than the producer executing routing code such as `if total >= 1000: call fraud`.
+
+The same power creates a contract risk. An incorrect `detail-type`, nested path, capitalization, or value type makes a healthy rule not match. Test patterns against real example events and version schemas so a producer change does not silently disconnect consumers.
+
+### How Does EventBridge Deliver to Targets Reliably?
+<!-- section-summary: EventBridge retries eligible target-delivery failures, consumers remain duplicate-safe, and a target DLQ preserves events that exhaust delivery. -->
+
+After an event matches, EventBridge still has to deliver it across a distributed boundary. The target may throttle, be unavailable, have missing permission, or be deleted.
+
+For retriable target-delivery failures, EventBridge uses exponential backoff and jitter. The default target retry policy attempts delivery for up to 24 hours and up to 185 retries.
+
+```text
+EventBridge -> target fails -> wait -> retry -> wait longer -> retry
 ```
 
-Example output:
+The phrase **target delivery** matters. EventBridge already accepted the event. This retry concerns one matched rule-to-target path, not republishing the event from its original producer.
+
+#### Consumers must be idempotent
+
+A target can process an event successfully while the delivery acknowledgement is lost or another rare duplicate invocation occurs. Exactly-once business execution cannot be assumed.
+
+Carry a stable business event ID:
 
 ```json
 {
-  "Result": true
+  "detail": {
+    "eventId": "order-7821-placed-v1",
+    "orderId": "7821"
+  }
 }
 ```
 
-`Result: true` means the sample event matches the pattern. This command is useful in reviews because small JSON shape mistakes can make a rule silently miss events.
+Before a non-repeatable side effect such as a payment, refund, or shipment, the consumer checks durable state for that event ID. Repeated delivery returns the recorded outcome instead of repeating the effect.
 
-The command below creates the rule on the custom bus:
+#### A DLQ preserves exhausted target deliveries
 
-```bash
-aws events put-rule \
-  --event-bus-name northstar-publishing \
-  --name lesson-published-beginner-to-search \
-  --event-pattern file://lesson-published-beginner-pattern.json \
-  --state ENABLED
+Without a DLQ, an event can be discarded after its target retry policy is exhausted. EventBridge can use an SQS Standard queue as the target's dead-letter queue:
+
+```text
+EventBridge -> target -> repeated delivery failure -> SQS DLQ
 ```
 
-Example output:
+Operators can inspect whether permission, throttling, deletion, network behavior, or target configuration prevented delivery, correct the cause, and reprocess deliberately.
+
+If EventBridge successfully puts the event into a target SQS queue but the queue's worker later fails, that processing error is outside the EventBridge delivery boundary. The main queue's redrive policy and SQS DLQ own it, just as in an SNS-to-SQS design.
+
+## How Do Archives and Replay Differ from Retries and DLQs?
+<!-- section-summary: Retry repairs a current delivery, a DLQ retains exhausted failures, an archive stores event history, and replay sends selected history back through the source bus. -->
+
+These mechanisms solve different problems:
+
+| Mechanism | Question it answers |
+| --- | --- |
+| Retry | Can this matched event reach its target after a temporary failure? |
+| DLQ | Which target deliveries still failed after the retry policy? |
+| Archive | Which historical events arrived on this bus? |
+| Replay | Can selected historical events go through routing again? |
+
+Suppose January orders were delivered successfully. In March, a new recommendation service wants those facts. A DLQ cannot help because the original deliveries did not fail. An archive can retain matching bus events, and replay can send selected historical events back to the archive's source event bus.
+
+```text
+Event bus -> Archive
+Archive -- replay --> same source event bus -> current rules -> targets
+```
+
+An archive can capture all or a pattern-selected subset of events. Replayed events are not guaranteed to emerge in their exact original order. Consumers must be designed for duplicate or historical processing, and new rules should be scoped so replay does not accidentally repeat unrelated side effects.
+
+Archives are not automatic for every bus. If history, later reprocessing, or new-consumer backfill matters, define the archive pattern, retention, access, cost, and replay procedure explicitly.
+
+## How Does EventBridge Cross Accounts and SaaS Boundaries?
+<!-- section-summary: Event bus policies and bus-to-bus rules create organizational boundaries, while partner sources and API destinations connect SaaS and external HTTP systems. -->
+
+An organization may separate commerce, security, analytics, and platform work into different AWS accounts. Security processing need not be embedded in each application account:
+
+```text
+Commerce account commerce bus
+           |
+           | matching security events
+           v
+Security account security bus
+           |
+           v
+Security tooling
+```
+
+Event bus resource policies can control which AWS accounts or organizations may send. Rules can route to buses in other accounts. The receiving account controls its own downstream rules and targets.
+
+This makes the event bus an organizational integration boundary. The commerce producer need not know the security application, and commerce developers do not have to own security processing.
+
+### SaaS events can enter through partner sources
+
+For supported partners, a SaaS provider creates a partner event source. The customer associates it with an EventBridge bus and then routes partner events with normal rules:
+
+```text
+SaaS provider -> partner event source -> EventBridge bus
+                                      -> rules -> Lambda, SQS, workflows
+```
+
+### API destinations can send events outward
+
+An EventBridge API destination lets a matching rule invoke an external HTTP API:
+
+```text
+EventBridge -> API destination -> external SaaS or API
+```
+
+Together, these capabilities place EventBridge between AWS services, custom applications, AWS accounts, SaaS partners, and external HTTP systems.
+
+### How Do EventBridge, SNS, and SQS Differ?
+<!-- section-summary: SQS holds work, SNS broadcasts a topic publication, and EventBridge applies content-based rules to facts on a bus. -->
+
+Feature overlap makes service memorization confusing. Start from the fundamental problem:
+
+```text
+SQS:         Keep this work until a consumer can process it.
+SNS:         Send this publication to topic subscribers.
+EventBridge: Route this fact according to event patterns.
+```
+
+| Question | SQS | SNS | EventBridge |
+| --- | --- | --- | --- |
+| Primary abstraction | Queue | Topic | Event bus |
+| Main job | Buffer and distribute work | Fan out messages | Route events |
+| Consumer relationship | Pull or managed poll | Push to subscriptions | Rules invoke targets |
+| Content routing | Not central | Subscription filters | Event patterns are central |
+| Waiting backlog | Core capability | Not standard topic behavior | Not bus behavior |
+
+Do not treat EventBridge and SQS as competing alternatives when both jobs exist:
+
+```text
+Order service -> EventBridge -> Payments SQS -> Payment workers
+```
+
+EventBridge determines that payments cares about `OrderPlaced`. SQS retains that consumer's work during a slowdown and lets workers scale independently.
+
+The same event can route to payments SQS, fraud SQS, analytics, and a security-account bus. Every consumer gets the delivery structure appropriate to its needs.
+
+## How Do You Build a Complete EventBridge Architecture?
+<!-- section-summary: A complete design joins a stable event envelope, custom bus, consumer-owned rules, buffered targets, retries, DLQs, optional archive, and cross-account routing. -->
+
+Use this event:
 
 ```json
 {
-  "RuleArn": "arn:aws:events:us-east-1:123456789012:rule/northstar-publishing/lesson-published-beginner-to-search"
+  "source": "com.shop.orders",
+  "detail-type": "Order Placed",
+  "detail": {
+    "eventId": "evt-8fa21",
+    "orderId": "O-7821",
+    "customerId": "C-42",
+    "total": 1250,
+    "currency": "GBP",
+    "customerTier": "gold"
+  }
 }
 ```
 
-The rule now exists, but it still needs a target. A rule without a target matches events and has nowhere useful to send them.
+The order service calls `PutEvents` once on the commerce bus. An archive optionally records the event. Rules match independently:
 
-![The rules view shows how event patterns select targets and why routing belongs in the bus rule rather than hidden application code](/content-assets/articles/article-cloud-providers-aws-application-integration-event-driven-architecture/event-bus-rules-targets.png)
-
-*The rules view shows how event patterns select targets and why routing belongs in the bus rule rather than hidden application code.*
-
-
-## Send Events to Targets
-<!-- section-summary: Targets receive matching events, and each target should have permissions, retry behavior, and failure handling. -->
-
-The command below attaches an SQS queue target to the rule. This lets the search team process matched events from its own durable queue.
-
-```bash
-aws events put-targets \
-  --event-bus-name northstar-publishing \
-  --rule lesson-published-beginner-to-search \
-  --targets '[
-    {
-      "Id": "search-index-queue",
-      "Arn": "arn:aws:sqs:us-east-1:123456789012:lesson-search-index-events",
-      "DeadLetterConfig": {
-        "Arn": "arn:aws:sqs:us-east-1:123456789012:eventbridge-target-dlq"
-      },
-      "RetryPolicy": {
-        "MaximumRetryAttempts": 8,
-        "MaximumEventAgeInSeconds": 3600
-      }
-    }
-  ]'
+```text
+OrderPlaced             -> Payments SQS -> workers
+total >= 1000           -> Fraud workflow
+source=com.shop.orders  -> Analytics
+security-sensitive      -> Security account event bus
 ```
 
-Example output:
+Each target has the permission EventBridge needs, an appropriate retry policy, and a DLQ where failed delivery must be recoverable. SQS targets add their own visibility, consumer idempotency, scaling, and processing DLQ.
+
+Permission is another boundary to diagnose explicitly. A producer needs permission to put its event on the chosen bus. The bus resource policy decides which accounts or organizations may publish. After a rule matches, EventBridge needs the service role or target resource-policy access required for that particular destination. A successful `PutEvents` call therefore proves ingestion, not successful invocation of every later target. Check the producer-to-bus and rule-to-target permission relationships separately rather than broadening the producer role until an unrelated delivery happens to work.
+
+Operational evidence follows the same boundaries. Record the producer's stable business event ID and the `PutEvents` result. Test the exact event against the rule pattern. Confirm the rule was triggered, delivery was attempted, and the target received it. If delivery failed, inspect retry state and the EventBridge target DLQ. If an SQS target received it but its worker failed, move the investigation to queue age, consumer logs, visibility behavior, and that queue's processing DLQ. This last-confirmed-boundary method avoids treating all missing business outcomes as an event-bus failure.
+
+Tomorrow, marketing asks for all gold-customer orders. Add a rule matching `customerTier=gold` and its target. The order service does not change. Compliance later requests refund events; another rule handles them without rewriting refund producers.
+
+This is the architectural payoff: producers announce stable domain facts, while consumers and platform owners evolve routing independently.
+
+The managed router replaces application code that would otherwise contain every `if event.type ... send_to_target` branch and require the team to operate its scaling, availability, permissions, retries, observability, cross-account delivery, SaaS links, event history, and replay.
+
+## How Should You Design Event Contracts?
+<!-- section-summary: Events should be stable statements of business reality with specific routing metadata, durable IDs, versioned detail, and duplicate-safe consumers. -->
+
+Events may gain consumers that the producer does not know today. Prefer a durable statement:
 
 ```json
 {
-  "FailedEntryCount": 0,
-  "FailedEntries": []
+  "detail-type": "Order Placed",
+  "detail": {
+    "eventId": "evt-8fa21",
+    "orderId": "O-7821",
+    "total": 1250
+  }
 }
 ```
 
-`FailedEntryCount: 0` means EventBridge accepted the target configuration. The SQS queue also needs a queue policy that allows `events.amazonaws.com` to send messages from this rule. Without that resource policy, the rule can exist while delivery fails.
-
-Targets can receive the full event by default. EventBridge also supports input transformers. A transformer can pass a smaller payload to a target when the target only needs selected fields.
+Avoid shaping the event around one current consumer:
 
 ```json
 {
-  "InputPathsMap": {
-    "lessonId": "$.detail.lessonId",
-    "courseId": "$.detail.courseId",
-    "eventId": "$.detail.eventId"
-  },
-  "InputTemplate": "{\"jobType\":\"IndexLesson\",\"lessonId\":\"<lessonId>\",\"courseId\":\"<courseId>\",\"eventId\":\"<eventId>\"}"
+  "detail-type": "TellPaymentServiceToProcessOrder",
+  "detail": {
+    "paymentLambdaName": "...",
+    "analyticsNeeded": true
+  }
 }
 ```
 
-This transformer produces a search job shape instead of the full event envelope. It is target configuration, so the rule owner should document it. A transformer can help keep target messages small, but it also creates another contract that needs review when event fields change.
+The first lets a future consumer decide that `Order Placed` matters. The second exposes orchestration decisions and target knowledge.
 
-The command below lists rules on the custom bus. It gives operators a quick way to confirm whether the expected rule is enabled.
+Use specific source and type names, stable business event IDs, occurrence time, a versioned schema, and only the detail subscribers are allowed and expected to receive. Make side-effecting consumers idempotent. Test event patterns with actual envelope examples. Define ownership for publisher permissions, bus policies, rules, target permissions, delivery DLQs, archives, and replays.
 
-```bash
-aws events list-rules \
-  --event-bus-name northstar-publishing \
-  --query 'Rules[].{Name:Name,State:State,EventPattern:EventPattern}' \
-  --output table
+The complete mental model is:
+
+```text
+Event:      Something happened.
+Event bus:  Bring events into this routing domain.
+Rule:       Do I care about this event?
+Target:     Send matching input here.
+Retry:      Try this target delivery again.
+DLQ:        Retain exhausted target failures.
+Archive:    Keep selected bus history.
+Replay:     Put selected history through the source bus again.
 ```
 
-Example output:
+If you remember one sentence, use this: **A producer publishes a durable fact to an event bus; rules independently select events by their content and route matches to targets, allowing producers and consumers to evolve without knowing about one another.**
 
-```bash
------------------------------------------------------------------------------------------
-|                                      ListRules                                        |
-+------------------------------------+----------+---------------------------------------+
-| Name                               | State    | EventPattern                          |
-+------------------------------------+----------+---------------------------------------+
-| lesson-published-beginner-to-search| ENABLED  | {"source":["com.northstar.lessons"]...|
-+------------------------------------+----------+---------------------------------------+
-```
+:::expand[Why Do Applications Need an Event Router?]{kind="recap"}
+EventBridge moves consumer knowledge and content-based routing out of the producer, reducing knowledge and temporal coupling.
 
-If the rule is disabled, no matching events reach its targets. If the rule is enabled and target delivery still fails, check target resource policy, failed invocation metrics, DLQ messages, and retry settings.
+Direct producer calls create knowledge of every consumer and often require those consumers to be available. EventBridge moves content-based routing into managed rules so producers publish once and new consumers can appear without producer changes.
+:::
 
-## Retries, DLQs, Archives, and Replay
-<!-- section-summary: EventBridge delivery needs a failure path, and archives let teams replay events after a consumer bug. -->
+:::expand[What Is the Difference Between an Event and a Command?]{kind="recap"}
+An event states an immutable past fact, while a command asks a particular action to occur.
 
-EventBridge retries failed target delivery for a configured time window and attempt count. A target DLQ gives failed events a place to land after retries. For SQS, Lambda, and Step Functions targets, DLQs and target policies should be part of the infrastructure review rather than a last-minute incident fix.
+A command asks for an action. An event records a fact that already occurred. Events should describe durable domain reality and let consumers independently decide how to react.
 
-An **archive** stores events from a bus that match a pattern. Archives are useful when a consumer bug drops or mishandles events. After the bug is fixed, teams can replay the archived events into a bus for reprocessing.
+The bus receives events, each rule asks whether an event matches, and a target receives the selected event or transformed input.
 
-The command below creates an archive for lesson events and keeps matching events for 30 days:
+The bus receives events in a routing domain. Every rule evaluates its event pattern. Each matching rule delivers to its configured target, optionally with transformed input. A bus routes; it does not hold an unconsumed work backlog.
+:::
 
-```bash
-aws events create-archive \
-  --archive-name lesson-publishing-archive \
-  --event-source-arn arn:aws:events:us-east-1:123456789012:event-bus/northstar-publishing \
-  --event-pattern '{"source":["com.northstar.lessons"]}' \
-  --retention-days 30
-```
+:::expand[What Does an EventBridge Event Look Like?]{kind="recap"}
+The standard envelope separates routing and provenance metadata from producer-specific domain detail.
 
-Example output:
+The standard envelope carries source, type, account, Region, time, resources, and other routing metadata around producer-specific `detail`. Default buses commonly receive AWS service events; custom buses provide application or organizational routing domains.
+:::
 
-```json
-{
-  "ArchiveArn": "arn:aws:events:us-east-1:123456789012:archive/lesson-publishing-archive",
-  "State": "ENABLED"
-}
-```
+:::expand[How Do Applications Publish and Match Events?]{kind="recap"}
+Producers send facts with PutEvents, while consumers or platform owners declare content-based event patterns without changing producer code.
 
-The archive pattern keeps the archive focused on lesson events. Retention controls how long events stay available for replay. Teams should treat archive data as production data because it may contain business identifiers.
+Producers call PutEvents with a source, detail type, bus, and domain detail. Consumer-owned rules declaratively match top-level and nested fields, so a new routing requirement does not require a producer code path.
 
-The command below starts a replay for a one-hour window. It sends archived events back to the same event bus.
+EventBridge retries eligible target-delivery failures, consumers remain duplicate-safe, and a target DLQ preserves events that exhaust delivery.
 
-```bash
-aws events start-replay \
-  --replay-name replay-search-index-2026-06-27 \
-  --event-source-arn arn:aws:events:us-east-1:123456789012:archive/lesson-publishing-archive \
-  --event-start-time 2026-06-27T09:00:00Z \
-  --event-end-time 2026-06-27T10:00:00Z \
-  --destination '{"Arn":"arn:aws:events:us-east-1:123456789012:event-bus/northstar-publishing"}'
-```
+EventBridge retries eligible target-delivery failures with backoff and jitter. Targets remain idempotent because duplicate invocation can occur. A Standard SQS DLQ preserves deliveries that exhaust the configured target retry policy.
+:::
 
-Example output:
+:::expand[How Do Archives and Replay Differ from Retries and DLQs?]{kind="recap"}
+Retry repairs a current delivery, a DLQ retains exhausted failures, an archive stores event history, and replay sends selected history back through the source bus.
 
-```json
-{
-  "ReplayArn": "arn:aws:events:us-east-1:123456789012:replay/replay-search-index-2026-06-27",
-  "State": "STARTING"
-}
-```
+Retry addresses a current target delivery. A DLQ retains final delivery failures. An archive stores selected event history even when delivery succeeded. Replay sends historical events back through the source bus and current matching rules.
+:::
 
-Replay makes idempotency mandatory. Search indexing should use `detail.eventId` or `lessonId` to avoid duplicate records. Analytics should handle repeated events without double-counting. Replayed events are powerful because they can repair missed processing, and they can also repeat side effects when consumers are careless.
+:::expand[How Does EventBridge Cross Accounts and SaaS Boundaries?]{kind="recap"}
+Event bus policies and bus-to-bus rules create organizational boundaries, while partner sources and API destinations connect SaaS and external HTTP systems.
 
-## Cross-Account and SaaS Events
-<!-- section-summary: EventBridge can route selected events across accounts and ingest supported SaaS partner events. -->
+Bus policies and bus-to-bus rules connect AWS accounts under separate ownership. Partner event sources bring supported SaaS events in, and API destinations send matching events to external HTTP endpoints.
 
-Larger AWS environments often separate accounts by workload, environment, or team. Northstar Learn may run lesson publishing in an application account and analytics in a data account. EventBridge can send selected events from one account to an event bus in another account when bus policies allow it.
+SQS holds work, SNS broadcasts a topic publication, and EventBridge applies content-based rules to facts on a bus.
 
-Cross-account routing gives platform teams a controlled way to share events. The publishing account can publish `LessonPublished`, and a rule can send those events to the analytics account bus. The analytics team then owns its own rules and targets inside its account.
+SQS buffers work for consumption. SNS fans one topic publication out to subscriptions. EventBridge applies content-based event rules. EventBridge often routes to SQS when a selected consumer also needs durable buffering.
+:::
 
-EventBridge also integrates with many AWS service events and supported SaaS partner event sources. This lets teams route events from AWS services, custom applications, and SaaS tools through one event pattern and target model.
+:::expand[How Do You Build a Complete EventBridge Architecture?]{kind="recap"}
+A complete design joins a stable event envelope, custom bus, consumer-owned rules, buffered targets, retries, DLQs, optional archive, and cross-account routing.
 
-Cross-account and SaaS designs need clear data rules. An event that is safe inside one application account may expose too much when sent to analytics, security, or a partner-integrated bus. Keep the payload small, document owners, and treat event schemas as public contracts inside the organization.
+Publish a stable event once, route through consumer-owned patterns, buffer slow paths where necessary, grant narrow target permissions, capture delivery failures, optionally archive history, and let cross-account owners control their own downstream buses and targets.
+:::
 
-## EventBridge, SNS, and SQS
-<!-- section-summary: EventBridge routes facts by pattern, SNS fans out notifications, and SQS stores work for one consumer group. -->
+:::expand[How Should You Design Event Contracts?]{kind="recap"}
+Events should be stable statements of business reality with specific routing metadata, durable IDs, versioned detail, and duplicate-safe consumers.
 
-EventBridge, SNS, and SQS can all appear in the same lesson publishing system. The difference is the communication job.
-
-| Need | Best starting service | Example |
-|---|---|---|
-| One consumer group needs durable work | SQS | Transcode uploaded video |
-| Several subscribers need a direct notification copy | SNS | Email, search, analytics, and mobile receive `LessonPublished` |
-| Teams need event routing rules, replay, archives, or cross-account delivery | EventBridge | Route product events to analytics, data lake, workflows, and account-level consumers |
-
-EventBridge works well for business event routing. SNS works well for topic fanout. SQS works well for durable work. Combining them is normal. For example, EventBridge can route `LessonPublished` to an SQS queue target so the search team gets a durable backlog from a routed event rule.
-
-The design should name the owner of each contract. The lesson service owns the event fields it publishes. The platform team may own the event bus. Each consumer team owns its rule, target, alarms, and idempotency behavior.
-
-## Putting It Together
-<!-- section-summary: EventBridge gives the publishing platform routed events that can be owned, inspected, archived, and replayed. -->
-
-Northstar Learn now has a custom event bus for lesson publishing. The lesson service publishes `LessonPublished` with stable fields. Rules match events for search, analytics, data lake loading, and workflow starts. Targets receive the matching events with retry policies and DLQs.
-
-The archive gives the team a recovery tool after consumer bugs. Replay gives the team a way to reprocess selected events. Cross-account routing lets analytics own its processing in a separate account while the lesson service continues publishing the same fact.
-
-This is the concrete EventBridge distinction: **EventBridge is for routed events**. It fits the point where application integration needs more than one topic fanout path and starts needing rules, targets, account boundaries, archives, replay, and event ownership.
-
-![The operations summary connects retries, DLQs, archives, replay, event IDs, and target logs into one event-recovery path](/content-assets/articles/article-cloud-providers-aws-application-integration-event-driven-architecture/event-operations-summary.png)
-
-*The operations summary connects retries, DLQs, archives, replay, event IDs, and target logs into one event-recovery path.*
-
-
-## What's Next
-<!-- section-summary: The next article uses Step Functions when the publishing process needs visible steps, branches, retries, waits, and final state. -->
-
-Events are good for facts and reactions. The final article in this module covers a different need: one publish request has a sequence of steps that should be visible and controlled from start to finish. Step Functions gives that process a state machine.
+Use specific routing metadata, a stable event ID, versioned domain detail, and fact-based past-tense meaning. Avoid embedding current target names or orchestration. Test patterns and make side effects safe when an event is delivered again.
+:::
 
 ## References
 
-- [What is Amazon EventBridge?](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html)
-- [Amazon EventBridge event buses](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html)
-- [Amazon EventBridge events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-events.html)
-- [Amazon EventBridge event patterns](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns.html)
-- [Amazon EventBridge targets](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-targets.html)
-- [Amazon EventBridge archives and replay](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html)
-- [Sending and receiving Amazon EventBridge events between AWS accounts](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-account.html)
+- [Amazon SNS documentation: Message filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html)
+- [Amazon EventBridge documentation: Event buses](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html)
+- [Amazon EventBridge documentation: Event bus logging](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-logs-execution-steps.html)
+- [Amazon EventBridge documentation: Events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-events.html)
+- [Amazon EventBridge documentation: Create an event bus](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-event-bus.html)
+- [Amazon EventBridge documentation: Sending custom events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-putevents.html)
+- [Amazon EventBridge documentation: Event patterns](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns.html)
+- [Amazon EventBridge documentation: Targets](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-targets.html)
+- [Amazon EventBridge documentation: Event bus concepts and transformers](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is-how-it-works-concepts.html)
+- [Amazon EventBridge documentation: Rule best practices](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules-best-practices.html)
+- [Amazon EventBridge documentation: Retry policy](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-retry-policy.html)
+- [Amazon EventBridge documentation: Troubleshooting duplicate delivery](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-troubleshooting.html)
+- [Amazon EventBridge documentation: Dead-letter queues](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rule-dlq.html)
+- [Amazon EventBridge documentation: Archives and replay](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-archive.html)
+- [Amazon EventBridge documentation: Event bus permissions](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus-perms.html)
+- [Amazon EventBridge documentation: SaaS partner events](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-saas.html)
+- [Amazon EventBridge documentation: API destinations](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-api-destinations.html)
+- [AWS decision guide: Amazon SQS, SNS, or EventBridge](https://docs.aws.amazon.com/decision-guides/latest/sns-or-sqs-or-eventbridge/sns-or-sqs-or-eventbridge.html)
+- [Amazon SQS documentation: Visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)

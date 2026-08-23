@@ -1,436 +1,584 @@
 ---
 title: "StatefulSets"
 description: "Run Kubernetes workloads that need stable identity, ordered rollout, and persistent storage."
-overview: "StatefulSets are for Pods that carry durable identity. `notification-api` can stay replaceable, while supporting services may need stable names and volumes."
+overview: "StatefulSets manage persistent identity slots: a Pod may be replaced, while its ordinal, network name, and storage association remain stable."
 tags: ["statefulsets", "storage", "pods", "identity"]
 order: 4
 id: article-containers-orchestration-kubernetes-workloads-statefulsets
 ---
+
 ## Table of Contents
 
-1. [Data Needs Stable Identity](#data-needs-stable-identity)
-2. [Stable Pod Identity](#stable-pod-identity)
-3. [Headless Services and Pod DNS](#headless-services-and-pod-dns)
-4. [Persistent Storage with PVC Templates](#persistent-storage-with-pvc-templates)
-5. [A StatefulSet Skeleton](#a-statefulset-skeleton)
-6. [Add the Database Container and Storage Mount](#add-the-database-container-and-storage-mount)
-7. [Startup, Scaling, and Updates](#startup-scaling-and-updates)
-8. [Debugging StatefulSets in the Terminal](#debugging-statefulsets-in-the-terminal)
-9. [Production Guidance for Stateful Services](#production-guidance-for-stateful-services)
-10. [When a Deployment Fits Better](#when-a-deployment-fits-better)
-11. [Operational Runbook](#operational-runbook)
-12. [References](#references)
+1. [Why does a stateful workload need a stable replica identity?](#why-does-a-stateful-workload-need-a-stable-replica-identity)
+2. [How does a StatefulSet keep a Pod name, DNS name, and storage claim aligned?](#how-does-a-statefulset-keep-a-pod-name-dns-name-and-storage-claim-aligned)
+3. [What job does the headless Service perform?](#what-job-does-the-headless-service-perform)
+4. [How does each replica receive its own PersistentVolumeClaim?](#how-does-each-replica-receive-its-own-persistentvolumeclaim)
+5. [How do ordered creation, scaling, and rolling updates work?](#how-do-ordered-creation-scaling-and-rolling-updates-work)
+6. [What happens to a member's storage during replacement, scale-down, and deletion?](#what-happens-to-a-members-storage-during-replacement-scale-down-and-deletion)
+7. [How do you inspect one member from the StatefulSet controller to its DNS name and disk?](#how-do-you-inspect-one-member-from-the-statefulset-controller-to-its-dns-name-and-disk)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Data Needs Stable Identity
-<!-- section-summary: StatefulSets exist for Pods where data, membership, or peer identity must stay tied to a predictable Pod name and storage claim. -->
+A Pod is ultimately a place where one or more processes run. If that Pod is deleted or its node fails, Kubernetes can create a replacement process somewhere else. Restarting restores compute capacity. A stateful application also needs to answer a deeper question:
 
-Most Kubernetes service Pods can be replaced freely because the important data lives somewhere else. Stateful workloads are different. They need a stable name, a stable storage claim, or a stable member identity that survives restarts and rescheduling.
+Here, **state** means information that must remain useful beyond the lifetime of one process. The bytes in a database file are state. A member's place in a replication group can also be state because the other members remember its identity. Kubernetes can replace compute automatically, but information that outlives that compute needs an explicit storage and identity model.
 
-A **StatefulSet** is the Kubernetes controller for workloads where identity and storage must stay tied to a predictable replica. It still uses a Pod template and a desired replica count, but each replica receives an ordinal name such as `notification-postgres-0`, `notification-postgres-1`, and `notification-postgres-2`. Storage claims can line up with those same ordinals.
+> **Which facts about this member must survive when its current process disappears?**
 
-For the Customer Notification Platform, `notification-api` should usually stay on a Deployment because any ready API Pod can serve the next request. A supporting PostgreSQL member in a learning or staging cluster has a stronger connection to its disk and identity. After a restart or reschedule, operators need to know which Pod owns which data directory, which DNS name clients should use for that member, and which storage claim must mount back to it.
+For a stateless web server, one healthy replica can usually replace another. Requests arrive through a shared Service, durable data lives elsewhere, and callers use the shared endpoint rather than a particular Pod name.
 
-A **stateful workload** keeps important data, membership, or identity inside a specific replica. A database member may own a local data directory. A Redis cluster member may own a hash slot range. A search node may own a shard copy. A message broker may keep a log segment on disk. Those systems need stronger identity than a random Deployment Pod name.
+A database member, message-broker replica, or consensus-system peer can have a different contract. Member `1` may own a particular disk, appear in peer membership records under a particular name, and need to return as the same logical member after a crash. Its current process is replaceable, while its identity continues across replacements.
 
-Stable identity shows up through ordinal Pod names, headless Services, DNS, volume claim templates, startup order, updates, debugging, production guidance, and the cases where a Deployment remains the better controller.
+Suppose a three-member system uses these relationships:
 
-For `notification-api`, the API layer should stay replaceable. If one API Pod disappears, another API Pod can read and write the same notification records in PostgreSQL. For `notification-postgres`, the Pod itself has a stronger connection to local data. The Pod name, DNS name, and disk all need to stay aligned through restarts.
+| Logical member | Pod name | Stable peer name | Private claim |
+|---:|---|---|---|
+| `0` | `db-0` | `db-0.db` | `data-db-0` |
+| `1` | `db-1` | `db-1.db` | `data-db-1` |
+| `2` | `db-2` | `db-2.db` | `data-db-2` |
 
-| Workload | Usual controller | Reason |
-|---|---|---|
-| `notification-api` | Deployment | Every API replica can serve the same kind of request through the same Service. |
-| `notification-worker` that reads from a queue | Deployment | A worker can disappear and a new worker can pick up the next message. |
-| `notification-postgres` with local database files | StatefulSet | The database member needs a stable name and a stable volume. |
-| `notification-redis` in a clustered setup | StatefulSet | Each member may need stable peer identity and persistent data. |
+If the process for member `1` dies, the safe replacement is another `db-1` that can be found at `db-1.db` and mounts `data-db-1`. Creating an unrelated member with a random name and a blank disk would change the system's membership instead of repairing it.
 
-StatefulSets deserve caution. They give the cluster stronger promises around identity and storage, and those promises add operational responsibility. Once a Pod owns a disk, rollout, backup, restore, and cleanup decisions carry more weight than they carry for stateless API replicas.
+The central idea is:
 
-## Stable Pod Identity
-<!-- section-summary: StatefulSet Pods receive ordinal names that survive restarts, rescheduling, and normal controller reconciliation. -->
+> **The process is disposable; the logical identity persists.**
 
-An **ordinal** is the number Kubernetes adds to each StatefulSet Pod name. For a StatefulSet named `notification-postgres`, the first Pod is `notification-postgres-0`, the second Pod is `notification-postgres-1`, and the third Pod is `notification-postgres-2`. Kubernetes uses this pattern every time it recreates the Pod, so the identity stays predictable.
+A StatefulSet expresses that idea by managing an ordered set of identity slots. Each slot joins an ordinal, a Pod name, a network identity, and usually a storage claim. The explanation follows seven questions:
 
-That stable identity shows up in several places. The Pod name includes the ordinal. Kubernetes adds labels that identify the owning StatefulSet and Pod identity. A volume claim created from a StatefulSet template also includes the ordinal, so the storage object and the Pod identity line up.
+1. **Why does a stateful workload need a stable replica identity?**
+2. **How does a StatefulSet keep a Pod name, DNS name, and storage claim aligned?**
+3. **What job does the headless Service perform?**
+4. **How does each replica receive its own PersistentVolumeClaim?**
+5. **How do ordered creation, scaling, and rolling updates work?**
+6. **What happens to a member's storage during replacement, scale-down, and deletion?**
+7. **How do you inspect one member from the StatefulSet controller to its DNS name and disk?**
 
-![StatefulSet identity map infographic showing the notification-postgres StatefulSet connecting notification-postgres-0 and notification-postgres-1 to matching DNS identities and PVC data volumes](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-identity-map.png)
+## Why does a stateful workload need a stable replica identity?
+<!-- section-summary: A StatefulSet preserves a numbered member identity when an application connects a particular replica to a peer name, startup position, or private disk. -->
 
-*StatefulSets give each replica a stable ordinal identity that can connect to matching DNS and storage.*
+### Member identity adds to the replica count
 
-_This infographic shows the StatefulSet contract: each ordinal Pod keeps a matching DNS identity and PVC identity._
+A Deployment with `replicas: 3` asks Kubernetes to maintain three interchangeable copies of one Pod template. The controller may create Pods with generated names, and any ready Pod can usually serve the same request. The important condition is the count: three healthy copies exist.
 
-Think about a database support page during business hours. A runbook that says "check `notification-postgres-0` first" works because that name keeps meaning the same member identity. A graph that shows disk pressure on `data-notification-postgres-0` also points back to the matching Pod. The name gives operators a stable handle during a careful repair.
+A StatefulSet with `replicas: 3` asks Kubernetes to maintain three distinct identity slots:
 
-The identity also helps applications that keep peer lists. A clustered service can say "member 0 is reachable at this DNS name, member 1 is reachable at that DNS name." Kubernetes still may move the Pod to another node and give it a different IP address. The Pod identity remains the same.
+| Desired slot | Deterministic Pod name |
+|---:|---|
+| `0` | `db-0` |
+| `1` | `db-1` |
+| `2` | `db-2` |
 
-## Headless Services and Pod DNS
-<!-- section-summary: A headless Service lets clients discover individual StatefulSet Pods instead of sending every request through one load-balanced virtual IP. -->
+The number at the end is the **ordinal**. It gives the application a stable way to distinguish one member from another. A database may use it to associate each member with a private data directory. A consensus system may store the corresponding peer names in its membership configuration. A broker may use the names so that clients and other brokers can address particular members.
 
-A **Service** gives a stable network entry point for a group of Pods. A normal ClusterIP Service gives clients one virtual IP and load-balances traffic to matching Pods. That works well for `notification-api` because a caller usually wants any healthy API replica.
+The difference can be stated plainly:
 
-A **headless Service** is a Service with `clusterIP: None`. Kubernetes still creates DNS records for it, and those records point clients toward the individual Pods behind the Service. StatefulSets use this pattern because some clients need to reach a specific member, such as `notification-postgres-0.notification-postgres.notifications.svc.cluster.local`.
+| Deployment model | StatefulSet model |
+|---|---|
+| “Keep three equivalent replicas running.” | “Keep identity slots `0`, `1`, and `2` present.” |
+| Any replacement replica can take the missing capacity. | The replacement must occupy the missing ordinal. |
+| One shared Service is often the only name callers need. | Individual members may also need stable names. |
+| Durable state normally lives outside the replica. | Each member can be associated with its own durable claim. |
 
-The headless Service provides the DNS side of the StatefulSet contract:
+### A new Pod object can represent the same logical member
+
+Assume the current `db-1` Pod has UID `A`. Its node disappears, so Kubernetes eventually creates a new `db-1` Pod with UID `B` on another node.
+
+The Pod UID changes because these are two different Kubernetes objects. The Pod IP may change because the replacement is attached to a new network endpoint. The following application-facing relationships can remain stable:
+
+- ordinal `1`;
+- Pod name and hostname `db-1`;
+- peer DNS name such as `db-1.db`;
+- claim `data-db-1`; and
+- the storage volume already bound to that claim.
+
+StatefulSet Pods therefore carry distinct member identities, unlike the interchangeable Pods behind a typical Deployment. Kubernetes restores the missing member slot as well as the replica count.
+
+### Where StatefulSet's responsibility ends
+
+Creating three PostgreSQL Pods in a StatefulSet creates three stable Kubernetes member slots. A highly available PostgreSQL cluster also needs database replication, leader election, backup, restore, data synchronization, and safe membership changes. Those database behaviors remain outside the StatefulSet controller.
+
+It supplies the lower-level Kubernetes pieces that stateful software can use:
+
+- stable numbered members;
+- stable member names;
+- stable per-member storage associations; and
+- predictable creation, scaling, and update order.
+
+The application, an application-specific operator, or an external managed service must still decide how the members form a cluster and protect the data.
+
+That boundary tells us what to examine next. StatefulSet can remain independent of a database's replication algorithm while reliably reconstructing the Kubernetes identity that the database uses. The ordinal is the key that lets the controller join the Pod name, network name, and storage claim.
+
+## How does a StatefulSet keep a Pod name, DNS name, and storage claim aligned?
+<!-- section-summary: The StatefulSet controller reconciles ordinal identity slots and recreates a missing slot with the same Pod name, network identity, and claim association. -->
+
+### The controller reconciles identity slots
+
+Suppose a StatefulSet is named `db` and has `replicas: 3`. Its desired state is the exact set of ordinals `{0, 1, 2}`.
+
+For every desired ordinal, the controller asks questions such as:
+
+1. Does the Pod for this ordinal exist?
+2. Does it use the StatefulSet's current Pod template?
+3. Is its governing network identity available through the named Service?
+4. Does the Pod reference the claim generated for this ordinal?
+
+If slot `1` has no Pod, the controller creates `db-1`. The default Pod name follows this rule:
+
+```text
+<statefulset-name>-<ordinal>
+```
+
+Kubernetes also adds the label `apps.kubernetes.io/pod-index` with the ordinal as its value. For `db-1`, that label has value `1`. Monitoring, routing, and operational tools can use the label without having to parse the Pod name.
+
+The durable relationship is:
+
+> **ordinal → Pod identity → network identity → storage identity**
+
+The current Pod process sits inside that relationship. When the process or Pod object changes, the controller reconstructs the slot around the same ordinal.
+
+![Studio Light infographic showing the StatefulSet controller maintaining ordinal slots 0, 1, and 2, with each slot connected to a deterministic Pod name, member DNS name, and ordinal PVC; the middle Pod is replaced while its identity connections remain](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-identity-contract.png)
+
+*The replacement for ordinal `1` receives a new Pod UID and possibly a new IP, while the `db-1` name, DNS identity, and `data-db-1` claim remain tied to the same logical member.*
+
+### What stability means at each layer
+
+A stable Pod name can belong to a sequence of replacement Pod objects. A stable network identity lets DNS resolve one member name to the current Pod IP. Stable storage reconnects the identity slot to the same claim and bound volume when the underlying storage system allows it. Data replication and backup remain separate application and storage responsibilities.
+
+Keeping these layers separate makes failure behavior easier to reason about:
+
+| Property | What happens during replacement |
+|---|---|
+| Ordinal | Remains `1` |
+| Pod name and hostname | Returns as `db-1` |
+| Pod UID | Changes |
+| Pod IP and node | May change |
+| Member DNS name | Remains predictable and resolves to the current endpoint |
+| PVC name | Remains `data-db-1` |
+| Backing data | Remains on the bound volume unless the storage system or lifecycle policy removes it |
+
+The Pod name gives Kubernetes a stable identity inside the API. Other processes still need a way to find that member over the network. The governing headless Service turns the stable hostname into a DNS record that can follow the Pod's changing IP address.
+
+## What job does the headless Service perform?
+<!-- section-summary: A headless Service gives each selected StatefulSet Pod a discoverable DNS identity instead of hiding all members behind one load-balanced virtual IP. -->
+
+### A shared Service name and a member name solve different problems
+
+A normal ClusterIP Service gives clients one stable virtual IP and balances connections across selected Pods. That is useful when a caller wants any healthy replica. It deliberately hides which Pod receives the connection.
+
+Stateful peers can need the opposite. During bootstrap, `db-2` may need to contact `db-0` specifically. A client diagnosing replication may need to address `db-1`. One load-balanced address cannot express those member choices.
+
+A **headless Service** sets:
+
+```yaml
+spec:
+  clusterIP: None
+```
+
+A headless Service omits the usual Service virtual IP and load-balancing path. Kubernetes DNS publishes records that expose the selected endpoints directly. The application can then use a stable member name while DNS points that name to the current Pod IP.
+
+DNS is the name-to-address layer. A peer asks for `db-1.db`; cluster DNS returns the IP of the current `db-1` Pod. If Kubernetes later recreates that Pod with another IP, the peer keeps using the same name and DNS can return the replacement address.
+
+The StatefulSet connects to this Service through `spec.serviceName`:
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: notification-postgres
-  namespace: notifications
+  name: db
 spec:
   clusterIP: None
-  selector:
-    app.kubernetes.io/name: notification-postgres
-  ports:
-    - name: postgres
-      port: 5432
 ```
 
-The important parts are:
+The StatefulSet names that governing Service with `serviceName: db`. Cluster DNS then turns the Service name plus each Pod hostname into a stable member address. The complete manifest later in the article shows how a selector connects the Service to the Pod-template labels.
 
-- `clusterIP: None` tells Kubernetes to create a headless Service.
-- `selector` connects the Service to Pods with the same label.
-- `ports.name: postgres` gives the database port a stable name.
-- The StatefulSet will later set `serviceName: notification-postgres`, which ties Pod DNS names to this Service.
+For a StatefulSet named `db`, governing Service `db`, namespace `default`, and cluster domain `cluster.local`, the members receive names such as:
 
-A DNS check from the API namespace should resolve the member name, such as `notification-postgres-0.notification-postgres.notifications.svc.cluster.local`, to the current Pod IP. If the Service selector is wrong, the database may run perfectly while clients fail because discovery has no matching endpoint. EndpointSlices are the first Kubernetes object to inspect when DNS or Service routing looks suspicious.
-
-| Object to inspect | Healthy signal |
+| Pod | Fully qualified member name |
 |---|---|
-| Headless Service | `clusterIP: None` and a selector that matches the StatefulSet labels |
-| Pod labels | The member Pod carries the labels the Service selector expects |
-| EndpointSlices | Endpoints exist for the selected Pods and expose the expected port |
-| DNS lookup from caller namespace | The ordinal Pod name resolves to the current Pod IP |
+| `db-0` | `db-0.db.default.svc.cluster.local` |
+| `db-1` | `db-1.db.default.svc.cluster.local` |
+| `db-2` | `db-2.db.default.svc.cluster.local` |
 
-## Persistent Storage with PVC Templates
-<!-- section-summary: A volumeClaimTemplate creates one PersistentVolumeClaim per StatefulSet Pod identity, keeping storage tied to ordinals. -->
+The shorter `db-1.db` form usually works from a Pod in the same namespace. The complete name makes every part visible: Pod hostname, governing Service, namespace, the `svc` zone, and the cluster's configured DNS domain.
 
-A **PersistentVolumeClaim**, or **PVC**, is a request for storage. A Pod mounts the claim, and Kubernetes binds it to a PersistentVolume from the cluster's storage system. A normal single PVC can work for one Pod, but a StatefulSet needs a repeatable pattern for each ordinal.
+### Discovery may be needed before readiness
 
-StatefulSets add **volumeClaimTemplates**. A volume claim template says, "create a PVC like this for each Pod ordinal." With a template named `data`, Kubernetes creates claims named `data-notification-postgres-0`, `data-notification-postgres-1`, and so on. When `notification-postgres-0` restarts, Kubernetes mounts the same claim for that same ordinal.
+By default, a Pod normally needs to be Ready before its individual DNS record is published. Some distributed systems cannot become Ready until they first discover and contact their peers. That creates a bootstrap dependency: peer discovery waits for readiness while readiness waits for peer discovery.
 
-Here is the storage request by itself:
+Setting `publishNotReadyAddresses: true` on the headless Service allows the addresses to be published before readiness succeeds:
+
+```yaml
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+```
+
+This setting makes early discovery possible. Readiness still reports whether the member is safe for normal traffic, so the choice must match the application's bootstrap protocol.
+
+The network path now preserves *where peers find member `1`*. A stateful member also needs the bytes that belong to member `1`. StatefulSet uses the same ordinal to create that second path through a per-member PersistentVolumeClaim.
+
+## How does each replica receive its own PersistentVolumeClaim?
+<!-- section-summary: A volumeClaimTemplate creates one PVC for every ordinal so each logical member can reconnect to its own storage after Pod replacement. -->
+
+### A shared volume and per-member storage express different data models
+
+If all three database Pods mount one writable claim, they see the same filesystem. That arrangement is only correct when the application and storage system are explicitly designed for shared access. It does not automatically give each database member an independent data directory.
+
+Three Kubernetes storage objects participate in the per-member path:
+
+| Object | Beginner meaning | Role in this article |
+|---|---|---|
+| PersistentVolumeClaim (PVC) | A namespaced request for storage | `data-db-1` is the request associated with member `1` |
+| PersistentVolume (PV) | The Kubernetes record for storage that satisfies a claim | It represents the volume bound to `data-db-1` |
+| StorageClass | A provisioning profile offered by the cluster | It tells the provisioner what kind of volume to create when a matching PV is needed |
+
+The claim gives the workload a stable Kubernetes handle. The PV and storage driver connect that handle to the actual disk, network volume, or other storage system. This separation lets the Pod refer to a claim without embedding provider-specific disk details in the Pod template.
+
+A StatefulSet usually needs a repeatable rule instead:
+
+| Identity slot | Generated PVC | Bound storage |
+|---:|---|---|
+| `0` | `data-db-0` | volume A |
+| `1` | `data-db-1` | volume B |
+| `2` | `data-db-2` | volume C |
+
+`volumeClaimTemplates` is the rule that generates those claims. The template is written once inside the StatefulSet, and the controller creates one PVC per Pod ordinal:
 
 ```yaml
 volumeClaimTemplates:
   - metadata:
       name: data
     spec:
-      accessModes: ["ReadWriteOncePod"]
-      storageClassName: fast-ssd
+      accessModes:
+        - ReadWriteOncePod
       resources:
         requests:
-          storage: 20Gi
+          storage: 10Gi
 ```
 
-The storage request has three key parts:
-
-- `ReadWriteOncePod` means the volume should be mounted read-write by a single Pod.
-- `storageClassName: fast-ssd` asks for a class defined by the cluster.
-- `20Gi` is the requested capacity.
-
-Inspecting PVCs should show a claim named from the template, StatefulSet, and ordinal, such as `data-notification-postgres-0`. A healthy claim is `Bound`, uses the expected StorageClass, and has the requested capacity. Now we have the three core pieces: Pod identity, DNS identity, and storage identity. The next section puts them together without dropping a full production manifest all at once.
-
-![Stable DNS and storage contract infographic showing a headless Service with clusterIP None, Pod DNS, volumeClaimTemplate, PVC, StorageClass, and PV binding](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/stable-dns-storage-contract.png)
-
-*The headless Service and volume claim template work together to give each StatefulSet Pod stable network and storage contracts.*
-
-_This infographic connects the network and storage halves of the StatefulSet design, so the headless Service answers where a member lives and the PVC path answers where its data lives._
-
-## A StatefulSet Skeleton
-<!-- section-summary: The StatefulSet skeleton connects selector labels, the headless Service name, and the Pod template before container details are added. -->
-
-The skeleton combines the three promises introduced earlier: a stable controller identity, a headless Service name for DNS, and matching labels for Pod ownership. The database container comes later because the first StatefulSet question is whether Kubernetes can connect the ordinal Pod identity to the Service and the Pod template before storage and process details are added. That contract anchors the later volume claim and mount for the database Pod and its data directory.
+The template name is `data`, so the generated claim names combine that name with the StatefulSet Pod name. The container mounts a volume with the same template name:
 
 ```yaml
+volumeMounts:
+  - name: data
+    mountPath: /usr/share/nginx/html
+```
+
+For production use, Kubernetes recommends `ReadWriteOncePod` when the storage driver supports it and one Pod should have read-write access to the claim across the cluster. The claim must also name a StorageClass that can dynamically provision a suitable volume, or the cluster must already contain a compatible PV.
+
+The recovery model for ordinal `1` is concrete:
+
+| Before failure | After replacement |
+|---|---|
+| Pod `db-1`, UID `A` | Pod `db-1`, UID `B` |
+| PVC `data-db-1` | PVC `data-db-1` |
+| Bound volume B | Bound volume B |
+
+The replacement process returns to the stored data and logical member association that survived the failure.
+
+![Two coordinated tracks for ordinal 1: a headless Service provides the db-1.db DNS identity, while a volume claim template produces data-db-1 and binds it to a PersistentVolume mounted by db-1](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-service-storage-path.png)
+
+*The ordinal is the common key: member `1` receives both the `db-1.db` network identity and the `data-db-1` storage identity.*
+
+### How the Objects Fit Together in One Manifest
+<!-- section-summary: Matching names and labels connect the headless Service, StatefulSet, generated Pods, and generated claims. -->
+
+This small manifest uses NGINX to make the object relationships visible. In a real system, interchangeable NGINX replicas would usually run in a Deployment; here the simple container keeps the focus on StatefulSet names, labels, and claims.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  clusterIP: None
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: notification-postgres
-  namespace: notifications
+  name: web
 spec:
-  serviceName: notification-postgres
-  replicas: 1
+  serviceName: web
+  replicas: 3
   selector:
     matchLabels:
-      app.kubernetes.io/name: notification-postgres
+      app: web
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: notification-postgres
-```
-
-`serviceName: notification-postgres` connects the StatefulSet to the headless Service. `replicas: 1` keeps the learning example small. The selector must match the Pod template labels, just like other controllers.
-
-Add the PVC template from the previous section:
-
-```yaml
-spec:
+        app: web
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/nginx/html
   volumeClaimTemplates:
     - metadata:
         name: data
       spec:
-        accessModes: ["ReadWriteOncePod"]
-        storageClassName: fast-ssd
+        accessModes:
+          - ReadWriteOncePod
         resources:
           requests:
-            storage: 20Gi
+            storage: 10Gi
 ```
 
-At this point the controller knows the identity, DNS contract, and storage request. The Pod still needs a container that mounts the claim.
+Read the joins in this order:
 
-## Add the Database Container and Storage Mount
-<!-- section-summary: The container uses normal Pod fields, while the volume mount must match the volumeClaimTemplate name. -->
+1. `replicas: 3` creates identity slots `web-0`, `web-1`, and `web-2`.
+2. `serviceName: web` connects each Pod hostname to the headless Service's DNS domain.
+3. The Service selector and Pod-template label both use `app: web`, so the Service discovers the generated Pods.
+4. The StatefulSet selector also matches the Pod-template label, so the controller knows which Pods belong to it.
+5. The `data` volume mount matches the `data` claim-template name.
+6. The controller creates `data-web-0`, `data-web-1`, and `data-web-2`, and each Pod mounts its corresponding claim.
 
-The database container needs an image, port, environment values, probes, and a mount. In a real platform, a database operator or managed database service is often the production choice. This example keeps PostgreSQL small so the StatefulSet mechanics are visible.
+The resulting identity slot combines an ordinal, a Pod, a DNS name, and a private claim. No single YAML field creates the entire relationship; the fields and objects join through matching names and labels.
 
-The storage mount is the key detail in this container section. The `data` mount in the container must match the `volumeClaimTemplates` name, because that shared name is how Kubernetes connects `notification-postgres-0` to `data-notification-postgres-0`. If the mount and claim template drift, the Pod may start without the storage contract the database needs.
+At this point the identity slot is complete. The next question is how Kubernetes changes a set of these slots while respecting startup dependencies. Ordinal order supplies that lifecycle rule.
 
-Credentials belong in a Secret before the container reads them. The container can then read `POSTGRES_USER` and `POSTGRES_PASSWORD` from that Secret and mount the `data` claim:
+## How do ordered creation, scaling, and rolling updates work?
+<!-- section-summary: StatefulSet lifecycle policies use ordinal order for creation, scale-down, and rolling updates while preserving each member's identity. -->
+
+Stable identity answers *which member* Kubernetes is managing. Lifecycle policy answers *in what order* the controller changes those members.
+
+### Default creation waits from the lowest ordinal upward
+
+The default `podManagementPolicy` is `OrderedReady`. For three replicas, the controller creates `web-0` and waits until it is Running and Ready. It then creates `web-1`, waits again, and finally creates `web-2`.
+
+`Running` means the Pod has been assigned to a node and its containers have started. `Ready` is a separate application-facing signal: its readiness checks say the Pod can participate in the service or member group. `OrderedReady` waits for both because a started process may still be loading data, replaying a log, or joining its peers.
+
+This order can help a distributed application whose later members need an earlier member to finish bootstrap. Kubernetes remains independent of the application's membership protocol and provides a readiness-gated order that the application can use.
+
+Readiness is therefore part of the controller's decision. A probe that becomes successful as soon as a port opens may allow the next member to start before the earlier member has actually joined the cluster. A stateful application often needs a probe that reflects meaningful membership or serving readiness.
+
+If member startup is independent, `podManagementPolicy: Parallel` removes the create and scale ordering constraints. The controller may launch or terminate several Pods at once while still preserving their unique ordinals, names, and claims.
+
+### Scaling changes the set of identity slots
+
+Scaling from three replicas to four adds the next ordinal. The controller creates `web-3`, the claim template produces `data-web-3`, and the headless Service can publish `web-3.web`.
+
+Scaling down removes the highest ordinal first. Changing from four replicas to two removes `web-3`, waits for it to terminate, and then removes `web-2`. Slots `0` and `1` remain. The descending order avoids removing a lower-numbered member while higher members still depend on it.
+
+| Operation | Default ordinal order |
+|---|---|
+| Create or scale up | `0 → 1 → 2` |
+| Scale down | `2 → 1 → 0` |
+| Rolling update | `2 → 1 → 0` |
+
+### Rolling updates also move from the highest ordinal downward
+
+Assume `db-0`, `db-1`, and `db-2` run version `1`, and the StatefulSet's Pod template changes to version `2`. With the default `RollingUpdate` strategy, the controller replaces `db-2` first and waits until the new Pod is Running and Ready. It then replaces `db-1`, waits again, and finally replaces `db-0`.
+
+StatefulSets also support partitioned rolling updates when only part of the ordinal set should move to the changed template.
+
+`OnDelete` uses a different contract:
 
 ```yaml
-containers:
-  - name: postgres
-    image: postgres:16.4
-    ports:
-      - name: postgres
-        containerPort: 5432
-    env:
-      - name: POSTGRES_USER
-        valueFrom:
-          secretKeyRef:
-            name: notification-postgres-auth
-            key: username
-      - name: POSTGRES_PASSWORD
-        valueFrom:
-          secretKeyRef:
-            name: notification-postgres-auth
-            key: password
-    volumeMounts:
-      - name: data
-        mountPath: /var/lib/postgresql/data
+updateStrategy:
+  type: OnDelete
 ```
 
-The `volumeMounts` entry named `data` must match the `volumeClaimTemplates` entry named `data`. Kubernetes creates the PVC and mounts it into the container from that shared name.
+Kubernetes stores the new Pod template while automatic replacement stays disabled. When a Pod is later deleted, the StatefulSet recreates that ordinal from the current template.
 
-Add a readiness probe with `pg_isready` so clients only connect after PostgreSQL is ready. After applying the Service, Secret, and StatefulSet through the team's delivery path, inspect one named controller, one named Pod, one headless Service, and one matching claim. If the Pod moves to another node tomorrow, the Pod name remains `notification-postgres-0`, the DNS name remains tied to that identity, and the data claim remains `data-notification-postgres-0`.
+![Studio Light infographic showing three StatefulSet lifecycle lanes: OrderedReady creation from ordinal 0 to 2, default rolling replacement from ordinal 2 to 0, and scale-down removing the highest ordinals while their PVCs remain by default](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-ordered-lifecycle.png)
 
-## Startup, Scaling, and Updates
-<!-- section-summary: StatefulSet startup, scale-down, and rolling updates preserve ordinal order by default, which protects identity-sensitive systems. -->
+*Creation normally moves upward through the ordinals; scale-down and rolling replacement move downward.*
 
-The default StatefulSet Pod management policy is **OrderedReady**. For a StatefulSet with three replicas, Kubernetes creates `notification-postgres-0`, waits until it is Running and Ready, then creates `notification-postgres-1`, and then creates `notification-postgres-2`. During scale-down, Kubernetes removes the highest ordinal first.
+Ordering explains which Pod changes first. Storage has its own lifecycle, so replacing or removing a Pod raises a separate question: whether its PVC and backing volume remain for that identity slot.
 
-That ordering protects systems that need a predictable startup sequence. It can also surprise teams that expect all replicas to appear at once. Under the default policy, Kubernetes waits for `notification-postgres-0` to report ready before creating `notification-postgres-1`.
+## What happens to a member's storage during replacement, scale-down, and deletion?
+<!-- section-summary: Replacement reuses an ordinal's claim, while retention and PV reclaim policies separately control whether the claim and backing storage survive scale-down or deletion. -->
 
-Updates also use ordered behavior by default. The rolling update works from the highest ordinal down toward zero. If `notification-postgres-2` fails readiness after an image change, Kubernetes pauses there and leaves lower ordinals alone. That pause gives operators time to inspect the newest member before the rollout reaches earlier identities.
+### Pod replacement normally reuses the existing claim
 
-During an update, watch rollout status, revision history, and the Pods sorted by ordinal. The healthy signal needs more than "new image running." The expected ordinal should update, report ready, and keep its storage identity.
+Suppose `db-1` mounts `data-db-1`, which is bound to volume B. Deleting `db-1` removes the current Pod object. The StatefulSet controller sees that ordinal `1` is missing and creates a new `db-1`. The replacement mounts `data-db-1`, so it reaches volume B again.
 
-StatefulSets also support partitioned rolling updates. A partition lets you update only Pods with ordinals greater than or equal to a chosen number. Teams use this to test a new database image on a higher ordinal before touching lower ordinals.
+The same model applies when a node fails. The replacement may run on another node, and the storage system may need time to detach and reattach the physical disk. From the StatefulSet's point of view, the logical association is still ordinal `1` to `data-db-1`. The storage driver and infrastructure determine how quickly and safely that volume can move.
 
-For example, a partition of `2` on a three-member StatefulSet updates only ordinal `2`. Ordinals `0` and `1` stay on the old template until the team lowers or removes the partition.
+### Scale-down retains generated claims by default
 
-The risky part of StatefulSet updates is data compatibility. An image can change on-disk format, migrate files, or start writing metadata that an older version cannot read. For `notification-postgres`, an image change should sit next to a database upgrade plan, backup checkpoint, restore test, and rollback decision.
+If `db-0`, `db-1`, and `db-2` exist and the StatefulSet scales from three replicas to two, the controller removes `db-2`. By default, `data-db-2` remains.
 
-## Debugging StatefulSets in the Terminal
-<!-- section-summary: StatefulSet debugging separates controller state, Pod readiness, DNS discovery, PVC binding, volume attachment, and application logs. -->
+That default favors data safety by preserving a database member's disk after scale-down. If the StatefulSet later scales back to three, the new `db-2` can reconnect to the existing claim. The application must decide whether the old member data is still valid. Some distributed systems require the returning member to rejoin or rebuild before serving from those files.
 
-The controller, Pods, and PVCs show whether identity and storage lined up. A Pending Pod with a Pending PVC points toward storage events before PostgreSQL logs. A running Pod with failing readiness points toward the database process, configuration, or probe command. DNS problems usually trace back to the headless Service selector, Pod labels, and EndpointSlices.
-
-StatefulSet debugging needs a slower first pass because the data path is part of the workload. The notification database may have a healthy controller with a Pending claim, a running Pod with broken DNS, or a ready Pod with a storage volume close to full. The table below maps each symptom to the first evidence source before the command sequence.
-
-| Symptom | First evidence | Likely direction |
-|---|---|---|
-| Pod is `Pending` and PVC is `Pending` | PVC events and StorageClass | Provisioning, quota, missing StorageClass, or volume binding |
-| Pod is running but not ready | Pod events and database logs | PostgreSQL startup, credentials, probe command, or data directory |
-| Disk is almost full | Container filesystem check and PVC metrics | Capacity expansion, cleanup, backup retention, or storage class limits |
-| DNS name has no answer | Service selector, Pod labels, EndpointSlices | Discovery wiring rather than database process health |
-
-The right evidence source depends on the symptom. Storage binding problems show up in PVC events. Process failures show up in Pod events and logs. Discovery problems show up in Service selectors and EndpointSlices.
-
-The controller is the first evidence source. The StatefulSet row tells you how many replicas Kubernetes wants, how many are ready, and which update revision is current.
-
-```bash
-$ kubectl get statefulset notification-postgres -n notifications
-NAME                    READY   AGE
-notification-postgres   1/1     14d
-```
-
-For a wider view, include labels and revisions:
-
-```bash
-$ kubectl describe statefulset notification-postgres -n notifications
-Name:               notification-postgres
-Namespace:          notifications
-Replicas:           1 desired | 1 total
-Pods Status:        1 Running / 0 Waiting / 0 Succeeded / 0 Failed
-Update Strategy:    RollingUpdate
-Pod Template:
-  Labels:           app.kubernetes.io/name=notification-postgres
-Volume Claims:
-  Name:             data
-```
-
-The useful fields are:
-
-- `Replicas` shows whether the controller has the requested count.
-- `Pods Status` separates running Pods from waiting or failed Pods.
-- `Update Strategy` tells you whether updates should roll through ordinals.
-- `Volume Claims` confirms the template name that should appear inside PVC names.
-
-Next, check the Pods with their node placement and readiness. StatefulSet Pod names should include the ordinal.
-
-```bash
-$ kubectl get pods -n notifications -l app.kubernetes.io/name=notification-postgres -o wide
-NAME                      READY   STATUS    RESTARTS   AGE   IP            NODE
-notification-postgres-0   1/1     Running   0          14d   10.244.2.41   worker-b
-```
-
-`notification-postgres-0` is the identity to follow through DNS, logs, events, and storage. If the Pod moves to another node, the `NODE` and `IP` values may change, while the Pod identity and matching claim name stay stable.
-
-PVCs prove whether storage binding worked. The claim name should combine the volume claim template name, StatefulSet name, and ordinal.
-
-```bash
-$ kubectl get pvc -n notifications
-NAME                           STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-data-notification-postgres-0   Bound    pvc-9c4f7a2c-2d61-4a7b-84f5-9e2a9c0a1111   20Gi       RWO            fast-ssd       14d
-```
-
-`STATUS Bound` means Kubernetes matched the claim to backing storage. `STORAGECLASS fast-ssd` should match the design. `CAPACITY 20Gi` should match the request unless the storage system expanded it later through a reviewed change.
-
-DNS checks prove whether the headless Service exposes the ordinal identity. Run the lookup from a temporary Pod in the same namespace or from the application namespace that will call the database.
-
-```bash
-$ kubectl run dns-check -n notifications --rm -it --restart=Never \
-  --image=registry.k8s.io/e2e-test-images/agnhost:2.45 -- \
-  nslookup notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-Server:    10.96.0.10
-Address 1: 10.96.0.10 kube-dns.kube-system.svc.cluster.local
-
-Name:      notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-Address 1: 10.244.2.41 notification-postgres-0.notification-postgres.notifications.svc.cluster.local
-```
-
-The DNS answer should point to the current Pod IP. If the lookup has no answer, inspect the headless Service selector, Pod labels, and EndpointSlices before changing the database container.
-
-Rollout checks should follow ordinal order. For a one-member learning database, the status command is short. For larger StatefulSets, watch which ordinal updates and which one pauses.
-
-```bash
-$ kubectl rollout status statefulset/notification-postgres -n notifications
-partitioned roll out complete: 1 new pods have been updated...
-```
-
-The controller history adds the revision record:
-
-```bash
-$ kubectl rollout history statefulset/notification-postgres -n notifications
-statefulset.apps/notification-postgres
-REVISION  CHANGE-CAUSE
-1         <none>
-2         postgres image 16.4
-```
-
-The rollout status tells you whether Kubernetes finished updating the StatefulSet. The history tells you which controller revisions exist, but a database upgrade plan is still required. A database image change still needs backup, restore confidence, and data compatibility review.
-
-PVC Pending events usually explain storage problems before application logs exist. A Pending claim can block the Pod before the database process starts.
-
-```bash
-$ kubectl describe pvc data-notification-postgres-0 -n notifications
-Name:          data-notification-postgres-0
-Namespace:     notifications
-StorageClass:  fast-ssd
-Status:        Pending
-Events:
-  Type     Reason                Age   From                         Message
-  ----     ------                ----  ----                         -------
-  Warning  ProvisioningFailed    2m    persistentvolume-controller  storageclass.storage.k8s.io "fast-ssd" not found
-```
-
-That event says the StorageClass name in the PVC request has no matching cluster StorageClass. The next action is to fix storage configuration before investigating PostgreSQL. Other Pending events might point to quota, unavailable zones, volume binding mode, or a storage provisioner problem.
-
-## Production Guidance for Stateful Services
-<!-- section-summary: Production StatefulSets need backup, restore, storage, disruption, security, and upgrade plans around the Kubernetes object. -->
-
-Production stateful systems need more than a correct YAML file. The StatefulSet gives identity and storage wiring. The service still needs backup, restore, replication, monitoring, upgrade, and failure-handling plans.
-
-For databases, many teams prefer managed services or Kubernetes operators. A managed database shifts storage operations, backups, failover, and upgrades to the provider. A database operator can automate cluster membership, failover, backups, and version upgrades inside Kubernetes. A hand-written StatefulSet may be fine for learning, local development, or small internal systems, but serious production databases need stronger operational machinery.
-
-Backups should be proven with restore tests. A backup job that has never restored a database is only a hopeful file. The runbook should say where backups live, how encryption works, who can restore, how long restore takes, and how the application will be pointed at recovered data.
-
-Pod disruption planning also belongs in the design. A **PodDisruptionBudget**, or **PDB**, tells Kubernetes how many matching Pods can be voluntarily disrupted during operations such as node drains. For a single database Pod, `maxUnavailable: 0` can prevent voluntary eviction and protect availability, while also blocking some maintenance until the team makes an explicit plan.
+StatefulSet offers an explicit PVC retention policy:
 
 ```yaml
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: notification-postgres
-  namespace: notifications
 spec:
-  maxUnavailable: 0
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: notification-postgres
+  persistentVolumeClaimRetentionPolicy:
+    whenScaled: Delete
+    whenDeleted: Retain
 ```
 
-StorageClass choice should show up in design review too. A production class may need encrypted disks, the right availability-zone behavior, volume expansion, a `Retain` reclaim policy, backup integration, and `WaitForFirstConsumer` volume binding. The cluster admin owns the StorageClass definition, and the application team owns the request that chooses it.
+Both fields accept `Retain` or `Delete`, and both default to `Retain`:
 
-The StatefulSet's PVC retention policy adds another cleanup control. By default, PVCs created from `volumeClaimTemplates` remain after scale-down or StatefulSet deletion. Kubernetes also supports `.spec.persistentVolumeClaimRetentionPolicy`, where teams can choose `Retain` or `Delete` behavior for scale-down and deletion. For production data, `Retain` keeps destructive cleanup deliberate. For short-lived preview environments, `Delete` may fit if the data has no long-term value.
+| Policy field | Event it controls | `Retain` | `Delete` |
+|---|---|---|---|
+| `whenScaled` | An ordinal is removed by scale-down | Keep that ordinal's generated PVC | Delete it after the Pod terminates |
+| `whenDeleted` | The StatefulSet is deleted | Keep all generated PVCs | Delete them after their Pods terminate |
 
-Monitoring should connect Kubernetes and application signals. Kubernetes metrics can show Pod restarts, PVC usage, scheduling problems, and volume attachment issues. Database metrics can show replication lag, connection saturation, slow queries, checkpoint behavior, and backup age. The support dashboard for `notification-postgres` should show both layers because a green Pod can still contain an unhealthy database.
+These policies apply to Pods removed because of scale-down or StatefulSet deletion. A normal replacement after Pod or node failure continues to use the existing PVC.
 
-## When a Deployment Fits Better
-<!-- section-summary: Stateless APIs and workers should usually stay on Deployments while they depend on a database or cache. -->
+### Claim retention and backing-volume reclaim are separate decisions
 
-A **stateless Pod** can disappear without losing unique local state. It may still read and write important data, and that data lives in another system such as PostgreSQL, Redis, object storage, or a message broker. The Pod itself keeps no disk identity that needs to follow it after rescheduling.
+The StatefulSet policy answers whether the PVC should disappear. If the PVC is deleted, the bound PV's reclaim policy answers what happens to the storage resource.
 
-That is the normal shape for `notification-api`. The API connects to `notification-postgres`, handles HTTP requests, writes rows, and returns responses. If an API Pod restarts, Kubernetes can create a new Pod with a new name because the API has no need for a stable ordinal or a private disk. A Deployment gives faster rolling updates, simpler scaling, and load-balanced Services that match this shape.
+| Layer | Lifecycle question |
+|---|---|
+| StatefulSet `persistentVolumeClaimRetentionPolicy` | Should the generated PVC be deleted for this event? |
+| PV reclaim policy | After the claim is deleted, should the PV and external storage be retained or deleted? |
 
-`notification-worker` also fits a Deployment when it reads from a queue and acknowledges messages after processing. Queue semantics, deduplication keys, and retry handling give the worker its business safety. The worker can use replaceable Pod names.
+With a `Retain` PV reclaim policy, deleting the PVC leaves the PV and external data for manual recovery. With a supported `Delete` policy, deleting the PVC normally removes the PV and the external storage asset as well. A Pod deletion, a PVC deletion, and destruction of the stored bytes are intentionally different operations.
 
-Use this table during design review:
+Backup, restore, replication, and data synchronization still need their own design. A retained PVC preserves one Kubernetes claim association; StatefulSet does not provide those application-level data mechanisms.
 
-| Question | Deployment answer | StatefulSet answer |
+### Duplicate member identities can corrupt a distributed system
+
+Force deletion tells the API server to remove a Pod object without waiting for confirmation that its process has stopped. If a disconnected node still runs the old `db-1` process and Kubernetes starts another `db-1`, two processes may claim the same member identity.
+
+For a distributed system, that can cause split brain, duplicate writers, volume corruption, or membership confusion. Stable identity is valuable because identity matters; that same fact makes duplicate identity dangerous.
+
+These policies describe the intended behavior. During an incident, the practical task is to prove that one ordinal still connects to the expected Pod, DNS endpoint, claim, and volume. The inspection path follows those relationships in the same order in which the article built them.
+
+## How do you inspect one member from the StatefulSet controller to its DNS name and disk?
+<!-- section-summary: A reliable inspection follows one ordinal through the StatefulSet, Pod, governing Service, PVC, PV, and underlying storage. -->
+
+Suppose the StatefulSet is called `db` and the member under investigation is `db-1`. Follow that one ordinal from the controller outward instead of reading every object at once.
+
+Start with the controller's desired and observed state:
+
+```bash
+kubectl get statefulset db
+kubectl describe statefulset db
+```
+
+These commands show the controller and its desired configuration. Next, inspect the current Pod:
+
+```bash
+kubectl get pod db-1 -o wide
+kubectl describe pod db-1
+```
+
+Read the ordinal directly from its standard label:
+
+```bash
+kubectl get pod db-1 \
+  -o jsonpath='{.metadata.labels.apps\.kubernetes\.io/pod-index}{"\n"}'
+```
+
+The expected value is `1`.
+
+Inspect the governing headless Service:
+
+```bash
+kubectl get service db
+kubectl describe service db
+```
+
+Its cluster IP should be `None`, and its selector should match the Pod labels. The stable member name is `db-1.db`.
+
+Now follow the storage association. If the claim template is named `data`, the claim for ordinal `1` is `data-db-1`:
+
+```bash
+kubectl get pvc
+kubectl describe pvc data-db-1
+```
+
+Read the bound PV name:
+
+```bash
+kubectl get pvc data-db-1 \
+  -o jsonpath='{.spec.volumeName}{"\n"}'
+```
+
+If the command returns `pvc-abc123`, inspect that PV:
+
+```bash
+kubectl describe pv pvc-abc123
+```
+
+This produces a practical chain:
+
+| Inspection layer | Identity to follow | What it proves |
 |---|---|---|
-| What happens if the Pod name changes? | Nothing important changes for the workload. | Peers, operators, or storage mapping rely on that identity. |
-| Where does durable data live? | In an external database, cache, queue, or object store. | In a volume attached to a specific Pod identity. |
-| How should clients connect? | Any healthy replica behind a Service can respond. | Some clients need a specific member DNS name. |
-| How should scaling behave? | Replicas can come and go freely. | Replicas may need ordered startup, shutdown, or membership changes. |
-| What does rollback involve? | Usually a Pod template or image rollback. | Often a Pod template rollback plus data compatibility review. |
+| StatefulSet | desired ordinal `1` | The controller expects the member |
+| Pod | `db-1` and pod-index `1` | The current compute object occupies the slot |
+| Headless Service | `db-1.db` | Member discovery uses the stable network identity |
+| PVC | `data-db-1` | The slot requests the expected storage |
+| PV and storage driver | bound PV such as `pvc-abc123` | The claim reaches the actual storage resource |
 
-This distinction keeps Kubernetes designs clean. The notification API and worker can stay replaceable and easy to roll out. The supporting database or clustered cache can receive stronger identity and storage behavior only where the system actually needs it.
+The first broken link tells you whether the problem lies between the StatefulSet and Pod, the Pod and its stable network identity, or the claim and its bound storage.
 
-## Operational Runbook
-<!-- section-summary: StatefulSet operations should check backups, storage, DNS, Pod health, and rollout order before making destructive changes. -->
+### When a StatefulSet Fits the Application
+<!-- section-summary: StatefulSet fits software whose members need stable names, private disks, or ordered lifecycle, while interchangeable replicas usually fit a Deployment. -->
 
-Before a StatefulSet change, the team should know the current controller revision, current Pods, current PVCs, recent backup status, and restore confidence. A small pre-change snapshot gives everyone the same starting point. It also gives production responders a quick comparison if the rollout pauses.
+A StatefulSet is a strong fit when the application can make statements such as:
 
-During a manifest change, the watch should focus on ordinals and readiness. The highest ordinal usually updates first during a rolling update. A lower ordinal may wait because the controller wants ordered progress.
+- “Member `2` must return as member `2`.”
+- “Each replica needs its own disk.”
+- “Peers must have stable, individual names.”
+- “Later members should wait for earlier members during bootstrap.”
+- “Replacing a process must preserve that member's data association.”
 
-For a pending Pod, storage comes first. The PVC status, claim events, StorageClass, namespace quota, and cluster provisioner logs usually explain the problem faster than container logs. Container logs help after Kubernetes mounts the volume and starts the process.
+Distributed databases, consensus systems, brokers, and coordination systems often have one or more of those needs.
 
-For a DNS problem, the Service selector and EndpointSlices come first. The Pod may run and the database may accept local connections, while clients still fail because the headless Service has no matching endpoints. A DNS test from the caller's namespace confirms the path the application really uses.
+A Deployment is usually simpler when every replica is interchangeable, durable state lives elsewhere, and callers only need a load-balanced Service. REST APIs, frontends, stateless workers, and HTTP proxies usually have that shape.
 
-For a data-bearing Pod, forced deletion should sit at the end of the decision tree. A force delete can help after a node failure leaves a Pod stuck, and it can also create split-brain risk for stateful systems that still have a process running somewhere. Confirm node state, volume attachment state, database membership, and backup position before using force.
+The compact definition is:
 
-For cleanup, PVC deletion should require an explicit data decision. Deleting a StatefulSet normally leaves the PVCs behind by default. Deleting the PVCs may release or delete the backing storage depending on the PV reclaim policy and storage provider.
+> **A StatefulSet manages an ordered set of persistent identity slots. A Pod may die and be replaced, but its ordinal gives the replacement the same logical member name, network identity, and associated persistent storage.**
 
-Treat the StatefulSet, the headless Service, the PVCs, the StorageClass, and the application data plan as one system. Kubernetes gives you stable building blocks. Production safety comes from the runbooks and recovery tests around those blocks.
+Once that identity-slot model is clear, the rest follows from it: ordinal Pod names identify the slots, a headless Service publishes each member, volume claim templates attach one claim per slot, lifecycle operations follow ordinal order, and retention policy decides how long the storage association survives.
 
-![StatefulSet operations runbook infographic showing backups, PVCs, DNS, Pod health, rollout order, and force delete last as the safe operations sequence](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-statefulsets/statefulset-operations-runbook.png)
+## Check Your Answers
+<!-- section-summary: Revisit stable member identity, headless-Service discovery, per-ordinal claims, ordered lifecycle, storage retention, and controller-to-disk inspection. -->
 
-*StatefulSet operations should protect backups, PVCs, DNS identity, Pod health, and rollout order before disruptive actions.*
+:::expand[Why does a stateful workload need a stable replica identity?]{kind="recap"}
+A stateful member may have a peer name, a membership role, and a private disk that must survive the current process. A StatefulSet restores the missing identity slot instead of merely adding any interchangeable replica. The process and Pod object can change while the logical member remains the same.
+:::
 
-_This infographic summarizes the StatefulSet operating order: verify recovery first, inspect identity and storage, then handle rollout or deletion only after the data path is clear._
+:::expand[How does a StatefulSet keep a Pod name, DNS name, and storage claim aligned?]{kind="recap"}
+The controller assigns each desired member an ordinal such as `1`. That ordinal produces the Pod name `db-1`, participates in the member's DNS name, and appears in the generated claim `data-db-1`. If the Pod disappears, reconciliation recreates the same ordinal slot with those associations.
+:::
+
+:::expand[What job does the headless Service perform?]{kind="recap"}
+A headless Service has `clusterIP: None`, selects the StatefulSet Pods, and exposes their current endpoints through DNS instead of hiding them behind one load-balanced virtual IP. `spec.serviceName` gives the StatefulSet Pods the governing Service's DNS subdomain, so peers can address members such as `db-1.db`.
+:::
+
+:::expand[How does each replica receive its own PersistentVolumeClaim?]{kind="recap"}
+`volumeClaimTemplates` repeats one storage request for every ordinal. A template named `data` creates claims such as `data-db-0`, `data-db-1`, and `data-db-2`. Each generated Pod mounts the claim for its own slot, and a replacement mounts the same claim again.
+:::
+
+:::expand[How do ordered creation, scaling, and rolling updates work?]{kind="recap"}
+Default `OrderedReady` creation moves from the lowest ordinal upward and waits for each Pod to become Running and Ready. Scale-down and default rolling updates move from the highest ordinal downward. `Parallel`, `OnDelete`, and rolling-update partitions change how the sequence is controlled without removing stable member identities.
+:::
+
+:::expand[What happens to a member's storage during replacement, scale-down, and deletion?]{kind="recap"}
+Normal replacement reuses the ordinal's existing claim. Scale-down and StatefulSet deletion retain generated PVCs by default. `persistentVolumeClaimRetentionPolicy` can delete claims for either event, and the PV reclaim policy then decides what happens to the backing storage after claim deletion. Force deletion needs special caution because an old process may still be using the same member identity.
+:::
+
+:::expand[How do you inspect one member from the StatefulSet controller to its DNS name and disk?]{kind="recap"}
+Start with the StatefulSet and ordinal Pod, then confirm the pod-index label. Follow the governing Service to the stable member name, and follow the ordinal PVC to its bound PV and storage driver. The first missing or inconsistent relationship identifies the layer that needs deeper investigation.
+:::
 
 ## References
+<!-- section-summary: Kubernetes documentation defines StatefulSet identity, ordering, DNS, storage, retention, and failure behavior. -->
 
-- [Kubernetes StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/) - Official StatefulSet concepts, including stable identity, ordered deployment, update strategies, Pod management policy, and PVC retention policy.
-- [StatefulSet Basics](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/) - Official tutorial that demonstrates ordered Pod creation, stable DNS, stable storage, scaling, and StatefulSet deletion behavior.
-- [Headless Services](https://kubernetes.io/docs/concepts/services-networking/service/#headless-services) - Official Service documentation for `clusterIP: None`, direct Pod endpoint discovery, and headless Service DNS behavior.
-- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Official DNS record shapes for normal Services, headless Services, Pods, and SRV records.
-- [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) - Official PV and PVC documentation, including claim binding, access modes, reclaim policies, and storage object protection.
-- [Storage Classes](https://kubernetes.io/docs/concepts/storage/storage-classes/) - Official StorageClass documentation for provisioners, reclaim policy, volume expansion, binding mode, and default classes.
-- [Specifying a Disruption Budget for your Application](https://kubernetes.io/docs/tasks/run-application/configure-pdb/) - Official guide for creating and checking PodDisruptionBudgets.
-- [Debug a StatefulSet](https://kubernetes.io/docs/tasks/debug/debug-application/debug-statefulset/) - Official debugging task for listing and investigating StatefulSet Pods.
-- [Force Delete StatefulSet Pods](https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/) - Official guidance for the rare cases where StatefulSet Pods need forced deletion.
-- [kubectl reference](https://kubernetes.io/docs/reference/kubectl/) - Official reference for the command-line tool used throughout the runbooks.
+- [StatefulSets](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/) — identity, ordinals, governing Services, volume claim templates, ordering, rolling updates, and PVC retention.
+- [StatefulSet Basics](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/) — official walkthrough of stable Pod names, DNS, storage, scaling, and updates.
+- [Service: Headless Services](https://kubernetes.io/docs/concepts/services-networking/service/#headless-services) — direct endpoint discovery for a Service with `clusterIP: None`.
+- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) — Service, Pod hostname, subdomain, and readiness-related DNS behavior.
+- [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) — PVC binding, access modes, PV reclaim policy, and storage lifecycle.
+- [Storage Classes](https://kubernetes.io/docs/concepts/storage/storage-classes/) — dynamic provisioning and storage management behavior.
+- [Debug a StatefulSet](https://kubernetes.io/docs/tasks/debug/debug-application/debug-statefulset/) — official inspection starting points.
+- [Force Delete StatefulSet Pods](https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/) — identity and split-brain risks around forced deletion.
+- [Operator Pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) — application-specific controllers that add operational knowledge StatefulSet itself does not provide.

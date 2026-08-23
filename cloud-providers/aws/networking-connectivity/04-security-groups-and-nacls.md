@@ -1,7 +1,7 @@
 ---
 title: "Security Groups and NACLs"
-description: "Use security groups, network ACLs, and VPC Flow Logs to control and verify packet access in AWS VPC networks."
-overview: "Route tables give packets a path. Security groups and network ACLs decide which packets may use that path, and VPC Flow Logs provide evidence when a connection succeeds or fails."
+description: "Learn how stateful security groups and stateless network ACLs filter AWS VPC traffic at different layers."
+overview: "A route gives a packet a possible path. Security groups and network ACLs decide whether the packet may use that path, but they differ in attachment point, connection state, rule ordering, deny behavior, and return-traffic handling."
 tags: ["aws", "vpc", "security-groups", "nacls", "flow-logs", "networking"]
 order: 4
 id: article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls
@@ -14,296 +14,520 @@ aliases:
   - cloud-providers/aws/networking-connectivity/security-groups-vs-nacls.md
   - cloud-providers/aws/networking-connectivity/02-security-groups-vs-nacls.md
 ---
+
 ## Table of Contents
 
-1. [Routes Need Traffic Rules](#routes-need-traffic-rules)
-2. [Security Groups](#security-groups)
-3. [Security Group Rules for the App](#security-group-rules-for-the-app)
-4. [Inspecting Security Groups](#inspecting-security-groups)
-5. [Network ACLs](#network-acls)
-6. [Ephemeral Ports](#ephemeral-ports)
-7. [A Safe NACL Pattern](#a-safe-nacl-pattern)
-8. [Verification With Flow Logs](#verification-with-flow-logs)
-9. [References](#references)
+1. [What Must Happen to One Packet?](#what-must-happen-to-one-packet)
+2. [How Are Security Groups Different From NACLs?](#how-are-security-groups-different-from-nacls)
+3. [Why Are Security Group References Useful?](#why-are-security-group-references-useful)
+4. [How Do Stateless NACLs Work?](#how-do-stateless-nacls-work)
+5. [Why Do NACLs Need Ephemeral-Port Rules?](#why-do-nacls-need-ephemeral-port-rules)
+6. [How Do Ordered Allow and Deny Rules Work?](#how-do-ordered-allow-and-deny-rules-work)
+7. [How Do Flow Logs Help Explain a Failure?](#how-do-flow-logs-help-explain-a-failure)
+8. [How Do You Troubleshoot a Packet Path?](#how-do-you-troubleshoot-a-packet-path)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Routes Need Traffic Rules
-<!-- section-summary: The receipts app already has routes, and now each packet path needs rules that allow only the intended traffic. -->
+Suppose a browser connects to a web application over HTTPS:
 
-The receipts app has a route from the public load balancer to private API tasks, and the API has a local VPC route to the database. Routes answer where packets can go next. Traffic rules answer whether those packets may pass.
+```text
+Client                                  Web server
+203.0.113.50:53124 ──────────────────► 10.0.2.10:443
+```
 
-AWS gives two common VPC packet controls: **security groups** and **network ACLs**, often called NACLs. Security groups attach to resources such as ENIs, load balancers, EC2 instances, database interfaces, and interface endpoints. NACLs attach to subnets and evaluate packets as they enter or leave the subnet boundary.
+The client sends traffic toward a known server port. The server replies to the client's temporary source port:
 
-For most application access, security groups carry the main design because they sit close to the workload. NACLs usually act as broad subnet guardrails. That split keeps daily app permissions tied to the app and keeps subnet-level deny rules rare, visible, and documented.
+```text
+Client                                  Web server
+203.0.113.50:53124 ◄────────────────── 10.0.2.10:443
+```
 
-The running packet path stays the same. Customer traffic reaches the load balancer on TCP `443`. The load balancer reaches the API on TCP `8080`. The API reaches PostgreSQL on TCP `5432`. Each hop needs a route, a source, a destination, a port, a security group decision, and a NACL decision.
+Those two directions explain most of the difference between an AWS security group and a network access control list, or NACL.
 
-## Security Groups
-<!-- section-summary: Security groups are stateful allow lists attached to resources, so allowed connections automatically include their response traffic. -->
+The sections below answer these questions in order:
 
-A **security group** is a stateful allow list. You add inbound and outbound allow rules. When a connection is allowed in one direction, response traffic for that connection is automatically allowed by the security group state tracking.
+1. **What Must Happen to One Packet?**
+2. **How Are Security Groups Different From NACLs?**
+3. **Why Are Security Group References Useful?**
+4. **How Do Stateless NACLs Work?**
+5. **Why Do NACLs Need Ephemeral-Port Rules?**
+6. **How Do Ordered Allow and Deny Rules Work?**
+7. **How Do Flow Logs Help Explain a Failure?**
+8. **How Do You Troubleshoot a Packet Path?**
 
-Security groups deny inbound traffic unless a rule allows it. Many tools create security groups with broad outbound access, but production teams should still review egress. An API that only needs the database, S3, CloudWatch Logs, Secrets Manager, and one payment provider should have those outbound needs named.
+## What Must Happen to One Packet?
+<!-- section-summary: A working connection needs a route, filtering permission in both relevant directions, and a listening destination service. -->
 
-Security group rules can use CIDR ranges or other security groups as sources and destinations. CIDR rules work for fixed networks such as office IP ranges or partner ranges. Security group references work well for dynamic AWS workloads because the rule follows the group rather than a changing private IP address.
+A TCP packet carries facts such as:
 
-For the receipts app, the useful relationships are small. Customers reach the load balancer. The load balancer reaches the API. The API reaches the database and approved outbound dependencies. Each rule should describe one of those relationships in plain language.
+```text
+Source IP:        203.0.113.50
+Source port:      53124
+Destination IP:   10.0.2.10
+Destination port: 443
+Protocol:         TCP
+```
+
+AWS networking must answer two independent questions:
+
+```text
+Where should this packet go?
+        → routing
+
+May this packet go there?
+        → filtering and security
+```
+
+A route such as `0.0.0.0/0 → internet gateway` does not allow internet traffic. It selects a next hop for destinations without a more-specific route. Security groups and NACLs may still reject the packet.
+
+The reverse is also true. A security group can allow TCP `443`, but it cannot manufacture a missing route, internet gateway, NAT path, peering route, or listening service.
+
+The simplified formula is:
+
+```text
+working connectivity
+    = valid route and return path
+    + permitted network traffic
+    + destination listening and responding
+```
+
+For an EC2 HTTPS server, the route, NACL rules, security-group rules, and server process must all align. Remove one layer and the request can fail.
+
+This separation is practical, not merely theoretical. Randomly widening a security group cannot repair a wrong route. Adding a route cannot override a NACL deny. Opening both network controls cannot start a stopped web server.
+
+## How Are Security Groups Different From NACLs?
+<!-- section-summary: Security groups protect resource interfaces with stateful allow rules, while NACLs protect subnet boundaries with ordered stateless allow and deny rules. -->
+
+AWS provides two major VPC packet filters:
+
+| Property | Security group | Network ACL |
+|---|---|---|
+| Protects | Network interfaces and attached resources | Subnet boundary |
+| Mental model | Firewall around a resource | Firewall around a subnet |
+| Connection state | Stateful | Stateless |
+| Allow rules | Yes | Yes |
+| Explicit deny rules | No | Yes |
+| Rule ordering | No | Yes |
+| Can reference security groups | Yes | No |
+| Can use CIDR ranges | Yes | Yes |
+| Strongest use | Precise application access | Coarse subnet guardrails |
 
 ![The control comparison shows why security groups track connection state while network ACLs require separate inbound and outbound thinking](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/stateful-vs-stateless-controls.png)
 
-*The control comparison shows why security groups track connection state while network ACLs require separate inbound and outbound thinking.*
+*Security groups remember allowed conversations around resources; NACLs evaluate each packet independently at subnet boundaries.*
 
+The most important difference is state. A stateful security group recognizes return traffic for an allowed connection. A stateless NACL evaluates the reply as another packet. That is why a custom NACL often needs broad-looking ephemeral-port rules even when the application's known server port is narrow.
 
-## Security Group Rules for the App
-<!-- section-summary: A practical security group design follows the app conversation instead of trusting whole subnet ranges. -->
+The two controls are not substitutes. A packet crossing a subnet boundary may need to satisfy the applicable NACL and then the destination interface's security groups. Return traffic must also satisfy the stateless NACL directions, even though security-group state recognizes the conversation.
 
-A simple rule set can use three security groups: `receipts-alb-sg`, `receipts-api-sg`, and `receipts-db-sg`. The load balancer security group receives HTTPS from customer ranges. The API security group receives app traffic from the load balancer security group. The database security group receives database traffic from the API security group.
+### How Do Stateful Security Groups Work?
+<!-- section-summary: Security groups are resource-level allowlists that automatically recognize return traffic for allowed connections. -->
 
-| Security group | Inbound rule | Why it exists |
-| --- | --- | --- |
-| `receipts-alb-sg` | TCP `443` from approved customer ranges, often `0.0.0.0/0` for a public web app | Customers reach the public entry point. |
-| `receipts-api-sg` | TCP `8080` from `receipts-alb-sg` | The load balancer forwards requests to the API. |
-| `receipts-db-sg` | TCP `5432` from `receipts-api-sg` | The API reaches PostgreSQL. |
+A security group is logically attached to an **elastic network interface**, or ENI. That interface can belong to EC2, a load balancer, an RDS database, or another VPC resource.
 
-Terraform can express the API-to-database relationship with dedicated security group rule resources:
-
-```hcl
-resource "aws_vpc_security_group_ingress_rule" "api_from_alb" {
-  security_group_id            = aws_security_group.api.id
-  referenced_security_group_id = aws_security_group.alb.id
-  ip_protocol                  = "tcp"
-  from_port                    = 8080
-  to_port                      = 8080
-  description                  = "Receipts ALB to API"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "db_from_api" {
-  security_group_id            = aws_security_group.db.id
-  referenced_security_group_id = aws_security_group.api.id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "Receipts API to PostgreSQL"
-}
+```text
+network → security group → ENI → resource and application
 ```
 
-The `security_group_id` field is the group receiving the inbound rule. The `referenced_security_group_id` field names the trusted source group. `ip_protocol`, `from_port`, and `to_port` define the TCP port range, and `description` gives reviewers the app reason behind the rule.
+Suppose an EC2 instance at `10.0.2.10` has this inbound permission:
 
-This style avoids hardcoding API task IP addresses. If the API scales from two tasks to twenty tasks, new tasks get the API security group and the database rule still applies. The network trust follows the workload group instead of a list of private addresses.
+```text
+TCP 443 from 0.0.0.0/0
+```
 
-Outbound rules need the same owner. Some teams allow broad outbound traffic during early discovery and then narrow it after logs show the real dependencies. Other teams start narrow from day one. Either path should name the expected destinations and create a follow-up for broad egress.
+For a new packet from `203.0.113.50:53124` to `10.0.2.10:443`, the group checks the protocol, destination port, and allowed source. If the packet matches, the connection can pass this layer.
+
+Security groups are **allowlists**. They do not contain explicit deny rules. If no allow rule matches, traffic is not allowed.
+
+```text
+Inbound permissions:
+443 from 0.0.0.0/0
+22  from 10.20.0.0/16
+
+Internet → 443          allowed
+10.20.0.0/16 → 22       allowed
+Internet → 22           not allowed
+Internet → 3306         not allowed
+```
+
+No `DENY everything else` rule is needed. The absence of a matching allow has that effect.
+
+Now the server replies:
+
+```text
+10.0.2.10:443 → 203.0.113.50:53124
+```
+
+The security group recognizes this as return traffic for the connection it admitted. You do not need to add a broad outbound rule for `1024-65535` merely so that the HTTPS server can answer this inbound flow. That memory of the conversation is what **stateful** means in this context.
+
+For a new connection initiated by an application, reason about the initiator's outbound permission and the destination's inbound permission:
+
+```text
+initiator
+  └── outbound security-group permission
+       ↓ network
+destination
+  └── inbound security-group permission
+
+return traffic
+  └── recognized as part of the allowed conversation
+```
+
+If several security groups attach to one ENI, their allow permissions combine. One group cannot override another group's allow with a deny because security groups have no deny rules.
+
+## Why Are Security Group References Useful?
+<!-- section-summary: Referencing a source security group expresses workload identity and survives changing resource addresses. -->
+
+Consider a three-tier service:
+
+```text
+Internet
+  ↓ TCP 443
+load balancer, SG: alb-sg
+  ↓ TCP 8080
+application, SG: app-sg
+  ↓ TCP 5432
+PostgreSQL, SG: db-sg
+```
+
+A clean inbound design is:
+
+| Security group | Inbound permission |
+|---|---|
+| `alb-sg` | TCP `443` from internet clients |
+| `app-sg` | TCP `8080` from `alb-sg` |
+| `db-sg` | TCP `5432` from `app-sg` |
+
+The application rule does not say, "Allow everything in `10.0.1.0/24`." It says that network interfaces associated with the load-balancer security group may connect on `8080`. The database rule says the application group may use PostgreSQL rather than trusting every resource that happens to occupy an app subnet.
 
 ![The app rule map shows the intended ALB-to-API-to-database path and where each security group rule belongs](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/alb-api-db-rules.png)
 
-*The app rule map shows the intended ALB-to-API-to-database path and where each security group rule belongs.*
+*Security-group references make the packet permissions follow application relationships rather than changing IP addresses.*
 
+This keeps the network design meaningful when instances are replaced or scale horizontally. New application interfaces receive `app-sg`, so the existing database rule recognizes them without an updated list of IP addresses.
 
-## Inspecting Security Groups
-<!-- section-summary: AWS CLI security group output shows sources, destinations, protocols, and ports, which makes broad or missing rules visible. -->
+References also communicate intent. `db-sg: allow 5432 from app-sg` reads as "the application may talk to the database." A broad CIDR says only that an address inside a range may talk to the database, regardless of that resource's role.
 
-The AWS CLI can show the security group relationships that matter for the receipts app:
+These relationships are not transitive. The internet may reach the ALB, and the ALB may reach the app. That does not imply that the internet may reach the app. Each hop is a separate connection and must satisfy its own route and rules.
 
-```bash
-aws ec2 describe-security-groups \
-  --group-ids sg-0receiptsapi sg-0receiptsdb \
-  --query 'SecurityGroups[*].{name:GroupName,id:GroupId,ingress:IpPermissions[*].{protocol:IpProtocol,from:FromPort,to:ToPort,sourceGroups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp},egress:IpPermissionsEgress[*].{protocol:IpProtocol,from:FromPort,to:ToPort,destinationGroups:UserIdGroupPairs[*].GroupId,cidrs:IpRanges[*].CidrIp}}'
+When inspecting an app-to-database failure, write the actual flow:
+
+```text
+10.0.2.15:41722 → 10.0.3.20:5432
 ```
 
-The `--group-ids` flag selects the exact groups under review. The `--query` expression keeps the group name, group ID, ingress rules, egress rules, security group references, CIDR ranges, protocols, and ports.
+Find the security groups protecting the database ENI and look for TCP `5432` from `app-sg`. The stateful reply from database port `5432` to client port `41722` does not require a separate inbound rule on the application security group for `41722`.
 
-```json
-[
-  {
-    "name": "receipts-api-sg",
-    "id": "sg-0receiptsapi",
-    "ingress": [
-      {
-        "protocol": "tcp",
-        "from": 8080,
-        "to": 8080,
-        "sourceGroups": [
-          "sg-0receiptsalb"
-        ],
-        "cidrs": []
-      }
-    ],
-    "egress": [
-      {
-        "protocol": "tcp",
-        "from": 5432,
-        "to": 5432,
-        "destinationGroups": [
-          "sg-0receiptsdb"
-        ],
-        "cidrs": []
-      }
-    ]
-  },
-  {
-    "name": "receipts-db-sg",
-    "id": "sg-0receiptsdb",
-    "ingress": [
-      {
-        "protocol": "tcp",
-        "from": 5432,
-        "to": 5432,
-        "sourceGroups": [
-          "sg-0receiptsapi"
-        ],
-        "cidrs": []
-      }
-    ],
-    "egress": []
-  }
-]
+## How Do Stateless NACLs Work?
+<!-- section-summary: A NACL applies to every resource in a subnet and evaluates inbound and outbound packets independently. -->
+
+A **network ACL** surrounds a subnet rather than an individual network interface:
+
+```text
+network → NACL boundary → subnet → resource ENIs
 ```
 
-The database rule should show `sourceGroups` with the API security group and port `5432`. A database ingress rule with `cidrs` containing `0.0.0.0/0` would mean a very different exposure. For the API group, broad outbound egress would appear as protocol `-1` and CIDR `0.0.0.0/0`, so reviewers can spot it quickly.
+Every resource in that subnet is subject to the subnet's NACL. The NACL does not remember connections. It evaluates each packet from its fields and direction.
 
-Security groups control network reachability. IAM, TLS, database credentials, and application authorization still protect identity and data after the network path opens. A good network rule narrows the path, and the application still authenticates the caller.
+Return to the HTTPS flow. An inbound NACL rule permits:
 
-## Network ACLs
-<!-- section-summary: Network ACLs filter traffic at subnet boundaries with ordered allow and deny rules, and each direction is evaluated separately. -->
-
-A **network ACL** is a subnet-level packet filter. It has numbered inbound and outbound rules. AWS evaluates the lowest rule number first and stops at the first matching rule. NACLs can allow and deny traffic.
-
-NACLs are stateless, so inbound and outbound directions need separate rules. Security group state tracking handles response traffic for allowed connections, but a NACL still needs rules that allow the response packets at the subnet boundary. This is the detail that makes NACLs easy to break during a rushed change.
-
-Because a NACL applies to a whole subnet, it affects every resource in that subnet. A deny rule can be useful for blocking a confirmed malicious range at a public subnet boundary. The same deny rule can also break future resources that land in the subnet. That is why most teams keep NACLs broad and use security groups for precise workload relationships.
-
-Rule numbers are part of the behavior. If an allow for TCP `443` from `0.0.0.0/0` is rule `100`, a deny for a known bad range on TCP `443` at rule `120` will never match that traffic. Number gaps such as `100`, `110`, and `120` leave room for emergency rules above or below the normal rule.
-
-## Ephemeral Ports
-<!-- section-summary: Stateless NACLs need temporary client ports because TCP responses return to the client's ephemeral port. -->
-
-**Ephemeral ports** are temporary client-side ports used by TCP connections. A customer may connect from source port `51544` to the load balancer destination port `443`. The response goes back to destination port `51544`, so subnet-level rules must allow that return path.
-
-This matters because NACLs are stateless. A public subnet NACL that allows inbound destination port `443` also needs outbound ephemeral ports for responses to customers. A private app subnet that allows inbound destination port `8080` from the load balancer also needs outbound ephemeral ports back to the load balancer nodes.
-
-Many AWS examples use the range `1024-65535` for ephemeral ports, although operating systems can use different ranges. A strict production NACL review checks the operating system defaults and the protocols in use before narrowing those ports. For a beginner app, broad NACL ephemeral ranges plus precise security groups often produce fewer accidental outages.
-
-For the receipts database path, the data subnet NACL may need inbound destination port `5432` from app subnet CIDRs and outbound ephemeral ports back to app subnet CIDRs. The security group can still use the API security group as the trusted source, which is more precise than the subnet CIDR.
-
-## A Safe NACL Pattern
-<!-- section-summary: A safe NACL design starts broad enough for normal stateful protocols, then adds narrow deny rules only with evidence and rollback. -->
-
-A safe beginner pattern keeps NACLs simple and lets security groups carry the workload relationships. Public load balancer subnets allow customer HTTPS and return traffic. Private app subnets allow traffic from the load balancer and responses to approved outbound calls. Data subnets allow the app-to-database path and response traffic.
-
-When a NACL deny rule is needed, the change record should name the reason. Blocking a confirmed malicious source range at a public subnet boundary can be reasonable. Blocking a broad internal range because one service misbehaved usually creates hidden outages for other services in the same subnet.
-
-A small public-subnet NACL pattern might look like this:
-
-| Direction | Rule | Action | Port range | CIDR | Purpose |
-| --- | ---: | --- | --- | --- | --- |
-| Inbound | 90 | Deny | `443` | `198.51.100.0/24` | Block a confirmed malicious range. |
-| Inbound | 100 | Allow | `443` | `0.0.0.0/0` | Allow customer HTTPS. |
-| Outbound | 100 | Allow | `1024-65535` | `0.0.0.0/0` | Allow responses to customer ephemeral ports. |
-
-The CLI can show the actual NACL entries for a subnet:
-
-```bash
-aws ec2 describe-network-acls \
-  --filters Name=association.subnet-id,Values=subnet-0publica \
-  --query 'NetworkAcls[*].{acl:NetworkAclId,entries:Entries[?RuleNumber < `32767`].{rule:RuleNumber,egress:Egress,action:RuleAction,protocol:Protocol,cidr:CidrBlock,from:PortRange.From,to:PortRange.To}}'
+```text
+TCP destination 443 from 0.0.0.0/0
 ```
 
-The `--filters` flag finds the NACL associated with the public subnet. The `--query` expression removes the default catch-all rule and keeps rule number, direction, action, protocol, CIDR, and port range. In NACL output, protocol `6` means TCP.
+The request to the server can cross the inbound subnet boundary. The response has different endpoints:
 
-```json
-[
-  {
-    "acl": "acl-0public",
-    "entries": [
-      {
-        "rule": 90,
-        "egress": false,
-        "action": "deny",
-        "protocol": "6",
-        "cidr": "198.51.100.0/24",
-        "from": 443,
-        "to": 443
-      },
-      {
-        "rule": 100,
-        "egress": false,
-        "action": "allow",
-        "protocol": "6",
-        "cidr": "0.0.0.0/0",
-        "from": 443,
-        "to": 443
-      },
-      {
-        "rule": 100,
-        "egress": true,
-        "action": "allow",
-        "protocol": "6",
-        "cidr": "0.0.0.0/0",
-        "from": 1024,
-        "to": 65535
-      }
-    ]
-  }
-]
+```text
+10.0.2.10:443 → 203.0.113.50:53124
 ```
 
-The `egress` value separates inbound and outbound entries. `false` means the rule applies to traffic entering the subnet, and `true` means the rule applies to traffic leaving the subnet. The lower deny rule number makes the malicious range match before the general HTTPS allow rule.
+A security group recognizes it as a reply. A NACL evaluates it from the beginning. The outbound NACL must permit a destination port of `53124`, not `443`.
 
-## Verification With Flow Logs
-<!-- section-summary: Flow Logs provide packet metadata that helps separate route problems from security group, NACL, listener, and application problems. -->
+This independent handling applies on every subnet boundary involved. A request from a load balancer subnet to an app subnet can encounter outbound rules on the source subnet and inbound rules on the destination subnet. Its response reverses those directions and ports.
 
-VPC Flow Logs record metadata about IP traffic at a VPC, subnet, or network interface level. They can publish to CloudWatch Logs, S3, or Data Firehose. Flow Logs include packet facts such as source address, destination address, source port, destination port, protocol, action, and log status, while application payloads stay outside the log record.
+Because a NACL affects an entire subnet, one narrow-looking change can affect many resources. That makes it suitable for broad network guardrails but less convenient for dynamic application identity.
 
-The first state check confirms that Flow Logs exist for the VPC:
+## Why Do NACLs Need Ephemeral-Port Rules?
+<!-- section-summary: Clients use temporary source ports, so stateless return paths must allow those ports in the reverse NACL direction. -->
 
-```bash
-aws ec2 describe-flow-logs \
-  --filter Name=resource-id,Values=vpc-0receipts \
-  --query 'FlowLogs[*].{id:FlowLogId,resource:ResourceId,destination:LogDestinationType,status:FlowLogStatus,traffic:TrafficType}'
+Servers use well-known ports so clients know where to connect: HTTPS uses `443`, SSH commonly uses `22`, and DNS commonly uses `53`. A client does not need a famous source port for a temporary connection. Its operating system selects a high-numbered **ephemeral port**.
+
+A client can hold several connections at once:
+
+```text
+203.0.113.50:53124 → google.com:443
+203.0.113.50:53125 → aws.amazon.com:443
+203.0.113.50:53126 → github.com:443
 ```
 
-The `--filter` flag selects Flow Logs for the receipts VPC. The `--query` expression shows the Flow Log ID, resource, destination type, delivery status, and whether it records accepted traffic, rejected traffic, or both.
+Those source ports help the client distinguish conversations.
 
-```json
-[
-  {
-    "id": "fl-0receipts",
-    "resource": "vpc-0receipts",
-    "destination": "cloud-watch-logs",
-    "status": "ACTIVE",
-    "traffic": "ALL"
-  }
-]
+For an inbound-initiated connection:
+
+```text
+Client:53124 → Server:443
 ```
 
-During an incident, a useful Flow Logs query focuses on one destination port and one interface. In CloudWatch Logs Insights, the database path might be inspected like this:
+the server subnet needs inbound permission for destination `443`. The reply is:
 
-```console
-fields @timestamp, interfaceId, srcAddr, dstAddr, srcPort, dstPort, protocol, action, flowDirection
-| filter interfaceId = "eni-0db1234567890ab" and dstPort = 5432
-| sort @timestamp desc
-| limit 20
+```text
+Server:443 → Client:53124
 ```
 
-Example results can point the investigation in different directions:
+so the same stateless NACL needs outbound permission for the client's ephemeral destination port.
 
-```console
-@timestamp              interfaceId           srcAddr       dstAddr       srcPort  dstPort  protocol  action  flowDirection
-2026-06-27T10:15:08Z   eni-0db1234567890ab   10.40.10.48  10.40.20.35  53144    5432     6         ACCEPT  ingress
-2026-06-27T10:11:42Z   eni-0db1234567890ab   10.40.12.77  10.40.20.35  51220    5432     6         REJECT  ingress
+For a connection initiated by an application server, the directions reverse:
+
+```text
+App:42871 → external API:443
 ```
 
-The first row shows the API reaching the database ENI on PostgreSQL and being accepted. The second row shows another source address being rejected on the same port. A `REJECT` at the VPC packet layer points toward security group or NACL review, while an `ACCEPT` followed by an application timeout points toward the database listener, TLS, credentials, connection pool, or application behavior.
+The app subnet NACL needs outbound permission for destination `443`. The response is:
 
-The safest review uses one packet path at a time. Source IP, destination IP, destination port, route table, security groups, subnet NACLs, and Flow Logs should all describe the same story. That habit prevents random rule changes and keeps the public entry, private app tier, database tier, outbound updates, and safe filtering aligned.
+```text
+external API:443 → App:42871
+```
+
+so the app subnet needs inbound permission for the ephemeral destination port `42871`.
+
+The reusable rule is:
+
+```text
+Inbound-initiated connection:
+  inbound  → server port
+  outbound → client ephemeral port
+
+Outbound-initiated connection:
+  outbound → server port
+  inbound  → client ephemeral port
+```
+
+There is no one universal ephemeral range for every operating system and AWS component. Common modern ranges include `32768-60999` and `49152-65535`, while some AWS patterns require a broader range. This is why examples often permit roughly `1024-65535` at the NACL layer where arbitrary clients or infrastructure need return traffic.
+
+That range can look alarmingly broad, but the layers still restrict one another:
+
+```text
+NACL: permits broad network return range
+Security group: permits app port 8080 only from alb-sg
+Application: listens only on 8080
+```
+
+Permitting return packet ranges at a stateless boundary does not automatically publish an application on all of those ports.
+
+## How Do Ordered Allow and Deny Rules Work?
+<!-- section-summary: A NACL chooses the lowest numbered matching rule and can explicitly deny traffic before a broader allow. -->
+
+Unlike security groups, NACLs contain both `ALLOW` and `DENY` actions. Their rule numbers determine evaluation order.
+
+Consider:
+
+| Rule | Source | Port | Action |
+|---:|---|---:|---|
+| 100 | `198.51.100.7/32` | all | DENY |
+| 200 | `0.0.0.0/0` | `443` | ALLOW |
+| `*` | everything else | all | DENY |
+
+A TCP `443` packet from `198.51.100.7` matches both the narrow deny and the broad allow. AWS processes the lower rule number first, rule `100` denies the packet, and evaluation stops.
+
+Rule ordering makes emergency coarse blocks possible, but it can also create subtle mistakes. A broad allow at rule `100` makes a more-specific deny at rule `200` ineffective for matching packets because the earlier allow has already won.
+
+Keep numbering gaps so future rules can be inserted deliberately. More importantly, read a NACL in numerical order rather than grouping it mentally by allow and deny.
+
+### How Should Security Groups and NACLs Share the Job?
+<!-- section-summary: Use NACLs for coarse subnet boundaries and security groups for precise resource-to-resource relationships. -->
+
+Trying to reproduce the entire application policy in NACLs quickly becomes fragile. A precise three-tier system would need to account for:
+
+- ALB-to-app traffic on `8080` and its ephemeral return path;
+- app-to-database traffic on `5432` and its ephemeral return path;
+- outbound app calls to HTTPS APIs and their inbound ephemeral responses;
+- DNS, package repositories, monitoring, and other dependencies; and
+- every source and destination subnet CIDR involved.
+
+NACLs cannot express `alb-sg`, `app-sg`, or `db-sg`; they work with packet fields and CIDRs. Their stateless nature requires mirrored direction thinking. A detailed policy becomes a maze that is easy to break.
+
+A more useful division is:
+
+```text
+NACL
+  → coarse subnet boundary and exceptional deny guardrails
+
+Security group
+  → precise resource and application relationships
+```
+
+For example, an app-subnet NACL can permit required internal ranges and return traffic. `app-sg` still allows TCP `8080` only from `alb-sg`, and `db-sg` allows `5432` only from `app-sg`.
+
+Trace the ALB-to-app connection:
+
+```text
+10.0.1.20:45217 → 10.0.2.15:8080
+```
+
+The route must reach the app subnet. The app-subnet NACL must allow inbound TCP destination `8080`. The app security group must allow TCP `8080` from `alb-sg`. The application must listen on `8080`.
+
+The response is:
+
+```text
+10.0.2.15:8080 → 10.0.1.20:45217
+```
+
+The security group recognizes return traffic. The NACL evaluates it independently, so the app subnet's outbound rules must permit the destination ephemeral port.
+
+The route/security combinations make failure categories visible:
+
+| Route | Security | Meaning |
+|---|---|---|
+| present | permitted | Packet can potentially reach the destination |
+| present | blocked | Correct road, rejected by filtering |
+| missing | permitted | Security would allow it, but no path exists |
+| missing | blocked | Neither reachable nor permitted |
+
+Changing a security group cannot fix missing NAT, IGW, peering, transit, or VPN routing. Adding a route cannot fix a blocked security group or NACL. Refusing to collapse reachability and permission into one problem makes troubleshooting much faster.
+
+## How Do Flow Logs Help Explain a Failure?
+<!-- section-summary: VPC Flow Logs show packet metadata and an ACCEPT or REJECT outcome that can be correlated with routes and filtering rules. -->
+
+Diagrams and policy configuration show intended behavior. **VPC Flow Logs** provide evidence about traffic AWS networking observed.
+
+A record can include:
+
+```text
+source address       10.0.1.20
+source port          45217
+destination address  10.0.2.15
+destination port     8080
+protocol             6
+action               ACCEPT
+```
+
+or it may report `REJECT`.
+
+This answers useful packet questions: Did AWS observe the flow? Which addresses and ports did it see? Was the traffic accepted or rejected at the captured VPC layer?
+
+The data can correct a mistaken assumption. A reviewer may believe the load balancer connects to the app on `443`, while the flow shows destination `8080`. A rejected response flow from `10.0.2.15:8080` to `10.0.1.20:45217` points attention toward a stateless NACL and ephemeral-port return handling.
+
+Flow Logs do not contain application payloads. A `REJECT` also does not name the exact rule that caused it. Correlate the record with the source and destination security groups, subnet NACLs, routes, and intended architecture. An `ACCEPT` does not prove the application succeeded; the process can still be stopped, reject authentication, or fail after the network delivers the packet.
 
 ![The packet checklist turns security group, NACL, route, DNS, and Flow Logs evidence into a repeatable access review](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-security-groups-vs-nacls/packet-control-checklist.png)
 
-*The packet checklist turns security group, NACL, route, DNS, and Flow Logs evidence into a repeatable access review.*
+*Flow metadata confirms the actual endpoint and direction so the relevant route, NACL, security group, and listener can be checked together.*
 
+## How Do You Troubleshoot a Packet Path?
+<!-- section-summary: A reliable investigation writes the exact flow and checks route, source egress, destination ingress, both NACL directions, listener, and observed evidence. -->
+
+When A cannot connect to B, do not begin by opening more ports. Follow one packet.
+
+1. Write the exact new connection as `source-IP:source-port → destination-IP:destination-port`.
+2. Identify which side initiates the connection and which destination port the server is expected to use.
+3. Verify the route from A to B and a viable return path.
+4. Check A's outbound security-group permission for the new connection.
+5. Check B's inbound security-group permission.
+6. Check the NACL on A's subnet in the outbound and return-inbound directions.
+7. Check the NACL on B's subnet in the inbound and return-outbound directions.
+8. Remember that the response's destination is usually the client's ephemeral port.
+9. Verify that B listens on the expected address and port.
+10. Use Flow Logs or related diagnostics to confirm which flow AWS accepted or rejected.
+
+The complete mental model is:
+
+```text
+ROUTE TABLE
+Where does the packet go?
+        ↓
+NACL
+May this individual packet cross the subnet boundary?
+Stateless, ordered, allow and deny
+        ↓
+SECURITY GROUP
+May this resource start or accept the conversation?
+Stateful, allow only, no ordering
+        ↓
+APPLICATION
+Is anything listening and willing to respond?
+```
+
+For TCP:
+
+```text
+Client:E → Server:443
+Client:E ← Server:443
+
+E = ephemeral client port
+```
+
+The security group understands that the two directions belong to one conversation. The NACL does not. That is why inbound HTTPS through a security group automatically permits its return traffic, while a NACL needs inbound `443` plus outbound ephemeral destinations. For an app-initiated HTTPS request, the NACL needs outbound `443` plus inbound ephemeral destinations.
+
+These rules are not arbitrary AWS details. They follow directly from how client and server ports create two-direction packet flows.
+
+## Check Your Answers
+<!-- section-summary: Test the state, boundary, rule, identity-reference, ephemeral-port, and evidence distinctions. -->
+
+:::expand[What Must Happen to One Packet?]{kind="recap"}
+A working connection needs a route, filtering permission in both relevant directions, and a listening destination service.
+
+Routing selects a path or next hop for the destination. Filtering decides whether the packet may use that path. A working connection needs both, plus a valid return path and a listening destination.
+:::
+
+:::expand[How Are Security Groups Different From NACLs?]{kind="recap"}
+Security groups protect resource interfaces with stateful allow rules, while NACLs protect subnet boundaries with ordered stateless allow and deny rules.
+
+Security groups are resource-level allowlists that automatically recognize return traffic for allowed connections.
+
+After the group allows a new connection, it recognizes response traffic as part of the same conversation. Separate broad rules are not required merely to allow the return direction of that connection.
+
+No. Internet-to-ALB and ALB-to-app are separate allowed connections. The first does not imply direct internet-to-app access; every hop satisfies its own rules.
+:::
+
+:::expand[Why Are Security Group References Useful?]{kind="recap"}
+Referencing a source security group expresses workload identity and survives changing resource addresses.
+
+The reference follows workload membership and states intent, such as "the app group may reach the database." It survives changing IP addresses and avoids trusting unrelated resources that happen to share a subnet.
+:::
+
+:::expand[How Do Stateless NACLs Work?]{kind="recap"}
+A NACL applies to every resource in a subnet and evaluates inbound and outbound packets independently.
+
+The NACL does not remember a connection. It evaluates request and response packets independently according to their direction, addresses, protocol, and ports.
+:::
+
+:::expand[Why Do NACLs Need Ephemeral-Port Rules?]{kind="recap"}
+Clients use temporary source ports, so stateless return paths must allow those ports in the reverse NACL direction.
+
+The request's destination is server port `443`, but the response's destination is the client's temporary source port. The stateless outbound evaluation must permit that ephemeral destination.
+:::
+
+:::expand[How Do Ordered Allow and Deny Rules Work?]{kind="recap"}
+A NACL chooses the lowest numbered matching rule and can explicitly deny traffic before a broader allow.
+
+They contain allow rules but no explicit deny rules or rule order. Traffic without a matching allow is not permitted, and permissions from multiple groups attached to an ENI combine.
+
+The lowest numbered matching rule wins, and evaluation stops. A narrow deny must have a lower number than a broad matching allow if it is intended to take effect.
+
+Use NACLs for coarse subnet boundaries and security groups for precise resource-to-resource relationships.
+
+Security groups protect ENIs and their resources. A NACL protects a subnet boundary and affects every resource using that subnet.
+
+Detailed application policy creates many mirrored return-path and ephemeral-port rules, while NACLs cannot use application-oriented security-group identities. Security groups express precise workload relationships more safely.
+:::
+
+:::expand[How Do Flow Logs Help Explain a Failure?]{kind="recap"}
+VPC Flow Logs show packet metadata and an ACCEPT or REJECT outcome that can be correlated with routes and filtering rules.
+
+It can show that AWS observed a flow with specific source and destination addresses, ports, protocol, and an ACCEPT or REJECT result. It does not contain the payload or automatically identify the exact misconfigured rule.
+:::
+
+:::expand[How Do You Troubleshoot a Packet Path?]{kind="recap"}
+A reliable investigation writes the exact flow and checks route, source egress, destination ingress, both NACL directions, listener, and observed evidence.
+
+Write the exact flow, prove routing and return routing, check source outbound and destination inbound security groups, evaluate every involved NACL direction including ephemeral returns, verify the listener, and correlate Flow Logs.
+:::
 
 ## References
 
-- [Amazon VPC documentation: Security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html)
-- [Amazon VPC documentation: Security group rules](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html)
-- [Amazon VPC documentation: Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html)
-- [Amazon VPC documentation: Network ACL rules](https://docs.aws.amazon.com/vpc/latest/userguide/nacl-rules.html)
-- [Amazon VPC documentation: VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)
+- [Security groups](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html) - Introduces resource-level VPC security groups.
+- [Security group rules](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html) - Documents stateful allow behavior, references, and rule components.
+- [Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) - Introduces subnet-level stateless packet filtering.
+- [Network ACL rules](https://docs.aws.amazon.com/vpc/latest/userguide/nacl-rules.html) - Explains ordered allow and deny processing.
+- [Network ACLs for your VPC](https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html) - Provides guidance on return traffic and ephemeral ports.
+- [VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html) - Describes captured IP-flow metadata and ACCEPT or REJECT actions.

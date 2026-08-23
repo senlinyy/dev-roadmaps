@@ -12,19 +12,31 @@ aliases:
 
 ## Table of Contents
 
-1. [The Trace-by-Trace Operations Problem](#the-trace-by-trace-operations-problem)
-2. [What Application Signals Adds](#what-application-signals-adds)
-3. [Services, Operations, and Dependencies](#services-operations-and-dependencies)
-4. [Enable It Where Your Code Runs](#enable-it-where-your-code-runs)
-5. [Standard Metrics and Healthy SLIs](#standard-metrics-and-healthy-slis)
-6. [SLOs, SLIs, and Error Budgets](#slos-slis-and-error-budgets)
-7. [Latency and Availability SLO Design](#latency-and-availability-slo-design)
-8. [Creating an SLO in Practice](#creating-an-slo-in-practice)
-9. [Investigating an Unhealthy Service](#investigating-an-unhealthy-service)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [Why Is One Trace Not Enough to Measure Service Health?](#why-is-one-trace-not-enough-to-measure-service-health)
+2. [What Does Application Signals Add?](#what-does-application-signals-add)
+3. [Why Must Instrumentation Run With the Application?](#why-must-instrumentation-run-with-the-application)
+4. [How Do Metrics Become Service Level Indicators?](#how-do-metrics-become-service-level-indicators)
+5. [How Do SLOs Create Error Budgets and Burn Rates?](#how-do-slos-create-error-budgets-and-burn-rates)
+6. [How Should You Design Availability and Latency SLOs?](#how-should-you-design-availability-and-latency-slos)
+7. [How Do You Investigate an Unhealthy Service?](#how-do-you-investigate-an-unhealthy-service)
+8. [How Does the Complete Service-Health Model Fit Together?](#how-does-the-complete-service-health-model-fit-together)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## The Trace-by-Trace Operations Problem
+The service-health progression is `requests -> telemetry -> application signals -> SLIs -> SLOs -> engineering decisions`. Each layer answers a different question. A trace explains one request. Application Signals summarizes how an operation behaves across many requests. An SLO decides whether that behavior is good enough for users.
+
+The sections below answer these questions in order:
+
+1. **Why Is One Trace Not Enough to Measure Service Health?**
+2. **What Does Application Signals Add?**
+3. **Why Must Instrumentation Run With the Application?**
+4. **How Do Metrics Become Service Level Indicators?**
+5. **How Do SLOs Create Error Budgets and Burn Rates?**
+6. **How Should You Design Availability and Latency SLOs?**
+7. **How Do You Investigate an Unhealthy Service?**
+8. **How Does the Complete Service-Health Model Fit Together?**
+
+## Why Is One Trace Not Enough to Measure Service Health?
 <!-- section-summary: Tracing explains individual requests, but production operations need a service-level view of customer-facing health. -->
 
 In the previous article, you followed a checkout request across services with OpenTelemetry and AWS X-Ray. That is a huge step forward. A trace can show that the checkout API spent 1.8 seconds waiting on a payment provider, 300 milliseconds writing to DynamoDB, and 40 milliseconds sending an event to SQS. A responder can finally see the path instead of guessing from separate logs.
@@ -40,7 +52,7 @@ That last question matters a lot. A single slow request might be acceptable in a
 
 This is where **CloudWatch Application Signals** and **service level objectives** come in.
 
-## What Application Signals Adds
+## What Does Application Signals Add?
 <!-- section-summary: Application Signals uses application telemetry to discover services, show operational health, and connect service views to SLOs, canaries, RUM, logs, metrics, and traces. -->
 
 **Amazon CloudWatch Application Signals** is an application performance monitoring feature in CloudWatch. In plain language, it takes the traces and metrics your application emits and organizes them around the services, operations, and dependencies that your team actually talks about during incidents.
@@ -65,7 +77,7 @@ For the rest of the article, imagine a production checkout system. Customers bro
 *The service view shows how Application Signals groups operations, dependencies, latency, errors, and throughput into one service health picture.*
 
 
-## Services, Operations, and Dependencies
+### How Do Services, Operations, and Dependencies Organize Health?
 <!-- section-summary: Application Signals breaks application behavior into services, the operations they serve, and the dependencies they call. -->
 
 Application Signals uses three ideas again and again: **service**, **operation**, and **dependency**. These sound simple, but they prevent many monitoring mistakes.
@@ -73,6 +85,8 @@ Application Signals uses three ideas again and again: **service**, **operation**
 A **service** is one running application component that receives work. In our checkout example, `orders-api` is a service. `payments-api` is another service. A Lambda function called `send-receipt-email` can also be a service when it handles a request or event.
 
 An **operation** is a named unit of work handled by a service. For an HTTP API, operations often look like routes or route groups, such as `POST /checkout`, `GET /orders/{id}`, or `POST /payment/authorize`. Operations are useful because different endpoints deserve different reliability targets. A slow admin export might be annoying. A slow payment authorization can block revenue.
+
+This is why an organizational service boundary is not always the right reliability boundary. A high-volume `GET /profile` operation can keep a service-wide average healthy while a low-volume but critical `POST /checkout-info` operation is completely broken. The best SLO boundary is often the user-visible capability rather than the whole microservice.
 
 A **dependency** is something a service calls while doing its work. Dependencies can be another service, an AWS service, a database, a queue, or an external endpoint. In checkout, `orders-api` might call DynamoDB, Amazon SQS, and a payment provider. If the service is slow because the payment provider is slow, the service detail page should help you follow that path.
 
@@ -85,10 +99,12 @@ The **Application Map** gives the topology view. It shows services, clients, can
 Application Signals discovers services and operations from recent telemetry. AWS notes that Application Signals displays services and operations based on the selected time filter, defaults to the past three hours, may take up to 10 minutes for service topology discovery, and may take up to 15 minutes for SLI health evaluation. In production, that means a newly deployed service or a quiet operation might need real traffic before it appears in the expected places.
 
 
-## Enable It Where Your Code Runs
+## Why Must Instrumentation Run With the Application?
 <!-- section-summary: Enabling Application Signals depends on the runtime platform, but the common pattern is ADOT instrumentation plus the CloudWatch agent or Lambda layer. -->
 
 Application Signals needs telemetry from the application. Behind the scenes, AWS uses OpenTelemetry-compatible instrumentation, AWS Distro for OpenTelemetry, the CloudWatch agent, and platform-specific setup paths. The exact setup depends on where the code runs.
+
+Infrastructure monitoring cannot infer application meaning by itself. Container CPU can say `93%`; it cannot say that `POST /checkout` called `payments-api` and waited 720 milliseconds. Instrumentation around inbound and outbound application work supplies the semantic context needed to identify operations and dependencies.
 
 The current AWS support matrix lists Application Signals support and testing for **Amazon EKS**, **native Kubernetes**, **Amazon ECS**, and **Amazon EC2**. The same support page includes runtime guidance for Java, .NET, PHP, Ruby, Python, Node.js, and Go, with version details such as JVM versions 8, 11, 17, 21, and 23, Python 3.9 and higher, Node.js versions 14 through 22, PHP 8.0 and higher, Ruby runtime ranges, and Go 1.18 and higher. Treat the support matrix as a rollout checklist, because instrumentation details can differ by runtime and language module system.
 
@@ -105,10 +121,14 @@ For EKS, a team might annotate a namespace that contains checkout workloads so e
 
 The goal is the same in each platform: make the application emit standard telemetry with stable service and environment names. If the names are inconsistent, the console gets noisy. If one service calls itself `checkout`, another calls it `orders-api`, and a third emits `UnknownService`, the incident view splits one service into several names.
 
-## Standard Metrics and Healthy SLIs
+## How Do Metrics Become Service Level Indicators?
 <!-- section-summary: Application Signals collects latency, fault, and error metrics, and uses these metrics to power SLI health. -->
 
 An **SLI**, or service level indicator, is the measurement you use to judge a service target. If the target is "checkout should stay available," the SLI might be availability. If the target is "checkout should respond quickly," the SLI might be latency.
+
+A metric is only a measurement. An SLI interprets measurements as user-visible reliability. For availability, the team divides successful eligible requests by all eligible requests. If 999,500 of 1,000,000 checkout requests are good, availability is 99.95 percent. For latency, the team first defines a good experience, such as `latency <= 300 ms`, then divides requests meeting that condition by all eligible requests. If 992,000 of 1,000,000 requests meet it, latency compliance is 99.2 percent.
+
+The interpretation is the important step. Raw latency values become good or bad user experiences only after the team defines eligibility and the acceptable condition.
 
 Application Signals sends standard application metrics to the `ApplicationSignals` namespace in CloudWatch. The three core metrics to understand are **Latency**, **Fault**, and **Error**.
 
@@ -124,7 +144,7 @@ That means a 404 from a mistyped product URL stays outside the service availabil
 
 Application Signals uses SLOs to turn these measurements into health. After you create SLOs, the Services, Service detail, and Application Map pages can show whether service level indicators are healthy. The team moves from "latency looks high on a chart" to "the checkout latency SLO is unhealthy and budget is burning."
 
-## SLOs, SLIs, and Error Budgets
+## How Do SLOs Create Error Budgets and Burn Rates?
 <!-- section-summary: An SLO turns an SLI into a target over time, and the error budget tells the team how much unreliability remains before the target is missed. -->
 
 A **service level objective**, or **SLO**, is a target for an SLI over a time window. It says what good enough means for a service. For example, the checkout team might choose:
@@ -143,7 +163,9 @@ AWS supports **period-based** and **request-based** SLOs.
 
 An **error budget** is the amount of bad behavior the service can still have while meeting the SLO. If the checkout team sets a 99.9% monthly availability SLO, the remaining 0.1% is the budget for faults. If the service burns that budget quickly after a deployment, the team has evidence to slow down releases and fix reliability instead of debating opinions.
 
-Burn rate gives the budget an operating speed. A burn rate tells you how quickly the service is consuming its budget. AWS documents burn rate configurations and burn rate alarms for SLOs, including multi-window alarm strategies. In practical terms, a fast burn means "customers are being hurt quickly, page someone." A slow burn means "the service is drifting, create work before it turns into an incident."
+For ten million eligible requests, a 0.1 percent budget permits approximately 10,000 bad requests while still meeting a 99.9 percent objective. The point is not to celebrate failures. It is to avoid pretending that cost-free, risk-free 100 percent reliability is attainable, and to make the trade-off between change velocity and reliability explicit.
+
+Burn rate gives the budget an operating speed. If the allowed bad rate is 0.1 percent and the current bad rate is 1 percent, the service burns budget at roughly `1 / 0.1 = 10` times the sustainable rate. If that rate continued, a 30-day budget would be consumed in roughly three days. AWS documents burn-rate configurations and alarms, including multi-window strategies. A severe short event may justify immediate paging, while a smaller problem sustained over days still needs planned action.
 
 ![The error-budget visual shows how availability or latency misses consume the budget that protects user experience](/content-assets/articles/article-cloud-providers-aws-observability-application-signals-and-slos/slo-error-budget.png)
 
@@ -151,7 +173,7 @@ Burn rate gives the budget an operating speed. A burn rate tells you how quickly
 
 
 
-## Latency and Availability SLO Design
+## How Should You Design Availability and Latency SLOs?
 <!-- section-summary: AWS recommends both latency and availability SLOs for critical applications, and real teams usually start with the user journeys that matter most. -->
 
 AWS recommends setting both **latency** and **availability** SLOs on critical applications. That recommendation matches how customers experience a service. A checkout request that returns 200 after 12 seconds still hurts the customer. A checkout request that returns 500 quickly also hurts the customer. One SLO catches slowness. The other catches failure.
@@ -171,7 +193,7 @@ There is also a naming detail that saves time during incidents. AWS recommends i
 
 Finally, keep SLOs close to ownership. The checkout team can own `orders-api POST /checkout` availability. A platform team might own a shared ingress SLO. A third-party dependency might need a dependency SLO so the service owner can explain that checkout is unhealthy because payment authorization is failing outside the service boundary.
 
-## Creating an SLO in Practice
+### How Do You Create an SLO in Practice?
 <!-- section-summary: Teams can create SLOs through the CloudWatch console, CLI, or infrastructure as code once the service has reported standard metrics. -->
 
 Before creating an SLO on a service operation discovered by Application Signals, the operation must have reported standard metrics. This detail surprises teams during early setup. If `POST /checkout` has received no traffic since instrumentation was enabled, it may stay out of the selector until a real or test request produces telemetry.
@@ -317,7 +339,7 @@ Example output:
 
 This output is the contract the alarm and dashboard will follow. The service is `orders-api`, the environment is `ecs:prod-checkout`, the operation is `POST /checkout`, and a good 60-second period has p99 latency at or below 800 milliseconds. During an incident, this saved definition keeps the team from investigating the wrong service name, environment label, or operation.
 
-## Investigating an Unhealthy Service
+## How Do You Investigate an Unhealthy Service?
 <!-- section-summary: The operational workflow starts at SLO health, drills into service details, and then follows correlated traces, logs, metrics, canaries, and client pages. -->
 
 Now let us put the pieces into an incident path.
@@ -368,7 +390,7 @@ This is the bridge from telemetry to operations. The team starts with the user-f
 *The investigation flow connects an unhealthy SLO to service operations, traces, logs, dependencies, and release evidence.*
 
 
-## Putting It All Together
+## How Does the Complete Service-Health Model Fit Together?
 <!-- section-summary: Application Signals turns raw telemetry into service health, while SLOs turn service health into explicit reliability targets. -->
 
 Application Signals is the part of CloudWatch that helps an application team stop thinking in disconnected telemetry names and start thinking in services, operations, dependencies, and customer promises.
@@ -389,16 +411,91 @@ The important production habit is to create SLOs for the journeys that matter mo
 
 Once services have SLOs, the next visibility gap is the customer's actual path. A service can look healthy from inside AWS while the public checkout page is broken by a JavaScript error, a CDN problem, or a regional network issue. That is why the next article moves from service health to **CloudWatch Synthetics** and **CloudWatch RUM**.
 
-## What's Next
-<!-- section-summary: The next article adds outside-in checks and real-user telemetry so service SLOs can be compared with actual customer experience. -->
+## What Should You Remember?
+<!-- section-summary: Application Signals organizes application telemetry into health signals, while SLIs and SLOs turn those signals into explicit user-facing reliability decisions. -->
 
-You now have the service-health layer: Application Signals, standard metrics, SLIs, SLOs, error budgets, and investigations.
+The conceptual hierarchy is:
 
-The next article adds the customer edge. You will use CloudWatch Synthetics canaries to test important journeys on a schedule, and CloudWatch RUM to collect browser and mobile experience data from real user sessions.
+```text
+Business expectation
+       |
+       v
+SLO: acceptable target
+       |
+       v
+SLI: user-oriented measurement
+       |
+       v
+Application Signals: services, operations, dependencies, health
+       |
+       v
+Telemetry: metrics, traces, logs
+       |
+       v
+Application requests
+```
 
----
+The purpose is not to collect more telemetry. It is to turn events into structure, structure into signals, signals into user-oriented indicators, indicators into objectives, and objectives into decisions.
 
-**References**
+:::expand[Why Is One Trace Not Enough to Measure Service Health?]{kind="recap"}
+Tracing explains individual requests, but production operations need a service-level view of customer-facing health.
+
+A trace is a diagnostic representation of one request. A production service may handle millions of requests, so overall health needs aggregated latency, traffic, and outcomes. Signals reveal where health changed; traces and logs explain why.
+:::
+
+:::expand[What Does Application Signals Add?]{kind="recap"}
+Application Signals uses application telemetry to discover services, show operational health, and connect service views to SLOs, canaries, RUM, logs, metrics, and traces.
+
+It uses application telemetry to discover services, their operations, and their dependencies, then organizes latency, faults, errors, availability, traces, logs, canaries, and client views around that application vocabulary.
+
+Application Signals breaks application behavior into services, the operations they serve, and the dependencies they call.
+
+A service is an independently observable application component. An operation is meaningful work that it handles. A dependency is something it calls. Operation-level health is often more useful than one service-wide average because critical low-volume work can otherwise be hidden.
+:::
+
+:::expand[Why Must Instrumentation Run With the Application?]{kind="recap"}
+Enabling Application Signals depends on the runtime platform, but the common pattern is ADOT instrumentation plus the CloudWatch agent or Lambda layer.
+
+External infrastructure metrics can measure CPU or memory but cannot infer that one route called a dependency or how long it waited. Instrumentation observes inbound and outbound application work and supplies the semantic service, operation, and dependency context.
+:::
+
+:::expand[How Do Metrics Become Service Level Indicators?]{kind="recap"}
+Application Signals collects latency, fault, and error metrics, and uses these metrics to power SLI health.
+
+A metric is a measurement such as latency or fault count. An SLI interprets measurements as user experience, such as the fraction of eligible requests that succeeded or completed within a stated latency boundary.
+:::
+
+:::expand[How Do SLOs Create Error Budgets and Burn Rates?]{kind="recap"}
+An SLO turns an SLI into a target over time, and the error budget tells the team how much unreliability remains before the target is missed.
+
+An SLO sets the required SLI attainment over a time window. The gap between that target and 100 percent is the allowed error budget. Burn rate shows how quickly current bad behavior is consuming that allowance relative to a sustainable rate.
+
+Name a user-visible operation, choose the reliability dimension, define eligible events, define good behavior, set the target and time window, choose request or period evaluation, and decide how the error budget will change engineering behavior.
+:::
+
+:::expand[How Should You Design Availability and Latency SLOs?]{kind="recap"}
+AWS recommends both latency and availability SLOs for critical applications, and real teams usually start with the user journeys that matter most.
+
+Availability asks whether the operation worked. Latency asks whether it worked quickly enough. A service can return every response after 45 seconds or answer very quickly while failing 40 percent of requests, so either objective alone is incomplete.
+
+Teams can create SLOs through the CloudWatch console, CLI, or infrastructure as code once the service has reported standard metrics.
+:::
+
+:::expand[How Do You Investigate an Unhealthy Service?]{kind="recap"}
+The operational workflow starts at SLO health, drills into service details, and then follows correlated traces, logs, metrics, canaries, and client pages.
+
+Start with the customer promise, identify the service and operation, determine whether latency or availability failed, compare dependencies, open representative traces, find the responsible span, and use correlated logs and runtime metrics to test the explanation.
+:::
+
+:::expand[How Does the Complete Service-Health Model Fit Together?]{kind="recap"}
+Application Signals turns raw telemetry into service health, while SLOs turn service health into explicit reliability targets.
+
+A request-based SLO measures the fraction of individual requests that were good. A period-based SLO divides time into windows and measures the fraction of windows whose aggregate condition passed. They describe different reliability promises and must be chosen intentionally.
+
+Requests generate telemetry. Application Signals aggregates it into services, operations, dependencies, and standard health signals. SLIs interpret those signals as user experience. SLOs define acceptable experience, while budgets and burn rates guide response and release decisions.
+:::
+
+## References
 
 * [Application Signals](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Monitoring-Sections.html) - AWS overview of Application Signals features, supported regions, supported languages, and integrations with RUM, Synthetics, AppRegistry, and EC2 Auto Scaling.
 * [Supported systems](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Application-Signals-supportmatrix.html) - Current AWS support matrix for Application Signals platforms, languages, runtime versions, and known runtime issues.

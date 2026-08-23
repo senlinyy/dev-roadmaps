@@ -1,7 +1,7 @@
 ---
 title: "Troubleshooting with Flow Logs and Reachability Analyzer"
-description: "Troubleshoot AWS VPC connectivity with VPC Flow Logs, Reachability Analyzer, DNS checks, route-table review, NAT, internet gateways, endpoints, and Transit Gateway paths."
-overview: "Network troubleshooting works best when configuration evidence and packet evidence are used together. This article teaches a repeatable AWS workflow for private and public connectivity issues across app, shared services, analytics, security, Transit Gateway, and on-premises paths."
+description: "Use exact packet flows, VPC Flow Logs, Reachability Analyzer, and application evidence to diagnose AWS connectivity without guessing."
+overview: "Flow Logs record traffic AWS observed, while Reachability Analyzer models what supported AWS configuration should permit. This article combines those evidence types with DNS, routes, return paths, security controls, load balancers, NAT, Transit Gateway, and application diagnostics."
 tags: ["aws", "vpc", "flow-logs", "reachability-analyzer", "network-troubleshooting"]
 order: 8
 id: article-cloud-providers-aws-networking-connectivity-flow-logs-reachability-analyzer
@@ -10,282 +10,595 @@ aliases:
   - flow-logs-and-reachability-analyzer
   - network-troubleshooting
 ---
+
 ## Table of Contents
 
-1. [Start With One Timeout](#start-with-one-timeout)
-2. [Write the Flow Down](#write-the-flow-down)
-3. [Flow Logs Show Packet Evidence](#flow-logs-show-packet-evidence)
-4. [Reachability Analyzer Checks Configuration](#reachability-analyzer-checks-configuration)
-5. [A Repeatable Investigation](#a-repeatable-investigation)
-6. [Common AWS Network Failures](#common-aws-network-failures)
-7. [Final Runbook](#final-runbook)
-8. [References](#references)
+1. [How Do You Turn a Timeout Into a Packet?](#how-do-you-turn-a-timeout-into-a-packet)
+2. [What Must Be True for the Connection to Work?](#what-must-be-true-for-the-connection-to-work)
+3. [What Does Reachability Analyzer Prove?](#what-does-reachability-analyzer-prove)
+4. [How Do the Two Evidence Sources Work Together?](#how-do-the-two-evidence-sources-work-together)
+5. [What Is a Repeatable Investigation?](#what-is-a-repeatable-investigation)
+6. [Which Routing and Filtering Failures Are Common?](#which-routing-and-filtering-failures-are-common)
+7. [When Should You Stop Changing the Network?](#when-should-you-stop-changing-the-network)
+8. [What Is the Final Troubleshooting Runbook?](#what-is-the-final-troubleshooting-runbook)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Start With One Timeout
-<!-- section-summary: Network incidents become easier to investigate when the team reduces a broad outage report to one exact source, destination, port, and protocol. -->
+AWS connectivity is easier to diagnose when you replace the broad question "Can A talk to B?" with:
 
-The receipts company now has an app VPC, shared services VPC, analytics VPC, security VPC, and on-premises support network. One morning, the receipts API starts timing out when it calls `inventory.shared.internal`. The app team sees a timeout. The network team sees many possible causes: DNS, source routes, Transit Gateway route tables, return routes, security groups, NACLs, firewall inspection, endpoint policy, or a listener problem on the inventory service.
+> What exact packet did the client try to send, which decisions should AWS make for it, and at which decision does observed reality differ from the model?
 
-The first move is to shrink the incident to one failed flow. We will use the API task in the app VPC calling the inventory service in the shared services VPC on TCP `443`. That single flow can be checked in DNS, route tables, Flow Logs, Reachability Analyzer, security groups, and application logs.
+That distinction explains why two tools complement one another:
 
-Two AWS tools help here. **VPC Flow Logs** show packet metadata that AWS observed at a network interface, subnet, or VPC. **Reachability Analyzer** reads supported AWS network configuration and reports whether that configuration permits a path between a source and a destination. Flow Logs show what happened during traffic. Reachability Analyzer explains what the current configuration allows.
+- **VPC Flow Logs** provide evidence about traffic AWS networking actually observed.
+- **Reachability Analyzer** reasons about whether supported AWS configuration permits a hypothetical packet to travel from a source to a destination.
 
-These tools work best after the flow is named. A vague inventory timeout report leaves too much room for guessing. "`eni-0app1234567890abc` at `10.20.12.45` tried to reach `10.40.8.20` on TCP `443`" gives everyone a flow that can be checked hop by hop.
+Reachability Analyzer builds a configuration model. It does not transmit test packets through the data plane.
 
-## Write the Flow Down
-<!-- section-summary: Every investigation starts by recording the hostname, resolved IP, source ENI, source IP, destination port, and protocol. -->
+The sections below answer these questions in order:
 
-Before opening five AWS console tabs, write the flow down. DNS names and chat messages are useful hints, but troubleshooting needs the actual source and destination that the network sees.
+1. **How Do You Turn a Timeout Into a Packet?**
+2. **What Must Be True for the Connection to Work?**
+3. **What Does Reachability Analyzer Prove?**
+4. **How Do the Two Evidence Sources Work Together?**
+5. **What Is a Repeatable Investigation?**
+6. **Which Routing and Filtering Failures Are Common?**
+7. **When Should You Stop Changing the Network?**
+8. **What Is the Final Troubleshooting Runbook?**
 
-For the inventory incident, the evidence sheet can look like this:
+## How Do You Turn a Timeout Into a Packet?
+<!-- section-summary: A useful incident statement records the exact source and destination addresses, source and destination ports, and protocol. -->
 
-| Item | Example |
-| --- | --- |
-| Source runtime | ECS task in app private subnet |
-| Source ENI | `eni-0app1234567890abc` |
-| Source IP | `10.20.12.45` |
-| Hostname | `inventory.shared.internal` |
-| Resolved IP | `10.40.8.20` |
-| Destination port | `443` |
-| Protocol | TCP |
-| Expected route path | App VPC to Transit Gateway to shared services VPC |
+Suppose an application on `10.0.1.25` needs TCP `443` on `10.0.8.40`. AWS networking does not reason about a product label such as "frontend calls payments." At the IP layer, it sees values like:
 
-The source port will be temporary, often in an ephemeral range such as `51544`. Flow Logs record it, and stateless NACLs may need to allow return traffic to that ephemeral port range. Security groups track connection state, while NACLs evaluate inbound and outbound rules independently.
-
-The DNS check should come from the workload path:
-
-```bash
-getent hosts inventory.shared.internal
+```text
+Source IP:        10.0.1.25
+Source port:      49152
+Destination IP:   10.0.8.40
+Destination port: 443
+Protocol:         TCP
 ```
 
-Example output:
+Together, these values form the **5-tuple**:
 
-```console
-10.40.8.20 inventory.shared.internal
+```text
+(source IP, destination IP,
+ source port, destination port,
+ protocol)
 ```
-
-This output tells you the app sees the intended private inventory address. The next action is route and packet evidence. If the output returned a public address, an old private address, or no answer, the next action would be Route 53 private hosted zones, Resolver rules, endpoint private DNS, or the application resolver path.
-
-For containers and serverless workloads, the closest test usually wins. A bastion in the same VPC can help, but it may use a different subnet, security group, DHCP option set, or resolver path. When the test location differs from the failing runtime, write that difference down so later evidence stays honest.
 
 ![The five-tuple view shows the exact source, destination, ports, and protocol that should be written down before opening every AWS console page](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-flow-logs-reachability-analyzer/five-tuple-first.png)
 
-*The five-tuple view shows the exact source, destination, ports, and protocol that should be written down before opening every AWS console page.*
+*An exact tuple gives route tables, policies, logs, and analyzers one consistent question to answer.*
 
+Different AWS components use different parts of that tuple. A route table selects a next hop primarily from the destination IP. A security group compares protocol, port, and source or destination permission. A NACL evaluates packet fields at a subnet boundary. NAT can change source address and port. A load balancer terminates one connection and starts another toward a target.
 
-## Flow Logs Show Packet Evidence
-<!-- section-summary: VPC Flow Logs show packet metadata such as addresses, ports, action, and log status after traffic reaches the VPC network layer. -->
+Before opening AWS consoles, write the exact flow:
 
-**VPC Flow Logs** capture metadata about IP traffic going to and from network interfaces, subnets, or VPCs. They can publish to CloudWatch Logs, S3, or Kinesis Data Firehose. A record can include source address, destination address, ports, protocol, packet count, byte count, action, and log status.
+```text
+SOURCE
+Resource: i-client
+IP:       10.0.1.25
 
-The two fields people look at first are `action` and `logStatus`. `ACCEPT` means the VPC packet layer accepted the packet. The application can still fail after that because TLS, listener health, credentials, or service logic can reject the request. `REJECT` means the VPC packet layer rejected the packet, commonly because of security groups or NACLs. `SKIPDATA` means AWS skipped some records during the capture interval, so the evidence has a gap.
-
-A CloudWatch Logs Insights query for the inventory destination can look like this:
-
-```sql
-fields @timestamp, interfaceId, srcAddr, srcPort, dstAddr, dstPort, protocol, action, logStatus
-| filter dstAddr = '10.40.8.20' and dstPort = 443
-| sort @timestamp desc
-| limit 20
+DESTINATION
+Resource: i-server
+IP:       10.0.8.40
+Port:     443
+Protocol: TCP
 ```
 
-This query asks CloudWatch Logs for recent records where the destination is the inventory IP and the destination port is HTTPS. It includes the interface ID so you can tell whether the record came from the source ENI, destination ENI, NAT, firewall, or another network interface.
+If the application starts with a hostname, resolve it from the failing runtime. Do not assume the name maps to the address in your diagram.
 
-Healthy request records might look like this in Logs Insights:
+Then write the expected packet path. A same-VPC path might be:
 
-| @timestamp | interfaceId | srcAddr | srcPort | dstAddr | dstPort | protocol | action | logStatus |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-06-27 10:20:18 | `eni-0app1234567890abc` | `10.20.12.45` | `51544` | `10.40.8.20` | `443` | `6` | `ACCEPT` | `OK` |
-| 2026-06-27 10:20:18 | `eni-0inv9876543210def` | `10.40.8.20` | `443` | `10.20.12.45` | `51544` | `6` | `ACCEPT` | `OK` |
-
-Protocol `6` means TCP. These two rows show request and response packet metadata accepted by the VPC layer. If the application still times out with evidence like this, the next action moves away from basic network filtering and toward inventory listener health, TLS negotiation, target group health, firewall inspection state, or application logs.
-
-A rejected destination record points to a different next action:
-
-| @timestamp | interfaceId | srcAddr | srcPort | dstAddr | dstPort | protocol | action | logStatus |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-06-27 10:22:41 | `eni-0inv9876543210def` | `10.20.12.45` | `51602` | `10.40.8.20` | `443` | `6` | `REJECT` | `OK` |
-
-This row says the packet reached the inventory ENI and the VPC layer rejected it there. The next action is the destination security group and destination subnet NACL. If the source record is `ACCEPT` and no destination record appears, the next action is route path, Transit Gateway routing, inspection VPC logging coverage, or whether Flow Logs exist on the destination side.
-
-Flow Logs show metadata rather than payload. They can tell you that TCP `443` was accepted. HTTP request paths, TLS certificate matching, IAM authorization, and application `500` responses need service logs and application evidence.
-
-## Reachability Analyzer Checks Configuration
-<!-- section-summary: Reachability Analyzer checks supported AWS network configuration and reports the path or blocking component for a specific source and destination. -->
-
-**Reachability Analyzer** analyzes AWS network configuration for a source, destination, protocol, and port. It can show a hop-by-hop reachable path or explain which component blocks the path. It is useful when traffic is hard to generate, intermittent, or missing from Flow Logs.
-
-For the inventory incident, create a path from the API task ENI to the inventory service ENI on TCP `443`. The source and destination can be ENIs, instances, gateways, load balancers, Transit Gateway attachments, and other supported resources depending on the path. The more precise the resources, the more useful the result.
-
-A CLI flow has two steps. First, define the path:
-
-```bash
-aws ec2 create-network-insights-path \
-  --source eni-0app1234567890abc \
-  --destination eni-0inv9876543210def \
-  --protocol tcp \
-  --destination-port 443 \
-  --region eu-west-2
+```text
+client ENI → source subnet → local VPC routing
+           → destination subnet → server ENI
 ```
 
-```json
-{
-  "NetworkInsightsPath": {
-    "NetworkInsightsPathId": "nip-0123456789abcdef0",
-    "Source": "eni-0app1234567890abc",
-    "Destination": "eni-0inv9876543210def",
-    "Protocol": "tcp",
-    "DestinationPort": 443
-  }
-}
+A cross-VPC path might be:
+
+```text
+client ENI → source subnet route table
+           → TGW attachment → TGW route table
+           → destination attachment → destination subnet
+           → server ENI
 ```
 
-The path ID is the reusable definition of the question. It says "can this source ENI reach this destination ENI on TCP `443`?" Second, start an analysis for that path:
+This is the **expected packet story**. It is a logical troubleshooting model, not a claim that physical appliances are lined up in exactly that visual order.
 
-```bash
-aws ec2 start-network-insights-analysis \
-  --network-insights-path-id nip-0123456789abcdef0 \
-  --region eu-west-2
+## What Must Be True for the Connection to Work?
+<!-- section-summary: DNS, routes, filtering, intermediate systems, destination state, and an independently valid return path must all agree. -->
+
+A successful connection can depend on many independent conditions:
+
+```text
+name
+  ↓
+address
+  ↓
+route
+  ↓
+network policy
+  ↓
+intermediate devices
+  ↓
+destination policy
+  ↓
+destination host
+  ↓
+application
+  ↓
+return path
 ```
 
-```json
-{
-  "NetworkInsightsAnalysis": {
-    "NetworkInsightsAnalysisId": "nia-0abc1111222233334",
-    "NetworkInsightsPathId": "nip-0123456789abcdef0",
-    "Status": "running"
-  }
-}
+Failure anywhere can appear as `connection timed out`. The symptom does not inherently mean a security-group problem. It can mean a wrong DNS answer, wrong address or port, missing or misassociated route, SG or NACL rejection, NAT issue, TGW route error, unhealthy load-balancer target, host firewall, closed listener, overload, or broken return path.
+
+TCP requires both directions. The client sends:
+
+```text
+10.0.1.25:49152 → 10.0.8.40:443  SYN
 ```
 
-After the analysis finishes, inspect the result:
+The server must return:
 
-```bash
-aws ec2 describe-network-insights-analyses \
-  --network-insights-analysis-ids nia-0abc1111222233334 \
-  --region eu-west-2 \
-  --query 'NetworkInsightsAnalyses[0].{Status:Status,Found:NetworkPathFound,Explanations:Explanations[*].ExplanationCode}'
+```text
+10.0.8.40:443 → 10.0.1.25:49152  SYN-ACK
 ```
 
-```json
-{
-  "Status": "succeeded",
-  "Found": false,
-  "Explanations": [
-    "ENI_SG_RULES_MISMATCH"
-  ]
-}
+The client completes:
+
+```text
+10.0.1.25:49152 → 10.0.8.40:443  ACK
 ```
 
-This result says the analysis completed and did not find a permitted path. `ENI_SG_RULES_MISMATCH` points to security group rules on one of the ENIs. The next action is comparing the app source and inventory destination security groups for TCP `443`, then rerunning the same analysis after the rule change.
+Connectivity is `A → B` **and** `B → A`.
 
-A reachable result drives a different next action:
+Security groups are stateful, so they recognize return traffic for an allowed connection. NACLs are stateless, so the reply independently needs a matching direction and often an ephemeral destination-port rule.
 
-```json
-{
-  "Status": "succeeded",
-  "Found": true,
-  "Explanations": []
-}
+A NACL can allow inbound TCP `443` yet block the server response to client port `49152`. The forward packet arrives, the reply disappears, and the client reports a timeout. This is why an investigation must describe a conversation, not only the server destination.
+
+### What Do VPC Flow Logs Prove?
+<!-- section-summary: Flow Logs provide aggregated metadata about observed flows and their ACCEPT or REJECT result at a logging point, not packet payloads or application success. -->
+
+Imagine standing beside a VPC interface and recording:
+
+```text
+AWS observed traffic from A to B
+using this protocol and these ports
+during this interval
+and accepted or rejected it here.
 ```
 
-This result says the supported AWS network configuration permits the path. If users still see a timeout, check live packet evidence, service listener health, target group health, TLS, application logs, and any appliances or systems outside Reachability Analyzer's supported modeling for your path.
+That is approximately the role of a VPC Flow Log.
 
-The pairing is powerful. Flow Logs can show `REJECT` while Reachability Analyzer names the blocking security group. Reachability Analyzer can say a path is reachable while Flow Logs show no traffic, which points back to DNS, application behavior, missing traffic generation, or logging scope.
+It is not a packet-capture tool such as Wireshark. Flow Logs normally do not contain HTTP paths, request bodies, authorization headers, or TLS payloads. They provide flow metadata such as source and destination addresses, ports, protocol, packet and byte counts, times, interface information, and action. Custom formats can include richer metadata.
+
+A conceptual record is:
+
+```text
+srcaddr  = 10.0.1.25
+dstaddr  = 10.0.8.40
+srcport  = 49152
+dstport  = 443
+protocol = 6
+action   = ACCEPT
+```
+
+Protocol `6` represents TCP.
+
+`ACCEPT` establishes that AWS networking accepted the observed flow at the point represented by the record. It does not establish that:
+
+- the complete end-to-end conversation succeeded;
+- a process was listening on port `443`;
+- TLS negotiation succeeded;
+- the application returned HTTP `200`; or
+- the application processed the request correctly.
+
+A packet can reach a host that has no listener and receive a TCP reset. Network policy accepted the flow while the website still failed.
+
+`REJECT` narrows the investigation more strongly:
+
+```text
+10.0.1.25:49152 → 10.0.8.40:443 REJECT
+```
+
+AWS rejected that traffic at the logged VPC layer. Security groups and NACLs are common causes, although other conditions can also produce rejected records. Inspect the exact source, destination, port, protocol, direction, and interface.
+
+The exact source matters because the architecture diagram can differ from the packet. A proxy, load balancer, NAT device, or firewall can make the destination observe a different source than the engineer expected.
+
+Flow Logs are aggregated, delayed, and delivered on a best-effort basis. Records can be skipped. Some traffic, including certain AWS-provided DNS, DHCP, instance-metadata, and other special traffic, is excluded.
+
+Therefore no log entry does not prove no packet existed. It can mean the application sent nothing, DNS chose another address, the wrong ENI or time was searched, the traffic type was excluded, the record has not arrived, delivery skipped it, or logging was not enabled at the relevant scope.
+
+> Flow Logs are evidence, not omniscience.
+
+## What Does Reachability Analyzer Prove?
+<!-- section-summary: Reachability Analyzer performs static reasoning over supported AWS network configuration for a hypothetical source, destination, protocol, and port. -->
+
+Reachability Analyzer begins with a different question:
+
+> Given current AWS configuration, should this modeled flow have a valid path?
+
+Specify a source, destination, protocol, and destination port. The analyzer builds a model of supported AWS network components and evaluates the constraints along the path. It does not send packets or inspect the live data plane.
+
+Think of it as a compiler for the network design. Connectivity requires constraints such as:
+
+```text
+route exists
+AND source policy permits the flow
+AND intermediate path exists
+AND destination policy permits the flow
+AND required gateway and attachment configuration is valid
+```
+
+When a constraint fails, the analyzer tries to identify the blocking component, such as a route table, security group, NACL, NAT gateway, load balancer, Transit Gateway, Network Firewall, or peering resource within its supported model.
+
+```text
+source
+  ↓ route table
+Transit Gateway
+  X missing TGW route
+destination
+```
+
+This can replace a long manual search through several route tables with an explanation that the modeled path stops at that route.
+
+`REACHABLE` means the supported AWS configuration is compatible with the specified connection. It does not prove that the application runs, the operating-system firewall permits it, the process listens, the service is healthy, TLS is correct, DNS returned the modeled destination, or no transient data-plane problem exists.
+
+Reachability Analyzer also does not account for load-balancer target health. A network path to the load balancer can be modeled as reachable while every registered target is unhealthy.
+
+There is no contradiction when Reachability Analyzer says reachable and `curl` fails. The tools are making different claims.
+
+## How Do the Two Evidence Sources Work Together?
+<!-- section-summary: Analyzer output describes configuration implications, while Flow Logs describe observed traffic, so their combinations eliminate different hypotheses. -->
+
+The tools answer complementary questions:
+
+| Question | Best evidence |
+|---|---|
+| Should supported AWS configuration permit the path? | Reachability Analyzer |
+| Which modeled component blocks it? | Reachability Analyzer |
+| Did AWS observe traffic at a logging point? | Flow Logs |
+| Was that observed flow accepted or rejected? | Flow Logs |
+| Did DNS return the expected destination? | DNS tools and Resolver evidence |
+| Was a service listening? | Host and service diagnostics |
+| Did TLS or HTTP succeed? | Client, TLS, access, and application logs |
+
+The important question is not which one tool to choose. It is which uncertainty you are removing.
+
+### Not reachable
+
+If Reachability Analyzer reports not reachable, focus on the modeled AWS configuration. Follow its blocking explanation: missing route, SG mismatch, NACL restriction, TGW route, peering, or firewall policy.
+
+### Reachable plus REJECT
+
+First prove that the analyzer and log describe the same packet. Compare source and destination IPs, ports, protocol, direction, time, and actual ENIs. One may model `frontend → backend` while the log shows a different destination produced by DNS or a different connection made by a load balancer. Unsupported or dynamic aspects can also create differences.
+
+Compare exact tuples, not vague service labels.
+
+### Reachable plus ACCEPT
+
+Basic AWS routing and filtering become a weaker hypothesis. Move upward: listener, host firewall, target health, TLS, HTTP, application behavior, and dependencies.
 
 ![The evidence pair view shows how Flow Logs and Reachability Analyzer answer different parts of the same connectivity question](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-flow-logs-reachability-analyzer/evidence-pair-workflow.png)
 
-*The evidence pair view shows how Flow Logs and Reachability Analyzer answer different parts of the same connectivity question.*
+*Configuration analysis predicts a supported path; observed flow evidence tests whether a matching packet appeared and how AWS treated it.*
 
+### Reachable with no Flow Logs
 
-## A Repeatable Investigation
-<!-- section-summary: A repeatable investigation separates DNS, source route, hub route, return route, packet filters, endpoint policy, and service health. -->
+Ask whether the client actually sent traffic. Verify DNS, application configuration, environment, destination, logging scope, excluded traffic, and delivery timing. This combination often reveals that the presumed network request never occurred or went somewhere else.
 
-Use the same order each time. Start with the name and resolved IP. Then find the source ENI and source subnet. Inspect the source subnet route table and match the destination IP to the best route. Inspect the Transit Gateway, peering, endpoint, NAT, or internet gateway path if the route points to one. Then inspect the return path from destination back to source.
+## What Is a Repeatable Investigation?
+<!-- section-summary: A controlled test compares one exact packet prediction with static analysis and observed flow evidence before moving to higher layers. -->
 
-A source route table command can look like this:
+Suppose users report, "The frontend cannot reach the API." Turn it into:
+
+```text
+source ENI 10.0.1.25
+must establish TCP
+to destination 10.0.8.40
+port 443
+```
+
+Then follow a repeatable sequence.
+
+### Confirm the intended tuple
+
+Identify source, destination, protocol, and destination port. Resolve the hostname from the source runtime. Do not assume `api.internal.example.com` means the IP in a document.
+
+### Write the expected path
+
+For example:
+
+```text
+frontend ENI
+  → frontend subnet route
+  → TGW attachment and TGW table
+  → API VPC attachment
+  → API subnet and ENI
+```
+
+Include the response path.
+
+### Analyze the configuration
+
+Ask Reachability Analyzer whether the supported AWS model allows this exact source, destination, protocol, and port. If it reports a blocker such as no route, subnet ACL restriction, or security-group mismatch, fix that component and analyze again.
+
+### Generate controlled traffic
+
+Run an appropriate test from the actual or equivalent source:
 
 ```bash
-aws ec2 describe-route-tables \
-  --filters Name=association.subnet-id,Values=subnet-0appprivate \
-  --region eu-west-2 \
-  --query 'RouteTables[0].Routes[*].{Destination:DestinationCidrBlock,PrefixList:DestinationPrefixListId,Gateway:GatewayId,Nat:NatGatewayId,Tgw:TransitGatewayId,Endpoint:VpcEndpointId,State:State}'
+curl -v https://api.internal.example.com
 ```
 
-```json
-[
-  {
-    "Destination": "10.40.0.0/16",
-    "PrefixList": null,
-    "Gateway": null,
-    "Nat": null,
-    "Tgw": "tgw-0123456789abcdef0",
-    "Endpoint": null,
-    "State": "active"
-  },
-  {
-    "Destination": "0.0.0.0/0",
-    "PrefixList": null,
-    "Gateway": null,
-    "Nat": "nat-0egress111111111",
-    "Tgw": null,
-    "Endpoint": null,
-    "State": "active"
-  }
-]
+or:
+
+```bash
+nc -vz 10.0.8.40 443
 ```
 
-The destination IP `10.40.8.20` fits `10.40.0.0/16`, so the next hop is the Transit Gateway. The `0.0.0.0/0` NAT route is less specific, so this private shared services flow should use the TGW route. The next action is the source TGW attachment association and TGW route table entry for `10.40.0.0/16`.
+Record the time so the flow can be correlated.
 
-For endpoint paths, DNS and endpoint policy join the route review. A Secrets Manager endpoint can have healthy ENIs while the endpoint policy blocks the task role's action. An S3 gateway endpoint can exist while the app subnet route table lacks the endpoint association. A service error such as `AccessDeniedException` points to policy layers; a timeout points to route, DNS, security group, NACL, endpoint ENI, or listener behavior.
+### Search the logs
 
-For NAT and internet gateway paths, include the edge resource. A private subnet egress issue needs the private subnet route, NAT gateway state, NAT public subnet route, internet gateway attachment, security group egress, NACLs, and any external allowlist. An internet-facing load balancer issue needs public DNS, listener config, target group health, public subnet routes, security groups, NACLs, and application health.
+Use the exact tuple or as much of it as known:
 
-For Transit Gateway paths, add the hub route check. The source VPC route table must point to the Transit Gateway. The source attachment must be associated with the TGW route table you inspect. That TGW route table must send the destination CIDR to the destination or inspection attachment. The destination VPC route table must return traffic to the source CIDR.
+```text
+srcaddr = 10.0.1.25
+dstaddr = 10.0.8.40
+dstport = 443
+protocol = TCP
+```
 
-## Common AWS Network Failures
-<!-- section-summary: Common AWS connectivity failures come from wrong DNS answers, missing return routes, security group mismatches, stale CIDRs, and overreading ACCEPT records. -->
+Ask whether the request appears, where it appears, whether the action is ACCEPT or REJECT, and whether response traffic appears.
 
-Wrong DNS answers are common. The app asks for the right name, but the VPC resolver returns a public address because endpoint private DNS is off, a private hosted zone lacks the VPC association, or a forwarding rule sends the query to the wrong DNS server. DNS evidence comes before route table edits.
+### Move to the correct layer
 
-Missing return routes are common in peering, Transit Gateway, VPN, Direct Connect, and inspection designs. The request route exists, and the response route points somewhere else or nowhere useful. Flow Logs may show request records without matching response records. The next action is the destination subnet route table, TGW return route table, VPN route, Direct Connect advertisement, or firewall return path.
+If AWS configuration permits the path and accepted traffic arrives, stop broadening VPC network policy. Inspect the host firewall, listener, load-balancer target health, TLS, HTTP, application logs, and dependencies.
 
-Security group and NACL mismatches often show up as Flow Log `REJECT` records. NACL problems frequently involve ephemeral ports because NACLs are stateless. Security group problems often involve a missing inbound rule on the destination or a missing egress rule on locked-down sources. The next action is matching the Flow Log interface ID to the ENI, then reading the rules attached to that ENI and subnet.
+This prevents troubleshooting changes from expanding access without addressing the real failure.
 
-Accepted packets can still end in failure. The listener might be closed. TLS might fail. The database might reject credentials. The application might have no healthy targets. Treat `ACCEPT` as network-layer evidence, then continue into service-level checks instead of stopping the investigation early.
+## Which Routing and Filtering Failures Are Common?
+<!-- section-summary: Common failures include SG and NACL mismatches, wrong route associations, more-specific routes, mistaken NAT expectations, and labels that do not match configuration. -->
 
-Transit Gateway association confusion is another common failure. Teams sometimes inspect a TGW route table that contains the correct destination route while the source attachment uses a different associated route table. The next action is always the source attachment association, then the route search inside that exact TGW route table.
+### Security-group mismatch
 
-Flow Log coverage can also mislead responders. Flow Logs may exist on the app VPC while shared services VPC lacks destination logging. The next action is checking Flow Log scope before using missing records as evidence.
+The client uses `sg-client`, but the server group has no matching inbound TCP `443` permission. Reachability Analyzer can identify the configuration mismatch, while a destination Flow Log can show `REJECT`. Together they form a high-confidence diagnosis.
 
-## Final Runbook
-<!-- section-summary: The final runbook gives a short investigation pattern for VPC, endpoint, NAT, internet, hybrid, and TGW incidents. -->
+### NACL return traffic
 
-Use this runbook for each incident:
+The inbound NACL permits client ephemeral port `49152 → server 443`, but its outbound side does not permit `server 443 → client 49152`. The SYN arrives, the SYN-ACK is blocked, and the client waits. Checking only "443 is allowed" misses the response's ephemeral destination port.
 
-1. Name one flow with source runtime, source ENI, source IP, hostname, resolved IP, destination port, and protocol.
-2. Confirm DNS from the same runtime path as the workload.
-3. Find the source subnet route table and match the destination IP to the best route.
-4. Check the destination return route, including Transit Gateway, peering, VPN, Direct Connect, or inspection route tables.
-5. Check security groups and NACLs in both directions.
-6. Check endpoint policy, NAT gateway state, internet gateway attachment, firewall policy, or load balancer target health when those services sit in the path.
-7. Query Flow Logs for `ACCEPT`, `REJECT`, and `SKIPDATA` evidence on the relevant ENIs or subnets.
-8. Run Reachability Analyzer for configuration evidence on the same source, destination, protocol, and port.
-9. When the network path is accepted, continue to listener health, TLS, credentials, target health, and application logs.
+### Wrong route-table association
 
-Record the final fix with the evidence. A useful incident note might say: "API task `eni-0app1234567890abc` at `10.20.12.45` to inventory `10.40.8.20:443` failed because `tgw-rtb-app` lacked a route to `10.40.0.0/16`. Added static route to the shared services attachment, verified Reachability Analyzer found a path, and confirmed Flow Logs `ACCEPT` in both directions."
+A route table contains `10.20.0.0/16 → TGW`, but the source subnet uses a different table or the VPC main table. Inspecting a correct-looking object is not enough. Prove that the source traffic actually uses it.
 
-That note helps the next responder. It names the flow, the failed hop, the exact fix, and the verification evidence. After one flow is understood, repeat the same steps for the next timeout instead of making broad route or security changes across the network.
+### A more-specific route wins
+
+Suppose:
+
+```text
+10.0.0.0/8   → Transit Gateway
+10.20.0.0/16 → VPC peering
+```
+
+Traffic to `10.20.5.10` selects the `/16` peering route. Ask which route wins for the exact destination, not whether any broad route appears relevant.
+
+### NAT confusion
+
+The normal private egress path is:
+
+```text
+private EC2 → private default route → NAT gateway
+            → public subnet route → internet gateway → internet
+```
+
+NAT supports connections initiated outward and their responses. It does not publish the private EC2 instance for arbitrary inbound connections.
+
+### "Public subnet" misunderstanding
+
+A name such as `public-subnet` has no network effect. For IPv4, the subnet normally needs `0.0.0.0/0 → IGW`, and the resource needs suitable public addressing and security. Follow the configuration, not the label.
+
+### How Do Load Balancer and Transit Paths Change the Flow?
+<!-- section-summary: Load balancers create separate client and target connections, while Transit Gateway adds independent VPC and TGW routing decisions in both directions. -->
+
+A load balancer splits one apparent application path into at least two network connections:
+
+```text
+Connection 1: client → load balancer
+Connection 2: load balancer → target
+```
+
+The first can work while the second fails. Troubleshoot the listener, listener rules, target group, target registration, target health, load-balancer security group, target security group, NACLs, application listener, and health-check path and port.
+
+Treat the two tuples independently. The client might connect to the load balancer's address on `443`, while the load balancer opens a new connection from one of its network interfaces to a target on `8080`. A Flow Log for the second connection will not necessarily show the original client address or original destination port. Comparing that target record with a Reachability Analyzer path that models the client directly to the target would compare two different questions.
+
+Target health is also active evidence. A listener can accept connections while the target group contains no healthy destination. Confirm that the registered target uses the expected address and port, that its process listens there, and that the health-check protocol, port, and path match the service. The load balancer and target security groups must allow the load-balancer-to-target connection, while NACLs must also permit the return ephemeral ports.
+
+Reachability Analyzer does not account for registered target health, so a modeled path does not replace load-balancer health diagnostics.
+
+Transit Gateway adds two routing decisions per direction:
+
+```text
+VPC A route table
+  → TGW attachment A
+  → TGW route table associated with A
+  → attachment B
+  → VPC B delivery
+```
+
+A route in VPC A does not prove TGW knows the destination. A correct TGW route does not prove VPC B has a return route. The response independently uses VPC B's route and the TGW table associated with attachment B.
+
+Reachability Analyzer is valuable for supported TGW paths because it can expose route and attachment blockers across the modeled sequence. Flow evidence still reveals whether the live packet followed the expected addresses and interfaces.
+
+The same separation helps with other middleboxes. NAT can translate the source tuple, a firewall can create an inspected path whose return must remain symmetric, and a proxy can establish a new connection on behalf of the client. At every boundary, rewrite the expected source, destination, and ports as AWS will observe them. A diagram arrow that says `app → internet` or `VPC A → VPC B` is not precise enough to correlate with a log record.
+
+## When Should You Stop Changing the Network?
+<!-- section-summary: Once configuration analysis and accepted traffic support the path, investigation should move up through host, transport, TLS, HTTP, application, and dependency layers. -->
+
+Suppose the evidence says:
+
+```text
+Reachability Analyzer → REACHABLE
+Flow Logs             → ACCEPT
+destination host      → observed connection
+```
+
+Yet the user still gets an error. Basic VPC networking is now a weaker cause.
+
+The failure may be:
+
+```text
+HTTP 500 or 503
+TLS certificate or handshake error
+application timeout
+database timeout
+bad credentials
+crashed process
+CPU or memory starvation
+wrong virtual host
+wrong health-check path
+```
+
+Progress up the stack:
+
+```text
+network → transport → TLS → HTTP → application → dependencies
+```
+
+Continuing to modify routes or security groups can make the system less secure without fixing the service. A good debugger knows when the evidence has cleared one layer.
+
+The deeper distinction is between configuration and observation.
+
+Reachability Analyzer provides **declarative knowledge**: the blueprint says this traffic should be possible under supported AWS configuration. Flow Logs provide **empirical knowledge**: sensors observed this traffic and recorded how the VPC layer treated it. Application logs describe what happened after delivery.
+
+Predict before observing. Write what you expect to see:
+
+```text
+source ENI:
+10.0.1.25 → 10.0.8.40:443 ACCEPT
+
+destination ENI:
+same request ACCEPT
+
+return:
+10.0.8.40:443 → 10.0.1.25:49152 ACCEPT
+```
+
+Then compare with reality. If the log shows `10.0.9.17` as the destination, the client is not calling the server you modeled. DNS or application configuration has produced a new hypothesis.
+
+This is first-principles troubleshooting:
+
+```text
+model → prediction → controlled experiment
+      → observation → comparison → new hypothesis
+```
+
+## What Is the Final Troubleshooting Runbook?
+<!-- section-summary: The final runbook moves from one exact flow through configuration analysis and observed evidence, then deliberately hands off to higher layers. -->
+
+When someone says, "A cannot connect to B," use this sequence:
+
+1. **Turn the complaint into a packet.** Identify the real source resource and IP, destination resource and IP, protocol, destination port, and resolved hostname.
+2. **Write the expected path and return.** Include source and destination subnets, route tables, peering or TGW, NAT, firewalls, load balancers, destination ENI, and reverse routing.
+3. **Run Reachability Analyzer.** Model the same tuple. If not reachable, investigate the reported supported configuration blocker. Remember that this is analysis, not test traffic.
+4. **Generate controlled traffic.** Make one known attempt from the source and record its time.
+5. **Inspect Flow Logs.** Search for the tuple. REJECT focuses on network policy or path. ACCEPT means traffic passed that observation point, not that the application succeeded. Account for aggregation, delay, best-effort delivery, and exclusions.
+6. **Check both directions.** Return routing and stateless NACLs are especially important for TGW, VPN, and middlebox paths.
+7. **Move upward when the network checks out.** Inspect host policy, listening processes, load-balancer target health, TLS, HTTP, application behavior, and dependencies.
 
 ![The runbook summary turns DNS, routes, Flow Logs, Reachability Analyzer, security controls, and service health into a repeatable debugging path](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-flow-logs-reachability-analyzer/aws-connectivity-runbook.png)
 
-*The runbook summary turns DNS, routes, Flow Logs, Reachability Analyzer, security controls, and service health into a repeatable debugging path.*
+*The runbook uses configuration evidence to predict the path, observed flow evidence to test it, and application diagnostics after delivery.*
 
+The compact decision is:
+
+```text
+What should happen?
+  ↓ Reachability Analyzer
+not reachable → fix the modeled AWS configuration
+reachable     → generate controlled traffic
+                  ↓ Flow Logs
+               REJECT → investigate network policy/path
+               ACCEPT → investigate host, TLS, and application
+               no log → prove traffic, tuple, scope, and exclusions
+```
+
+Reachability Analyzer tells you what the supported configuration implies. Flow Logs tell you what AWS networking observed. Application diagnostics tell you what happened after the traffic arrived. Keeping those claims separate turns networking incidents into hypothesis elimination rather than guessing.
+
+## Check Your Answers
+<!-- section-summary: Review the tuple, evidence, configuration, return-path, middlebox, and handoff concepts. -->
+
+:::expand[How Do You Turn a Timeout Into a Packet?]{kind="recap"}
+A useful incident statement records the exact source and destination addresses, source and destination ports, and protocol.
+
+It is source IP, destination IP, source port, destination port, and protocol. Writing it turns a vague service complaint into one network flow that routes, policies, logs, and analysis can compare.
+
+A written expected tuple and forward/return observation gives reality something precise to contradict. A different destination, source, port, or direction immediately produces a better hypothesis than random rule changes.
+:::
+
+:::expand[What Must Be True for the Connection to Work?]{kind="recap"}
+DNS, routes, filtering, intermediate systems, destination state, and an independently valid return path must all agree.
+
+The source VPC route must choose TGW, and the source attachment's associated TGW table must choose the next attachment. The destination independently needs VPC and TGW return routes.
+
+Flow Logs provide aggregated metadata about observed flows and their ACCEPT or REJECT result at a logging point, not packet payloads or application success.
+
+AWS networking accepted that observed flow at the logging point. It does not prove end-to-end completion, a listening process, healthy targets, successful TLS, or an application response.
+
+It is strong evidence that the observed VPC packet path was rejected, commonly by security-group or NACL conditions. Inspect the exact tuple, direction, interface, and attached controls rather than the service label.
+
+The wrong ENI or time may have been searched, DNS may have selected another destination, logging may be absent, delivery may be delayed or skipped, and some traffic categories are excluded.
+:::
+
+:::expand[What Does Reachability Analyzer Prove?]{kind="recap"}
+Reachability Analyzer performs static reasoning over supported AWS network configuration for a hypothetical source, destination, protocol, and port.
+
+It statically models supported AWS networking configuration for a hypothetical source, destination, protocol, and port. It reports whether a path exists in that model and can identify a blocking component without sending data-plane packets.
+
+First prove both pieces of evidence describe the same tuple, direction, destination ENI, and time. Service labels can hide different connections or addresses, and unsupported dynamic behavior can differ from the static model.
+:::
+
+:::expand[How Do the Two Evidence Sources Work Together?]{kind="recap"}
+Analyzer output describes configuration implications, while Flow Logs describe observed traffic, so their combinations eliminate different hypotheses.
+:::
+
+:::expand[What Is a Repeatable Investigation?]{kind="recap"}
+A controlled test compares one exact packet prediction with static analysis and observed flow evidence before moving to higher layers.
+:::
+
+:::expand[Which Routing and Filtering Failures Are Common?]{kind="recap"}
+Common failures include SG and NACL mismatches, wrong route associations, more-specific routes, mistaken NAT expectations, and labels that do not match configuration.
+
+Load balancers create separate client and target connections, while Transit Gateway adds independent VPC and TGW routing decisions in both directions.
+
+TCP needs packets in both directions. Return traffic can select different VPC and TGW routes or be blocked by stateless NACL ephemeral-port rules even when the first packet reaches the server.
+
+The AWS configuration can permit the path while a host firewall, closed listener, unhealthy load-balancer target, TLS problem, application overload, or other unsupported or runtime condition causes failure.
+
+It separates client-to-load-balancer and load-balancer-to-target into distinct connections, each with its own addresses, ports, security rules, health, and evidence.
+:::
+
+:::expand[When Should You Stop Changing the Network?]{kind="recap"}
+Once configuration analysis and accepted traffic support the path, investigation should move up through host, transport, TLS, HTTP, application, and dependency layers.
+
+When the supported path is reachable and matching traffic is accepted and arrives, move to host, transport, TLS, HTTP, application, and dependency evidence. Continued network widening is unlikely to fix those layers.
+:::
+
+:::expand[What Is the Final Troubleshooting Runbook?]{kind="recap"}
+The final runbook moves from one exact flow through configuration analysis and observed evidence, then deliberately hands off to higher layers.
+:::
 
 ## References
 
-- [Amazon VPC documentation: VPC Flow Logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)
-- [Amazon VPC documentation: Flow log records](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html)
-- [Amazon VPC documentation: Reachability Analyzer](https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html)
-- [Amazon VPC documentation: Reachability Analyzer explanation codes](https://docs.aws.amazon.com/vpc/latest/reachability/explanation-codes.html)
-- [AWS Transit Gateway documentation](https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html)
+- [How Reachability Analyzer works](https://docs.aws.amazon.com/vpc/latest/reachability/how-reachability-analyzer-works.html) - Explains static configuration analysis, supported components, and limitations.
+- [Route priority](https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html) - Documents longest-prefix route selection.
+- [Network ACLs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html) - Explains stateful security groups, stateless NACLs, and return traffic.
+- [Flow Log records](https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html) - Defines flow metadata fields and ACCEPT or REJECT actions.
+- [Flow Log limitations](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-limitations.html) - Documents aggregation, delivery delay, best-effort behavior, and exclusions.
+- [Network Load Balancer troubleshooting](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-troubleshooting.html) - Covers target listeners, health checks, security groups, and NACL issues.
+- [Reachability Analyzer explanation codes](https://docs.aws.amazon.com/vpc/latest/reachability/explanation-codes.html) - Defines blocker explanations returned by analyses.
+- [Create a VPC route table](https://docs.aws.amazon.com/vpc/latest/userguide/create-vpc-route-table.html) - Covers explicit and main route-table associations.
+- [Routing options](https://docs.aws.amazon.com/vpc/latest/userguide/route-table-options.html) - Documents IGW and NAT gateway paths.

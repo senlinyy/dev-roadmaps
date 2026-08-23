@@ -1,308 +1,498 @@
 ---
 title: "Services"
-description: "Use Kubernetes Services to give changing Pods a stable name, port, and backend discovery point."
-overview: "A Service is the stable network contract in front of changing Pods. A checkout example traces Pod IP churn, Service DNS, selectors, EndpointSlices, readiness, and production debugging."
+description: "Understand how a Kubernetes Service gives callers one stable application identity while Pods are replaced, scaled, and moved."
+overview: "Pods are temporary application instances. A Service is the stable application identity, EndpointSlices record its current instances, readiness decides which instances may receive traffic, and the cluster data plane steers each connection."
 tags: ["services", "selectors", "endpoints", "dns", "kubectl"]
 order: 1
 id: article-containers-orchestration-kubernetes-networking-services
 ---
+
 ## Table of Contents
 
-1. [Services Give Callers A Stable Address](#services-give-callers-a-stable-address)
-2. [The First Service](#the-first-service)
-3. [Selectors Choose the Backends](#selectors-choose-the-backends)
-4. [EndpointSlices Show the Real Backend List](#endpointslices-show-the-real-backend-list)
-5. [Ports Separate the Caller Contract From the Container](#ports-separate-the-caller-contract-from-the-container)
-6. [DNS Gives the Service a Name](#dns-gives-the-service-a-name)
-7. [Readiness Decides Who Receives Traffic](#readiness-decides-who-receives-traffic)
-8. [Debugging a Service in Production](#debugging-a-service-in-production)
-9. [Putting It All Together](#putting-it-all-together)
-10. [What's Next](#whats-next)
-11. [References](#references)
+1. [Why is a Pod IP a poor application address?](#why-is-a-pod-ip-a-poor-application-address)
+2. [What stays stable when you create a Service?](#what-stays-stable-when-you-create-a-service)
+3. [How does a Service know which Pods belong to it?](#how-does-a-service-know-which-pods-belong-to-it)
+4. [What happens to one request?](#what-happens-to-one-request)
+5. [Why can a Running Pod be left out?](#why-can-a-running-pod-be-left-out)
+6. [When would a Service work differently?](#when-would-a-service-work-differently)
+7. [How do you find the broken link?](#how-do-you-find-the-broken-link)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Services Give Callers A Stable Address
-<!-- section-summary: Pods move and get replaced, so callers need a stable Service name instead of a changing list of Pod IPs. -->
+Kubernetes has to solve a basic identity problem: an application can remain the same while every process implementing it changes.
 
-A caller inside Kubernetes needs a stable place to send traffic even while backend Pods move. In the checkout path, `checkout-web` should call the orders API every time a customer submits an order, but the orders Pods can restart, roll forward, scale out, or move to other nodes.
+Suppose a payments application currently runs as three Pods:
 
-A **Service** is the Kubernetes object that gives those changing Pods a stable network contract. It gives callers a name and port, then Kubernetes keeps a live backend list of the Pods that match the Service selector and pass readiness checks.
+```text
+payments application
 
-At first, a direct Pod IP can look tempting. A quick Pod listing may show one orders Pod at `10.244.2.17`, and someone might wire `checkout-web` to call `http://10.244.2.17:8080`. That shortcut works during a demo because one Pod happens to exist at that address at that moment.
+Pod A    10.244.1.7
+Pod B    10.244.2.4
+Pod C    10.244.3.9
+```
 
-Then the orders team ships version `2.4.2`, Kubernetes creates a replacement Pod, and the old Pod disappears. `checkout-web` still carries the old address, so its next health check can time out even though the orders API is healthy on a newer Pod. The caller needs a stable way to say, "I want the orders API," while Kubernetes keeps replacing the actual processes behind it.
+Another application needs to send a payment request. It could connect to `10.244.2.4`, but that address means “this particular Pod.” The caller really means “the payments application,” regardless of which replicas happen to be alive when the request arrives.
 
-![Kubernetes Service stable contract showing checkout-web calling a orders-api Service while EndpointSlices track replaceable ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-stable-contract.png)
+A Kubernetes Service separates those two identities. The caller uses one stable application name and port. Kubernetes maintains the changing set of Pod addresses behind that name.
 
-*The Service is the caller-facing contract. Pod IPs can churn during rollouts or repairs while the name, port, selector, and EndpointSlices keep the backend path stable.*
+The central model for this article is:
 
-For the checkout path, `checkout-web` should call a Service name such as `http://orders-api.orders.svc.cluster.local`. That name means the `orders-api` Service in the `orders` namespace. The caller can keep using that name while the orders Deployment rolls from version `2.4.1` to `2.4.2`, scales from two replicas to six, or moves Pods across nodes during maintenance.
+- **Pods are application instances.** They are created, replaced, rescheduled, and removed.
+- **A Service is the stable identity of the application.** Callers depend on this identity.
+- **EndpointSlices are the current mapping from that identity to concrete instances.** They record the addresses and conditions the networking data plane can use.
 
-So the first job is clear. The orders team needs to publish a stable Service in front of changing Pods.
+That model leads to seven questions:
 
-## The First Service
-<!-- section-summary: A basic ClusterIP Service publishes an internal name and port for Pods selected by labels. -->
+1. **Why is a Pod IP a poor application address?**
+2. **What stays stable when you create a Service?**
+3. **How does a Service know which Pods belong to it?**
+4. **What happens to one request?**
+5. **Why can a Running Pod be left out?**
+6. **When would a Service work differently?**
+7. **How do you find the broken link?**
 
-A **ClusterIP Service** is the default Service type. It gives the Service an internal cluster IP and makes it reachable from inside the cluster. This is the normal starting point for one backend calling another backend, like `checkout-web` calling `orders-api`.
+## Why is a Pod IP a poor application address?
+<!-- section-summary: A Pod IP reaches one temporary instance, while a caller needs the stable identity of the application implemented by many changing instances. -->
 
-The Service is the first object where the orders team publishes a contract for callers. `checkout-web` should know a stable name and port, while the orders Deployment can keep changing Pod IPs behind that contract. A beginner can treat the Service as a small promise: this name exists in this namespace, this selector finds the backend Pods, and this port is safe for callers to use.
+A Pod IP is a real, usable network address. Kubernetes networking is designed so that Pods can communicate directly through their Pod IPs. The problem is the meaning and lifetime of that address.
 
-A complete first Service can stay small. The orders Deployment still needs matching Pod labels and a named container port, but the Service object is the caller-facing contract reviewers usually read first:
+`10.244.2.4` identifies one Pod. The payments application can outlive that Pod and every other member of the current replica set.
+
+Imagine that a Deployment maintains three payments replicas. Today their addresses are:
+
+```text
+10.244.1.7
+10.244.2.4
+10.244.3.9
+```
+
+When the team deploys a new version, Kubernetes may terminate all three and create replacements:
+
+```text
+10.244.2.19
+10.244.4.12
+10.244.5.3
+```
+
+The application is still logically `payments`, but every concrete network location has changed. A node failure can cause the same replacement. Autoscaling changes the set even when the software version stays the same:
+
+```text
+10:00    3 Pods
+10:05    8 Pods
+10:20    4 Pods
+```
+
+If every caller stored the Pod list, each caller would have to watch Kubernetes, detect newly created Pods, wait until they were usable, remove terminating Pods, and choose a destination for every connection. Each client would become a small and incomplete Kubernetes controller.
+
+The Service adds one level of indirection:
+
+1. the caller asks for the stable payments identity;
+2. Kubernetes finds the current eligible instances behind that identity;
+3. the network sends the connection to one of those instances.
+
+![A payments caller keeps one Service name while old Pod addresses retire and newly ready Pod addresses join the backend set](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-stable-contract.png)
+
+*The caller keeps the application identity. Kubernetes keeps the changing list of concrete locations.*
+
+This separation is what allows a Deployment to roll out a release or an autoscaler to change the replica count without forcing every client to update its configuration at the same moment.
+
+Follow the alternative to see the cost. If frontend stores three Pod IPs, it must learn when a rollout creates replacements, decide whether each replacement is ready, remove terminating instances, and distribute the changed list before making requests. Every other caller must repeat the same control-plane work. A Service centralizes that changing membership behind one identity designed for clients to depend on.
+
+The Service does not make Pods permanent. It makes their replacement ordinary. A new ready payments Pod can enter the EndpointSlice, an old Pod can leave, and callers continue using `payments:80`. Stable discovery and dynamic membership are different state, updated by different parts of Kubernetes.
+
+## What stays stable when you create a Service?
+<!-- section-summary: A normal Service provides a stable DNS name, virtual ClusterIP, and caller-facing port while backend Pod names, addresses, count, and readiness change. -->
+
+Consider a normal Service for the payments application:
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: orders-api
-  namespace: orders
+  name: payments
 spec:
-  type: ClusterIP
   selector:
-    app.kubernetes.io/name: orders-api
-    app.kubernetes.io/component: api
+    app: payments
   ports:
     - name: http
       port: 80
-      targetPort: http
+      targetPort: 8080
 ```
 
-Each field has a concrete job:
+Kubernetes may allocate this contract:
 
-- `metadata.name: orders-api` gives callers the Service name.
-- `metadata.namespace: orders` places that name inside the `orders` namespace.
-- `spec.type: ClusterIP` keeps the Service reachable only through the cluster network.
-- `spec.selector` chooses Pods that carry both orders labels.
-- `spec.ports[].name: http` gives the port a stable name that other objects can reference.
-- `spec.ports[].port: 80` is the caller-facing Service port.
-- `spec.ports[].targetPort: http` sends traffic to the Pod port named `http`.
+```text
+Service name: payments
+ClusterIP:    10.96.18.42
+Service port: 80
+```
 
-The Deployment side must line up with that contract. The Pod template should carry `app.kubernetes.io/name=orders-api` and `app.kubernetes.io/component=api`, and the container should expose a port named `http` on `8080`. Kubernetes uses TCP when `protocol` is omitted, so this example keeps the Service short. In production, teams treat these fields with the same care they give an API route. If `checkout-web` calls `orders-api.orders` on port `80`, a casual rename or port change can break checkout even while every orders Pod looks healthy.
+A Pod in the same namespace can normally call `http://payments:80`. The full cluster DNS name is commonly `payments.default.svc.cluster.local`.
 
-Now the next question is the important one. How does Kubernetes know which Pods belong behind this Service?
+For a regular Service, cluster DNS resolves that name to the ClusterIP:
 
-## Selectors Choose the Backends
-<!-- section-summary: A Service selector is a label query, and a selector typo gives you a Service with no useful backends. -->
+The DNS answer maps `payments.default.svc.cluster.local` to `10.96.18.42`.
 
-A **label** is a key-value pair attached to a Kubernetes object. A **selector** is a query over those labels. In a Service, the selector tells Kubernetes which Pods should receive traffic for that Service.
+The caller-facing contract and the backend runtime change at different speeds:
 
-The orders Service uses two selector labels: `app.kubernetes.io/name=orders-api` and `app.kubernetes.io/component=api`. A Pod needs both labels to belong behind the Service. The Deployment template puts those labels on every new orders Pod, so the Service can find them.
+| Stable Service contract | Changing backend state |
+|---|---|
+| Service name | Pod names |
+| ClusterIP | Pod IP addresses |
+| Service port | Number of Pods and their readiness |
 
-This is simple, and it is also one of the easiest places to make a production mistake. If the Deployment uses `app.kubernetes.io/name: order-api` and the Service selector uses `app.kubernetes.io/name: orders-api`, the Service still exists, DNS can still resolve, and the Service still has a cluster IP. It just has no matching Pods. From the caller side, that often looks like a timeout or connection failure.
+The ClusterIP is a **virtual IP**. It exists as cluster networking state rather than as an address owned by one machine, one network interface, or one Service process. The cluster networking data plane treats packets sent to that virtual address as traffic for the Service and redirects each connection to an eligible backend.
 
-Here is the first check a team usually runs:
+The two port fields describe opposite sides of the contract:
+
+- `port: 80` is the port callers use on the Service;
+- `targetPort: 8080` is the port where the application listens inside each backend Pod.
+
+Therefore a connection to `payments:80` can be delivered to `10.244.2.4:8080`. A useful way to remember the distinction is that `port` belongs to the stable public contract inside the cluster, while `targetPort` belongs to the backend implementation.
+
+Kubernetes also supports named target ports, which are useful when the backend implementation evolves while callers continue using the same Service port.
+
+For example, callers can keep using `payments:80` while the Service targets a container port named `http`. During a rollout, old and new Pod templates can associate that name with the application port appropriate to each version. The Service contract stays on port `80`; the backend implementation retains room to evolve behind it.
+
+This is another indirection boundary:
+
+```text
+caller contract: payments:80
+Service mapping: port 80 -> targetPort http
+Pod contract:    named port http -> application listener
+```
+
+Diagnosis should verify every mapping rather than assume that seeing port `80` on the Service means the process itself listens on `80`.
+
+A Service is responsible for stable discovery and routing. Workload controllers create the payments Pods and replace failed processes, while the application defines what healthy enough to receive traffic means. The Service provides a stable route to the endpoints Kubernetes currently considers eligible.
+
+## How does a Service know which Pods belong to it?
+<!-- section-summary: A selector defines logical membership, while EndpointSlices record the concrete addresses, ports, and conditions produced from that membership. -->
+
+The Service needs a membership rule that survives replacement. Generated Pod names and Pod IPs change, so Kubernetes normally uses labels and a selector.
+
+Suppose two payments Pods and one inventory Pod have these labels:
+
+```yaml
+# payments Pod A
+metadata:
+  labels:
+    app: payments
+
+# payments Pod B
+metadata:
+  labels:
+    app: payments
+
+# inventory Pod C
+metadata:
+  labels:
+    app: inventory
+```
+
+The Service selector asks for `app: payments`. Pod A and Pod B belong to the logical backend set. Pod C belongs to inventory and stays outside this set.
+
+The changing Pod-IP list lives in **EndpointSlice** objects rather than inside the Service object. A control-plane component watches Services and Pods, evaluates the selector, and maintains those EndpointSlices. An EndpointSlice is a Kubernetes API object containing concrete backend addresses, ports, address family information, and conditions such as readiness.
+
+For example, the control plane may publish `10.244.1.7` with `ready: true` and `10.244.2.4` with `ready: false`.
+
+This object makes the Service model concrete. The Service stores a stable identity and selector; the EndpointSlice stores the current network destinations and their conditions.
+
+![The payments Service selector admits Pods with the payments label, readiness removes a warming candidate, and the EndpointSlice publishes the current usable address](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/selector-endpointslice-flow.png)
+
+*Labels define membership. Endpoint conditions determine which members are eligible for ordinary traffic.*
+
+Three separate questions now have separate answers:
+
+| Question | Kubernetes object or field that answers it |
+|---|---|
+| Who are callers trying to reach? | Service name and ClusterIP |
+| Which Pods belong to that application? | Service selector and Pod labels |
+| Where are those Pods now, and are they usable? | EndpointSlices |
+
+That distinction is especially valuable during debugging. If a Pod is absent from the EndpointSlice, first inspect whether its labels match the selector. If it is present with `ready: false`, membership succeeded and readiness is the next boundary to investigate.
+
+A one-character mismatch is enough to create an empty backend set:
+
+```yaml
+# Service selector
+selector:
+  app: payments
+
+# Pod label
+labels:
+  app: payment
+```
+
+Both the Service and the Pod can exist, and the Pod can be Running, but the selector matches nothing. These commands expose each part of the relationship:
 
 ```bash
-kubectl -n orders get pods -l app.kubernetes.io/name=orders-api,app.kubernetes.io/component=api --show-labels
+kubectl get service payments -o yaml
+kubectl get pods -l app=payments --show-labels
+kubectl get endpointslices \
+  -l kubernetes.io/service-name=payments -o yaml
 ```
 
-Healthy output should show the orders Pods and the labels the Service expects:
+## What happens to one request?
+<!-- section-summary: DNS resolves the stable name, the caller connects to the virtual Service IP and port, and programmed network rules translate that connection to one eligible Pod address and target port. -->
 
-```bash
-NAME                            READY   STATUS    RESTARTS   AGE   LABELS
-orders-api-65dc7c9f4d-7sk2c   1/1     Running   0          12m   app.kubernetes.io/name=orders-api,app.kubernetes.io/component=api,app.kubernetes.io/part-of=shop-platform
-orders-api-65dc7c9f4d-cb9mh   1/1     Running   0          12m   app.kubernetes.io/name=orders-api,app.kubernetes.io/component=api,app.kubernetes.io/part-of=shop-platform
-orders-api-65dc7c9f4d-q6x4z   1/1     Running   0          12m   app.kubernetes.io/name=orders-api,app.kubernetes.io/component=api,app.kubernetes.io/part-of=shop-platform
+Suppose a frontend Pod sends:
+
+```http
+GET http://payments/orders/123
 ```
 
-The Service selector only finds Pods in the same namespace as the Service. If the Service lives in `orders` and a Deployment accidentally lands in `checkout`, the selector will not cross the namespace boundary. That matters in real clusters because teams often split namespaces by application, environment, or ownership.
+Cluster DNS first resolves `payments` to the virtual Service address `10.96.18.42`. The frontend then tries to establish a connection to `10.96.18.42:80`.
 
-Selectors answer which Pods should be used. The next useful object shows which Pod IPs Kubernetes actually selected.
+At this point it is easy to imagine a Service process accepting the request and proxying it to a Pod. The virtual IP is instead implemented by the cluster's networking data plane and its packet-processing rules.
 
-## EndpointSlices Show the Real Backend List
-<!-- section-summary: EndpointSlices list the current backend IPs and ports behind a Service, which makes Service state visible during debugging. -->
+With the standard Kubernetes implementation, kube-proxy watches Services and EndpointSlices. It programs node networking rules so that traffic for a Service address can be translated to a selected backend. Depending on the cluster, those rules may use nftables, iptables, or another implementation. Some networking systems replace kube-proxy and program their own data plane, but they consume the same Service and endpoint intent.
 
-An **EndpointSlice** is a Kubernetes discovery object that stores a slice of network endpoints for a Service. For a normal selector-based Service, the control plane watches Pods, evaluates the Service selector, and writes the matching backend addresses into EndpointSlices.
+Kube-proxy's usual role is to prepare the node's packet-processing rules. Those rules handle the traffic directly instead of sending every application request through a kube-proxy userspace forwarding loop.
 
-This gives operators a very practical view. The Service is the contract that callers use. EndpointSlices are the current backend list behind that contract.
+For one chosen endpoint, the packet can effectively change from:
 
-For the orders example, this is where the article stops trusting the manifest and checks live cluster state. The Service YAML can look correct while a rollout, readiness probe, or label typo leaves the real backend list empty. EndpointSlices answer the question that matters during an incident: which Pod IPs and ports can receive traffic right now?
+```text
+before backend selection
+src = 10.244.5.10
+dst = 10.96.18.42:80
 
-For the orders Service, this command shows the selected backend addresses:
-
-```bash
-kubectl -n orders get endpointslices -l kubernetes.io/service-name=orders-api -o wide
+after backend selection
+src = 10.244.5.10
+dst = 10.244.2.4:8080
 ```
 
-Typical output looks like this:
+This destination translation is commonly described as destination network address translation, or DNAT. The cluster's Pod network then carries the packet to `10.244.2.4`, even when that Pod is running on another node.
 
-```bash
-NAME                  ADDRESSTYPE   PORTS   ENDPOINTS
-orders-api-p8mq9    IPv4          8080    10.244.1.32,10.244.2.18,10.244.3.44
-```
+An ordinary Service operates mainly at the transport layer. Its common protocols are TCP, UDP, and SCTP. An HTTP path such as `/orders/123` remains opaque to this backend selection.
 
-That output tells a very concrete story. The Service named `orders-api` has backend endpoints on port `8080`, and Kubernetes currently sees three Pod IPs behind it. If the `ENDPOINTS` column is empty, the selector did not find ready backends, or every selected backend is currently excluded from traffic.
+For TCP, backend selection is best understood at the connection level:
 
-![Service selector and EndpointSlice flow showing Pod labels, readiness, selected endpoints, and unready Pods left out of traffic](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/selector-endpointslice-flow.png)
+1. the frontend opens a TCP connection to the Service;
+2. the data plane chooses an eligible endpoint for that connection;
+3. all HTTP requests reused over that keep-alive connection normally continue through the same connection.
 
-*Selectors decide which Pods belong behind the Service, and readiness decides which selected Pods should actually receive traffic.*
+Ten HTTP requests on one persistent connection provide one connection-level selection sample. Ten independently opened connections provide ten opportunities to select a backend. Higher-level routing based on hosts, paths, headers, or request weights belongs to systems such as Ingress, Gateway API, or a service mesh, which appear later in the roadmap.
 
-EndpointSlices also matter as Services grow. Kubernetes can create multiple EndpointSlice objects for one Service instead of forcing every backend into one giant object. The lookup label `kubernetes.io/service-name=orders-api` is the normal way to gather all the slices that belong to the Service.
+This explains why a simple request count can give a surprising distribution. A client that opens one keep-alive connection and sends many HTTP operations through it may remain with one selected Pod. The Service data plane did choose an endpoint; it chose it for the transport connection rather than re-reading each HTTP path. The Service is not an HTTP proxy and has no basis for routing `/orders/123` differently from `/health` on that same connection.
 
-Now we know how the Service finds Pods. The next piece is where traffic enters the Service and where it lands inside each Pod.
+## Why can a Running Pod be left out?
+<!-- section-summary: Running reports that containers have started, while readiness reports whether an endpoint should receive new Service traffic. -->
 
-## Ports Separate the Caller Contract From the Container
-<!-- section-summary: The Service port belongs to callers, while targetPort points to the backend Pod port. -->
+A Pod can be Running while its application is still loading configuration, opening database connections, warming caches, or waiting for another required dependency. The process exists, but sending new payment traffic to it would fail.
 
-A Service usually has two port ideas. The **Service port** is the port callers use on the Service. The **target port** is the port Kubernetes sends traffic to on the backend Pods.
-
-In our manifest, callers use Service port `80`. The target port is `http`, and the Deployment says the container port named `http` is `8080`. So the path is: `checkout-web` calls `orders-api.orders:80`, the Service chooses one ready backend, and Kubernetes sends the request to port `8080` on an orders Pod.
-
-Named target ports are useful during rollouts. Imagine the orders team moves the application from port `8080` to port `9090` in version `2.5.0`. If every Pod still exposes a port named `http`, the Service can keep `targetPort: http` while old and new Pods overlap during the rollout. The application team can change the container implementation while the caller-facing Service contract stays stable. The web app still calls the same Service name and port.
-
-When a Service fails, this port split deserves a careful check. A common mistake is `port: 80` with `targetPort: 3000` while the application actually listens on `8080`. Another common mistake is `targetPort: http` while the Pods expose a port named `web`. Kubernetes cannot route to the port you meant in your head; it routes to the number or name in the manifest.
-
-With selector and ports in place, the caller still needs a clean way to find the Service. That is where Kubernetes DNS enters the story.
-
-## DNS Gives the Service a Name
-<!-- section-summary: Kubernetes DNS lets Pods call Services by stable names, and namespace-qualified names prevent cross-namespace confusion. -->
-
-Kubernetes creates DNS records for Services. That means a Pod can call a Service by name instead of hardcoding the Service cluster IP.
-
-For our example, a Pod inside the `orders` namespace can usually call `http://orders-api/healthz`. A Pod in another namespace should use `http://orders-api.orders/healthz`. The fully qualified form, `http://orders-api.orders.svc.cluster.local/healthz`, is useful in runbooks and incident notes because every DNS piece is visible.
-
-The namespace piece matters. If `checkout-web` runs in the `checkout` namespace and calls `http://orders-api/healthz`, Kubernetes DNS will first look for a Service named `orders-api` in `checkout`. If the real Service lives in `orders`, the caller should use `orders-api.orders` or the full name.
-
-Here is a practical DNS check from the caller namespace:
-
-```bash
-kubectl -n checkout run service-dns-check --rm -it --restart=Never --image=busybox:1.36 -- \
-  nslookup orders-api.orders.svc.cluster.local
-```
-
-The response should resolve to the Service's cluster IP for a normal ClusterIP Service:
-
-```bash
-Name:      orders-api.orders.svc.cluster.local
-Address:   10.96.41.23
-```
-
-DNS gives the caller a stable name. Selectors and EndpointSlices give Kubernetes a backend list. There is one more traffic decision before a Pod should receive requests: readiness.
-
-## Readiness Decides Who Receives Traffic
-<!-- section-summary: Readiness probes keep Pods out of Service traffic until the application can actually handle requests. -->
-
-A **readiness probe** tells Kubernetes whether a container is ready to receive traffic. A process can be running while the application still cannot serve useful requests. It might be loading configuration, opening a database connection, warming caches, or waiting for a dependency.
-
-Readiness is the link between application health and Service traffic. Without it, a new orders Pod could receive checkout requests as soon as the container starts, even if the app has not loaded its inventory service config yet. The probe gives Kubernetes a small application-level signal before the Pod joins the Service backend list.
-
-Here is a readiness probe for the orders API:
+This is why Kubernetes keeps **running state** and **readiness** separate. A readiness probe answers the traffic question: “Should this replica receive new connections now?”
 
 ```yaml
 readinessProbe:
   httpGet:
-    path: /readyz
-    port: http
-  initialDelaySeconds: 5
-  periodSeconds: 10
-  failureThreshold: 3
+    path: /ready
+    port: 8080
 ```
 
-With this probe, Kubernetes checks `/readyz` on the named `http` port. When the probe succeeds, the Pod can receive Service traffic. When the probe fails, Kubernetes can remove that Pod's IP from the EndpointSlices for matching Services.
+Suppose the cluster reports:
 
-The readiness fields control that decision:
+| Pod | Process running? | Ready? | Ordinary Service traffic? |
+|---|---:|---:|---:|
+| Pod A, `10.244.1.7` | Yes | Yes | Yes |
+| Pod B, `10.244.2.4` | Yes | No | No |
+| Pod C, `10.244.3.9` | Yes | Yes | Yes |
 
-- `httpGet.path: /readyz` names the application endpoint Kubernetes calls.
-- `httpGet.port: http` uses the named container port instead of a raw number.
-- `initialDelaySeconds: 5` gives the app a short startup window before checks run.
-- `periodSeconds: 10` checks readiness every ten seconds.
-- `failureThreshold: 3` removes the Pod from ready traffic after three failed checks.
+Pod B remains available for logs and inspection, while the failing readiness probe marks its endpoint unready. Normal Service routing generally avoids that endpoint until the probe succeeds.
 
-Services and rollouts fit together through that readiness decision. During a rollout, Kubernetes creates a new orders Pod, waits for readiness, adds it to the backend list, and then continues replacing old Pods according to the Deployment strategy. `checkout-web` keeps using the Service name while the backend membership changes.
+During startup, this gives a clean handoff. The process can start and the Pod can become Running while initialization continues. Only after `/ready` succeeds does endpoint eligibility turn true and ordinary new Service traffic begin. During shutdown, terminating and serving conditions let the endpoint move out of the normal new-traffic set while existing work is drained according to the surrounding implementation.
 
-The ready condition is visible in EndpointSlices. This proof is useful because it reads the backend membership Kubernetes will use for Service traffic:
+Readiness therefore protects callers as well as the Pod. It prevents a replica that is alive but unable to serve correctly from becoming part of the stable application promise. A probe that checks an irrelevant condition weakens that promise; a probe tied to the application's ability to receive its real traffic makes endpoint eligibility meaningful.
+
+Selector failure looks different from readiness failure:
+
+- **Absent from EndpointSlices:** investigate selector matching and whether the control plane has published the Pod as a member.
+- **Present with `ready: false`:** membership succeeded, and the Pod is currently ineligible for normal new traffic.
+
+EndpointSlices can also distinguish `serving` and `terminating`. A terminating endpoint may still be serving existing work while Kubernetes removes it from ordinary new traffic. During shutdown, these conditions help the data plane drain traffic instead of treating every endpoint as simply present or absent. Kubernetes has fallback behavior when all available endpoints are terminating, so inspect the actual conditions when shutdown behavior matters.
+
+## When would a Service work differently?
+<!-- section-summary: Service types and special discovery modes keep some form of stable identity while changing the entry point, DNS answer, backend source, or component that chooses the concrete destination. -->
+
+The normal model built so far has four stages: DNS resolves the Service name, the caller connects to the ClusterIP, the Service data plane selects an endpoint, and the connection reaches one ready Pod.
+
+That is a `ClusterIP` Service, the default type. Kubernetes supports variations because callers may live outside the cluster, clients may need individual member identities, or the backend may come from a separately managed endpoint set.
+
+| Service form | What changes |
+|---|---|
+| `ClusterIP` | A stable internal virtual IP leads to backend endpoints. |
+| `NodePort` | A port on each node provides another entry point into the Service. |
+| `LoadBalancer` | The environment can add an external load-balancer address in front of the Service. |
+| Headless Service | No ClusterIP is allocated; DNS exposes backend endpoint addresses. |
+| `ExternalName` | DNS returns an alias to an external hostname; Kubernetes performs no Service proxying. |
+| Service without a selector | EndpointSlices are supplied separately instead of being derived from matching Pods. |
+
+NodePort and LoadBalancer generally build on the ClusterIP mechanism. The next article follows those extra network boundaries in detail.
+
+A headless Service explicitly requests a different discovery contract:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments
+spec:
+  clusterIP: None
+  selector:
+    app: payments
+```
+
+DNS can now return addresses such as `10.244.1.7`, `10.244.2.4`, and `10.244.3.9` instead of one ClusterIP. This Service skips the normal virtual-IP proxying path. The client sees individual members and decides how to connect to them.
+
+This model is useful when backend identity matters, as it can for StatefulSets, databases, and distributed systems.
+
+A selectorless Service keeps the stable Service identity but obtains its endpoints from separately managed EndpointSlices.
+
+An ExternalName Service behaves differently again. It creates a DNS alias to an external hostname. The connection follows DNS to that outside destination, bypassing ClusterIP routing and Kubernetes endpoint selection.
+
+## How do you find the broken link?
+<!-- section-summary: Prove the Service path in order from caller and DNS through the Service contract, selector, EndpointSlice, readiness, data plane, Pod network, and application. -->
+
+A Service is a chain of responsibilities:
+
+1. the caller uses the expected name and port;
+2. DNS resolves the name;
+3. the Service object exposes the expected ClusterIP, port, target port, and selector;
+4. Pods match the selector;
+5. EndpointSlices publish the expected addresses and conditions;
+6. the network data plane can steer traffic to an endpoint;
+7. the Pod network can carry the packet;
+8. the application is listening and responds.
+
+Begin with the Service object:
 
 ```bash
-kubectl -n orders get endpointslices \
-  -l kubernetes.io/service-name=orders-api \
-  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{" ready="}{.conditions.ready}{"\n"}{end}'
+kubectl get service payments -o wide
+kubectl describe service payments
 ```
 
-Healthy output should look like this:
+Confirm values such as:
+
+```text
+ClusterIP:   10.96.18.42
+Port:        80
+TargetPort:  8080
+Selector:    app=payments
+```
+
+Next, ask whether any Pods match the selector:
 
 ```bash
-10.244.1.32 ready=true
-10.244.2.18 ready=true
-10.244.3.44 ready=true
+kubectl get pods -l app=payments --show-labels
 ```
 
-If every endpoint shows `ready=false`, the Service can exist, DNS can resolve, and callers can still fail because no backend is ready to accept traffic. The next checks are readiness events on the selected Pods and recent application logs from the orders Deployment.
+If this returns zero Pods, the Service exists but its membership rule currently identifies no backend. Inspecting node rules before fixing the selector would skip the first known failure.
 
-The readiness endpoint should describe whether the application can serve requests, rather than only whether the process is alive. For an orders API, `/readyz` might check that required configuration is loaded and the inventory service client can be initialized. Teams often keep deeper dependency checks lightweight because a slow or flaky readiness endpoint can remove healthy Pods from traffic.
-
-Now we have all the main pieces. The final job is to use them in a repeatable debugging flow.
-
-## Debugging a Service in Production
-<!-- section-summary: Service debugging should move from caller evidence to DNS, Service definition, EndpointSlices, Pods, and application behavior. -->
-
-Service incidents usually arrive as simple symptoms. Checkout fails, `checkout-web` returns `502`, or a worker reports `connection refused`. The useful response is to check one Service layer at a time and keep one proof per layer.
-
-The Service is the caller-facing contract, so it deserves the first look. From there, each check moves one step closer to the actual application: DNS name, selector, EndpointSlice, Pod readiness, target port, and application response. This keeps the team from changing several objects at once before they know which layer failed.
-
-The first useful evidence is the Service object. It should show the expected type, cluster IP, Service port, target port, and selector:
+Then inspect what Kubernetes has published as the actual backend set:
 
 ```bash
-NAME           TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
-orders-api   ClusterIP   10.96.41.23   <none>        80/TCP    18m   app.kubernetes.io/component=api,app.kubernetes.io/name=orders-api
+kubectl get endpointslices \
+  -l kubernetes.io/service-name=payments
+
+kubectl get endpointslices \
+  -l kubernetes.io/service-name=payments \
+  -o yaml
 ```
 
-The rest of the ladder can stay compact:
+Look for endpoint entries and their conditions:
 
-| Layer | Proof to capture | What a failure usually means |
-|---|---|---|
-| Caller namespace | Smoke request from `checkout` to `http://orders-api.orders/healthz` | The symptom is reproducible from the same side as the app |
-| DNS | Lookup of `orders-api.orders.svc.cluster.local` from `checkout` | Wrong name, missing namespace, or cluster DNS trouble |
-| EndpointSlice | Backend list labeled `kubernetes.io/service-name=orders-api` | Selector mismatch, unready Pods, or no matching Pods |
-| Pod labels and readiness | Selected Pods with labels, `READY`, events, and recent logs | Label drift, readiness failure, crash, or bad startup config |
-| Application path | Direct backend proof through port-forward or a caller-side Pod request | App listener, port, or Service routing problem |
+```yaml
+endpoints:
+  - addresses:
+      - 10.244.1.7
+    conditions:
+      ready: true
+```
 
-A port-forward to the Deployment gives a local application proof without adding another caller path:
+If the Pod is present but unready, inspect the Pod's readiness and events:
 
 ```bash
-kubectl -n orders port-forward deployment/orders-api 8080:8080
-curl -i http://127.0.0.1:8080/healthz
+kubectl get pods
+kubectl describe pod payments-abc
 ```
 
-This gives a clean split. If the port-forwarded application fails, the problem is inside the Pod or application. If the port-forwarded application works and the Service path fails, the issue sits in the Service definition, target port, DNS, NetworkPolicy, node Service implementation, or something between caller and backend.
+Now bypass the Service and test one endpoint directly from a suitable debug Pod:
 
-Here is a compact review table for the common cases:
+```bash
+curl http://10.244.1.7:8080
+```
 
-| Symptom | First useful check | Common cause |
-|---|---|---|
-| Caller gets `Name or service not known` | `nslookup orders-api.orders.svc.cluster.local` from the caller namespace | Wrong Service name, missing namespace, or DNS problem |
-| DNS resolves but requests time out | `kubectl -n orders get endpointslices -l kubernetes.io/service-name=orders-api -o wide` | No ready endpoints, blocked traffic, or wrong backend port |
-| EndpointSlices are empty | `kubectl -n orders get pods --show-labels` | Selector misses the Pod labels or Pods are in another namespace |
-| EndpointSlices show the wrong port | `kubectl -n orders get svc orders-api -o yaml` | `targetPort` points to the wrong number or missing named port |
-| Service works for one namespace but fails for another | `kubectl -n orders get networkpolicy` | NetworkPolicy allows one caller and blocks another |
-| Direct Pod or port-forward works, Service fails | `kubectl -n orders describe svc orders-api` and node Service proxy checks | Service routing layer needs deeper platform investigation |
+If the direct endpoint fails, investigate the application listener, target port, Pod networking, and any NetworkPolicy affecting the caller before moving outward to the Service virtual IP. If the endpoint works directly while `curl http://payments:80` fails, the backend application path has been proved and the Service path remains to be explained.
 
-Production review has the same shape. A good Service change includes the manifest diff, the live Service, EndpointSlice evidence, a caller-namespace smoke test, and a rollback path. The review note can say which Service file changed, what the live selector and port are, how many ready endpoints exist, and whether a caller in `checkout` reached `/healthz`.
+Test from the original caller where possible. Another Pod can have a different namespace search path, source label, egress policy, node route, or service-mesh interception. A direct endpoint request from the real caller preserves those source properties while removing only DNS and Service translation from the path.
 
-Teams usually avoid renaming Services during routine changes. A safer migration creates a new Service beside the old one, moves callers deliberately, checks logs and metrics for remaining old-name traffic, and removes the old Service after the migration is complete. That keeps checkout alive while the contract changes.
+The comparison creates strong evidence:
 
-## Putting It All Together
-<!-- section-summary: A Service is the stable caller contract, while selectors, EndpointSlices, ports, DNS, and readiness keep that contract connected to real Pods. -->
+```text
+localhost on payments Pod fails -> application or listener
+localhost works, caller to Pod IP fails -> Pod network, policy, or bind address
+caller to Pod IP works, ClusterIP fails -> Service mapping or data plane
+ClusterIP works, Service name fails -> DNS or resolver context
+```
 
-The orders Service gives `checkout-web` one stable way to reach the orders API. The caller uses the Service name and port. The selector finds matching Pods. EndpointSlices show the current backend addresses. The Service port stays stable for callers while `targetPort` maps to the container. DNS gives Pods a name to call. Readiness decides which Pods should receive traffic.
+Change one layer per test and keep the source, port, and protocol constant. The first result that changes identifies the boundary that deserves the next investigation.
 
-This is the practical shape to remember in production. A Service issue has visible objects behind it: the Service, DNS response from the caller namespace, EndpointSlices, Pod labels, readiness state, and application behavior from logs or port-forwarding. Each piece removes guesswork and turns a vague networking problem into a specific Kubernetes object or application behavior.
+Test DNS from the same namespace and network context as the real caller:
 
-![Kubernetes Service debugging path with caller, Service, DNS, EndpointSlice, readiness, and app response evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-debugging-summary.png)
+```bash
+nslookup payments
+```
 
-*A Service incident needs one small proof at each layer instead of several object changes at once.*
+For a regular Service, the answer should normally include the Service ClusterIP. If DNS, the Service object, matching Pods, EndpointSlices, readiness, and direct Pod connectivity all look correct, move to the remaining networking layer: kube-proxy or its replacement, the CNI-managed Pod network, NetworkPolicies, and node-level data-plane rules.
 
-Once Services make one internal backend reachable, the next question is how different Service types expose traffic in different ways.
+![A Service investigation proves each boundary from the real caller through DNS, the Service contract, EndpointSlices, policy and network, and the application response](/content-assets/articles/article-containers-orchestration-kubernetes-networking-services/service-debugging-summary.png)
 
-## What's Next
-<!-- section-summary: The next article compares ClusterIP, NodePort, and LoadBalancer so you can choose the right exposure path. -->
+*Stop at the first failed proof. Repair that responsibility, then repeat the original request from the original caller.*
 
-The core Service object gives the stable in-cluster name, selector, endpoint discovery, ports, DNS, readiness, and debugging evidence.
+The full model now has a control-plane side and a data-plane side. The Service selector and EndpointSlice controller maintain the mapping from application identity to current endpoints. Kube-proxy or an alternative watches that state and programs the network. Packets then travel from the Service virtual IP to a concrete Pod address.
 
-The next article compares **ClusterIP**, **NodePort**, and **LoadBalancer**. Those types decide whether a Service stays inside the cluster, opens a port on each node, or asks the platform for an external load balancer.
+Condensed into one relationship:
+
+> Stable application identity + dynamic healthy membership + network forwarding = a Kubernetes Service.
+
+When a Service fails, identify which term in that relationship is missing. This turns “Service networking” from one opaque mechanism into a short sequence of testable responsibilities.
+
+## Check Your Answers
+<!-- section-summary: Reconstruct a Service from its stable identity, dynamic membership, endpoint eligibility, packet steering, and application response. -->
+
+:::expand[Why is a Pod IP a poor application address?]{kind="recap"}
+A Pod IP identifies one current application instance. Rollouts, rescheduling, and autoscaling replace or resize that instance set. Callers need the stable application identity while Kubernetes maintains the changing locations.
+:::
+
+:::expand[What stays stable when you create a Service?]{kind="recap"}
+A normal Service gives callers a stable DNS name, virtual ClusterIP, and Service port. Pod names, Pod addresses, replica count, readiness, and the concrete endpoint chosen for a connection can change behind that contract.
+:::
+
+:::expand[How does a Service know which Pods belong to it?]{kind="recap"}
+The Service selector matches Pod labels. The control plane turns that logical membership into EndpointSlices containing concrete addresses, ports, and conditions. The Service says who callers mean; EndpointSlices say where the current instances are.
+:::
+
+:::expand[What happens to one request?]{kind="recap"}
+DNS resolves the Service name to a virtual ClusterIP. The caller opens a connection to the Service port, and network rules programmed by kube-proxy or another implementation translate the destination to one eligible Pod address and target port. The Pod network carries the packet to the application.
+:::
+
+:::expand[Why can a Running Pod be left out?]{kind="recap"}
+Running means that the Pod's containers have started. Readiness answers whether the application should receive new Service traffic. A matching Pod can therefore remain Running while its EndpointSlice entry is marked unready and excluded from ordinary new connections.
+:::
+
+:::expand[When would a Service work differently?]{kind="recap"}
+NodePort and LoadBalancer add entry points, a headless Service returns endpoint addresses instead of a ClusterIP, a selectorless Service uses separately managed EndpointSlices, and ExternalName returns a DNS alias. Each changes who discovers or chooses the concrete destination.
+:::
+
+:::expand[How do you find the broken link?]{kind="recap"}
+Repeat the real request from the real caller, then prove DNS, the Service contract, selector matches, EndpointSlices, readiness, direct endpoint connectivity, policy, the data plane, and the application. The first failed proof identifies the next responsibility to inspect.
+:::
 
 ## References
 
-- [Kubernetes Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Defines Services as a network abstraction for groups of Pods, documents selectors, ports, EndpointSlices, and Service types.
-- [Labels and Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/) - Documents labels and selectors, the metadata query system that Services use to choose Pods.
-- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Documents Service DNS names, namespace-qualified lookups, and how normal Services resolve to cluster IPs.
-- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Explains how Kubernetes tracks Service endpoints through EndpointSlice objects and labels them by Service name.
-- [Pod lifecycle: readiness probes](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#readiness-probe) - Explains readiness probes and how failed readiness removes Pod IPs from matching Service EndpointSlices.
-- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Provides the official Service troubleshooting path for Service existence, DNS, Service IP, definition, EndpointSlices, Pods, and kube-proxy.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official Service behavior, selectors, ports, headless Services, selectorless Services, and ExternalName.
+- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Official backend discovery model and endpoint conditions.
+- [Virtual IPs and Service Proxies](https://kubernetes.io/docs/reference/networking/virtual-ips/) - Official description of Service virtual IPs, kube-proxy modes, and traffic policies.
+- [DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/) - Official naming behavior for regular and headless Services.
+- [Configure Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/) - Official readiness-probe behavior.
+- [Debug Services](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/) - Official layered checks for Service failures.

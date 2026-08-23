@@ -1,90 +1,93 @@
 ---
 title: "Telemetry Pipelines"
-description: "Connect logs, metrics, traces, and events into a production telemetry pipeline without repeating basic signal concepts."
+description: "Carry application signals through collectors to observability backends with clear identity, controlled cost, resilient buffering, and end-to-end proof."
+overview: "A telemetry pipeline captures ephemeral evidence, adds controlled identity, processes and transports it, and proves that it became queryable at the intended backend."
 tags: ["Kubernetes", "Operations", "Telemetry", "OpenTelemetry"]
 area: "Containers & Orchestration"
 order: 4
 id: article-containers-orchestration-kubernetes-operations-telemetry-pipelines
 ---
+
 ## Table of Contents
 
-- [Why a Telemetry Pipeline Exists](#why-a-telemetry-pipeline-exists)
-- [Receivers, Processors, and Exporters](#receivers-processors-and-exporters)
-- [Choose the Collector Shape](#choose-the-collector-shape)
-- [Configure the Collector in Layers](#configure-the-collector-in-layers)
-- [Deploy the Collector in Kubernetes](#deploy-the-collector-in-kubernetes)
-- [The App Sends Signals To The Pipeline](#the-app-sends-signals-to-the-pipeline)
-- [Keep Attributes Safe and Affordable](#keep-attributes-safe-and-affordable)
-- [Verify One Request End to End](#verify-one-request-end-to-end)
-- [Troubleshoot Missing Telemetry](#troubleshoot-missing-telemetry)
-- [Operational Checklist](#operational-checklist)
-- [References](#references)
+1. [Why does useful telemetry need a delivery pipeline?](#why-does-useful-telemetry-need-a-delivery-pipeline)
+2. [How do receivers, processors, exporters, and service pipelines form one active route?](#how-do-receivers-processors-exporters-and-service-pipelines-form-one-active-route)
+3. [Why do application OTLP, container logs, and Kubernetes Events start through different paths?](#why-do-application-otlp-container-logs-and-kubernetes-events-start-through-different-paths)
+4. [Which Collector placement fits node-local collection and shared processing?](#which-collector-placement-fits-node-local-collection-and-shared-processing)
+5. [How can attributes improve correlation while controlling privacy and cost?](#how-can-attributes-improve-correlation-while-controlling-privacy-and-cost)
+6. [How should the pipeline handle bursts and a slow backend?](#how-should-the-pipeline-handle-bursts-and-a-slow-backend)
+7. [How can a team prove one request across the application, Collector, and backend?](#how-can-a-team-prove-one-request-across-the-application-collector-and-backend)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Why a Telemetry Pipeline Exists
-<!-- section-summary: A telemetry pipeline receives application signals, processes them safely, and exports them to backends that responders can query during incidents. -->
+When a request fails inside `checkout-service`, evidence may exist as a container log line, an in-memory metric, spans inside application processes, and Kubernetes metadata about the Pod, Deployment, Node, namespace, and container. A backend query cannot see that evidence until a system captures, identifies, processes, transports, and stores it. That system is the telemetry pipeline.
 
-A Kubernetes **telemetry pipeline** is the path that carries logs, metrics, traces, and events from workloads to the systems where teams search, alert, and debug. The pipeline usually includes application instrumentation, a collector, processors that clean or batch data, and exporters that send data to a backend.
+Seven questions follow the data from source to query:
 
-For `devpolaris-orders-api`, the incident question might be: a checkout request failed, so where did it slow down and which dependency returned the error? Raw logs alone can help, but a trace with stable service names and safe attributes can connect the API, payment client, database call, and response status.
+1. **Why does useful telemetry need a delivery pipeline?**
+2. **How do receivers, processors, exporters, and service pipelines form one active route?**
+3. **Why do application OTLP, container logs, and Kubernetes Events start through different paths?**
+4. **Which Collector placement fits node-local collection and shared processing?**
+5. **How can attributes improve correlation while controlling privacy and cost?**
+6. **How should the pipeline handle bursts and a slow backend?**
+7. **How can a team prove one request across the application, Collector, and backend?**
 
-The practical goal is: **prove one request can travel from the app, through the collector, into the backend with the fields responders need.**
+## Why does useful telemetry need a delivery pipeline?
+<!-- section-summary: Telemetry is a data-delivery problem before it is a query problem because evidence begins in ephemeral processes, files, endpoints, and APIs. -->
 
-## Receivers, Processors, and Exporters
-<!-- section-summary: The collector receives telemetry, changes or protects it with processors, then exports it to one or more backends. -->
+### A signal is not queryable merely because it exists
 
-OpenTelemetry Collector configuration has three main pieces. A **receiver** accepts data, a **processor** changes or protects data, and an **exporter** sends data onward.
+At the instant `checkout-service` fails, a log line may exist in a Node file, a metric observation may exist in memory or behind `/metrics`, and spans may still exist inside several application processes. Kubernetes also knows which Pod, Deployment, namespace, Node, and container were involved. None of that guarantees that a later backend query can retrieve or correlate the evidence.
 
-The pipeline skeleton looks like this before details:
+The data must survive a sequence of boundaries: capture it before the source disappears, attach usable identity, perform controlled processing, transport it across unreliable links, and store it in the intended backend. Telemetry is therefore a distributed data-delivery problem before it becomes an observability query.
 
-```yaml
-receivers:
-  otlp:
+Signals begin in different places:
 
-processors:
-  batch:
+- application logs commonly begin on `stdout` and `stderr`, which the runtime writes to Node-local files;
+- metrics may wait behind `/metrics` for a scraper or leave through an OpenTelemetry SDK;
+- trace spans begin inside instrumented application processes;
+- Node and Pod measurements come from the kubelet;
+- Kubernetes state and Events come from the Kubernetes API.
 
-exporters:
-  otlp:
+Kubernetes does not provide permanent cluster-level log storage. A Collector or another collector must see each source, and a backend must store it before it becomes durable and queryable.
 
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [otlp]
+```mermaid
+flowchart LR
+    Source[Source] --> Collect[Collect]
+    Collect --> Identify[Identify]
+    Identify --> Process[Process]
+    Process --> Transport[Transport]
+    Transport --> Store[Store]
+    Store --> Query[Query]
 ```
 
-What the skeleton shows:
+For every signal, ask where it physically exists, who can see it, whether it is pushed or pulled, what identity it has, where buffering occurs, what happens when the next hop is unavailable, and how one record can be proven across that hop. Collector architecture follows from those answers.
 
-- The app sends OTLP data to the collector.
-- The collector batches data before export.
-- The traces pipeline connects receiver, processor, and exporter by name.
+### Follow the evidence before choosing the tooling
 
-![Telemetry pipeline flow showing app signals entering a receiver, passing through processors for sampling and attributes, then leaving through exporters to a backend](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/telemetry-pipeline-flow.png)
+Take one checkout request. Its log begins when the container writes bytes to stdout. Its metric may remain as an in-process counter until a scraper asks for `/metrics`. Its trace begins as several spans emitted by the frontend, checkout, and payment processes. Kubernetes metadata exists in a different control-plane view. A useful query may need all four, but none starts in the backend and none is automatically durable.
 
-*The flow shows the collector as an operational checkpoint between application signals and backend storage.*
+```text
+container stdout → runtime-managed Node file → log collector → log backend
+application counter → /metrics scrape → metrics pipeline → metrics backend
+application spans → OTLP receiver → trace pipeline → trace backend
+Pod identity → Kubernetes API lookup → enrichment processor → attached attributes
+```
 
-## Choose the Collector Shape
-<!-- section-summary: Collector placement decides who owns local collection, central routing, backend credentials, and scaling. -->
+This is why “we installed a dashboard” is not a telemetry design. A dashboard is a consumer at the final boundary. Every preceding arrow needs an owner, a protocol or file path, an identity model, failure behavior, and evidence that it is working.
 
-Kubernetes teams usually choose one of three collector shapes:
+## How do receivers, processors, exporters, and service pipelines form one active route?
+<!-- section-summary: Components are only definitions until a service pipeline connects a receiver through ordered processors to an exporter. -->
 
-| Shape | Where it runs | Good fit |
-|---|---|---|
-| Sidecar | Beside each app container | App-specific control and isolation |
-| DaemonSet agent | One collector per node | Node-local collection and log scraping |
-| Gateway Deployment | Shared collector service | Central routing, batching, and backend credentials |
+### Defined components are inert until a pipeline connects them
 
-For a first production path, a gateway Deployment is easy to understand: apps send OTLP to one stable Service, and the platform team operates the collector. Larger clusters often combine DaemonSet agents with a gateway.
+An OpenTelemetry Collector is a receive-process-export engine:
 
-![Collector deployment shapes comparing sidecar, DaemonSet agent, and gateway collectors with per-pod control, node coverage, and central routing](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/collector-deployment-shapes.png)
+- a **receiver** accepts OTLP, Prometheus, file logs, kubelet statistics, or another source;
+- a **processor** limits memory, enriches, filters, redacts, samples, transforms, or batches data;
+- an **exporter** sends data to an OTLP endpoint, remote-write endpoint, message bus, or backend.
 
-*The deployment shape decides where telemetry is gathered, processed, and routed.*
-
-## Configure the Collector in Layers
-<!-- section-summary: Build collector config from a working OTLP path, then add batching, memory protection, safe attributes, and exporter settings. -->
-
-Add collector config in layers so failures have a clear place to land. Use OTLP in and OTLP out first, then add safety processors.
+Defining components does not activate them. `service.pipelines` must connect them:
 
 ```yaml
 receivers:
@@ -92,258 +95,284 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
-```
 
-What this receiver does:
-
-- Listens for OTLP over gRPC on `4317`.
-- Listens for OTLP over HTTP on `4318`.
-- Gives instrumented apps a standard endpoint.
-
-Add processors for production behavior:
-
-```yaml
 processors:
   memory_limiter:
-    check_interval: 5s
-    limit_percentage: 80
-    spike_limit_percentage: 25
+    check_interval: 1s
+    limit_percentage: 75
+  k8sattributes:
+    auth_type: serviceAccount
   batch:
-    timeout: 5s
-    send_batch_size: 8192
-```
 
-Processor notes:
-
-- `memory_limiter` protects the collector from unlimited buffering.
-- `batch` reduces exporter overhead.
-- The values should match collector resources and backend limits.
-
-Add a safe exporter:
-
-```yaml
 exporters:
-  otlp/tempo:
-    endpoint: tempo.observability.svc.cluster.local:4317
-    tls:
-      insecure: true
-```
+  otlp/backend:
+    endpoint: observability-gateway.example:4317
 
-Exporter notes:
-
-- The endpoint points to the tracing backend Service.
-- Production TLS settings should match the backend certificate setup.
-- Name exporters clearly when a collector sends signals to multiple backends.
-
-Finally wire the pipeline:
-
-```yaml
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [otlp/tempo]
+      processors: [memory_limiter, k8sattributes, batch]
+      exporters: [otlp/backend]
 ```
 
-This final block is the actual trace route. A receiver or exporter defined above does nothing until a service pipeline uses it.
+Processor order can matter. Load protection belongs early, Kubernetes enrichment needs source context while it is still available, and batching belongs after record-level processing.
 
-## Deploy the Collector in Kubernetes
-<!-- section-summary: The Kubernetes deployment gives the collector a ConfigMap, Service, resource budget, and rollout path. -->
+The configuration contains two different ideas. The top-level blocks define components that *could* be used. `service.pipelines` selects an active route for a particular signal and fixes the processor order. A correctly configured `filelog` receiver that is never listed in a logs pipeline collects nothing; an exporter that is not connected exports nothing.
 
-In Kubernetes, the collector usually needs a ConfigMap, a Deployment, and a Service. Keep the first manifest small enough to review.
+Read the active trace path from bottom to top: traces enter through `otlp`, pass through memory protection, Kubernetes enrichment, and batching, then leave through `otlp/backend`. This habit turns a large Collector configuration into explicit data routes rather than a bag of enabled-looking components.
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: otel-collector
-  namespace: observability
-spec:
-  selector:
-    app.kubernetes.io/name: otel-collector
-  ports:
-    - name: otlp-grpc
-      port: 4317
-      targetPort: 4317
-    - name: otlp-http
-      port: 4318
-      targetPort: 4318
+The same Collector can define separate pipelines for logs, metrics, and traces, but each signal must name its route. A component may be shared by several routes only when its behavior fits each one. For example, batching records before export can reduce connection overhead, while redaction may need different rules for log bodies and trace attributes.
+
+Ordering expresses causality. The memory limiter protects the Collector before a burst consumes all available memory. Kubernetes enrichment runs while source association information is available. Filtering or redaction happens before records cross the external boundary. Batching groups the already-approved records for efficient export. Reordering these stages can change what metadata is available, what data leaves the cluster, or whether overload is controlled soon enough.
+
+When debugging configuration, inspect the route rather than merely searching for a component name:
+
+```text
+defined receiver
+→ named in the correct signal pipeline?
+→ processors listed in the intended order?
+→ exporter named in that pipeline?
+→ endpoint reachable with valid credentials?
 ```
 
-What this Service gives apps:
+A syntactically valid component block that never appears in `service.pipelines` is unused configuration, not an active collector.
 
-- A stable DNS name: `otel-collector.observability.svc.cluster.local`.
-- Standard OTLP ports.
-- A selector that routes traffic to collector Pods.
+## Why do application OTLP, container logs, and Kubernetes Events start through different paths?
+<!-- section-summary: Each signal's physical source determines its natural receiver and first Collector rather than one arbitrary shared collection point. -->
 
-Check the rollout:
+### Derive the first collector from physical locality
 
-```bash
-$ kubectl -n observability rollout status deploy/otel-collector
-deployment "otel-collector" successfully rolled out
+Map sources before choosing a deployment:
 
-$ kubectl -n observability get svc otel-collector
-NAME             TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)             AGE
-otel-collector   ClusterIP   10.43.91.144   <none>        4317/TCP,4318/TCP   3m
+| Signal | Source | Natural first collector | Destination |
+|---|---|---|---|
+| Application traces | OTel SDK | OTLP receiver | Trace backend |
+| Application OTLP metrics | OTel SDK | OTLP receiver | Metrics backend |
+| Prometheus metrics | `/metrics` endpoint | Prometheus receiver | Metrics backend |
+| Container logs | Node log files | Filelog receiver | Log backend |
+| Node and Pod metrics | Kubelet | Kubeletstats receiver | Metrics backend |
+| Host metrics | Node OS | Host metrics receiver | Metrics backend |
+| Kubernetes state | Kubernetes API | Cluster receiver | Metrics backend |
+| Kubernetes Events | Kubernetes API | Objects receiver | Log or event backend |
+
+An OTLP receiver can accept network traffic from applications elsewhere in the cluster. A Collector on Node 3 cannot directly read Node 7's `/var/log/pods`, and a host metrics receiver naturally observes its own machine. Cluster receivers are different again: identical copies can collect the same API-wide data several times.
+
+The placement rule is simple: put collection where the data exists.
+
+For example, a container's stdout begins as a Node-local log file. A collector on another Node cannot read that path as though it were local, so placing one collector on every selected Node follows directly. OTLP is network-delivered, so a receiver behind a Service can accept it centrally. Kubernetes Events live behind the Kubernetes API, so running the same cluster receiver on every Node may duplicate the same observations instead of improving coverage.
+
+The push-or-pull direction also shapes reachability. An instrumented application can push OTLP to a known Service endpoint. A Prometheus receiver pulls from application endpoints and therefore needs discovery and network access to those targets. A filelog receiver does not communicate with the application at all; it needs the host path where the container runtime writes logs. A kubeletstats receiver talks to the kubelet associated with its Node. Calling all four “collection” hides the distinct boundary each one must cross.
+
+Build the source map first and verify each row. If a signal's physical source, first receiver, and destination cannot be named, the architecture still contains an unexplained gap.
+
+## Which Collector placement fits node-local collection and shared processing?
+<!-- section-summary: DaemonSet agents fit Node-local sources, gateway Deployments fit shared policy and backend access, and sidecars fit unusually tight per-Pod isolation. -->
+
+### Each placement owns a different boundary
+
+A **DaemonSet agent** places one Collector on each selected Node. It fits container logs, host metrics, kubelet metrics, and optionally local OTLP because the collector is near Node-local sources.
+
+A **gateway Deployment** places horizontally scalable Collectors behind a Service. Gateways fit central credentials, organization-wide filtering and redaction, routing, batching, sampling, controlled backend connections, queues, and retries.
+
+A **sidecar** travels with one Pod. It can isolate a special pipeline or satisfy a very local collection need, but it adds a Collector per Pod and increases resource and operational cost.
+
+Cluster-wide receivers can use a separate cluster Collector so that every DaemonSet replica does not duplicate the same Kubernetes API data.
+
+```mermaid
+flowchart TD
+    Sources[Workloads and Node files] --> Agents[DaemonSet agents]
+    Agents -->|OTLP| Gateway[Gateway Deployment]
+    Gateway --> Backends[Observability backends]
+    Kubernetes[Kubernetes API] --> ClusterCollector[Cluster Collector]
 ```
 
-The output proves the Deployment is available and the Service exists for app traffic.
+This is a data-locality design, not a requirement that every layer look symmetrical.
 
-## The App Sends Signals To The Pipeline
-<!-- section-summary: The application should send telemetry to the collector Service with stable service identity fields. -->
+A common route now follows naturally: DaemonSet agents read local files and kubelet data, then send OTLP to a gateway Service. Gateway replicas centralize credentials, redaction, routing, batching, queues, and backend connections. A separate cluster Collector reads API-wide state once. Sidecars remain an exception for signals that genuinely need a per-Pod collector boundary.
 
-The app should know the collector endpoint and its own service identity. For many OpenTelemetry SDKs, environment variables are enough to configure the first path.
+Scaling every placement identically would be incorrect. More DaemonSet instances mean more selected Nodes. More gateway replicas add shared processing capacity. More identical cluster receivers can merely duplicate data. Placement and scaling both follow the source and processing state.
 
-```yaml
-env:
-  - name: OTEL_SERVICE_NAME
-    value: devpolaris-orders-api
-  - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: http://otel-collector.observability.svc.cluster.local:4318
-  - name: OTEL_RESOURCE_ATTRIBUTES
-    value: deployment.environment=prod,k8s.namespace.name=orders
+### Derive the common agent-to-gateway shape
+
+Start with Node-local data. One DaemonSet Pod per selected Node can see that Node's log files, host metrics, and kubelet. Those agents then export over the network to one logical gateway endpoint backed by a Deployment:
+
+```text
+Node 1 files and kubelet → agent 1 ┐
+Node 2 files and kubelet → agent 2 ├→ gateway Service → gateway replicas → backends
+Node 3 files and kubelet → agent 3 ┘
+
+Kubernetes API → one cluster collector → gateway or backend
 ```
 
-What these values do:
+The agents solve locality. The gateway solves shared policy: one place for backend credentials, organization-wide redaction, routing, sampling, batching, retries, and control over outbound connections. The cluster collector solves a different duplication problem by collecting API-wide state once rather than once per Node.
 
-- `OTEL_SERVICE_NAME` gives traces a stable service name.
-- `OTEL_EXPORTER_OTLP_ENDPOINT` sends data to the collector Service.
-- `OTEL_RESOURCE_ATTRIBUTES` adds environment and namespace context.
+This architecture is not mandatory for every cluster. It is a derivation from three different facts: files and host state are local, shared processing can scale behind a Service, and cluster-wide receivers can duplicate data. If those facts differ—for example, a special Pod requires a tightly isolated per-Pod pipeline—the placement can differ too.
 
-After rollout, check app logs for exporter errors:
+## How can attributes improve correlation while controlling privacy and cost?
+<!-- section-summary: Stable service identity and selected Kubernetes runtime attributes make records joinable, while an allowlist prevents high cardinality and sensitive-data leakage. -->
 
-```bash
-$ kubectl -n orders logs deploy/devpolaris-orders-api -c api --tail=40
-2026-06-30T11:10:14Z INFO telemetry exporter configured endpoint=http://otel-collector.observability.svc.cluster.local:4318
+### Keep logical identity stable and runtime identity precise
+
+Identity has two levels. Logical attributes answer which software produced the signal:
+
+```text
+service.name = checkout
+service.namespace = store
+service.version = 2026.08.19
 ```
 
-This log confirms the app loaded the expected endpoint. It is not enough by itself; the collector and backend still need verification.
+`service.name` stays stable across replicas. Runtime attributes answer which incarnation produced it:
 
-## Keep Attributes Safe and Affordable
-<!-- section-summary: Attribute controls prevent secrets, personal data, and high-cardinality values from making telemetry unsafe or expensive. -->
-
-Telemetry attributes can create two production problems: sensitive data exposure and high-cardinality cost. A trace attribute such as `user.email` can leak private data. A field such as `request.id` can create a unique label for every request in a metrics backend.
-
-Use processors to delete unsafe fields:
-
-```yaml
-processors:
-  attributes/safe:
-    actions:
-      - key: http.request.header.authorization
-        action: delete
-      - key: user.email
-        action: delete
+```text
+k8s.cluster.name = prod-eu
+k8s.namespace.name = ecommerce
+k8s.deployment.name = checkout
+k8s.pod.name = checkout-78c9f5...
+k8s.pod.uid = 671ab...
+k8s.node.name = node-27
 ```
 
-What this processor protects:
+The `k8sattributes` processor can discover Pods and attach selected namespace, Pod UID, Deployment, Node, and container metadata. Keep an explicit metadata contract instead of copying every label and annotation.
 
-- Authorization headers stay out of the backend.
-- Personal data stays out of normal incident search.
-- The collector enforces the rule centrally.
+If `service.name` were set to `checkout-78c9f5-h72js`, every rollout and replica would appear to create a new service. Instead, `service.name = checkout` groups the logical software across replicas and versions, while `k8s.pod.uid` and `service.instance.id` identify the exact runtime incarnation. Investigations can move from the stable service to one failing Pod without confusing ephemerality with service identity.
 
-Add the processor to the trace pipeline:
+### Enrichment is a schema contract, not a metadata dump
 
-```yaml
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [memory_limiter, attributes/safe, batch]
-      exporters: [otlp/tempo]
+Values such as customer IDs, request IDs, session IDs, random Pod hashes, full URLs, and commit strings can create excessive metric cardinality. Tokens, email addresses, customer data, and internal annotations can violate privacy. Enrichment, redaction, least-privilege Collector service accounts, TLS and authentication at network boundaries, and protected backend credentials belong to the pipeline design.
+
+Treat the allowed attributes like a versioned API consumed by queries and alerts. `service.name`, environment, cluster, namespace, Deployment, version, and Pod UID each answer a known operational question. A newly copied label should be admitted only when its value space, privacy, and purpose are understood.
+
+Cardinality is the number of distinct label combinations a metrics system must track. A bounded attribute such as namespace creates a manageable set. An unbounded request ID creates a new series for nearly every request. The same request ID may be useful in logs or traces for correlation, but using it as a metric dimension can make storage and queries explode. “Useful somewhere” does not mean “safe on every signal.”
+
+Security follows the same boundary model. The Collector's ServiceAccount should read only the Kubernetes metadata its receivers and processors need. Backend credentials should be available only to the layer that exports there. Transport across a network boundary should authenticate and encrypt the parties. Redaction must happen before sensitive records leave the trusted boundary, not after a vendor has stored them.
+
+## How should the pipeline handle bursts and a slow backend?
+<!-- section-summary: Bounded queues, retries, memory limits, sampling, and capacity absorb finite disruption, but sustained arrival above export capacity must eventually shed data or add real throughput. -->
+
+### Backlog growth is arrival rate minus service rate
+
+If 100,000 spans arrive each second while a backend consumes 60,000, backlog grows by 40,000 spans per second. After 30 seconds, 1.2 million spans are waiting. Kubernetes does not change that arithmetic.
+
+```text
+backlog growth per second = arrival rate - export rate
+100,000 - 60,000 = 40,000 spans
+40,000 × 30 seconds = 1,200,000 queued spans
 ```
 
-Order matters here: delete sensitive attributes before batching and exporting.
+Queues buy time; they do not create capacity. A memory queue survives only short disruptions and disappears with the Collector. A queue backed by persistent storage can survive Collector restarts. A durable message bus provides stronger decoupling but introduces another distributed system to operate.
 
-## Verify One Request End to End
-<!-- section-summary: End-to-end verification proves the app emitted telemetry, the collector accepted it, and the backend can query it. -->
+Bounded queues, retry behavior, `memory_limiter`, intentional sampling, and planned data-loss behavior prevent unbounded memory growth. If the backend stays slow until the queue fills, telemetry is eventually refused or dropped. Adding Collector replicas can make an overloaded backend worse by sending to it faster, so queue saturation is often a more direct scaling signal than Collector CPU alone.
 
-Use one synthetic request to prove the pipeline. The exact backend query changes by tool, but the Kubernetes-side checks stay similar.
+A memory queue is appropriate when short disruption can be absorbed and loss on Collector restart is acceptable. Persistent queue storage lets queued batches survive that restart. A durable message bus creates stronger decoupling, but it also creates another production system. The reliability choice should follow the signal: sampled traces and audit logs may have very different loss tolerances.
 
-```bash
-$ kubectl -n observability logs deploy/otel-collector --tail=80
-2026-06-30T11:14:03Z info TracesExporter {"exporter":"otlp/tempo","spans":18}
+### Stateful processing needs all records for the same key
+
+Some processing also needs related records together. Tail sampling decides after seeing a trace's outcome, so all spans for one trace must meet at the same sampler. With scaled gateways:
+
+```mermaid
+flowchart LR
+    Agents[Agents] --> Router[Stateless routing tier]
+    Router --> Hash[Hash by trace ID]
+    Hash --> Samplers[Tail-sampling collectors]
+    Samplers --> Backend[Trace backend]
 ```
 
-What this collector log says:
+Head sampling decides when the request begins and scales simply, but it cannot know the final outcome. Tail sampling can keep errors or slow traces intelligently, but it needs memory, time, and trace-affine routing.
 
-- The collector received trace spans.
-- The exporter sent spans to the backend.
-- The exporter name matches the configured route.
+Randomly balancing spans across three tail samplers can send the frontend, checkout, payment, and database spans of one trace to different instances. No sampler then sees the complete outcome. A stateless first tier must route by `trace_id` so every span for one trace reaches the same stateful sampler. This is the same distributed-systems rule as routing all events for one key to the same partition or shard.
 
-If the collector exposes metrics, watch accepted and failed data:
+## How can a team prove one request across the application, Collector, and backend?
+<!-- section-summary: Send one uniquely identifiable request, trace it across each pipeline boundary, and use Collector self-telemetry to localize missing data. -->
 
-```bash
-$ kubectl -n observability port-forward deploy/otel-collector 8888:8888
-Forwarding from 127.0.0.1:8888 -> 8888
+### Follow one identifier instead of looking for generic activity
+
+Send a known request with `synthetic.request_id = test-20260820-001` and propagate trace context through frontend, checkout, and payment. Record the trace ID, then prove it at each hop:
+
+```mermaid
+flowchart LR
+    SDK[Application SDK] --> AgentReceiver[Agent receiver]
+    AgentReceiver --> AgentExporter[Agent exporter]
+    AgentExporter --> GatewayReceiver[Gateway receiver]
+    GatewayReceiver --> GatewayProcessors[Gateway processors]
+    GatewayProcessors --> GatewayExporter[Gateway exporter]
+    GatewayExporter --> BackendQuery[Backend query]
 ```
 
-Expected follow-up checks:
+Logs should carry the same trace ID, traces should show the service chain, and metrics can use controlled dimensions such as `service.name = checkout` and `route = /checkout`. “The backend has some traces” does not prove delivery for this request.
 
-- `otelcol_receiver_accepted_spans` should rise after the synthetic request.
-- `otelcol_exporter_sent_spans` should rise after export.
-- `otelcol_exporter_send_failed_spans` should stay at `0` during the test.
+When a span disappears, inspect accepted and refused telemetry at receivers, sent and failed telemetry at exporters, and queue size versus capacity. If an agent accepts and sends 1,000 spans while a gateway accepts 1,000 and sends 400, the failure is after gateway ingress.
 
-## Troubleshoot Missing Telemetry
-<!-- section-summary: Missing telemetry debugging follows the path from app configuration to network access, collector receiver, processor drops, exporter errors, and backend indexing. -->
+The same proof should join signals. Query trace ID `ABC` in the trace backend, find application logs carrying `trace_id=ABC`, and inspect controlled metrics dimensions such as `service.name=checkout` and `route=/checkout`. “The backend contains some recent traces” proves only that some path works; accounting for the synthetic request proves this particular path.
 
-When traces are missing, trace the pipeline hop by hop:
+### Operate the pipeline as a production service
 
-| Hop | Check | Evidence |
-|---|---|---|
-| App config | Environment variables | App logs show OTLP endpoint |
-| Network | Service DNS and NetworkPolicy | App Pod can reach collector Service |
-| Receiver | Collector logs or metrics | Accepted spans increase |
-| Processor | Drop counters and config | Unsafe filters are intentional |
-| Exporter | Exporter errors | Failed sends stay near zero |
-| Backend | Search by service name | `devpolaris-orders-api` appears |
+Operate the telemetry pipeline as a production service. Measure ingress, intentional processing drops and resource use, buffering pressure, successful and failed egress, and delivery delay. Different signals can have different reliability goals: trace sampling may be acceptable while audit-log loss is not.
 
-Example network check from a debug Pod:
+Four views cover the data plane:
 
-```bash
-$ kubectl -n orders run otlp-check --rm -it --image=curlimages/curl -- curl -sS http://otel-collector.observability.svc.cluster.local:4318
-404 page not found
+- **ingress:** accepted and refused telemetry;
+- **processing:** intentional drops, sampling behavior, CPU, and memory;
+- **buffering:** queue size relative to capacity and the age of backlog;
+- **egress:** sent records, failed exports, and delivery delay.
+
+A delivery objective can then state what the pipeline owes its users, such as the proportion of accepted production telemetry that reaches its destination within a defined delay. Without its own health signals and objective, the telemetry pipeline can fail during the incident and remove the evidence needed to investigate that failure.
+
+### Turn one synthetic request into a boundary-by-boundary proof
+
+Assume the test request receives trace ID `ABC`. The proof is not one screenshot from a trace UI. It is a chain of observations:
+
+```text
+application SDK reports export for ABC
+→ agent receiver accepted ABC
+→ agent exporter sent ABC
+→ gateway receiver accepted ABC
+→ processors did not filter or sample ABC away
+→ gateway exporter sent ABC
+→ backend query returns ABC
 ```
 
-What this result means:
+At each boundary, compare counters over the same interval. If the agent receiver accepts records but its exporter reports failures and the queue grows, the problem is between the agent and its destination. If the gateway accepts the records but sends fewer after an intentional sampling processor, disappearance may be policy rather than transport failure. If exports succeed while the backend query cannot find the trace, verify the destination, tenant, time range, and query identity.
 
-- DNS and TCP routing to the collector worked.
-- The `404` is acceptable for a raw GET against an OTLP HTTP endpoint.
-- A timeout or connection refused would point to Service, Pod, port, or NetworkPolicy issues.
+The pipeline's own telemetry makes this possible. Accepted and refused counts describe ingress. Queue size and capacity describe how much disruption remains absorbable. Sent and failed export counts describe egress. Processing-drop metrics distinguish deliberate filtering or sampling from accidental loss. Delivery delay reveals a pipeline that is technically moving data but too slowly to support an incident.
 
-## Operational Checklist
-<!-- section-summary: A production telemetry pipeline needs clear ownership, safe attributes, collector health checks, and a tested failure path. -->
+Finally, correlate the request across signal types. The trace shows the frontend-to-checkout-to-payment path. Logs containing `trace_id=ABC` supply detailed events from those services. Metrics grouped by stable dimensions such as `service.name=checkout` and `route=/checkout` show whether the request occurred during a broader pattern. This joins durable, controlled identities; it does not require turning the unique trace ID into a high-cardinality metric label.
 
-Use this checklist when reviewing the telemetry pipeline for `devpolaris-orders-api`:
+## Check Your Answers
+<!-- section-summary: Rebuild the pipeline from physical sources, active routes, placement, identity, resilience, trace state, and end-to-end evidence. -->
 
-| Check | Expected result |
-|---|---|
-| Service identity | Traces include `service.name=devpolaris-orders-api` |
-| Endpoint | The app sends OTLP to `otel-collector.observability.svc.cluster.local` |
-| Collector pipeline | Receivers, processors, and exporters are connected under `service.pipelines` |
-| Attribute safety | Sensitive and high-cardinality fields are removed or never emitted |
-| Network boundary | Only approved namespaces can reach OTLP ports |
-| Collector health | Accepted, refused, failed-export, queue, memory, and restart metrics are dashboarded |
-| Backend proof | A synthetic orders request can be found in the tracing backend |
-| Ownership | App teams own instrumentation; platform teams own collector export and capacity |
+:::expand[Why does useful telemetry need a delivery pipeline?]{kind="recap"}
+Evidence begins in processes, Node files, endpoints, kubelets, and the Kubernetes API. It must be collected, identified, processed, transported, and stored before it can be queried.
+:::
 
-![Telemetry operations checklist with trace proof, safe attributes, batching, dropped data, cardinality, and backend verification](/content-assets/articles/article-containers-orchestration-kubernetes-operations-telemetry-pipelines/telemetry-operations-checklist.png)
+:::expand[How do receivers, processors, exporters, and service pipelines form one active route?]{kind="recap"}
+Receivers accept data, ordered processors control or enrich it, and exporters send it. The route is active only when `service.pipelines` connects those components.
+:::
 
-*The checklist keeps telemetry operations practical: prove one request end to end, clean unsafe fields, watch dropped data, and verify that the backend can answer incident questions.*
+:::expand[Why do application OTLP, container logs, and Kubernetes Events start through different paths?]{kind="recap"}
+They physically exist in different places and use different push, pull, file, or API paths. Their first receiver and Collector follow that locality.
+:::
 
-The pipeline is ready when a responder can name which hop failed: app emission, collector receive, processor filtering, exporter delivery, or backend indexing.
+:::expand[Which Collector placement fits node-local collection and shared processing?]{kind="recap"}
+DaemonSet agents fit Node-local data, gateways fit shared processing and backend access, sidecars fit exceptional per-Pod isolation, and a cluster Collector avoids duplicate API-wide collection.
+:::
+
+:::expand[How can attributes improve correlation while controlling privacy and cost?]{kind="recap"}
+Use stable logical service identity plus selected runtime attributes. Allowlist enrichment so high-cardinality or sensitive Kubernetes data does not leak into telemetry.
+:::
+
+:::expand[How should the pipeline handle bursts and a slow backend?]{kind="recap"}
+Use bounded queues, retries, limits, sampling, and enough real export capacity. Queues absorb finite disruption; trace-aware routing keeps spans together for tail sampling.
+:::
+
+:::expand[How can a team prove one request across the application, Collector, and backend?]{kind="recap"}
+Send one uniquely identified request, account for it at every hop, and use receiver, exporter, and queue telemetry to locate the first boundary where it disappears.
+:::
 
 ## References
 
-- [OpenTelemetry Collector configuration](https://opentelemetry.io/docs/collector/configuration/) - Official guide to receivers, processors, exporters, extensions, and service pipelines.
-- [OpenTelemetry Collector architecture](https://opentelemetry.io/docs/collector/architecture/) - Explains the collector as a vendor-neutral component that receives, processes, and exports telemetry.
-- [OpenTelemetry Collector Kubernetes install](https://opentelemetry.io/docs/collector/install/kubernetes/) - Shows Kubernetes installation options and points to Helm and Operator paths for production customization.
-- [OpenTelemetry agent-to-gateway deployment pattern](https://opentelemetry.io/docs/collector/deploy/other/agent-to-gateway/) - Describes the combined local-agent and central-gateway layout for larger production environments.
-- [OpenTelemetry transforming telemetry](https://opentelemetry.io/docs/collector/transforming-telemetry/) - Covers filtering, attribute updates, resource enrichment, and transformation processors.
-- [OpenTelemetry Collector internal telemetry](https://opentelemetry.io/docs/collector/internal-telemetry/) - Documents collector metrics, logs, queue metrics, receiver counts, and exporter failure signals.
-- [OpenTelemetry OTLP exporter environment variables](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) - Lists environment variables such as `OTEL_EXPORTER_OTLP_ENDPOINT` and protocol-specific endpoint settings.
-- [Kubernetes Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - Explains how NetworkPolicy controls Pod ingress and egress when enforced by the cluster network plugin.
-- [Kubernetes ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/) - Describes ConfigMaps for non-secret configuration consumed by Pods.
+- [OpenTelemetry Collector configuration](https://opentelemetry.io/docs/collector/configuration/)
+- [OpenTelemetry Collector deployment patterns](https://opentelemetry.io/docs/collector/deployment/)
+- [OpenTelemetry Collector in Kubernetes](https://opentelemetry.io/docs/platforms/kubernetes/collector/)
+- [Kubernetes logging architecture](https://kubernetes.io/docs/concepts/cluster-administration/logging/)
+- [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/)

@@ -5,5 +5,5 @@ kind: python
 icon: Code
 color: "#F59E0B"
 order: 3
-available: true
+available: false
 ---

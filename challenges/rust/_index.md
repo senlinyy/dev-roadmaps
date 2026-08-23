@@ -5,5 +5,5 @@ kind: "rust"
 icon: "Code"
 color: "#B39DDB"
 order: 4
-available: true
+available: false
 ---

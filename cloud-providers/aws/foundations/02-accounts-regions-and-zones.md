@@ -1,7 +1,7 @@
 ---
 title: "Accounts, Regions, and Availability Zones"
-description: "AWS resources placed across account security boundaries, geographic Regions, and isolated Availability Zones."
-overview: "Every AWS resource has a place. This article teaches how accounts, Organizations, Regions, Availability Zones, VPCs, subnets, and resource scope shape that placement before production traffic arrives."
+description: "Understand how AWS accounts, Regions, Availability Zones, VPCs, and subnets create separate ownership, location, failure, and network boundaries."
+overview: "An AWS resource has several coordinates. Learn which boundary owns it, where it runs, which failures it is exposed to, which private network it uses, and how to confirm that scope before making a change."
 tags: ["aws", "foundations", "accounts", "regions", "availability-zones"]
 order: 2
 id: article-cloud-providers-aws-foundations-accounts-regions-availability-zones
@@ -12,419 +12,681 @@ aliases:
 
 ## Table of Contents
 
-1. [Start With the Place of the App](#start-with-the-place-of-the-app)
-2. [Accounts: Who Owns the Workload](#accounts-who-owns-the-workload)
-3. [Regions: Where the Workload Runs](#regions-where-the-workload-runs)
-4. [Availability Zones: Local Failure Boundaries](#availability-zones-local-failure-boundaries)
-5. [VPCs and Subnets: The Private Network Layout](#vpcs-and-subnets-the-private-network-layout)
-6. [Shared Services and Cross-Account Work](#shared-services-and-cross-account-work)
-7. [Daily Scope Checks Before Changes](#daily-scope-checks-before-changes)
-8. [What's Next](#whats-next)
-9. [References](#references)
+1. [Which Question Does Each AWS Boundary Answer?](#which-question-does-each-aws-boundary-answer)
+2. [What Does an AWS Account Own and Control?](#what-does-an-aws-account-own-and-control)
+3. [How Does a Region Choose the Workload's Location?](#how-does-a-region-choose-the-workloads-location)
+4. [Why Does a Workload Use More Than One Availability Zone?](#why-does-a-workload-use-more-than-one-availability-zone)
+5. [How Do VPCs and Subnets Place Resources on a Network?](#how-do-vpcs-and-subnets-place-resources-on-a-network)
+6. [How Do Global, Regional, and Zonal Scopes Differ?](#how-do-global-regional-and-zonal-scopes-differ)
+7. [How Do Separate Accounts Share Access and Services?](#how-do-separate-accounts-share-access-and-services)
+8. [What Should You Check Before Changing a Resource?](#what-should-you-check-before-changing-a-resource)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Start With the Place of the App
-<!-- section-summary: AWS placement starts with account, Region, Availability Zone, VPC, and subnet scope. -->
+## Which Question Does Each AWS Boundary Answer?
+<!-- section-summary: Accounts, Regions, Availability Zones, VPCs, and subnets are separate coordinates that answer ownership, geography, failure, network, and placement questions. -->
 
-Keep following the small photo app from the previous article. `northstar-photos` has a web service, a PostgreSQL database, a private S3 bucket for uploaded profile images, and a few CloudWatch alarms. The app may look like one system to users, but AWS places each part inside several boundaries before the first production request arrives.
+AWS infrastructure is often drawn as a tree: accounts contain Regions, Regions contain Availability Zones, and Availability Zones contain networks and resources. The picture is useful, but treating every term as another folder hides the engineering reason each boundary exists.
 
-Those boundaries answer different questions. An **AWS account** answers who owns the workload, who pays for it, which IAM rules apply, and where audit events land. A **Region** answers which geographic AWS area hosts the workload. An **Availability Zone**, often shortened to **AZ**, answers which isolated location inside that Region holds a subnet or a resource. A **VPC** answers which private network the workload uses inside the Region.
+The boundaries answer different questions:
 
-We will keep the examples focused on account, Region, AZ, VPC, subnet, and one cross-account role. A later operations or landing-zone article can handle full multi-account and network design. The goal here is to help a beginner look at an AWS resource and say, **which account, Region, AZ, VPC, and subnet does this belong to?**
+```text
+AWS account
+Who owns, controls, and pays for the resource?
 
-| Layer | Simple definition | Photo app example |
+Region
+In which geographic AWS location does it run?
+
+Availability Zone
+In which local infrastructure failure domain does it run?
+
+VPC
+Which private network is it attached to?
+
+Subnet
+Which Availability Zone-specific part of that network is it attached to?
+```
+
+An application also needs answers to several independent design questions. Who may create or control it? Who receives the bill? Where in the world should it run? What happens if part of that location fails? Which network carries its traffic? How does it communicate with systems owned by other teams? AWS uses different boundaries because one boundary cannot answer all of those questions well.
+
+A simplified organization can be pictured like this:
+
+```text
+AWS Organization
+│
+├── Production account
+│   ├── Region: eu-west-2
+│   │   ├── VPC: production-vpc
+│   │   │   ├── AZ A
+│   │   │   │   └── Subnet A
+│   │   │   ├── AZ B
+│   │   │   │   └── Subnet B
+│   │   │   └── AZ C
+│   │   │       └── Subnet C
+│   │   └── other regional resources
+│   └── Region: us-east-1
+│       └── other resources
+│
+├── Development account
+│   └── resources in its chosen Regions
+│
+└── Shared Services account
+    └── shared resources
+```
+
+The drawing must be read carefully. The production account does not physically sit inside one Region. The same account can own resources in `eu-west-2`, `eu-west-1`, `us-east-1`, and other Regions at the same time. The account supplies the ownership coordinate; the Region supplies the geographic coordinate.
+
+The sections below answer these questions in order:
+
+1. **Which Question Does Each AWS Boundary Answer?**
+2. **What Does an AWS Account Own and Control?**
+3. **How Does a Region Choose the Workload's Location?**
+4. **Why Does a Workload Use More Than One Availability Zone?**
+5. **How Do VPCs and Subnets Place Resources on a Network?**
+6. **How Do Global, Regional, and Zonal Scopes Differ?**
+7. **How Do Separate Accounts Share Access and Services?**
+8. **What Should You Check Before Changing a Resource?**
+
+Together, these boundaries control **blast radius**: the amount of the organization or workload that one mistake, credential problem, network change, or infrastructure failure can affect.
+
+![The placement coordinates show how account, Region, Availability Zone, VPC, subnet, and resource ID answer different parts of the same scope question](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/aws-placement-coordinates.png)
+
+*A resource has several coordinates because ownership, geography, failure isolation, and network placement are different concerns.*
+
+## What Does an AWS Account Own and Control?
+<!-- section-summary: An AWS account is a strong ownership, security, billing, governance, and operational blast-radius boundary around resources. -->
+
+An **AWS account** is primarily an ownership, security, and administrative boundary. Resources such as EC2 instances, S3 buckets, RDS databases, IAM roles, VPCs, and CloudWatch resources normally belong to a particular account.
+
+A company could place production applications, development environments, security tools, central networking, and finance systems in one account. That design creates one large blast radius. A developer with excessive permissions could affect production. Billing is harder to separate. Service quotas are shared. A faulty automation run can touch unrelated workloads. Security policy and audit evidence become harder to reason about because many responsibilities occupy the same boundary.
+
+Organizations therefore commonly separate responsibilities:
+
+```text
+AWS Organization
+├── Production account
+├── Development account
+├── Security account
+├── Networking account
+├── Logging account
+└── Shared Services account
+```
+
+The account split provides several independent benefits.
+
+### Accounts separate permissions
+
+A developer might receive broad permissions in a development account but only read access or a narrowly scoped operational role in production:
+
+```text
+Developer
+   ├── Development account → broad development permissions
+   └── Production account  → restricted or read-only permissions
+```
+
+An error made with development permissions remains on the development side of the account boundary unless cross-account access was deliberately granted.
+
+### Accounts separate billing and quotas
+
+Costs can be attributed to the account that owns the resources:
+
+```text
+Development account → £20,000
+Production account  → £100,000
+Security account    → £10,000
+```
+
+This separation makes ownership visible and reduces the number of unrelated workloads competing within the same account-level limits.
+
+### Accounts limit operational blast radius
+
+If automation deletes or changes resources in one account, a correct account boundary makes it less likely that the same mistake reaches another. The boundary is not a guarantee by itself—cross-account roles and organization-wide automation still need careful design—but it creates a strong default separation.
+
+### Organizations govern accounts
+
+AWS Organizations groups member accounts and can apply organization policies to them. This allows a company to maintain separate owners while still enforcing central controls. A production account, development account, and security account can have different daily permissions while remaining governed by the same organization.
+
+The account should therefore be read as the answer to: **which administrative owner controls this resource?** It is not the physical location of a server.
+
+### The owner and the acting identity are different
+
+An account owns resources. An IAM identity determines who can act on those resources. For example:
+
+```text
+Production AWS account
+├── production database
+├── application VPC
+└── IAM role: ProductionOperator
+```
+
+Alice may authenticate through the company's identity system and then assume `ProductionOperator` in that account:
+
+```text
+human identity
+    ↓ assumes
+IAM role
+    ↓ receives permission to change
+resources
+    ↓ owned by
+AWS account
+```
+
+This distinction becomes essential in multi-account environments. Alice does not become the account, and the account is not an identity. She crosses the ownership boundary through a role that states what she may do there.
+
+## How Does a Region Choose the Workload's Location?
+<!-- section-summary: A Region is a major geographic deployment boundary chosen for latency, legal obligations, service support, recovery strategy, cost, and system proximity. -->
+
+After selecting the account that owns the workload, the team still needs to choose where the infrastructure runs. An AWS **Region** is a major geographic deployment boundary. Region codes include `eu-west-2`, `us-east-1`, and `ap-southeast-2`.
+
+The code is less important than the decision behind it. A team may choose a Region because of:
+
+- latency to users;
+- legal or regulatory requirements;
+- data-residency obligations;
+- availability of the AWS services the application needs;
+- a disaster-recovery plan;
+- cost; or
+- proximity to other systems that exchange data with the application.
+
+If most users are in the United Kingdom, placing the application in London can provide a shorter network path than placing it in a distant Region. If regulated data must remain in an approved geography, that obligation may determine the choice even before latency and cost are compared.
+
+An account and a Region remain independent dimensions:
+
+```text
+Production account
+├── London Region
+│   └── primary application
+└── Ireland Region
+    └── disaster-recovery resources
+```
+
+The account answers **who owns these resources**. The Region answers **where these resources run**. The same production account can use both Regions.
+
+AWS uses Regions because one worldwide infrastructure location would create an enormous shared failure domain. A sufficiently large power failure, network failure, natural disaster, software fault, or regulatory problem could affect everything placed there. Geographic separation allows an organization to design for a whole-Region problem:
+
+```text
+Region 1                    Region 2
+┌────────────────┐          ┌────────────────┐
+│ infrastructure │          │ infrastructure │
+│ infrastructure │          │ infrastructure │
+└────────────────┘          └────────────────┘
+
+         separate geographic failure boundaries
+```
+
+Choosing a second Region does not automatically create a working disaster-recovery system. Data, configuration, networking, DNS, permissions, and operating procedures must also support the recovery path. The Region boundary simply gives the architecture a separate geographic place in which that path can exist.
+
+## Why Does a Workload Use More Than One Availability Zone?
+<!-- section-summary: Availability Zones create local infrastructure failure boundaries inside one Region, allowing a workload to keep capacity outside the failed zone. -->
+
+Selecting the production account and London Region still leaves the application exposed to local infrastructure failure. Power, cooling, networking, or physical infrastructure can fail in one part of the Region. If the whole workload occupies that one location, the local failure can remove the whole application.
+
+AWS divides a Region into multiple **Availability Zones**, usually called **AZs**:
+
+```text
+Region
+├── Availability Zone A
+├── Availability Zone B
+└── Availability Zone C
+```
+
+An AZ is a local infrastructure failure boundary within a Region. AZs are close enough to communicate over high-speed regional networking while being isolated so that many local failures should not affect all zones at the same time.
+
+Consider a workload placed entirely in AZ A:
+
+```text
+AZ A
+├── web server
+├── application server
+└── database
+```
+
+If AZ A becomes unavailable, every listed component becomes unavailable with it. A Multi-AZ architecture instead distributes the application:
+
+```text
+                 Load Balancer
+                      │
+             ┌────────┴────────┐
+             ▼                 ▼
+
+          AZ A                AZ B
+     ┌────────────┐      ┌────────────┐
+     │ app server │      │ app server │
+     └────────────┘      └────────────┘
+
+              database design
+                spanning AZs
+```
+
+If AZ A fails, capacity in AZ B can continue serving traffic. Multi-AZ architecture is therefore primarily a resilience strategy for local infrastructure failure. It is not mainly a performance feature.
+
+Failure protection must match the size of the failure:
+
+| Failure | Example | Protection model |
 |---|---|---|
-| **Account** | Security, billing, IAM, quota, and audit boundary | The `prod` account owns production ECS, RDS, S3, and alarms |
-| **Region** | Geographic AWS area | `eu-west-2` hosts the UK production workload |
-| **Availability Zone** | Isolated location inside a Region | App subnets exist in `euw2-az1` and `euw2-az2` |
-| **VPC** | Private regional network | `vpc-0123456789abcdef0` with CIDR `10.40.0.0/16` |
-| **Subnet** | AZ-scoped slice of the VPC | One public and one private app subnet in each AZ |
+| Machine or component failure | One server stops | Multiple instances or managed-service redundancy |
+| Availability Zone failure | One local AWS location is unavailable | Multi-AZ architecture |
+| Regional failure | A major geographic AWS location is unavailable | Multi-Region architecture |
 
-These names connect directly to the first production design for the photo app. The production database belongs in the production account. The app runs in the Region approved for its users and data rules. The load balancer and app tasks spread across more than one AZ. The database sits in private subnets, while the load balancer receives public HTTPS traffic.
+An AZ is sometimes described as one data center to make the idea approachable. The safer model is an independently operated infrastructure location or failure domain. Application design should rely on the logical boundary AWS exposes rather than assumptions about individual physical buildings.
 
-That placement also shapes troubleshooting. A missing subnet, wrong Region, wrong account, or full AZ subnet can look like an application problem at first. The operator needs the placement map before changing code, policies, or network rules.
+### AZ names can differ between accounts
 
-![The placement coordinates show how account, Region, Availability Zone, VPC, subnet, and resource ID answer different parts of the same production-scope question](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/aws-placement-coordinates.png)
+Names such as `eu-west-2a`, `eu-west-2b`, and `eu-west-2c` look universal, but the letter can map differently in different accounts. `eu-west-2a` in account A does not necessarily identify the same physical AZ as `eu-west-2a` in account B.
 
-*The placement coordinates show how account, Region, Availability Zone, VPC, subnet, and resource ID answer different parts of the same production-scope question.*
+AWS provides stable **Availability Zone IDs** for cross-account correlation. The same physical AZ may appear as `AZ a` in one account and `AZ c` in another while both names refer to the same AZ ID:
 
-
-## Accounts: Who Owns the Workload
-<!-- section-summary: AWS accounts separate security, billing, permissions, quotas, and audit history. -->
-
-An **AWS account** is the strongest everyday ownership boundary in AWS. It holds IAM identities and roles, billing records, many service quotas, CloudTrail events, and the resources for one scope of work. If a developer deletes a test database in a development account, the account split keeps that action away from the production database in the production account.
-
-Real teams usually manage accounts through **AWS Organizations**. A simple company setup may include `dev`, `staging`, `prod`, `security`, `logging`, and `tooling` accounts. The production account hosts customer traffic and customer data. The logging account can receive organization-wide CloudTrail records. The security account can host GuardDuty, Security Hub, audit roles, and investigation tooling. The tooling account can host CI/CD systems that deploy into application accounts through tightly scoped roles.
-
-This split gives teams practical control over blast radius. A sandbox experiment can have a short retention window and a small budget. Production can require stricter IAM roles, alarms, backups, and change review. Central logging can keep audit records away from day-to-day application roles that have no reason to erase evidence.
-
-AWS Organizations can also apply **service control policies**, or **SCPs**, to accounts or groups of accounts. An SCP sets an outer guardrail for what member accounts can do. For example, the organization can deny resource creation outside approved Regions, deny disabling CloudTrail, or deny public S3 bucket policies except through a reviewed path. IAM policies inside the account still grant normal permissions, but the SCP can block actions even if an IAM policy would otherwise allow them.
-
-For `northstar-photos`, a beginner-friendly account split may look like this:
-
-| Account | Job | Example controls |
-|---|---|---|
-| `dev` | Safe experiments and feature testing | Small budget, synthetic data, short log retention |
-| `staging` | Release rehearsal | Same deployment path as prod, production-like alarms |
-| `prod` | Customer traffic and customer data | Strict roles, backups, change review, alerting |
-| `security` | Central security tooling | GuardDuty, Security Hub, audit access roles |
-| `logging` | Central audit and log archive | Organization CloudTrail and retained access logs |
-| `tooling` | CI/CD and shared automation | Pipeline roles that assume limited deploy roles |
-
-The account boundary matters every time a person opens a terminal. A profile name such as `prod` is only a local label. The command still needs proof of the active account ID and role before a production change.
-
-```bash
-aws sts get-caller-identity --profile prod
+```text
+Account A                 Account B
+"AZ a"                    "AZ c"
+   │                          │
+   └──────── same AZ ID ──────┘
 ```
 
-Example output:
+Friendly AZ names are normally sufficient inside one account. AZ IDs matter when network or infrastructure teams coordinate physical placement across accounts.
 
-```json
-{
-  "UserId": "AROAXAMPLEID:senlin",
-  "Account": "123456789012",
-  "Arn": "arn:aws:sts::123456789012:assumed-role/ProdReadOnly/senlin"
-}
+![The AZ mapping view explains why teams compare Availability Zone IDs when account-specific AZ names may differ](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/az-name-id-mapping.png)
+
+*An AZ ID gives cross-account teams a stable way to refer to the same local failure domain.*
+
+## How Do VPCs and Subnets Place Resources on a Network?
+<!-- section-summary: A VPC is a regional private network, while each subnet places resources in one Availability Zone-specific segment of that network. -->
+
+Accounts answer ownership, Regions answer geography, and AZs answer local failure placement. Resources still need an address space, routes, and controlled network relationships. AWS provides a **Virtual Private Cloud**, or **VPC**, for that job.
+
+A VPC is a private, logically isolated network defined inside one AWS Region. It includes IP address ranges, routing, connectivity, and network security relationships. For example:
+
+```text
+Production account
+└── London Region
+    └── VPC 10.0.0.0/16
 ```
 
-The important field is **Account** because it confirms the twelve-digit account ID receiving the command. The **Arn** field tells you which role or identity the credentials use. In this example, the caller has an assumed role named `ProdReadOnly`, so a write command should fail unless another approved role gets used.
+The VPC belongs to one account and one Region. It is not global, and it is not limited to one AZ. A VPC can span several AZs within its Region:
 
-The same account ID can also be checked against AWS Organizations when the caller has permission:
-
-```bash
-aws organizations describe-account --account-id 123456789012
+```text
+Production account
+└── London Region
+    └── VPC 10.0.0.0/16
+        ├── subnets in AZ A
+        ├── subnets in AZ B
+        └── subnets in AZ C
 ```
 
-Example output:
+A **subnet** is an AZ-specific section of the VPC. The relationship is worth memorizing:
 
-```json
-{
-  "Account": {
-    "Id": "123456789012",
-    "Arn": "arn:aws:organizations::999999999999:account/o-a1b2c3d4e5/123456789012",
-    "Email": "aws-prod@example.com",
-    "Name": "prod",
-    "Status": "ACTIVE",
-    "JoinedMethod": "CREATED"
-  }
-}
+```text
+VPC    → regional
+subnet → zonal
 ```
 
-The **Name** and **Email** fields help humans verify that the account ID points to the expected account. The **Status** field confirms that the account is active. This command supports access review by giving a beginner one concrete habit before touching security groups, databases, ECS services, or bucket policies.
+Suppose the VPC address range is `10.0.0.0/16`. It can be divided into public and private subnets in two AZs:
 
-The account choice leads naturally to the next placement question. Once the team knows the production account owns the workload, it still has to choose the geographic AWS area where that account will run the app.
-
-## Regions: Where the Workload Runs
-<!-- section-summary: A Region places resources near users, data obligations, dependent systems, and platform support. -->
-
-An **AWS Region** is a separate geographic area such as `us-east-1`, `eu-west-2`, or `ap-southeast-2`. A Region has its own service endpoints, control planes for many services, pricing details, and local availability characteristics. The Region choice affects user latency, data residency, service availability, compliance reviews, and operational support.
-
-For `northstar-photos`, the team may choose `eu-west-2` because most users are in the United Kingdom, data handling has already been approved there, and the platform team already has networking, deployment, logging, and backup patterns in that Region. A Region with slightly lower latency on paper can create real operational trouble if the organization has no monitoring, support process, or recovery practice there.
-
-Regions are intentionally separate. A VPC in `eu-west-2` contains resources in that Region. An RDS database in `eu-west-2` has its own endpoint, backups, maintenance window, and event history. CloudWatch log groups and ECS clusters are regional. S3 bucket names are globally unique, and a bucket still has a Region that matters for data placement, latency, and some policy decisions.
-
-Some AWS services are **global** or have global control-plane pieces. IAM identities are global within an account. Route 53 hosted zones are global. CloudFront is a global edge service. Most runtime resources that host an app, such as ECS services, EC2 instances, subnets, load balancers, RDS databases, and CloudWatch log groups, are regional.
-
-A beginner can check the default Region for a profile, then ask the same service for resources in two different Regions:
-
-```bash
-aws configure get region --profile prod
-aws ecs list-clusters --profile prod --region eu-west-2
-aws ecs list-clusters --profile prod --region us-east-1
+```text
+London Region
+└── VPC 10.0.0.0/16
+    ├── AZ A
+    │   ├── public-a  10.0.1.0/24
+    │   └── private-a 10.0.11.0/24
+    └── AZ B
+        ├── public-b  10.0.2.0/24
+        └── private-b 10.0.12.0/24
 ```
 
-Example output:
+A subnet cannot span AZs because the AZ is supposed to remain an explicit placement and failure boundary. The architecture must be able to say that one resource is in AZ A and another is in AZ B. Without zonal subnets, the team could not deliberately distribute network placement across those failure domains.
 
-```console
-eu-west-2
+An EC2 instance can now be described across every dimension:
 
-{
-  "clusterArns": [
-    "arn:aws:ecs:eu-west-2:123456789012:cluster/prod-booking"
-  ]
-}
+```text
+Owner
+  → AWS account
 
-{
-  "clusterArns": []
-}
+Geography
+  → Region
+
+Local failure domain
+  → Availability Zone
+
+Private network
+  → VPC
+
+Network segment
+  → subnet
+
+Compute resource
+  → EC2 instance
 ```
 
-The first line shows the profile default Region. The second response shows an ECS cluster in `eu-west-2`. The third response shows an empty cluster list in `us-east-1` for the same account because the command is looking at a different regional control plane.
+A concrete placement might be:
 
-Good runbooks and infrastructure code write the Region directly instead of relying on a hidden laptop default. A ticket that says "prod account `123456789012`, Region `eu-west-2`, ECS cluster `prod-booking`" gives the responder a clear target. The next question is how that Region spreads the workload across local failure boundaries.
-
-## Availability Zones: Local Failure Boundaries
-<!-- section-summary: Availability Zones let one Region host redundant resources in separate isolated locations. -->
-
-An **Availability Zone** is an isolated location inside a Region. AWS designs AZs with independent power, networking, and connectivity. A production system often places resources in at least two AZs so one local infrastructure problem has less chance of stopping the whole app.
-
-For `northstar-photos`, the Application Load Balancer can use public subnets in two AZs. ECS tasks can run in private app subnets in those same AZs. RDS can use a Multi-AZ deployment so AWS maintains standby capacity or cluster capacity in another AZ, depending on the database engine and deployment type. S3 Standard already stores data across multiple AZs inside a Region, so the app usually leaves AZ placement to S3.
-
-AZ names need one careful beginner note. Names such as `eu-west-2a` can map differently in different accounts. Your `eu-west-2a` can point to a different physical AZ than another account's `eu-west-2a`. AWS also exposes **AZ IDs**, such as `euw2-az1`, and those IDs stay consistent across accounts. Platform teams use AZ IDs when they coordinate subnet placement across multiple accounts.
-
-AZs also matter for capacity. A subnet lives in one AZ, and many resources consume private IP addresses from subnets. Fargate tasks, EC2 instances, Lambda functions attached to a VPC, load balancer nodes, databases, and network interfaces all need addresses. A deployment can stall because one AZ subnet has too few available IPs even while another AZ has plenty.
-
-For the booking app, the starter subnet layout may look like this:
-
-| AZ ID | Public subnet | Private app subnet | Private database subnet |
-|---|---|---|---|
-| `euw2-az1` | `10.40.0.0/24` | `10.40.10.0/24` | `10.40.20.0/24` |
-| `euw2-az2` | `10.40.1.0/24` | `10.40.11.0/24` | `10.40.21.0/24` |
-
-The exact CIDR ranges are examples. The useful shape is the repeated pattern across AZs. The load balancer gets public subnets in multiple AZs, the app gets private subnets in multiple AZs, and the database subnet group gets private database subnets in multiple AZs.
-
-A small inspection command can show the AZ name and AZ ID mapping in one Region:
-
-```bash
-aws ec2 describe-availability-zones \
-  --region eu-west-2 \
-  --query 'AvailabilityZones[].{Name:ZoneName,Id:ZoneId,State:State}'
+```text
+Production account
+└── eu-west-2
+    └── production-vpc
+        ├── private-subnet-a → AZ A
+        │   └── EC2 instance app-01
+        └── private-subnet-b → AZ B
+            └── EC2 instance app-02
 ```
 
-Example output:
+The account owns the instances, the Region places them geographically, the AZs separate local failure, the VPC gives them a private network, and the subnets give them zonal network placement.
 
-```json
-[
-  {
-    "Name": "eu-west-2a",
-    "Id": "euw2-az1",
-    "State": "available"
-  },
-  {
-    "Name": "eu-west-2b",
-    "Id": "euw2-az2",
-    "State": "available"
-  }
-]
+## How Do Global, Regional, and Zonal Scopes Differ?
+<!-- section-summary: AWS resources have different scopes, so operators must identify whether a resource is global, regional, or tied to one Availability Zone. -->
+
+The placement model is useful, but not every AWS resource fits into a single literal tree. AWS services expose resources at different scopes.
+
+Some concepts are global or global-like within their service model. Others exist in a particular Region. Some are associated with one AZ. The exact behavior depends on the service, so an operator should ask: **what is the scope of this resource?**
+
+```text
+Global or global-like scope
+Account
+└── resource not selected through one normal regional view
+
+Regional scope
+Account
+└── Region
+    └── resource
+
+Zonal scope
+Account
+└── Region
+    └── Availability Zone
+        └── resource
 ```
 
-The **Name** field is the account-specific AZ name that appears in many console views and CLI outputs. The **Id** field is the stable cross-account AZ ID. The **State** field should be `available` for normal placement planning.
+This matters because AWS consoles, CLI commands, and APIs are frequently scoped by account and Region. When an engineer says, “The database is not here,” several explanations are possible:
 
-Subnets show the same placement plus remaining IP capacity:
-
-```bash
-aws ec2 describe-subnets \
-  --region eu-west-2 \
-  --filters Name=vpc-id,Values=vpc-0123456789abcdef0 \
-  --query 'Subnets[].{Subnet:SubnetId,Cidr:CidrBlock,AZ:AvailabilityZone,AZID:AvailabilityZoneId,AvailableIPs:AvailableIpAddressCount}'
+```text
+correct account + wrong Region
+wrong account   + correct Region
+wrong account   + wrong Region
 ```
 
-Example output:
+The resource may still exist. The engineer may be looking through the wrong coordinates.
 
-```json
-[
-  {
-    "Subnet": "subnet-0aaa1111",
-    "Cidr": "10.40.10.0/24",
-    "AZ": "eu-west-2a",
-    "AZID": "euw2-az1",
-    "AvailableIPs": 218
-  },
-  {
-    "Subnet": "subnet-0bbb2222",
-    "Cidr": "10.40.11.0/24",
-    "AZ": "eu-west-2b",
-    "AZID": "euw2-az2",
-    "AvailableIPs": 221
-  }
-]
+For many resources, a useful mental address is:
+
+```text
+(account, Region, resource identifier)
 ```
 
-The **Subnet** field is the exact ID used by many deployments. The **Cidr** field shows the subnet's IP range. The **AvailableIPs** field gives an early warning before a rollout that increases task count. If one app subnet has only a few addresses left, the team should fix capacity before blaming ECS or the app code.
+For a networked resource, the address often needs more detail:
 
-Now the app has an account, a Region, and AZ spread. The next layer is the private network that holds those subnets together.
-
-![The AZ mapping view explains why teams compare Availability Zone IDs when accounts may use different AZ names for the same physical location](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/az-name-id-mapping.png)
-
-*The AZ mapping view explains why teams compare Availability Zone IDs when accounts may use different AZ names for the same physical location.*
-
-
-## VPCs and Subnets: The Private Network Layout
-<!-- section-summary: A VPC is the regional private network where subnets, routes, gateways, and security controls connect application resources. -->
-
-A **VPC** is a private network that you create inside one AWS Region. It has an IP range, route tables, gateways, security groups, network ACLs, and subnets. A **subnet** belongs to one AZ, so a two-AZ app needs at least two subnets for each layer that should keep running through an AZ problem.
-
-The common starter layout has public subnets for the load balancer and private subnets for application tasks and databases. An **internet gateway** lets public subnet resources, such as load balancer nodes, receive internet traffic. A **NAT gateway** can let private subnet resources start outbound internet connections for updates or external APIs. A **VPC endpoint** can give private access to supported AWS services, such as S3, without sending that traffic through a NAT gateway.
-
-This layout keeps the database away from direct public access. The browser talks to the load balancer over HTTPS. The load balancer talks to private app tasks. The app talks to the database through a private database endpoint and talks to S3 through IAM permission plus a network path.
-
-Security groups and network ACLs both affect traffic, but beginners should understand **security groups** first. A security group attaches to resources such as load balancers, task network interfaces, EC2 instances, and databases. It is stateful, so AWS handles return traffic for an allowed connection. A **network ACL** attaches to a subnet and is stateless, so inbound and outbound rules both need attention. Many app teams use security groups for normal workload boundaries and keep network ACLs simple unless the platform team has a specific reason.
-
-For `northstar-photos`, the intended connection policy may look like this:
-
-| From | To | Port | Reason |
-|---|---|---|---|
-| Internet | ALB security group | `443` | Users reach the public HTTPS endpoint |
-| ALB security group | App security group | `3000` | Load balancer reaches the web service |
-| App security group | DB security group | `5432` | App connects to PostgreSQL |
-| App tasks | S3 endpoint or NAT path | `443` | App reads and writes uploaded profile images |
-
-This is where placement and permissions meet. The network can allow the app task to reach S3 over HTTPS, and IAM still decides whether the task role can call `s3:PutObject` on the upload bucket. A working AWS design usually needs both the network path and the IAM permission.
-
-A lightweight database placement check can show the endpoint, port, subnet group, and Multi-AZ flag:
-
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier prod-photos-db \
-  --region eu-west-2 \
-  --query 'DBInstances[].{Status:DBInstanceStatus,Endpoint:Endpoint.Address,Port:Endpoint.Port,SubnetGroup:DBSubnetGroup.DBSubnetGroupName,MultiAZ:MultiAZ}'
+```text
+(account, Region, VPC, subnet or AZ, resource identifier)
 ```
 
-Example output:
+Names alone can be misleading. Two accounts may each contain a resource called `production-database`. Several Regions in the same account may contain similar stacks. The account ID, Region, VPC, subnet, AZ, and exact resource identifier disambiguate the target.
 
-```json
-[
-  {
-    "Status": "available",
-    "Endpoint": "prod-photos-db.abc123.eu-west-2.rds.amazonaws.com",
-    "Port": 5432,
-    "SubnetGroup": "prod-photos-db-subnets",
-    "MultiAZ": true
-  }
-]
+This scope model also prevents a common diagram mistake. The account does not belong to a Region. Instead, the account can own many resources, and each regional resource carries its own Region coordinate. A VPC belongs to one of those Regions, spans AZs inside it, and contains zonal subnets.
+
+## How Do Separate Accounts Share Access and Services?
+<!-- section-summary: Multi-account systems keep boundaries strong while crossing them deliberately through roles, network connections, and shared-service designs. -->
+
+Account separation reduces blast radius, but an organization still needs shared services. Production, development, analytics, and security accounts may all need central DNS. Many accounts may send audit data to a central logging account. Many VPCs may connect through a networking account. This creates a productive tension: accounts should remain isolated enough to limit failure, yet connected enough to operate as one organization.
+
+### Cross-account access uses explicit roles
+
+A foundational access pattern begins with a person or workload authenticated through an identity system. That identity receives access in one account and deliberately assumes a role in another:
+
+```text
+user
+  ↓
+identity system
+  ↓
+Account A
+  ↓ assume role
+Account B
 ```
 
-The **Status** field tells you whether the database is available. The **Endpoint** and **Port** fields tell the app where to connect. The **SubnetGroup** field points to the group of subnets RDS can use. The **MultiAZ** field tells you whether this DB instance has Multi-AZ enabled for that deployment type.
+An engineer might assume a Developer role in the development account and a ReadOnly role in production. This is safer and clearer than creating unrelated long-lived users and credentials in every account.
 
-When the app connection fails, the responder can then inspect the database security group:
+The important principle is: **cross-account work should be explicit.** The boundary is a control to cross deliberately, not an inconvenience to erase.
 
-```bash
-aws ec2 describe-security-groups \
-  --group-ids sg-photos-db \
-  --region eu-west-2 \
-  --query 'SecurityGroups[].IpPermissions'
+### Network connection and permission are separate
+
+Suppose an application in account A must reach a database in account B. Two independent conditions must be satisfied:
+
+```text
+a network path exists
+AND
+security and authorization permit the interaction
 ```
 
-Example output:
+Creating an IAM role does not connect two VPCs. Connecting two networks does not authorize the application to use every reachable resource. The recurring distinction is:
 
-```json
-[
-  [
-    {
-      "IpProtocol": "tcp",
-      "FromPort": 5432,
-      "ToPort": 5432,
-      "UserIdGroupPairs": [
-        {
-          "GroupId": "sg-photos-app",
-          "UserId": "123456789012"
-        }
-      ]
-    }
-  ]
-]
+```text
+Can packets reach the destination?
+                ≠
+Is the caller authorized to use it?
 ```
 
-The **FromPort** and **ToPort** fields show PostgreSQL port `5432`. The **UserIdGroupPairs** field shows that inbound traffic comes from the app security group rather than the whole internet. If the app logs show timeouts, connection refused errors, DNS failures, or authentication errors, these placement fields help the team choose the next layer to inspect.
+Cross-account network mechanisms solve the reachability problem. IAM roles, resource policies, and service-specific authorization solve the permission problem.
 
-The VPC section finishes the single-workload placement story. Real companies often add shared services around the workload, and those shared services introduce cross-account access.
+### Mature environments group account responsibilities
 
-## Shared Services and Cross-Account Work
-<!-- section-summary: Central accounts and shared platform services let teams reuse security, logging, networking, and deployment capabilities without mixing ownership boundaries. -->
+A larger environment may organize accounts by responsibility:
 
-As `northstar-photos` grows, shared platform services start to matter. A security team may own centralized CloudTrail, GuardDuty, Security Hub, IAM Identity Center, and audit roles. A platform team may own shared DNS, container base images, deployment pipelines, or network connectivity. These shared pieces help application teams while the production account still owns the application resources.
-
-Cross-account access usually uses **IAM roles**. A CI pipeline in the tooling account can assume a deployment role in the production account. The production role grants only the deployment actions needed for `northstar-photos`. CloudTrail records the assumed role session, so the team can trace the change back to a pipeline run, ticket, or person.
-
-```bash
-aws sts assume-role \
-  --role-arn arn:aws:iam::123456789012:role/deploy-photos-prod \
-  --role-session-name photos-release-2026-06-24
+```text
+AWS Organization
+├── Security OU
+│   ├── Security Tooling account
+│   └── Log Archive account
+├── Infrastructure OU
+│   ├── Networking account
+│   └── Shared Services account
+├── Production OU
+│   ├── Payments Production account
+│   └── Website Production account
+└── Development OU
+    ├── Payments Development account
+    └── Website Development account
 ```
 
-Example output:
+Inside the Payments Production account, a London VPC may contain public and private subnets in AZ A, AZ B, and AZ C. Each layer now has one reason:
 
-```json
-{
-  "Credentials": {
-    "AccessKeyId": "ASIAEXAMPLE",
-    "Expiration": "2026-06-24T13:15:00Z"
-  },
-  "AssumedRoleUser": {
-    "AssumedRoleId": "AROAXAMPLEID:photos-release-2026-06-24",
-    "Arn": "arn:aws:sts::123456789012:assumed-role/deploy-photos-prod/photos-release-2026-06-24"
-  }
-}
-```
-
-The **role-arn** names the production role that the caller wants to use. The **role-session-name** appears as part of the assumed-role identity in logs, so it should point back to the release or pipeline run. The **Expiration** field reminds beginners that assumed-role credentials are temporary.
-
-Shared networking can use AWS Transit Gateway, VPC peering, or AWS PrivateLink depending on the communication pattern. The important point here is the ownership layer: the app account owns app resources, the logging account owns retained audit logs, the security account owns security tooling, and the network account may own shared network attachments.
-
-Shared DNS gives another practical example. The platform team may own the public hosted zone for `example.com`, while the app team receives permission to manage records under `photos.example.com` through an approved pipeline. The app team gets a service name it can deploy, and the platform team keeps control of the larger domain.
-
-With shared services in place, daily AWS work needs a small scope checklist. That checklist keeps account, Region, network, and resource identity visible before anyone changes production.
-
-## Daily Scope Checks Before Changes
-<!-- section-summary: Repeating account, Region, network, AZ, and resource checks prevents many wrong-target production changes. -->
-
-Many AWS mistakes are scope mistakes. An engineer updates staging while the incident is in production. A security group gets created in one Region and attached in another Region. A rollout fails because one private subnet has almost no free IP addresses. A responder reads CloudTrail in the logging account but forgets the app change happened in the production account.
-
-The fix is a small habit with a short checklist. Before a production change, make account, role, Region, VPC, subnet, AZ spread, and resource ID visible in the ticket or runbook. The person doing the work can still move quickly, and the reviewer can see the exact target.
-
-```bash
-aws sts get-caller-identity --profile prod
-aws configure get region --profile prod
-aws ec2 describe-subnets --region eu-west-2 --profile prod --filters Name=vpc-id,Values=vpc-0123456789abcdef0
-```
-
-Example output:
-
-```console
-{
-  "Account": "123456789012",
-  "Arn": "arn:aws:sts::123456789012:assumed-role/ProdOperator/senlin"
-}
-
-eu-west-2
-
-{
-  "Subnets": [
-    {
-      "SubnetId": "subnet-0aaa1111",
-      "VpcId": "vpc-0123456789abcdef0",
-      "AvailabilityZone": "eu-west-2a",
-      "AvailabilityZoneId": "euw2-az1",
-      "CidrBlock": "10.40.10.0/24",
-      "AvailableIpAddressCount": 218
-    }
-  ]
-}
-```
-
-The account output answers who the command is acting as. The Region output answers which regional control plane the next commands will target. The subnet output answers which VPC and AZ the network placement uses, and the available IP count hints at rollout capacity.
-
-A good production note for `northstar-photos` may say: "prod account `123456789012`, Region `eu-west-2`, VPC `vpc-0123456789abcdef0`, ECS service `photos-web`, private app subnets in `euw2-az1` and `euw2-az2`, database subnet group `prod-photos-db-subnets`." That sentence gives future responders a real target instead of a vague service name.
-
-Here is the foundations-level checklist:
-
-| Check | Why it matters |
+| Boundary | Problem it addresses |
 |---|---|
-| Account ID and active role | Prevents staging, sandbox, and prod confusion |
-| Region | Prevents looking at the wrong regional control plane |
-| VPC and subnet IDs | Confirms the private network placement |
-| AZ IDs and available subnet IPs | Confirms spread and rollout capacity |
-| Resource ARN or service ID | Confirms the exact object the change will touch |
-| Owner and environment tags | Confirms the team and workload context |
+| Organization | Governance across accounts |
+| Account | Ownership, security, billing, and administrative blast radius |
+| Region | Geographic placement and regional failure |
+| Availability Zone | Local infrastructure failure |
+| VPC | Private network isolation |
+| Subnet | AZ-specific network placement |
+| IAM | Who may perform an action |
 
-During incidents, the same scope words help people divide work. One responder can inspect ALB and ECS in the app account and Region. Another can inspect central CloudTrail in the logging account. A database owner can inspect RDS in the same Region. The conversation stays grounded because everyone names the same account, Region, AZ, VPC, subnet, and resource.
+AWS exposes many boundaries because production systems face many different risks. Collapsing them into one boundary would remove the ability to isolate a developer mistake, a regional outage, a local infrastructure failure, a network relationship, and an authorization decision independently.
 
-![The review summary turns placement into a short pre-change checklist for account, Region, VPC, subnets, AZ spread, and shared-service access](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/placement-review-summary.png)
+## What Should You Check Before Changing a Resource?
+<!-- section-summary: A short scope and blast-radius check confirms the account, Region, network, placement, resource identity, action, and consequence before a change. -->
 
-*The review summary turns placement into a short pre-change checklist for account, Region, VPC, subnets, AZ spread, and shared-service access.*
+The most useful operational habit in AWS is to establish scope before touching anything. Begin with four words:
 
+```text
+ACCOUNT
+REGION
+RESOURCE
+ACTION
+```
 
-## What's Next
-<!-- section-summary: After placement scope, the next foundation is exact resource identity through names, ARNs, and tags. -->
+When network placement matters, expand the check:
 
-You now have the placement map for a first AWS workload. The app belongs to an account, runs in a Region, spreads across AZs, uses a VPC, and places resources in subnets that match their job.
+```text
+ACCOUNT
+REGION
+VPC
+AZ / SUBNET
+RESOURCE
+ACTION
+```
 
-The next article uses that placement map to identify the exact resources inside it. It explains friendly names, service IDs, ARNs, tags, ownership metadata, and the small checks that keep alerts, tickets, policies, and changes pointed at the same object.
+For example, an operator should be able to state:
+
+```text
+Account: production
+Region: eu-west-2
+VPC: production-vpc
+Subnet: private-b in AZ B
+Resource: app-server-03
+Action: replace its security group
+```
+
+That short statement catches many wrong-account, wrong-Region, wrong-network, and wrong-resource mistakes before they become production incidents.
+
+A practical scope check asks:
+
+1. Which account am I authenticated into?
+2. Which Region am I operating in?
+3. Is the service or resource global, regional, or zonal?
+4. If networking is involved, which VPC contains the resource?
+5. If placement matters, which subnet and AZ contain it?
+6. Am I changing the intended resource ID rather than a familiar-looking name?
+7. What happens if this action is wrong?
+
+The last question combines scope with blast radius. Replacing a security group on one test instance has a different consequence from changing a central route used by fifty production accounts.
+
+### One architecture through every boundary
+
+Imagine an online shop. The company first separates development from production:
+
+```text
+AWS Organization
+├── shop-dev account
+└── shop-prod account
+```
+
+That answers the administrative-isolation question. The team then selects the London Region for production because it needs geographic placement near UK users:
+
+```text
+shop-prod account
+└── London Region
+```
+
+To tolerate a local infrastructure failure, the team uses two AZs:
+
+```text
+London Region
+├── AZ A
+└── AZ B
+```
+
+The application needs a private network, so the team defines `shop-vpc`. It then creates one private subnet in each AZ:
+
+```text
+shop-vpc
+├── private-subnet-a → AZ A
+└── private-subnet-b → AZ B
+```
+
+Finally, the workload places application capacity in both subnets:
+
+```text
+                 Load Balancer
+                      │
+              ┌───────┴───────┐
+              ▼               ▼
+
+        private-a         private-b
+           AZ A              AZ B
+             │                 │
+          app-01             app-02
+```
+
+Every AWS object exists because the team answered a different question: the account isolates owners, the Region sets geography, the AZs set local failure domains, the VPC isolates the private network, and the subnets place networked resources in each AZ.
+
+A rough office analogy can reinforce the dimensions. The account resembles the administrative business unit that owns something. The Region resembles the city. The AZ resembles an independently operated campus within that city. The VPC resembles a private corporate network. The subnet resembles a local network segment at one campus. The analogy is imperfect, but it prevents the boundaries from collapsing into one idea.
+
+The compact hierarchy is:
+
+```text
+AWS Organization
+└── AWS account
+    └── Region
+        ├── VPC ───────────────────┐
+        │                          │
+        │       AZ A              AZ B
+        │        │                 │
+        │     Subnet A          Subnet B
+        │        │                 │
+        │     resources         resources
+        └── other regional services
+```
+
+The meanings are more important than the nesting:
+
+```text
+Organization      → governance
+Account           → ownership and security boundary
+Region            → geographic deployment boundary
+Availability Zone → local failure boundary
+VPC               → regional private network
+Subnet            → AZ-specific network segment
+```
+
+At first principles, all of these concepts help control blast radius. Account isolation asks how much of the organization a credential or automation error can affect. AZ isolation asks how much application capacity disappears during a local failure. Region isolation asks whether the business can continue after a geographic failure. Network isolation asks which systems can communicate. IAM asks which identities can perform which actions.
+
+![The review summary turns placement into a short check of account, Region, VPC, subnet, AZ, resource, and intended action](/content-assets/articles/article-cloud-providers-aws-foundations-accounts-regions-availability-zones/placement-review-summary.png)
+
+*Naming the boundary and the failure it contains makes AWS placement an engineering decision instead of a vocabulary exercise.*
+
+The question to carry into daily AWS work is: **which boundary am I operating inside, and which ownership, failure, or security problem is that boundary meant to contain?**
+
+## Check Your Answers
+
+:::expand[Which Question Does Each AWS Boundary Answer?]{kind="recap"}
+Accounts, Regions, Availability Zones, VPCs, and subnets are separate coordinates that answer ownership, geography, failure, network, and placement questions.
+
+The account answers ownership and control, the Region answers geographic location, the Availability Zone answers local failure placement, the VPC answers private-network membership, and the subnet answers AZ-specific network placement.
+
+A VPC is a private network in one account and Region that can span several AZs. Each subnet belongs to one AZ, making network placement and local failure placement explicit.
+:::
+
+:::expand[What Does an AWS Account Own and Control?]{kind="recap"}
+An AWS account is a strong ownership, security, billing, governance, and operational blast-radius boundary around resources.
+
+An account owns resources and creates a strong boundary for security, administration, billing, quotas, governance, and operational blast radius. IAM identities and roles determine who may act inside that boundary.
+:::
+
+:::expand[How Does a Region Choose the Workload's Location?]{kind="recap"}
+A Region is a major geographic deployment boundary chosen for latency, legal obligations, service support, recovery strategy, cost, and system proximity.
+
+A Region is a major geographic deployment boundary chosen for user latency, data rules, service availability, recovery strategy, cost, and proximity to other systems. One account can use many Regions.
+:::
+
+:::expand[Why Does a Workload Use More Than One Availability Zone?]{kind="recap"}
+Availability Zones create local infrastructure failure boundaries inside one Region, allowing a workload to keep capacity outside the failed zone.
+
+AZs are separate local infrastructure failure domains within a Region. Placing capacity in several AZs lets the workload continue when one local location fails, while multi-Region design addresses a larger regional failure.
+:::
+
+:::expand[How Do VPCs and Subnets Place Resources on a Network?]{kind="recap"}
+A VPC is a regional private network, while each subnet places resources in one Availability Zone-specific segment of that network.
+:::
+
+:::expand[How Do Global, Regional, and Zonal Scopes Differ?]{kind="recap"}
+AWS resources have different scopes, so operators must identify whether a resource is global, regional, or tied to one Availability Zone.
+
+AWS resources can have global-like, regional, or zonal scope depending on the service. Operators must identify the account, Region, and any VPC, subnet, or AZ context before assuming a resource is missing or changing it.
+:::
+
+:::expand[How Do Separate Accounts Share Access and Services?]{kind="recap"}
+Multi-account systems keep boundaries strong while crossing them deliberately through roles, network connections, and shared-service designs.
+
+Accounts remain isolated by default and cross the boundary deliberately through assumed roles, resource policies, network connections, and shared-service designs. Network reachability and authorization remain separate requirements.
+:::
+
+:::expand[What Should You Check Before Changing a Resource?]{kind="recap"}
+A short scope and blast-radius check confirms the account, Region, network, placement, resource identity, action, and consequence before a change.
+
+Confirm the account, active identity, Region, service scope, VPC, subnet or AZ, exact resource identifier, intended action, and blast radius. This short check prevents many wrong-target changes.
+:::
 
 ## References
 
 - [AWS Regions and Availability Zones](https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions-availability-zones.html)
 - [Regions and Zones for Amazon EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html)
-- [Availability Zone IDs for your AWS resources](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html)
+- [Availability Zone IDs for AWS resources](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html)
 - [What is Amazon VPC?](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html)
 - [How AWS Organizations works](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html)
 - [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html)

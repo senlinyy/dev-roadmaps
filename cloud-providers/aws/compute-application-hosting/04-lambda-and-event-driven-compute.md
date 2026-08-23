@@ -1,7 +1,7 @@
 ---
 title: "Lambda"
-description: "Understand AWS Lambda as event-driven compute for bounded work, including events, handlers, execution roles, triggers, timeouts, memory, retries, idempotency, concurrency, monitoring, and rollback."
-overview: "Lambda runs short units of application code in response to events. This article follows an image-upload pipeline and shows how events, handlers, execution roles, triggers, retries, timeouts, memory, concurrency, monitoring, and rollout safety fit together."
+description: "Understand AWS Lambda as event-driven compute, including handlers, execution environments, state, roles, invocation models, concurrency, queues, retries, idempotency, monitoring, versions, and rollback."
+overview: "Lambda runs bounded units of code when work arrives. This article derives its execution, scaling, reliability, security, deployment, and observability behavior from that first principle."
 tags: ["lambda", "events", "serverless", "aws"]
 order: 4
 id: article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute
@@ -12,436 +12,659 @@ aliases:
 
 ## Table of Contents
 
-1. [One Event, One Bounded Job](#one-event-one-bounded-job)
-2. [Handlers and Event Payloads](#handlers-and-event-payloads)
-3. [Execution Roles and Runtime Configuration](#execution-roles-and-runtime-configuration)
-4. [Triggers, Retries, and Idempotency](#triggers-retries-and-idempotency)
-5. [Concurrency and Downstream Protection](#concurrency-and-downstream-protection)
-6. [Versions, Aliases, and Rollback](#versions-aliases-and-rollback)
-7. [Monitoring Lambda Work](#monitoring-lambda-work)
-8. [A Lambda Failure Path](#a-lambda-failure-path)
-9. [References](#references)
+1. [What Is AWS Lambda?](#what-is-aws-lambda)
+2. [What Is an Execution Environment?](#what-is-an-execution-environment)
+3. [Where Should a Lambda Function Keep State?](#where-should-a-lambda-function-keep-state)
+4. [How Does Lambda Scale?](#how-does-lambda-scale)
+5. [Why Do Retries Require Idempotency?](#why-do-retries-require-idempotency)
+6. [When Is Lambda the Right Compute Model?](#when-is-lambda-the-right-compute-model)
+7. [How Do Versions, Aliases, and Rollback Work?](#how-do-versions-aliases-and-rollback-work)
+8. [How Do You Design a Complete Lambda Workload?](#how-do-you-design-a-complete-lambda-workload)
+9. [Check Your Understanding](#check-your-understanding)
+10. [References](#references)
 
-## One Event, One Bounded Job
-<!-- section-summary: Lambda fits work that starts because an event happened and finishes inside a clear time boundary. -->
+The sections below answer these questions in order:
 
-The photo app stores original images in S3. After each upload, the team wants a `256x256` thumbnail. Keeping a web server busy for that background job wastes attention because the work only starts when an object arrives.
+1. **What Is AWS Lambda?**
+2. **What Is an Execution Environment?**
+3. **Where Should a Lambda Function Keep State?**
+4. **How Does Lambda Scale?**
+5. **Why Do Retries Require Idempotency?**
+6. **When Is Lambda the Right Compute Model?**
+7. **How Do Versions, Aliases, and Rollback Work?**
+8. **How Do You Design a Complete Lambda Workload?**
 
-**AWS Lambda** runs a function handler in response to an event. Lambda creates the runtime environment, calls your handler, streams logs to CloudWatch, records metrics, and ends the invocation when the handler returns or the timeout is reached. You choose memory, timeout, runtime, environment variables, permissions, triggers, and failure behavior.
+## What Is AWS Lambda?
+<!-- section-summary: Lambda runs bounded pieces of customer code when work arrives while AWS operates the underlying machines and execution infrastructure. -->
 
-For this article, follow a function called `thumbnail-worker`. Original images land in `s3://northstar-photos-prod/originals/`. An event reaches Lambda. The function reads the original object, creates a thumbnail, writes it to `s3://northstar-photos-prod/thumbs/`, and logs the result. That small job still needs a serious production shape because events can repeat, bursts can arrive, and downstream services can fail.
+All code needs compute. A function such as `resize_image(image)` cannot execute without processors, memory, an operating system, a language runtime, networking, permissions, a start mechanism, capacity for simultaneous work, and recovery when infrastructure fails.
 
-Lambda is strongest when the work has a clear boundary:
+With a traditional application server, a team supplies a continuously running host and process:
 
-| Workload | Why Lambda fits |
-|---|---|
-| Create a thumbnail after S3 upload | One object event leads to one output object. |
-| Process an SQS message | One queue message or batch leads to one unit of work. |
-| Run a scheduled cleanup | One EventBridge schedule triggers bounded maintenance. |
-| Validate a webhook | One HTTP request produces one response through API Gateway or Function URLs. |
+```text
+request → load balancer → server → application process → function
+```
 
-The next step is understanding what Lambda actually calls: the handler and the event payload.
+For example, an EC2 instance can run Linux, Python, a web framework, and `resize_image()`. The server and process may remain allocated all day even when only a few requests arrive.
+
+**AWS Lambda** changes the unit you ask AWS to run. You provide code, dependencies, runtime configuration, permissions, and an entry point. AWS provides a managed environment that invokes the entry point when work arrives.
+
+```text
+event
+  ↓
+Lambda service
+  ↓
+execution environment
+  ↓
+your handler
+  ↓
+result or failure
+```
+
+You are not primarily renting a permanent server. You define how AWS should perform **bounded executions of code**. One invocation starts with input, performs computation and calls other systems, produces a result or error, and ends.
+
+```text
+invocation starts
+   ├── receive input
+   ├── compute
+   ├── read or write other systems
+   └── produce output
+invocation ends
+```
+
+That is different from a web server that starts once, waits, handles many unrelated requests over time, and keeps running indefinitely. Lambda naturally matches work such as one HTTP request, one uploaded file, one scheduled cleanup, one database-change event, one queue batch, or one background task.
+
+The word **serverless** does not mean servers disappeared. AWS still uses servers. It means most server provisioning, worker placement, process isolation, machine replacement, basic scaling machinery, and host operating-system lifecycle are hidden behind the service.
+
+Your team still owns application logic, dependencies, runtime selection and configuration, event integrations, IAM permissions, downstream design, and correctness. Lambda removes server fleet administration; it does not remove software engineering or distributed-systems responsibilities.
+
+### What Does a Lambda Handler Receive?
+<!-- section-summary: The handler is the configured entry point and receives source-shaped event data plus context about the current invocation. -->
+
+AWS needs to know where execution of your program begins. That entry point is the **handler**.
+
+```python
+def lambda_handler(event, context):
+    return {
+        "statusCode": 200,
+        "body": "Hello"
+    }
+```
+
+The handler is the boundary between Lambda-managed code and your application code:
+
+```text
+AWS invocation machinery
+          │
+          ▼
+lambda_handler(event, context)
+          │
+          ▼
+application logic
+```
+
+The `event` contains the input to this invocation. Lambda does not assign one universal meaning to it; the triggering system determines its shape. An API event can contain a method, path, headers, query parameters, and body. An S3 event identifies a bucket, object key, and event type. An SQS event carries one or more messages. A scheduled event contains schedule metadata.
+
+The `context` object describes the invocation itself, including metadata and the remaining execution time. A useful translation is:
+
+```text
+handler(
+  what happened,
+  information about this execution
+)
+```
+
+Lambda also separates the function from whatever causes it to run. The same function can conceptually be invoked by API Gateway, S3, EventBridge, SQS, another application, or another supported integration. Those producers and integrations are often called **triggers** or **event sources**.
+
+```text
+API Gateway ───┐
+S3 ────────────┤
+EventBridge ───┼──> Lambda handler
+SQS ───────────┤
+application ───┘
+```
+
+This separation is why Lambda fits event-driven architecture. The function implements what should happen; the event integration defines when it should happen and what input arrives.
 
 ![The function lifecycle shows how an event payload, handler, role, configuration, downstream call, logs, and metrics fit into one bounded job](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute/lambda-handler-lifecycle.png)
 
-*The function lifecycle shows how an event payload, handler, role, configuration, downstream call, logs, and metrics fit into one bounded job.*
+*The event source defines the payload, and the configured handler turns that payload into one bounded execution.*
 
+## What Is an Execution Environment?
+<!-- section-summary: Lambda creates isolated runtime environments for invocations and may reuse them, but applications must treat them as disposable. -->
 
-## Handlers and Event Payloads
-<!-- section-summary: The handler receives source-specific event data and turns it into one bounded unit of work. -->
+When an invocation arrives, Lambda needs somewhere to execute the handler. It can use a suitable existing **execution environment** or create a new one.
 
-A **handler** is the function Lambda calls. The event shape depends on the trigger. S3 events include bucket and object information. SQS events include message bodies and receipt metadata. API Gateway events include method, path, headers, and body. EventBridge events include `source`, `detail-type`, and `detail`.
+Conceptually, an environment contains:
 
-Here is a small S3 event sample:
-
-```json
-{
-  "Records": [
-    {
-      "eventSource": "aws:s3",
-      "eventName": "ObjectCreated:Put",
-      "s3": {
-        "bucket": {
-          "name": "northstar-photos-prod"
-        },
-        "object": {
-          "key": "originals/profile-123.png",
-          "size": 184230
-        }
-      }
-    }
-  ]
-}
+```text
+isolated compute
+├── allocated memory and related CPU resources
+├── language runtime
+├── deployed code
+├── dependencies
+└── temporary local storage
 ```
 
-`Records` can contain more than one event record. `eventSource` tells the code which AWS service produced the record. `eventName` names the type of change. `s3.bucket.name` gives the source bucket, and `s3.object.key` gives the object key. The object key may contain URL-encoded characters, so Node.js handlers often decode it before using it.
+Creating a new environment requires initialization:
 
-Now connect that event to real code:
-
-```js
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import sharp from "sharp";
-
-const s3 = new S3Client({});
-
-export const handler = async (event, context) => {
-  for (const record of event.Records) {
-    const sourceBucket = record.s3.bucket.name;
-    const sourceKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, " "));
-    const outputKey = sourceKey.replace("originals/", "thumbs/");
-
-    console.log(JSON.stringify({
-      requestId: context.awsRequestId,
-      sourceBucket,
-      sourceKey,
-      outputKey
-    }));
-
-    const original = await s3.send(new GetObjectCommand({
-      Bucket: sourceBucket,
-      Key: sourceKey
-    }));
-
-    const bytes = await original.Body.transformToByteArray();
-    const thumbnail = await sharp(Buffer.from(bytes))
-      .resize(256, 256, { fit: "inside" })
-      .png()
-      .toBuffer();
-
-    await s3.send(new PutObjectCommand({
-      Bucket: process.env.THUMBNAIL_BUCKET,
-      Key: outputKey,
-      Body: thumbnail,
-      ContentType: "image/png"
-    }));
-  }
-};
+```text
+create environment
+      ↓
+initialize language runtime
+      ↓
+load code and dependencies
+      ↓
+run initialization outside the handler
+      ↓
+invoke handler
 ```
 
-The `S3Client` is created outside the handler so the runtime can reuse it across warm invocations. The loop handles every record in the event. `sourceBucket` and `sourceKey` come from the event. `outputKey` uses a predictable path so retries write the same thumbnail location. The log line includes safe metadata and the Lambda request ID. `GetObjectCommand` reads the original file, `sharp` creates the thumbnail, and `PutObjectCommand` writes the result to the bucket named by `THUMBNAIL_BUCKET`.
+This extra path creates what is commonly called a **cold start**. Lambda may reuse the prepared environment for a later invocation, which can avoid much of the initialization work. That later path is often called a **warm invocation**.
 
-The handler uses `/tmp` only if the image library needs temporary files. Lambda runtime environments can be reused, so cached clients are useful, but correctness should come from the event and durable services rather than leftover local files.
+Code outside the handler can benefit from reuse:
 
-Once the handler shape is clear, the next question is what the function is allowed to do and how the runtime is configured.
+```python
+database_client = create_database_client()
 
-## Execution Roles and Runtime Configuration
-<!-- section-summary: A Lambda execution role gives the function scoped AWS permissions, while memory, timeout, and environment settings shape runtime behavior. -->
-
-Every Lambda function has an **execution role**. This IAM role gives the function permission to write logs and call AWS services. For `thumbnail-worker`, the role needs `s3:GetObject` on the original prefix and `s3:PutObject` on the thumbnail prefix.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ReadOriginalImages",
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::northstar-photos-prod/originals/*"
-    },
-    {
-      "Sid": "WriteThumbnails",
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::northstar-photos-prod/thumbs/*"
-    }
-  ]
-}
+def handler(event, context):
+    return database_client.query(...)
 ```
 
-`ReadOriginalImages` allows reads only from the original image prefix. `WriteThumbnails` allows writes only to the thumbnail prefix. The role also needs the standard CloudWatch Logs permissions, often through the AWS managed basic execution role policy or a scoped equivalent. Secret values should come from Secrets Manager, Parameter Store, or another managed secret path. Environment variables are fine for non-secret settings such as `THUMBNAIL_BUCKET` and `LOG_LEVEL`.
+The client may remain available when Lambda reuses that environment. Reuse is a performance opportunity, not a correctness guarantee. AWS may create many environments for concurrency, and any environment may disappear.
 
-Runtime configuration shapes cost and reliability:
-
-```bash
-aws lambda get-function-configuration \
-  --function-name thumbnail-worker \
-  --region eu-west-2 \
-  --query '{Runtime:Runtime,Handler:Handler,Memory:MemorySize,Timeout:Timeout,Role:Role,Environment:Environment.Variables,LastModified:LastModified}'
+```text
+Environment A: local counter = 7
+Environment B: local counter = 3
+Environment C: local counter = 11
 ```
 
-Example output:
+A global counter is therefore not a reliable account-wide total. A local cache can improve performance when present, but every invocation must remain correct if the cache is empty and the environment has never seen earlier work.
 
-```json
-{
-  "Runtime": "nodejs22.x",
-  "Handler": "index.handler",
-  "Memory": 1024,
-  "Timeout": 30,
-  "Role": "arn:aws:iam::123456789012:role/prod-thumbnail-worker",
-  "Environment": {
-    "THUMBNAIL_BUCKET": "northstar-photos-prod",
-    "LOG_LEVEL": "info"
-  },
-  "LastModified": "2026-06-24T09:42:11.000+0000"
-}
+The right mental model is:
+
+> **Execution environments are reusable but disposable.**
+
+## Where Should a Lambda Function Keep State?
+<!-- section-summary: Lambda performs ephemeral computation, while authoritative state must live in an external durable system. -->
+
+Calling a function **stateless** does not mean it cannot read or modify state. It means the individual execution environment must not be the authoritative home of application state.
+
+Bad design:
+
+```text
+Lambda process memory
+└── authoritative customer balance
 ```
 
-`Runtime` tells Lambda which language runtime runs the code. `Handler` points to the exported function. `Memory` is the configured memory in MB, and Lambda allocates CPU in proportion to memory. `Timeout` is the maximum invocation duration in seconds. `Role` is the execution role ARN. `Environment` shows non-secret settings available to the code. `LastModified` helps line up configuration changes with incidents.
+Better design:
 
-Image processing often benefits from testing several memory sizes. A 1024 MB function can finish faster than a 512 MB function because it receives more CPU, and the shorter duration can offset the higher memory setting. Use representative images, not a tiny sample file, when tuning.
-
-VPC configuration is another production choice. A function needs VPC access when it must reach private resources such as an RDS database. A function that only reads and writes S3 can often skip VPC attachment, which keeps networking simpler. If VPC access is required, plan subnets, security groups, outbound access, and IP capacity.
-
-Permissions and runtime settings define the function. The trigger defines how work reaches it.
-
-## Triggers, Retries, and Idempotency
-<!-- section-summary: Event-driven systems need a clear trigger path, retry behavior, and duplicate-safe writes. -->
-
-A Lambda trigger can be a direct S3 notification, an SQS queue, an EventBridge rule, an API Gateway route, or another event source. Each source has its own retry behavior. This is one reason Lambda design needs more than a handler function.
-
-For a small thumbnail system, S3 can invoke Lambda directly when objects arrive. For a busier system, S3 can send events to SQS and Lambda can poll the queue. The queue adds backlog visibility, retry control, and a dead-letter queue for messages that keep failing.
-
-Create an SQS event source mapping like this:
-
-```bash
-aws lambda create-event-source-mapping \
-  --function-name thumbnail-worker:prod \
-  --event-source-arn arn:aws:sqs:eu-west-2:123456789012:thumbnail-events \
-  --batch-size 5 \
-  --maximum-batching-window-in-seconds 10 \
-  --region eu-west-2
+```text
+Lambda computation
+       ↓ read or write
+DynamoDB, RDS, S3, cache, queue, or another durable service
+       ↓
+authoritative state
 ```
 
-Example output:
+Temporary files in the environment can support one invocation or an opportunistic cache. In-memory clients can be reused. Neither is a substitute for a durable database, object store, or queue when the information must survive environment removal or be shared across concurrent invocations.
 
-```json
-{
-  "UUID": "6f3c9e50-90f3-43f5-b742-0db2f4b1a111",
-  "State": "Creating",
-  "FunctionArn": "arn:aws:lambda:eu-west-2:123456789012:function:thumbnail-worker:prod",
-  "EventSourceArn": "arn:aws:sqs:eu-west-2:123456789012:thumbnail-events",
-  "BatchSize": 5,
-  "MaximumBatchingWindowInSeconds": 10
-}
+This principle can be summarized as:
+
+```text
+compute ≠ durable state
 ```
 
-`FunctionArn` points at the `prod` alias, so the trigger follows the production release pointer. `EventSourceArn` is the queue Lambda will poll. `BatchSize: 5` lets one invocation process up to five messages. `MaximumBatchingWindowInSeconds: 10` lets Lambda wait briefly to gather a batch. The `State` starts as `Creating` and should move to `Enabled`.
+For an order workflow, durable order facts belong in a database, receipts in object storage, messages in a queue, and events in an event bus. Lambda performs transient calculation and coordination that moves durable state from one valid condition to another.
 
-**Idempotency** means repeated attempts leave the same correct result. Event-driven systems often deliver events at least once, so duplicates can happen. The thumbnail worker uses a deterministic output key: `originals/profile-123.png` maps to `thumbs/profile-123.png`. If the same event arrives twice, the function overwrites the same thumbnail instead of creating duplicates.
+> **Lambda is ephemeral compute acting on durable state.**
 
-Jobs with money, emails, or database writes need a stronger idempotency key. A payment handler might store `orderId` in DynamoDB with a conditional write before charging a card. If a retry arrives with the same `orderId`, the handler sees the existing record and skips the duplicate side effect.
+### How Do Configuration and Permissions Work?
+<!-- section-summary: Function configuration defines the bounded runtime, and IAM separately controls who may invoke the function and what the function may call. -->
 
-Retries keep temporary failures from losing work. Idempotency keeps retries from corrupting work. The next risk is scale: Lambda can run many copies at the same time.
+A Lambda function is code plus a runtime definition. AWS needs the handler, language runtime, dependencies, memory, timeout, environment variables, architecture, network configuration, and IAM execution role.
+
+```text
+Function: ProcessOrder
+├── code and dependencies
+├── handler: app.handler
+├── runtime: Python
+├── memory: 1024 MB
+├── timeout: 30 seconds
+├── environment: TABLE_NAME, STAGE
+├── network settings
+├── execution role
+└── event integrations
+```
+
+The **timeout** establishes a hard upper bound. If the handler does not finish before the configured duration, Lambda terminates the invocation. That boundary encourages finite work such as “generate thumbnail X” rather than “start this worker and run forever.”
+
+Memory is also a compute setting. Lambda associates CPU capacity with allocated execution resources, so increasing memory can improve both available memory and execution speed. A 512 MB configuration that takes four seconds is not automatically cheaper or better than a larger configuration that takes one second. Measure representative workloads and compare latency and the combined effect of allocation and duration.
+
+Networking still exists underneath a serverless application. A function calling a database, private service, AWS API, or public endpoint still relies on DNS, routes, security controls, and destination availability. Connecting Lambda to a VPC makes subnet and security-group choices important. Serverless removes host administration, not networking.
+
+The **execution role** answers what the running function may do. If `ProcessOrder` calls DynamoDB, the role can allow `dynamodb:PutItem` on the Orders table and log delivery, without permission to delete buckets or administer IAM.
+
+Two permission directions must remain separate:
+
+```text
+Who or what may invoke the function?
+               ↓
+             Lambda
+               ↓
+What AWS operations may the function perform?
+```
+
+Trigger permissions or function resource policies can govern the first direction. The execution role governs the second. A valid S3 trigger does not automatically let the handler read the object, and a role that can read S3 does not automatically let every caller invoke the function.
+
+## How Does Lambda Scale?
+<!-- section-summary: Lambda scales horizontally by running more invocations concurrently, and concurrency depends on both arrival rate and execution duration. -->
+
+When several events arrive together, Lambda can use multiple execution environments:
+
+```text
+Event 1 → Environment A
+Event 2 → Environment B
+Event 3 → Environment C
+Event 4 → Environment D
+```
+
+**Concurrency** is approximately the number of invocations executing at the same time. A useful estimate for a steady workload is:
+
+```text
+concurrency ≈ request or event rate × average duration
+```
+
+If 100 invocations arrive each second and each takes two seconds, the function needs about 200 concurrent executions at steady state. If 500 events per second each take 0.2 seconds, the estimate is about 100.
+
+Automatic scaling is not the same as unlimited system capacity. The Lambda layer may add execution environments faster than a small database, cache, or rate-limited API can accept new work.
+
+```text
+10,000 messages
+       ↓
+many concurrent Lambda invocations
+       ↓
+many parallel database operations
+       ↓
+database overload
+```
+
+Ask how much concurrency the dependency behind the function can safely handle. A reserved or integration-level concurrency limit can deliberately cap pressure:
+
+```text
+large event backlog
+       ↓
+Lambda, maximum 50 concurrent executions
+       ↓
+database with known safe capacity
+```
+
+Concurrency and duration also form feedback. At 100 requests per second and 0.1-second duration, concurrency is about 10. If a dependency slows each invocation to five seconds, the same incoming rate implies about 500 concurrent executions. More concurrency then adds more dependency pressure.
+
+Retries can amplify that loop:
+
+```text
+dependency slows or fails
+      ↓
+invocations last longer or fail
+      ↓
+concurrency and retries rise
+      ↓
+additional dependency load
+      ↓
+deeper failure
+```
+
+Production control therefore combines concurrency limits, queues, sensible timeouts, retry backoff, idempotency, failure destinations, and alarms rather than treating them as unrelated settings.
+
+### How Do Invocation Models and Queues Change Reliability?
+<!-- section-summary: Synchronous, asynchronous, and poll-based integrations differ in response handling, batching, acknowledgement, and retry ownership. -->
+
+Not every trigger behaves like a simple request and response. Lambda participates in several invocation models.
+
+In a **synchronous invocation**, the caller waits for the function result. An API request is the usual mental example:
+
+```text
+caller → invoke Lambda → wait → response or error
+```
+
+Latency and failure are visible to the caller in that interaction.
+
+In an **asynchronous invocation**, a producer hands the event to AWS and does not wait for the application result in the same way. AWS accepts the event, then performs invocation and configured retry or failure handling separately.
+
+In a **poll-based integration**, AWS retrieves records from a queue or stream and invokes the function with records, possibly as a batch:
+
+```text
+SQS or stream
+      ↑ AWS-managed poller
+      ↓
+    Lambda
+```
+
+The integration determines who retries, when work is acknowledged, whether records arrive individually or in batches, and where exhausted failures go. Those semantics are part of application correctness.
+
+A queue can also buffer uneven arrival. Compare a producer invoking compute directly with a producer writing durable work to SQS:
+
+```text
+direct: producer → Lambda → database
+
+buffered: producer → SQS → Lambda → database
+```
+
+If producers create one million jobs, the queue holds the backlog while Lambda consumes it at a controlled pace. This decouples the rate at which work arrives from the rate at which downstream systems must process it. Queue age then becomes an important signal: the system may be error-free per invocation while falling further behind.
+
+## Why Do Retries Require Idempotency?
+<!-- section-summary: Events can be processed more than once, so side-effecting functions need a stable operation identity and duplicate-safe behavior. -->
+
+Consider an order handler that charges a card, updates a database, and returns success. The card charge can succeed, followed by a network failure before the invocation is acknowledged as successful. A retry can then execute the charge again.
+
+This is the distributed-systems fact behind an essential Lambda rule:
+
+> **An event may be processed more than once.**
+
+**Idempotency** means repeated execution creates one logical business effect. A naïve handler can charge £50 twice when the same order event arrives twice. An idempotent design attaches the action to a stable key such as `order-123`.
+
+```text
+Invocation 1
+  ↓
+Has order-123 been completed? no
+  ↓
+perform the action and record completion atomically
+
+Invocation 2
+  ↓
+Has order-123 been completed? yes
+  ↓
+return the prior result or skip the duplicate side effect
+```
+
+The exact storage and atomicity mechanism depend on the workflow, but the principle is:
+
+```text
+at-least-once delivery + idempotent processing
+→ one intended logical effect
+```
+
+For image thumbnails, a deterministic output key such as `thumbnail/holiday.jpg` can make repeated processing overwrite the intended object rather than create duplicates. Payments, emails, and multi-step database mutations need stronger operation records and conditional behavior.
+
+Idempotency also makes replay safer after an outage. If operators cannot safely send a failed event through the system again, the failure-recovery design is incomplete.
 
 ![The retry and idempotency view shows how concurrency limits, duplicate protection, and failed-event capture protect downstream systems](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute/function-retry-concurrency-idempotency.png)
 
-*The retry and idempotency view shows how concurrency limits, duplicate protection, and failed-event capture protect downstream systems.*
+*Retries preserve work only when duplicate attempts cannot multiply the business side effect.*
 
+### How Should Lambda Failures Be Handled?
+<!-- section-summary: A production workload defines retries, exhausted-event storage, alarms, investigation, repair, and replay before failures occur. -->
 
-## Concurrency and Downstream Protection
-<!-- section-summary: Concurrency controls how many Lambda invocations can run at once and can protect slower downstream systems. -->
+Failure is a normal path to design, not an anomaly to ignore. For an SQS-triggered payment function, the full path might be:
 
-**Concurrency** is the number of Lambda invocations running at the same time. A sudden upload burst can start many thumbnail jobs. That can be fine for S3 and expensive image processing, but it can hurt a small database, a rate-limited API, or a shared service.
-
-Reserved concurrency sets a maximum for one function:
-
-```bash
-aws lambda put-function-concurrency \
-  --function-name thumbnail-worker \
-  --reserved-concurrent-executions 50 \
-  --region eu-west-2
+```text
+message
+  ↓
+Lambda
+  ↓
+payment dependency temporarily fails
+  ↓
+retry according to integration rules
+  ↓
+failure repeats beyond configured tolerance
+  ↓
+dead-letter queue or failure destination
+  ↓
+alarm and investigation
+  ↓
+dependency or code repaired
+  ↓
+safe replay
 ```
 
-Example output:
+A production design should answer:
 
-```json
-{
-  "ReservedConcurrentExecutions": 50
-}
+- What happens when the handler throws an exception?
+- What happens when it reaches its timeout?
+- What happens when a dependency is unavailable?
+- Which component performs retries, and with what timing?
+- Where does an event go after repeated failure?
+- How will operators notice it?
+- Which evidence identifies the cause?
+- Can the event be replayed without duplicating side effects?
+
+Consider `Order 123`. Lambda receives the SQS message and the payment API returns `503`. The handler reports failure, so the message remains eligible under the queue’s processing semantics. After repeated attempts, it moves to a dead-letter queue. A CloudWatch alarm on dead-letter messages alerts an operator. After the payment service recovers, the team replays the message through the main path.
+
+Several Lambda ideas form one reliability chain:
+
+```text
+retry means duplicate execution is possible
+      ↓
+idempotency protects the business effect
+      ↓
+some events still exhaust retries
+      ↓
+failure destination preserves them
+      ↓
+monitoring alerts operators
+      ↓
+replay completes recovery
 ```
 
-This reserves and caps the function at 50 concurrent invocations. The cap protects downstream systems and prevents one busy function from consuming all account concurrency. If SQS is the trigger and the queue receives more work than 50 concurrent invocations can process, queue age grows. That is acceptable when the goal is controlled delay instead of overwhelming a dependency.
+Restoring the function for new work and repairing the backlog are separate recovery steps. A green error metric after the fix does not prove old failed events were processed.
 
-Batch size also affects pressure. A batch size of `5` means one invocation can process up to five messages. If each message triggers a database write, `50` concurrent invocations and batch size `5` can create up to `250` in-flight message operations. Choose these numbers from downstream capacity, not guesswork.
+## When Is Lambda the Right Compute Model?
+<!-- section-summary: Lambda is a strong fit for finite event-driven work, while VMs and containers fit workloads needing machine or long-running process control. -->
 
-Concurrency choices connect directly to monitoring. Watch throttles, queue age, function duration, errors, and downstream health together. A function can look healthy while the queue quietly grows, or the queue can drain while a database starts timing out.
+The timeout and invocation abstraction make Lambda a natural fit for finite tasks. It is less natural for a program that must remain alive indefinitely. The compute models form an abstraction continuum:
 
-Once the function has safe runtime behavior, releases need a stable pointer and rollback path.
+| Model | Primary request |
+|---|---|
+| EC2 | “Give me a machine.” |
+| Container hosting | “Keep this application process or container running.” |
+| Lambda | “Execute this bounded code when work arrives.” |
 
-## Versions, Aliases, and Rollback
-<!-- section-summary: Lambda versions and aliases give releases stable names, traffic control, and a rollback target. -->
+EC2 provides the most host control. Container platforms hide more machine detail while managing long-running application processes. Lambda hides more infrastructure and focuses on invocations.
 
-A Lambda **version** is an immutable snapshot of function code and most configuration. An **alias** is a stable name that points to a version, such as `prod` pointing to version `17`. Event sources, API clients, and deployment systems can use the alias ARN so releases move the alias rather than changing every caller.
+Economics follow the abstraction. A continuously allocated instance exists through idle and busy periods. Lambda metering can follow executions and compute duration more closely. That can be attractive for irregular traffic, bursty work, event processing, and small automation. It does not mean Lambda is always cheapest; a continuously busy workload may fit another model better.
 
-Check the current production pointer:
+Think about an hour containing only three short jobs. A provisioned server remains allocated across the quiet gaps as well as the work. Lambda can align its metered execution more closely with the three active intervals. Now change the example to a service that is busy throughout the entire hour. The idle-gap advantage disappears, and the continuously active invocation pattern may make a container or instance economically attractive. This is why cost follows workload shape rather than the word “serverless.” Compare representative rate, duration, memory, downstream charges, and operational effort instead of assuming that one abstraction always wins.
 
-```bash
-aws lambda get-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --region eu-west-2 \
-  --query '{Alias:Name,FunctionVersion:FunctionVersion,RoutingConfig:RoutingConfig}'
+Lambda deserves serious consideration when the workload can be said plainly as “When X happens, perform Y”: when an API request arrives, calculate a response; when an object lands in S3, transform it; when a queue has work, process a batch; when midnight arrives, clean up; when a record changes, react.
+
+Choose based on the workload boundary rather than treating one compute product as universally superior.
+
+## How Do Versions, Aliases, and Rollback Work?
+<!-- section-summary: Immutable versions identify deployed code and configuration, while aliases provide stable pointers that can move or split traffic. -->
+
+Production needs a better identity than “whatever was uploaded most recently.” A published Lambda **version** is an immutable snapshot of function code and relevant configuration.
+
+```text
+Function
+├── Version 1 → snapshot A
+├── Version 2 → snapshot B
+└── Version 3 → snapshot C
 ```
 
-Example output:
+An **alias** is a stable name that points to a version:
 
-```json
-{
-  "Alias": "prod",
-  "FunctionVersion": "17",
-  "RoutingConfig": null
-}
+```text
+prod → version 27
 ```
 
-`FunctionVersion: "17"` means production traffic points at version `17`. `RoutingConfig: null` means the alias sends all traffic to that version. A release can update the alias to version `18` after publishing and testing the version.
+Callers can invoke the `prod` alias while a release changes its target to version 28. The alias is a stable reference with a movable target.
 
-```bash
-aws lambda update-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --function-version 18 \
-  --region eu-west-2
+If version 28 causes failures, rollback can point `prod` back to version 27 rather than reconstructing yesterday’s code. This combines a known-good immutable artifact with a small, reviewable pointer change.
+
+Aliases can also split supported traffic between versions:
+
+```text
+90% → version 42
+10% → version 43
 ```
 
-Rollback uses the same operation pointed at the previous version:
+After observation, the deployment can increase version 43’s share or return all traffic to version 42. A gradual shift reduces the initial blast radius of a defective release.
 
-```bash
-aws lambda update-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --function-version 17 \
-  --region eu-west-2
-```
-
-Aliases can also use weighted routing for supported invocation paths. This command keeps most traffic on version `17` and sends 10 percent to version `18`:
-
-```bash
-aws lambda update-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --function-version 17 \
-  --routing-config '{"AdditionalVersionWeights":{"18":0.1}}' \
-  --region eu-west-2
-```
-
-The release record should state which event source invokes which ARN. If an SQS event source mapping points at `thumbnail-worker:prod`, alias rollback changes the code used for future messages. Failed messages that already landed in a dead-letter queue still need a replay plan after the fix.
-
-Now the service needs evidence during normal operations and incidents.
+Record the event source and qualified function ARN used in production. Moving an alias affects integrations that invoke that alias; an integration pinned directly to another version or the unqualified function may behave differently.
 
 ![The alias rollback view shows why publishing versions and moving an alias can make function rollback a small, reviewable change](/content-assets/articles/article-cloud-providers-aws-compute-application-hosting-lambda-event-driven-compute/lambda-alias-rollback.png)
 
-*The alias rollback view shows why publishing versions and moving an alias can make function rollback a small, reviewable change.*
+*Versions answer what code exists; an alias answers which version a stable production name currently selects.*
 
+### How Should You Monitor Lambda?
+<!-- section-summary: Logs, aggregate metrics, traces, and business outcomes reveal different parts of function correctness. -->
 
-## Monitoring Lambda Work
-<!-- section-summary: Lambda operations rely on invocation metrics, errors, duration, throttles, logs, queue age, and event-source state. -->
+Infrastructure being available does not prove that useful work occurred. Monitor four layers.
 
-CloudWatch collects Lambda metrics and logs. Start with invocations, errors, duration, throttles, concurrent executions, and dead-letter queue depth if one exists. For SQS triggers, add queue age and visible message count. For streams, add iterator age. For API-style functions, add latency and status-code metrics from the front door.
+**Logs** explain individual executions: which order was processed, which exception occurred, which safe input identifier was involved, and where application code failed. Avoid logging passwords, tokens, or sensitive customer data.
 
-Check error metrics for an incident window:
+**Metrics** summarize the workload. Common signals include invocations, errors, duration, throttles, and concurrency. Queue-backed functions also need queue age and backlog; failure destinations need message count. Metrics reveal patterns without requiring an operator to read thousands of log lines.
 
-```bash
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Errors \
-  --dimensions Name=FunctionName,Value=thumbnail-worker \
-  --start-time 2026-06-24T13:30:00Z \
-  --end-time 2026-06-24T14:30:00Z \
-  --period 300 \
-  --statistics Sum \
-  --region eu-west-2
+**Traces** place the function inside a larger request. A 900 ms request could spend 20 ms at API Gateway, 120 ms initializing Lambda, 40 ms in application code, 100 ms in a database, and 620 ms in an external API. Without the breakdown, a team might call “Lambda” slow when the external dependency dominates.
+
+**Business metrics** answer whether the intended outcome happened. A function can report a zero-percent platform error rate while creating zero orders because of a logic bug. Track outcomes such as orders processed, payments completed, thumbnails produced, emails dispatched, and events moved to the failure queue.
+
+Technical and business health should be read together. For a queue workload, rising duration can raise concurrency, throttling can raise queue age, and repeated failures can fill the dead-letter queue. For an API workload, latency and status codes at the front door matter alongside Lambda duration and errors.
+
+## How Do You Design a Complete Lambda Workload?
+<!-- section-summary: A thumbnail example connects events, roles, durable state, concurrency, idempotency, failure handling, deployment, and monitoring. -->
+
+Consider an image-thumbnail service:
+
+```text
+Browser uploads holiday.jpg
+           ↓
+          S3
+           ↓ object-created event
+        Lambda
+       ├── read original
+       ├── resize image
+       └── write thumbnail
+           ↓
+          S3
 ```
 
-Example output:
+S3 supplies an event containing the bucket and object key. The handler extracts those fields and treats one image as the bounded work. The runtime includes the image-processing dependency. The execution role permits reads from the originals prefix, writes to the thumbnails prefix, and log delivery—without unrelated administrative access.
 
-```json
-{
-  "Label": "Errors",
-  "Datapoints": [
-    {
-      "Timestamp": "2026-06-24T13:55:00+00:00",
-      "Sum": 0.0,
-      "Unit": "Count"
-    },
-    {
-      "Timestamp": "2026-06-24T14:00:00+00:00",
-      "Sum": 18.0,
-      "Unit": "Count"
-    }
-  ]
-}
+If 100 images arrive together, Lambda can create concurrent environments. The design checks whether image libraries, S3 request patterns, and any other dependency can handle the concurrency. If pressure needs control, a queue and concurrency limit provide buffering and a predictable processing ceiling.
+
+The output key is deterministic: `originals/holiday.jpg` maps to `thumbnails/holiday.jpg`. Processing the same event twice therefore targets the same output rather than creating two business objects. Repeated failures go to a configured failure path, produce an alarm, and can be replayed after repair.
+
+The team monitors invocations, errors, duration, throttles, concurrency, failed-event count, and the business count of thumbnails successfully produced. A new image-library release is published as version 8 and selected through `prod`. If its output is corrupted or errors spike, `prod` moves back to version 7.
+
+Five design questions expose most weaknesses:
+
+1. **What causes execution?** Identify the API, queue, file event, stream, schedule, or caller and understand its delivery semantics.
+2. **What is one bounded unit of work?** Define whether an invocation handles one request, one image, one order, or a batch.
+3. **Which state must survive?** Put authoritative state outside the execution environment in a suitable durable system.
+4. **What happens if execution repeats?** Give side effects stable identities and make retry or replay safe.
+5. **What happens if thousands run together?** Follow every downstream arrow and impose buffering or concurrency limits based on dependency capacity.
+
+The deeper model can be read word by word:
+
+> **Lambda is AWS-managed ephemeral compute that turns events into bounded concurrent executions of your code.**
+
+- **AWS-managed** means you do not administer the worker fleet.
+- **Ephemeral** means local environments can disappear and durable state belongs elsewhere.
+- **Events** imply triggers, payloads, and event-driven integration.
+- **Bounded** implies a handler, finite unit, and timeout.
+- **Concurrent** implies horizontal scaling and downstream-capacity controls.
+- **Executions** imply retries, duplicates, idempotency, failure handling, and monitoring.
+- **Your code** still implies dependencies, runtime configuration, roles, versions, and aliases.
+
+```text
+event
+  ↓
+Lambda: ephemeral, bounded, concurrent compute
+  ├──> durable database state
+  ├──> durable queued work
+  └──> external service side effect
+
+around the execution:
+IAM, runtime, timeout, concurrency, retries,
+idempotency, logs, metrics, traces, versions, aliases
 ```
 
-`--period 300` groups data into five-minute buckets. `--statistics Sum` returns the total number of errors per bucket. The jump from `0` to `18` points at a real failure window. Empty datapoints can mean no invocations, a wrong function name, a wrong Region, or metric delay, so compare this with the invocation metric before deciding the function was idle.
+A Lambda function is not a tiny permanent server. It is a definition of how AWS should execute a finite piece of your code when work arrives.
 
-Search logs for the same window:
+## Check Your Understanding
 
-```bash
-aws logs tail /aws/lambda/thumbnail-worker \
-  --since 45m \
-  --region eu-west-2 \
-  --filter-pattern '"AccessDenied"'
-```
+:::expand[What Is AWS Lambda?]{kind="recap"}
+Lambda runs bounded pieces of customer code when work arrives while AWS operates the underlying machines and execution infrastructure.
 
-Example output:
+The handler is the configured entry point and receives source-shaped event data plus context about the current invocation.
 
-```bash
-2026-06-24T14:01:12Z 5d446c07 ERROR AccessDenied: User arn:aws:sts::123456789012:assumed-role/prod-thumbnail-worker is not authorized to perform s3:PutObject on arn:aws:s3:::northstar-photos-prod/thumbs/profile-123.png
-```
+The event is source-specific input describing what happened. The context supplies metadata about this invocation, including information such as its remaining execution time.
+:::
 
-The log gives the request time, request ID, error type, assumed role, action, and resource. That is enough to check the execution role policy and compare the resource path with the function code.
+:::expand[What Is an Execution Environment?]{kind="recap"}
+Lambda creates isolated runtime environments for invocations and may reuse them, but applications must treat them as disposable.
 
-Monitoring should connect function state to the event source. If Lambda errors rise but SQS queue age stays low, retries may be recovering quickly. If queue age rises and throttles appear, concurrency may be too low for the incoming volume or a downstream dependency may be slow.
+It can reuse expensive clients or caches to improve performance, but correctness cannot depend on earlier invocations or on the environment surviving. Every environment is disposable, and many can exist concurrently.
+:::
 
-## A Lambda Failure Path
-<!-- section-summary: Lambda debugging follows event source state, metrics, logs, permissions, concurrency, alias history, and replay needs. -->
+:::expand[Where Should a Lambda Function Keep State?]{kind="recap"}
+Lambda performs ephemeral computation, while authoritative state must live in an external durable system.
 
-At 14:05, users report that new profile pictures show full-size images but no thumbnails. Start with three questions: did events arrive, did the function run, and did errors rise?
+The function may read and write state, but its local memory and temporary files are not authoritative. Durable state that must survive or be shared belongs in an external database, object store, queue, or similar system.
 
-Check Lambda errors and invocations for the same window. Then check the event source. For an SQS-backed design, queue age is a strong signal:
+Function configuration defines the bounded runtime, and IAM separately controls who may invoke the function and what the function may call.
 
-```bash
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/SQS \
-  --metric-name ApproximateAgeOfOldestMessage \
-  --dimensions Name=QueueName,Value=thumbnail-events \
-  --start-time 2026-06-24T13:30:00Z \
-  --end-time 2026-06-24T14:30:00Z \
-  --period 300 \
-  --statistics Maximum \
-  --region eu-west-2
-```
+Invocation permission determines who or which service may call the function. The execution role determines which AWS actions the running function may perform on other resources.
+:::
 
-If queue age grows while Lambda errors rise, messages are backing up because processing fails. Search Lambda logs for the first clear error:
+:::expand[How Does Lambda Scale?]{kind="recap"}
+Lambda scales horizontally by running more invocations concurrently, and concurrency depends on both arrival rate and execution duration.
 
-```bash
-aws logs tail /aws/lambda/thumbnail-worker \
-  --since 60m \
-  --region eu-west-2 \
-  --filter-pattern '"ERROR"'
-```
+For steady work, concurrency is approximately arrival rate multiplied by average invocation duration. One hundred requests per second lasting two seconds imply roughly 200 concurrent executions.
 
-The logs show `AccessDenied` on `s3:PutObject` for the `thumbs/` prefix. Now inspect the deployed alias and the execution role policy. A common release mistake is code writing to a new prefix such as `thumbnails/` while the role still allows only `thumbs/`.
+Longer dependency calls keep each invocation active for more time. At the same arrival rate, the increased duration raises the number of overlapping invocations, which may add still more pressure to the dependency.
 
-```bash
-aws lambda get-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --region eu-west-2
-```
+It provides a durable buffer that separates arrival rate from processing rate. Lambda can drain the backlog at controlled concurrency instead of transferring every burst immediately to a slower downstream system.
 
-If the alias moved to version `18` at the start of the failure, roll back to version `17` while the team prepares the correct policy or code change:
+Synchronous, asynchronous, and poll-based integrations differ in response handling, batching, acknowledgement, and retry ownership.
+:::
 
-```bash
-aws lambda update-alias \
-  --function-name thumbnail-worker \
-  --name prod \
-  --function-version 17 \
-  --region eu-west-2
-```
+:::expand[Why Do Retries Require Idempotency?]{kind="recap"}
+Events can be processed more than once, so side-effecting functions need a stable operation identity and duplicate-safe behavior.
 
-After rollback, upload a test image and confirm a new thumbnail appears. Then handle old failed work. If SQS holds the messages, they can retry automatically after the function is healthy. If messages moved to a dead-letter queue, replay them after confirming the fix. If S3 invoked Lambda directly and events were lost after repeated failures, you may need a backfill script that scans the `originals/` prefix and creates missing thumbnails.
+Delivery, timeouts, and retries can cause the same logical event to be handled more than once. Idempotency uses a stable operation identity so repeated attempts do not repeat the business effect.
 
-That final replay step is easy to forget. Event-driven incidents have two recoveries: restore the function for future events, then repair the events that failed during the outage.
+A production workload defines retries, exhausted-event storage, alarms, investigation, repair, and replay before failures occur.
+
+Define retry ownership, maximum tolerance, a dead-letter queue or failure destination, an alarm, operator evidence, repair steps, and a safe replay method for work that failed before recovery.
+:::
+
+:::expand[When Is Lambda the Right Compute Model?]{kind="recap"}
+Lambda is a strong fit for finite event-driven work, while VMs and containers fit workloads needing machine or long-running process control.
+
+Lambda’s main unit is one bounded invocation created when work arrives. A permanent server starts a long-running process that waits for and handles many requests over an indefinite lifetime.
+
+It fits finite work that can be expressed as “when X happens, perform Y.” Machines fit host control, containers fit long-running application processes, and Lambda fits bounded event-driven executions.
+:::
+
+:::expand[How Do Versions, Aliases, and Rollback Work?]{kind="recap"}
+Immutable versions identify deployed code and configuration, while aliases provide stable pointers that can move or split traffic.
+
+A version is an immutable release snapshot. An alias is a stable name pointing to a version. Rollback moves the alias back to the last known-good version instead of reconstructing old code.
+
+Logs, aggregate metrics, traces, and business outcomes reveal different parts of function correctness.
+
+Application logic can return successfully while failing to produce the intended outcome. Counts such as orders completed or thumbnails created reveal correctness that infrastructure error metrics cannot prove.
+:::
+
+:::expand[How Do You Design a Complete Lambda Workload?]{kind="recap"}
+A thumbnail example connects events, roles, durable state, concurrency, idempotency, failure handling, deployment, and monitoring.
+:::
 
 ## References
 
 - [What is AWS Lambda?](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)
-- [Best practices for working with AWS Lambda functions](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
-- [Lambda function handler in Node.js](https://docs.aws.amazon.com/lambda/latest/dg/nodejs-handler.html)
-- [Manage Lambda function versions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-versions.html)
-- [Create a Lambda alias](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)
-- [Lambda canary deployments with weighted aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuring-alias-routing.html)
-- [Using AWS Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
-- [Configuring reserved concurrency](https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html)
+- [Lambda function handlers](https://docs.aws.amazon.com/lambda/latest/dg/foundation-progmodel.html)
+- [Lambda execution environments](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html)
+- [Lambda best practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
+- [Lambda execution role](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html)
+- [Lambda concurrency](https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html)
+- [Lambda event-driven architectures](https://docs.aws.amazon.com/lambda/latest/dg/concepts-event-driven-architectures.html)
+- [Using Lambda with Amazon SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
+- [Lambda error handling and retries](https://docs.aws.amazon.com/lambda/latest/dg/invocation-retries.html)
+- [Lambda versions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-versions.html)
+- [Lambda aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)
+- [Weighted alias routing](https://docs.aws.amazon.com/lambda/latest/dg/configuring-alias-routing.html)
+- [Monitoring Lambda functions](https://docs.aws.amazon.com/lambda/latest/dg/lambda-monitoring.html)

@@ -1,341 +1,474 @@
 ---
 title: "DaemonSets"
 description: "Run one Kubernetes Pod on each eligible node for logging, monitoring, networking, and node-local helpers."
-overview: "DaemonSets are for node-level work. A cluster-wide helper supports the Customer Notification Platform by following eligible nodes and exposing missing-agent symptoms."
+overview: "DaemonSets turn a changing set of eligible nodes into one node-local Pod per node, with placement, host access, and rollout behavior designed around node coverage."
 tags: ["daemonsets", "nodes", "logging", "kubectl"]
 order: 5
 id: article-containers-orchestration-kubernetes-workloads-daemonsets
 ---
+
 ## Table of Contents
 
-1. [DaemonSets Run Node-Level Agents](#daemonsets-run-node-level-agents)
-2. [Node-Local Pods](#node-local-pods)
-3. [A DaemonSet Skeleton](#a-daemonset-skeleton)
-4. [Add Node Selection and Tolerations](#add-node-selection-and-tolerations)
-5. [Add the Agent Container and Node Mounts](#add-the-agent-container-and-node-mounts)
-6. [Inspecting DaemonSet Coverage](#inspecting-daemonset-coverage)
-7. [Rolling Updates and Rollbacks](#rolling-updates-and-rollbacks)
-8. [Debugging Missing Pods and Stuck Updates](#debugging-missing-pods-and-stuck-updates)
-9. [Production Runbooks](#production-runbooks)
-10. [Choosing DaemonSet or Another Workload](#choosing-daemonset-or-another-workload)
-11. [References](#references)
+1. [Why does a node-local agent need a DaemonSet?](#why-does-a-node-local-agent-need-a-daemonset)
+2. [How does Kubernetes turn each eligible node into one targeted Pod?](#how-does-kubernetes-turn-each-eligible-node-into-one-targeted-pod)
+3. [How do node labels, taints, and tolerations shape the eligible node set?](#how-do-node-labels-taints-and-tolerations-shape-the-eligible-node-set)
+4. [What access does a node-local agent need, and what security boundary comes with it?](#what-access-does-a-node-local-agent-need-and-what-security-boundary-comes-with-it)
+5. [What happens when a node joins, leaves, changes labels, or enters maintenance?](#what-happens-when-a-node-joins-leaves-changes-labels-or-enters-maintenance)
+6. [How do DaemonSet rolling updates trade temporary coverage for temporary capacity?](#how-do-daemonset-rolling-updates-trade-temporary-coverage-for-temporary-capacity)
+7. [How do you trace one node from eligibility to useful data?](#how-do-you-trace-one-node-from-eligibility-to-useful-data)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## DaemonSets Run Node-Level Agents
-<!-- section-summary: DaemonSets run node-level helpers, where the useful unit is one Pod per eligible node rather than a fixed replica count. -->
+A DaemonSet becomes much easier to understand when you start with the quantity Kubernetes must control.
 
-A **DaemonSet** runs one Pod on each eligible node. It fits node-level helpers such as log agents, metrics collectors, networking helpers, security sensors, and storage daemons. The desired count comes from the nodes that match the DaemonSet rules rather than from a `replicas` number.
+A Deployment begins with a replica count: “I want `N` interchangeable copies of this application somewhere in the cluster.” A DaemonSet begins with a set of machines: “For every node that satisfies these conditions, I want one copy of this Pod on that node.”
 
-For the Customer Notification Platform, application Pods may move across worker nodes during rollouts, scaling, and repairs. The platform team still needs logs and node-level signals from every eligible application worker. If `notification-api` runs on `worker-a`, a log agent on `worker-a` can read that node's container log files and forward them. If the API later runs on `worker-b`, the same kind of agent needs to exist there too.
+```text
+Deployment: desired Pods = replicas
+DaemonSet:  desired Pods = eligible nodes
+```
 
-The node-coverage problem leads to a DaemonSet skeleton, node selection, tolerations, hostPath mounts, coverage checks, rolling updates, and debugging commands for missing agents.
+With ten eligible nodes, the DaemonSet wants ten Pods. Add an eleventh eligible node and the desired count becomes eleven. Remove three nodes and it becomes eight. There is no `replicas: 10` field because the current set of eligible nodes supplies the count.
 
-## Node-Local Pods
-<!-- section-summary: A DaemonSet is for software that must run on nodes because the node itself is part of the job. -->
+The central model is:
 
-**Node-local** means the Pod's job depends on the node where it runs. A log agent reads files from that node. A monitoring agent reads node metrics from that node. A storage or networking helper configures local behavior on that node. The application may run anywhere, so the helper needs to follow the set of nodes rather than the number of application replicas.
+> **A DaemonSet maintains a node-local invariant: every eligible node should have one instance of this Pod.**
 
-For the notification platform, the team wants every application node to ship container logs to the central logging system. If an API Pod runs on `worker-a`, the log agent on `worker-a` reads that Pod's logs from the node and forwards them. If the cluster autoscaler adds `worker-f` during a launch campaign, the DaemonSet creates a log agent Pod there as well.
+This is a relationship invariant, not merely a count. Ten Pods running on ten arbitrary nodes are insufficient if two agents share one node while another eligible node has none. The controller cares about the mapping:
 
-The DaemonSet controller handles this coverage loop. It evaluates nodes, creates one Pod per eligible node, and keeps replacing those Pods when they fail. The Pod template works like other workload templates, but DaemonSet Pods use `restartPolicy: Always` or omit the field so Kubernetes applies the default.
+```text
+each eligible node ↔ its intended DaemonSet Pod
+```
 
-Logging agents, node exporters, security sensors, storage daemons, CNI plugin components, and local caching helpers all need node-level placement. The operating question changes from "how many replicas do we want?" to "which nodes must have this Pod?"
+That distinction explains why a disappearing node lowers desired population rather than causing its agent to be recreated elsewhere. The missing machine took its node-local logs, devices, and network context with it; an extra copy on another node cannot represent that state.
 
-![DaemonSet node coverage infographic showing a DaemonSet placing one log agent Pod on each eligible node and automatically adding an agent when a new app node appears](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-node-coverage.png)
+The article follows seven questions:
 
-*A DaemonSet follows eligible nodes, so node growth and node labels directly change where agent Pods appear.*
+1. **Why does a node-local agent need a DaemonSet?**
+2. **How does Kubernetes turn each eligible node into one targeted Pod?**
+3. **How do node labels, taints, and tolerations shape the eligible node set?**
+4. **What access does a node-local agent need, and what security boundary comes with it?**
+5. **What happens when a node joins, leaves, changes labels, or enters maintenance?**
+6. **How do DaemonSet rolling updates trade temporary coverage for temporary capacity?**
+7. **How do you trace one node from eligibility to useful data?**
 
-_This infographic shows the DaemonSet coverage loop: the desired count follows eligible nodes instead of an application replica number._
+## Why does a node-local agent need a DaemonSet?
+<!-- section-summary: A DaemonSet manages work that must follow node-local data or capabilities. -->
 
-## A DaemonSet Skeleton
-<!-- section-summary: The DaemonSet skeleton looks like a controller around a Pod template, with a selector that must match template labels. -->
+Each Kubernetes node has state and capabilities that belong to that machine. Its `/var/log` directory contains its local logs. Its network interfaces, disks, devices, and kernel state also belong to that node.
 
-The skeleton should look familiar because a DaemonSet still wraps a Pod template. The difference is the count. The log agent count comes from eligible nodes rather than a fixed `replicas` field. For the notification platform, the first thing to protect is the ownership link between the DaemonSet selector and the labels copied onto every node-local agent Pod, since that link decides which Pods the controller manages on each node pool.
+Suppose a cluster has three worker nodes and you need to collect container logs. The useful work is local:
+
+| Node | Where its logs exist | Process that can read them locally |
+|---|---|---|
+| `worker-1` | `worker-1:/var/log` | log agent on `worker-1` |
+| `worker-2` | `worker-2:/var/log` | log agent on `worker-2` |
+| `worker-3` | `worker-3:/var/log` | log agent on `worker-3` |
+
+A collector on `worker-1` cannot treat `/var/log` as a cluster-wide directory. That path refers to `worker-1`'s filesystem. The natural design is therefore one agent on each node: each agent reads local data and sends it to a central log store.
+
+The agent follows the data. This same relationship appears in:
+
+- node metrics collectors that inspect the local machine;
+- CNI networking agents that configure node networking;
+- storage node plugins that work with disks attached to a node;
+- security agents that inspect node activity;
+- device plugins that advertise local hardware;
+- node-local caches and proxies.
+
+These processes are node agents managed through Kubernetes. Their desired population changes when the node population changes.
+
+![A DaemonSet deriving one log-agent Pod from each eligible node while a Deployment maintains a separate fixed replica count](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-node-coverage.png)
+
+*A Deployment follows a number; a DaemonSet follows the eligible-node set.*
+
+## How does Kubernetes turn each eligible node into one targeted Pod?
+<!-- section-summary: The DaemonSet controller chooses eligible nodes, creates a targeted Pod for each, and lets the scheduler perform the final binding. -->
+
+Assume the cluster contains `node-a`, `node-b`, `node-c`, and `node-d`. The DaemonSet controller repeatedly asks the same question for every node: should this DaemonSet run here?
+
+Let `E` mean the eligible-node set and `P` mean the DaemonSet's Pods. The controller tries to maintain one intended Pod for each member of `E`:
+
+| Node | Eligible? | Desired result |
+|---|---:|---|
+| `node-a` | Yes | one DaemonSet Pod on `node-a` |
+| `node-b` | Yes | one DaemonSet Pod on `node-b` |
+| `node-c` | No | no DaemonSet Pod |
+| `node-d` | Yes | one DaemonSet Pod on `node-d` |
+
+This is an ongoing reconciliation loop. The controller watches both the DaemonSet and the node set, compares desired coverage with actual coverage, and acts whenever the two differ.
+
+The default scheduler still participates. For each eligible node, the DaemonSet controller creates a Pod with required node affinity targeting that node's name. Conceptually, a Pod intended for `worker-17` receives a constraint like this:
+
+```yaml
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchFields:
+          - key: metadata.name
+            operator: In
+            values:
+              - worker-17
+```
+
+The responsibilities are separate:
+
+1. The DaemonSet controller decides that `worker-17` should have a Pod.
+2. It creates a Pod whose required affinity targets `worker-17`.
+3. The scheduler checks whether that Pod can actually run there and binds it to the node.
+4. The kubelet on `worker-17` pulls the image and starts the containers.
+
+That distinction explains how a DaemonSet can want a Pod while the Pod remains `Pending`. The desired node coverage may be correct, yet the target node may lack the requested CPU or memory. A controller can keep asking for the missing Pod; it cannot create capacity on the machine.
+
+### Separate desired coverage from successful placement
+
+Assume four nodes match. The DaemonSet controller can correctly report four desired nodes and create four targeted Pods, yet one remains Pending on `worker-17` because its CPU request cannot fit. The state is then:
+
+```text
+eligible nodes          4
+intended targeted Pods  4
+scheduled Pods          3
+useful ready agents     at most 3
+```
+
+Increasing replicas is not an available fix because no replica field owns the desired count. Moving the Pod to a roomy node is not a fix either because it must represent `worker-17`. The choices are to free or add capacity on that node, reduce a justified resource request, change node eligibility intentionally, or correct another scheduling constraint.
+
+This is why status needs several counts. `desiredNumberScheduled` proves node selection, while current, ready, available, updated, and misscheduled fields describe later parts of the coverage pipeline. A single “four desired” number cannot prove that all four nodes receive a useful agent.
+
+## How do node labels, taints, and tolerations shape the eligible node set?
+<!-- section-summary: Labels select the intended node population, while tolerations allow the Pod through matching taints. -->
+
+The controller needs rules for deciding which nodes belong to `E`. Labels, selectors, affinity, taints, and tolerations answer different parts of that decision.
+
+A label describes a node. For example:
+
+```yaml
+metadata:
+  labels:
+    kubernetes.io/os: linux
+    node-pool: general
+    logging: enabled
+```
+
+The DaemonSet can require those properties:
+
+```yaml
+nodeSelector:
+  kubernetes.io/os: linux
+  logging: enabled
+```
+
+A node must satisfy both entries to enter the selected set. Node affinity can express richer matching rules, but the purpose is the same: identify nodes whose properties fit the workload.
+
+A taint works from the node's side. A node with this taint repels ordinary Pods:
+
+```text
+dedicated=gpu:NoSchedule
+```
+
+A Pod with a matching toleration is allowed past that restriction:
+
+```yaml
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: gpu
+    effect: NoSchedule
+```
+
+The distinction is worth holding clearly:
+
+| Mechanism | Question it answers |
+|---|---|
+| `nodeSelector` or node affinity | Which kinds of node does this Pod require? |
+| taint | Which Pods should this node repel? |
+| toleration | Is this taint an allowed condition for this Pod? |
+
+A toleration grants permission; it does not select the node by itself. A common infrastructure pattern combines both mechanisms:
+
+```yaml
+nodeSelector:
+  pool: infra
+
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: infra
+    effect: NoSchedule
+```
+
+The selector attracts the agent to the infrastructure pool, while the toleration allows it onto nodes protected by the `dedicated=infra:NoSchedule` taint.
+
+DaemonSet Pods also receive several tolerations automatically because node-level software often has to remain present while a node is unhealthy or undergoing maintenance. These cover conditions including `NotReady`, `Unreachable`, disk pressure, memory pressure, PID pressure, and unschedulable nodes.
+
+This behavior explains why this command does not remove ordinary DaemonSet agents from the node:
+
+```bash
+kubectl cordon worker-1
+```
+
+Cordoning prevents ordinary new scheduling, while node agents may still be needed for networking, logging, metrics, or maintenance visibility. Custom taints still require an explicit matching toleration when the agent legitimately belongs on those nodes.
+
+## What access does a node-local agent need, and what security boundary comes with it?
+<!-- section-summary: Node-local agents often need narrow host access, node identity, and resources sized for every selected node. -->
+
+The log agent needs to read the node's files from inside its container. A `hostPath` volume exposes a specific path from the node filesystem at a container path:
+
+```yaml
+volumeMounts:
+  - name: node-logs
+    mountPath: /host/var/log
+    readOnly: true
+
+volumes:
+  - name: node-logs
+    hostPath:
+      path: /var/log
+      type: Directory
+```
+
+On `worker-1`, `/host/var/log` refers to `worker-1:/var/log`. The same Pod template on `worker-2` exposes `worker-2:/var/log`. One template therefore produces node-relative behavior.
+
+Host access crosses an isolation boundary, so the scope matters. Mount the exact path the process needs, make it read-only when possible, avoid privileged mode unless the node operation truly requires it, grant minimal Linux capabilities, and give the ServiceAccount only the Kubernetes API permissions the agent needs.
+
+Different agents need different access. A log reader may only need read-only files. A CNI plugin may need host networking, writes to host paths, privileged operations, or network-namespace access. The workload kind and the security permissions answer separate questions:
+
+- DaemonSet controls where the Pods run and how many exist.
+- `securityContext`, volumes, Linux capabilities, and RBAC control what those Pods can do.
+
+The agent commonly needs to identify its own node when tagging logs or metrics. The Downward API can copy the assigned node name into an environment variable:
+
+```yaml
+env:
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+```
+
+Each instance then reports a different value, such as `NODE_NAME=worker-1`, so a central backend can associate an event with the correct cluster node.
+
+Here is the complete simple log-agent example from those pieces:
 
 ```yaml
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: notification-log-agent
-  namespace: observability
+  name: node-log-agent
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: notification-log-agent
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: notification-log-agent
-```
-
-The selector and template labels form the ownership contract. The DaemonSet controller creates and manages Pods with those labels. As with Deployments, the selector should be planned carefully because it is part of the controller identity.
-
-The skeleton has three field groups to read first:
-
-- `metadata.name` and `metadata.namespace` name the node agent object.
-- `spec.selector.matchLabels` defines which Pods the DaemonSet owns.
-- `spec.template.metadata.labels` defines the labels copied onto each node-local Pod.
-
-The skeleton has no container yet and no placement rules yet. If we added only a container, the DaemonSet would try to run on every eligible node in the cluster. For the notification platform, the team wants only the app node pool.
-
-## Add Node Selection and Tolerations
-<!-- section-summary: Node selectors choose which nodes should receive DaemonSet Pods, while tolerations let trusted Pods run on intentionally tainted nodes. -->
-
-An **eligible node** is a node that matches the DaemonSet's placement rules and can run the Pod. A DaemonSet may use `nodeSelector`, node affinity, taints and tolerations, or other scheduling constraints to define eligibility.
-
-The notification log agent should follow application nodes only. Control-plane nodes, GPU nodes, storage nodes, and special-purpose nodes may have different security or performance requirements. Placement rules let the platform team state which node pool should receive the agent before the DaemonSet starts creating Pods across the fleet.
-
-A **node selector** is the simplest placement rule. It says the node must have a matching label:
-
-```yaml
-template:
-  spec:
-    nodeSelector:
-      devpolaris.io/node-pool: app
-```
-
-In this example, only nodes labeled `devpolaris.io/node-pool=app` should receive the log agent. Control-plane nodes, GPU nodes, and storage nodes can stay outside this DaemonSet if they use different labels.
-
-A **taint** repels Pods from a node unless the Pod has a matching **toleration**. Dedicated nodes often use taints so only trusted workloads run there. If the app node pool has a taint such as `dedicated=app:NoSchedule`, the log agent needs a toleration:
-
-```yaml
-template:
-  spec:
-    tolerations:
-      - key: dedicated
-        operator: Equal
-        value: app
-        effect: NoSchedule
-```
-
-Node selection chooses the target pool. Tolerations let the Pod pass intentional taints on those nodes. Both pieces should appear in the runbook because a missing node label and a missing toleration create different symptoms.
-
-![DaemonSet eligibility filters infographic showing app, gpu, and control nodes passing or skipping nodeSelector and toleration filters before an agent Pod is placed](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-eligibility-filters.png)
-
-*Node selectors and tolerations decide which nodes receive the agent before the Pod can run.*
-
-_This infographic separates the two placement questions: node selection chooses the target pool, and tolerations let trusted DaemonSet Pods pass intentional taints._
-
-## Add the Agent Container and Node Mounts
-<!-- section-summary: A node log agent usually needs a container image, resource settings, and read-only hostPath mounts into node log directories. -->
-
-The container block looks familiar from Pods and Deployments. The difference is the job the container performs. The log agent must read log files from the node, enrich them with metadata, and forward them to a central system.
-
-That job makes resource and mount choices more sensitive than they may look. One small agent runs on every eligible node, so the total CPU and memory request grows with the node count. The agent also reads node files through a hostPath mount, so the manifest should keep the mount read-only and focused on the log directory it truly needs.
-
-```yaml
-containers:
-  - name: agent
-    image: ghcr.io/customer-notification/log-agent:2026.06.14
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
-```
-
-Resource settings are important for DaemonSets because one Pod runs on each eligible node. A small per-Pod request turns into cluster-wide capacity when multiplied by every node.
-
-The agent also needs a read-only mount of node log files:
-
-```yaml
-volumes:
-  - name: varlogcontainers
-    hostPath:
-      path: /var/log/containers
-      type: Directory
-containers:
-  - name: agent
-    volumeMounts:
-      - name: varlogcontainers
-        mountPath: /var/log/containers
-        readOnly: true
-```
-
-`hostPath` mounts a path from the node into the Pod. It is powerful and should be used carefully. A logging agent may need it because the node's container log files live outside the Pod. A normal application Pod should usually avoid it because it couples the application to node internals and expands security risk.
-
-## Inspecting DaemonSet Coverage
-<!-- section-summary: Coverage checks compare desired, current, ready, and available DaemonSet Pods against the eligible node set. -->
-
-Coverage is the main health signal for a DaemonSet. The notification team wants one ready agent on each eligible application node. The first command compares desired, current, ready, and available counts so the team can see whether Kubernetes coverage matches the node pool before checking the logging system or agent configuration. This is the Kubernetes layer of the symptom, before downstream log delivery.
-
-```bash
-$ kubectl get daemonset -n observability notification-log-agent
-NAME                     DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR
-notification-log-agent   4         4         4       4            4           devpolaris.io/node-pool=app
-```
-
-`DESIRED` is the number of eligible nodes. `CURRENT` is the number of DaemonSet Pods created. `READY` and `AVAILABLE` show how many are healthy enough to count for operations.
-
-List the Pods with nodes:
-
-```bash
-$ kubectl get pods -n observability \
-  -l app.kubernetes.io/name=notification-log-agent -o wide
-NAME                           READY   STATUS    NODE
-notification-log-agent-4tdsk   1/1     Running   worker-a
-notification-log-agent-7kq2p   1/1     Running   worker-b
-notification-log-agent-m91px   1/1     Running   worker-c
-notification-log-agent-z8vnt   1/1     Running   worker-d
-```
-
-The `-o wide` output shows the node for each Pod. A healthy DaemonSet should have one ready agent Pod on every eligible node. When notification logs disappear from one node, this is the first view the platform team checks.
-
-Compare that against eligible nodes:
-
-```bash
-$ kubectl get nodes -l devpolaris.io/node-pool=app
-NAME       STATUS   ROLES    AGE
-worker-a   Ready    <none>   18d
-worker-b   Ready    <none>   18d
-worker-c   Ready    <none>   18d
-worker-d   Ready    <none>   2h
-```
-
-If there are four eligible nodes and four ready DaemonSet Pods, the Kubernetes coverage layer looks healthy. The downstream logging system still needs its own check.
-
-## Rolling Updates and Rollbacks
-<!-- section-summary: DaemonSet updates replace one or more node-local Pods at a time, so rollout settings protect cluster-wide helper coverage. -->
-
-DaemonSets support rolling updates. The update strategy controls how many agent Pods can be unavailable during the update:
-
-Updating a node agent can affect every workload on the node, so the rollout pace deserves the same care as an application release. For the log agent, a brief gap may mean missing logs from one node. For networking or storage agents, a bad update can affect application traffic directly. The strategy below keeps only one agent unavailable at a time in the training example.
-
-```yaml
-spec:
+      app: node-log-agent
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
+  minReadySeconds: 10
+  template:
+    metadata:
+      labels:
+        app: node-log-agent
+    spec:
+      nodeSelector:
+        logging: enabled
+      tolerations:
+        - key: node-agent
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: <your-agent-image>
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: node-logs
+              mountPath: /host/var/log
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: node-logs
+          hostPath:
+            path: /var/log
+            type: Directory
 ```
 
-`maxUnavailable: 1` means Kubernetes should update one node-local Pod at a time. For a log agent, that limits the period where one node may briefly lack log forwarding. For networking or storage agents, the value may need even stricter review because the helper may affect every Pod on the node.
+The selector identifies the Pods owned by the DaemonSet and must match the Pod-template labels. This selector is immutable after creation. The `nodeSelector` chooses nodes. The toleration permits placement on a matching tainted node. The volume exposes local data, and `NODE_NAME` gives that data a node identity.
 
-Update the image through a manifest or command:
+Resource requests multiply across the fleet. A request of `100m` CPU on each of 500 eligible nodes commits 50 CPUs across the cluster. A small per-node number can become a large fleet-wide reservation.
 
-```bash
-$ kubectl set image daemonset/notification-log-agent -n observability \
-  agent=ghcr.io/customer-notification/log-agent:2026.06.14-2
-daemonset.apps/notification-log-agent image updated
+Read the manifest as one causal sentence: for every node labelled `logging=enabled` and permitted by its taints, create an agent Pod targeted to that node; reserve enough capacity, expose only that node's `/var/log` read-only, identify the node through `spec.nodeName`, and report Ready only when logs can reach the backend.
 
-$ kubectl rollout status daemonset/notification-log-agent -n observability
-daemon set "notification-log-agent" successfully rolled out
-```
+Every field should support that sentence. Removing `readOnly: true` changes host risk, not coverage. Changing the selector changes the desired node population. Raising the request changes whether each targeted Pod fits and multiplies the reservation by the eligible-node count. Weakening readiness can make status claim coverage before the agent is useful.
 
-Rollback uses the rollout machinery:
+For fleet cost, calculate both steady state and update overlap. Five hundred agents requesting `50m` CPU and `64Mi` reserve 25 CPU cores and roughly 31.25 GiB of memory. A surge rollout may temporarily require both old and new requests on selected nodes, so cluster-wide totals are not enough; each individual node must have room for its overlapping pair.
 
-```bash
-$ kubectl rollout history daemonset/notification-log-agent -n observability
-$ kubectl rollout undo daemonset/notification-log-agent -n observability
-$ kubectl rollout status daemonset/notification-log-agent -n observability
-```
+## What happens when a node joins, leaves, changes labels, or enters maintenance?
+<!-- section-summary: Changes to nodes and their labels change the DaemonSet's desired set and therefore its Pod population. -->
 
-After a rollback, verify both Kubernetes and the downstream system. A ready agent Pod is useful evidence, and the real outcome is that logs from each application node arrive in the central logging platform.
+Think in sets. If the eligible nodes are initially `{A, B, C}`, the desired Pods are `{Pod-A, Pod-B, Pod-C}`.
 
-## Debugging Missing Pods and Stuck Updates
-<!-- section-summary: DaemonSet debugging starts with node eligibility, then checks taints, scheduling events, Pod logs, and rollout status. -->
+When matching node `D` joins, the controller observes that `D` belongs to the desired set and has no DaemonSet Pod. It creates `Pod-D` targeted to that node. When node `B` disappears, `B` leaves the desired set and its Pod is garbage collected. There is no need to recreate `Pod-B` on another node because the work represented `B` itself.
 
-When a node has no DaemonSet Pod, eligibility is the first check. A DaemonSet creates Pods for eligible nodes, so compare the node labels to the DaemonSet placement rules.
+This differs from a Deployment:
 
-The first useful question is why Kubernetes thinks the node qualifies. A missing label, an unmatched taint, a resource shortage, an image failure, or a broken hostPath mount can all produce a node without a healthy agent. Eligibility evidence prevents the team from chasing agent logs on a Pod Kubernetes never created.
-
-```bash
-$ kubectl get node worker-c --show-labels
-$ kubectl get daemonset -n observability notification-log-agent -o yaml
-```
-
-If the labels match, check taints. A dedicated node may repel the agent because the Pod template lacks a matching toleration.
-
-```bash
-$ kubectl describe node worker-c | grep -A3 Taints
-$ kubectl get daemonset -n observability notification-log-agent \
-  -o jsonpath='{.spec.template.spec.tolerations}'
-```
-
-If eligibility and tolerations look correct, check scheduling and resource pressure. A DaemonSet Pod still needs CPU, memory, image pull access, volume mounts, and a working kubelet. Pod events usually point to the blocker.
-
-```bash
-$ kubectl get pods -n observability \
-  -l app.kubernetes.io/name=notification-log-agent -o wide
-$ kubectl describe daemonset -n observability notification-log-agent
-$ kubectl get events -n observability --sort-by=.lastTimestamp
-$ kubectl describe node worker-c
-```
-
-For a stuck rollout, compare old and new Pods. `UP-TO-DATE` below the desired count usually means the rollout cannot replace some Pods yet. Common causes include the new image failing to pull, the new container crashing, resource requests that no longer fit on a node, a broken hostPath mount, or a readiness condition that never passes.
-
-```bash
-$ kubectl rollout status daemonset/notification-log-agent -n observability
-$ kubectl get daemonset -n observability notification-log-agent
-$ kubectl logs -n observability \
-  -l app.kubernetes.io/name=notification-log-agent --all-containers=true --tail=100
-```
-
-When the new agent image crashes, rollback quickly if logs or metrics are production-critical. When the rollout is stuck because one node lacks resources, decide whether to reduce the agent request, drain unrelated workload from that node, or add capacity.
-
-## Production Runbooks
-<!-- section-summary: DaemonSet runbooks should connect Kubernetes coverage, node state, rollout state, and the downstream system the agent supports. -->
-
-A good DaemonSet runbook starts with the business symptom. "Notification logs are missing from one node" is different from "all log agents crash after rollout" and different from "the networking agent is absent from a new node." The commands overlap, but the risk and rollback decision are different.
-
-For **missing logs from one notification node**, identify the node that hosted the affected API or worker Pod. Then check whether the log agent Pod exists and is ready on the same node. If the agent exists, read its logs and check the downstream logging system. If the agent is absent, walk through labels, taints, tolerations, and node events.
-
-```bash
-$ kubectl get pod -n notifications -l app.kubernetes.io/name=notification-api -o wide
-$ kubectl get pod -n observability -l app.kubernetes.io/name=notification-log-agent -o wide
-$ kubectl describe node worker-c
-```
-
-For **a new node with no agent**, check the node labels applied by the node pool or cluster autoscaler. New nodes often miss custom labels when an infrastructure template changes. Fix the node pool configuration first, then label the current node only if you need an immediate repair.
-
-```bash
-$ kubectl label node worker-f devpolaris.io/node-pool=app
-$ kubectl get pod -n observability -l app.kubernetes.io/name=notification-log-agent -o wide
-```
-
-For **a DaemonSet rollout that breaks telemetry**, rollback to the known good revision and keep the failed Pod logs. The failed Pods tell the team whether the issue was configuration, image startup, permissions, or downstream authentication. After rollback, verify the logging dashboard for at least one node per zone.
-
-```bash
-$ kubectl rollout history daemonset/notification-log-agent -n observability
-$ kubectl rollout undo daemonset/notification-log-agent -n observability
-$ kubectl rollout status daemonset/notification-log-agent -n observability
-```
-
-For **planned node maintenance**, remember that DaemonSet Pods may run on cordoned or unschedulable nodes because DaemonSets get special tolerations. Draining a node has rules around DaemonSet-managed Pods, so maintenance runbooks should focus on moving normal application Pods away, handling the node, and confirming the DaemonSet agent returns when the node rejoins service.
-
-## Choosing DaemonSet or Another Workload
-<!-- section-summary: Use DaemonSets for node-level helpers, Deployments for replicated services, and Jobs or CronJobs for finite work. -->
-
-The Customer Notification Platform now has several workload shapes. The API server uses a Deployment because it should serve traffic continuously. The worker uses a Deployment because it should keep consuming queue messages. The migration uses a Job because it should finish once. The stale delivery cleanup uses a CronJob because it should create Jobs on a schedule. The log agent uses a DaemonSet because node coverage is the point.
-
-Use a DaemonSet when the node itself is part of the job. Logs, metrics, security agents, storage helpers, and network components often need one Pod on each eligible node. Use a Deployment when you care about an application replica count. Use a Job or CronJob when the process should finish.
-
-| Workload | Placement rule | Notification platform example |
+| Event | Deployment | DaemonSet |
 |---|---|---|
-| Deployment | Run a desired number of service replicas | `notification-api` |
-| Deployment | Run a desired number of worker replicas | `notification-worker` |
-| Job | Run finite work to completion | Notification schema migration |
-| CronJob | Create finite work from a schedule | Nightly stale delivery cleanup |
-| DaemonSet | Run one Pod on each eligible node | Log agent on app nodes |
+| A Pod disappears but the node remains | replace it to restore the replica count | replace it on that same eligible node |
+| A node disappears | replace affected replicas elsewhere if needed | desired count falls because that node no longer needs an agent |
+| A new node joins | replica count usually stays the same | create an agent when the node is eligible |
 
-For DaemonSets, inspect nodes and Pods together. Check labels, selectors, taints, tolerations, resource pressure, rollout revisions, and the downstream system the agent supports. A ready DaemonSet Pod is a good sign, and the real success check is whether the node-local job is actually happening.
+Labels can change the set without adding or deleting nodes. Suppose `A` and `B` have `logging=enabled`, while `C` has `logging=disabled`. The eligible set is `{A, B}`. This command moves `C` into the set:
 
-![DaemonSet debug runbook infographic showing symptom, coverage, node state, agent logs, downstream logs, and rollback as the troubleshooting path](/content-assets/articles/article-containers-orchestration-kubernetes-workloads-daemonsets/daemonset-debug-runbook.png)
+```bash
+kubectl label node C logging=enabled --overwrite
+```
 
-*A missing-agent investigation should prove node eligibility, Pod health, downstream delivery, and rollback evidence in order.*
+The controller then creates a Pod for `C`. Changing `B` to `logging=disabled` removes `B` from the set and causes its DaemonSet Pod to be removed.
 
-_This infographic summarizes the DaemonSet runbook: start from the missing node-local symptom, prove coverage, inspect node state and agent logs, then verify the downstream system._
+This lets one cluster run different agents on different node populations: logging on all Linux nodes, a GPU monitor on GPU nodes, a storage agent on storage nodes, and an edge proxy on edge nodes.
+
+DaemonSet status summarizes the same node-set model. Useful fields include:
+
+| Status field | Question it answers |
+|---|---|
+| `desiredNumberScheduled` | How many nodes should run the daemon? |
+| `numberReady` | How many daemon Pods are ready? |
+| `numberAvailable` | How many are available? |
+| `numberUnavailable` | How many desired nodes lack available coverage? |
+| `updatedNumberScheduled` | How many desired nodes run the updated template? |
+| `numberMisscheduled` | How many nodes run the daemon even though they should not? |
+
+If twelve nodes are desired, all twelve Pods exist, and only eleven are ready, the controller has achieved placement but one node still lacks useful coverage.
+
+## How do DaemonSet rolling updates trade temporary coverage for temporary capacity?
+<!-- section-summary: Rolling-update settings choose between a short gap on a node and temporary overlap of old and new agents. -->
+
+Changing the DaemonSet's Pod template creates a rollout across the eligible-node set. Replacing every agent at once would remove node-level coverage across the fleet, so the controller updates a controlled number of nodes at a time.
+
+The default style uses `maxUnavailable: 1` and no surge:
+
+```yaml
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+```
+
+For one node, the old agent stops, the new agent starts, and the new agent becomes ready. The node has a brief coverage gap, while its resource use stays close to one agent's request. `maxUnavailable` controls how many eligible nodes may be in that condition at once.
+
+An alternative preserves coverage with temporary overlap:
+
+```yaml
+rollingUpdate:
+  maxUnavailable: 0
+  maxSurge: 1
+```
+
+The old agent stays while the new agent starts. After the new agent is ready, Kubernetes removes the old one. This can temporarily require the sum of both versions' CPU and memory on a node.
+
+Surge is impossible for some node agents. If the old Pod owns host port `9100`, an exclusive device, or a locked socket, the new Pod cannot coexist on that node. The rollout strategy must match both resource capacity and the agent's ability to overlap.
+
+Readiness defines useful coverage. A started process may still be initializing, connecting to a backend, or preparing local state. With a readiness probe and `minReadySeconds: 10`, Kubernetes waits for the new agent to remain ready before treating the handoff as stable.
+
+The trade is therefore concrete:
+
+| Strategy | Temporary state | Main cost |
+|---|---|---|
+| allow unavailability | one or more nodes briefly have no useful agent | reduced coverage |
+| allow surge | old and new agents coexist on a node | extra capacity and possible overlap |
+
+### Prove rollout coverage on nodes with different constraints
+
+Before choosing surge, test whether both versions can coexist with host ports, devices, sockets, host paths, and per-node resources. One roomy test node does not prove a constrained node pool can surge. Before choosing unavailability, decide how long one node may operate without logging, networking, storage, or security coverage and how many simultaneous gaps the system can tolerate.
+
+During rollout, compare `updatedNumberScheduled`, `numberReady`, `numberAvailable`, and `numberUnavailable` with the eligible-node count. Then sample individual nodes from each pool and prove the new agent emits useful node-tagged data. A Ready process that cannot access the local path or reach its backend is not meaningful coverage.
+
+Rollback carries the same trade. Restoring the old Pod template still progresses across nodes under the update strategy. Confirm that recovery does not require coexistence that the old and new agents cannot support, and keep watching actual node coverage until every eligible node again reports useful service.
+
+## How do you trace one node from eligibility to useful data?
+<!-- section-summary: Debug one node by following the full chain from selection through scheduling, startup, local access, identity, and readiness. -->
+
+Take `worker-17`. It has these labels:
+
+```yaml
+kubernetes.io/os: linux
+logging: enabled
+```
+
+It also has this taint:
+
+```text
+node-agent=true:NoSchedule
+```
+
+The DaemonSet selects Linux nodes with logging enabled and tolerates the `node-agent` taint. Trace the result in order:
+
+1. **Selection:** confirm that both required labels match. A mismatch keeps the node outside the desired set.
+2. **Permission:** confirm that the Pod tolerates every blocking taint. A selector match does not cancel a taint.
+3. **Controller decision:** the DaemonSet should count `worker-17` among its desired nodes.
+4. **Targeted Pod:** the controller should create one Pod with required affinity for `worker-17`.
+5. **Scheduling:** inspect Pod events for CPU, memory, volume, or other placement failures. The scheduler can leave a correctly targeted Pod `Pending`.
+6. **Kubelet startup:** the kubelet on `worker-17` pulls the image and starts the container.
+7. **Local data:** `/host/var/log` should map to `worker-17:/var/log`.
+8. **Identity:** `NODE_NAME` should equal `worker-17`.
+9. **Useful output:** the agent should send recent records tagged with `worker-17` to the backend.
+10. **Readiness:** the Pod should report ready only after the agent can perform its useful work.
+
+The first failed step narrows the problem. A desired count that excludes the node points to labels or affinity. A desired Pod with no placement points to the scheduler. A running Pod without local files points to the mount. A ready Pod without backend data points beyond Kubernetes to the agent or its destination.
+
+A final design test helps decide whether this controller fits the workload:
+
+> If a matching node is added tomorrow, should this workload appear there because that node exists?
+
+Logging, metrics, networking, storage, security, device, and node-cache agents usually answer yes. An API that needs more request capacity usually answers with a replica count instead and belongs in a Deployment. The DaemonSet represents each selected node; the Deployment represents service capacity.
+
+## Check Your Answers
+<!-- section-summary: Revisit node-derived desired state, targeting, selection, host access, node lifecycle, rolling updates, and diagnosis. -->
+
+:::expand[Why does a node-local agent need a DaemonSet?]{kind="recap"}
+A DaemonSet derives its desired count from eligible nodes and maintains one Pod on each. That matches work tied to local logs, networking, storage, devices, or other node-specific state.
+:::
+
+:::expand[How does Kubernetes turn each eligible node into one targeted Pod?]{kind="recap"}
+The DaemonSet controller decides which nodes need coverage and creates one Pod per eligible node with required affinity for that host. The scheduler performs the final fit check and binding, then the node's kubelet starts the containers.
+:::
+
+:::expand[How do node labels, taints, and tolerations shape the eligible node set?]{kind="recap"}
+Selectors and affinity identify nodes with the required properties. Taints repel Pods, while matching tolerations allow this agent past those restrictions. Selection and permission usually work together.
+:::
+
+:::expand[What access does a node-local agent need, and what security boundary comes with it?]{kind="recap"}
+A node agent may use a narrow `hostPath` and the Downward API to read local state and tag it with the node name. Host access is a security boundary, so paths, write access, privileges, Linux capabilities, and RBAC should be limited to the agent's actual job.
+:::
+
+:::expand[What happens when a node joins, leaves, changes labels, or enters maintenance?]{kind="recap"}
+A matching new node raises the desired count, a removed node lowers it, and label changes move nodes into or out of the selected set. Automatic tolerations let many infrastructure agents remain during conditions that repel ordinary application Pods, including when a node is cordoned.
+:::
+
+:::expand[How do DaemonSet rolling updates trade temporary coverage for temporary capacity?]{kind="recap"}
+`maxUnavailable` permits a short coverage gap while keeping one agent's resource footprint. `maxSurge` overlaps old and new agents to preserve coverage, which needs extra capacity and may be blocked by exclusive ports, devices, or sockets.
+:::
+
+:::expand[How do you trace one node from eligibility to useful data?]{kind="recap"}
+Follow one node through label matching, taint permission, the controller's desired set, targeted Pod creation, scheduling, kubelet startup, local mounts, node identity, backend output, and readiness. The first failed transition identifies the layer to investigate.
+:::
 
 ## References
+<!-- section-summary: Kubernetes documentation for DaemonSet behavior and the mechanisms used by node-local agents. -->
 
-- [Kubernetes Workloads](https://kubernetes.io/docs/concepts/workloads/) - Overview of Kubernetes workload resources and controllers.
-- [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/) - Official DaemonSet behavior, required fields, selectors, node selection, scheduling, tolerations, communication patterns, and alternatives.
-- [Perform a Rolling Update on a DaemonSet](https://kubernetes.io/docs/tasks/manage-daemon/update-daemon-set/) - Official rollout commands and troubleshooting guidance for DaemonSet updates.
-- [Perform a Rollback on a DaemonSet](https://kubernetes.io/docs/tasks/manage-daemon/rollback-daemon-set/) - Official rollback commands and revision behavior for DaemonSets.
-- [Labels and Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/) - Official label and selector behavior used by DaemonSet Pod selectors and node labels.
-- [Assigning Pods to Nodes](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) - Official `nodeSelector`, node affinity, and scheduling constraint behavior.
-- [Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) - Official taint and toleration behavior for dedicated and special-purpose nodes.
-- [kubectl get](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_get/) - Generated reference for listing resources.
-- [kubectl describe](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_describe/) - Generated reference for inspecting resource details and events.
-- [kubectl logs](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/) - Generated reference for reading Pod logs.
+- [DaemonSet](https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/) — node-derived desired state, Pod targeting, automatic tolerations, node-label changes, status, and update behavior.
+- [DaemonSet API](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/daemon-set-v1/) — status fields and rolling-update parameters.
+- [Assigning Pods to Nodes](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) — node selectors and affinity.
+- [Taints and Tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) — node taints and Pod tolerations.
+- [Volumes: `hostPath`](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath) — node filesystem access and security considerations.
+- [Perform a Rolling Update on a DaemonSet](https://kubernetes.io/docs/tasks/manage-daemon/update-daemon-set/) — rolling-update behavior and rollout inspection.

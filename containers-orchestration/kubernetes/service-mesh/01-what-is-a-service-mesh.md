@@ -1,244 +1,410 @@
 ---
 title: "What Is a Service Mesh"
-description: "Understand how a service mesh adds managed proxies, shared traffic rules, security, and observability to Kubernetes service-to-service communication."
-overview: "A service mesh manages service-to-service communication in Kubernetes by placing proxies on the request path. A normal online-store request shows proxies, data plane, control plane, sidecar injection, verification, and production checks."
-tags: ["kubernetes", "service-mesh", "istio", "sidecar"]
+description: "Understand how a service mesh adds shared identity, traffic behavior, and telemetry to selected service-to-service connections."
+overview: "A service mesh is a separately operated communication layer whose data plane carries selected workload traffic and whose control plane programs its security, reliability, routing, and telemetry behavior."
+tags: ["kubernetes", "service-mesh", "data-plane", "control-plane"]
 order: 1
 id: article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh
 ---
+
 ## Table of Contents
 
-1. [What a Service Mesh Is](#what-a-service-mesh-is)
-2. [The Repeated Cross-Service Concerns](#the-repeated-cross-service-concerns)
-3. [What the Mesh Adds](#what-the-mesh-adds)
-4. [Data Plane and Control Plane](#data-plane-and-control-plane)
-5. [Sidecar Proxies and Admission Webhooks](#sidecar-proxies-and-admission-webhooks)
-6. [Install Istio for a First Look](#install-istio-for-a-first-look)
-7. [Enable Injection for the Store Namespace](#enable-injection-for-the-store-namespace)
-8. [How Traffic Interception Works](#how-traffic-interception-works)
-9. [Verify the Mesh Path With Curl](#verify-the-mesh-path-with-curl)
-10. [Production Gotchas](#production-gotchas)
-11. [Putting It All Together](#putting-it-all-together)
-12. [References](#references)
+1. [What problem does a service mesh solve for several communicating services?](#what-problem-does-a-service-mesh-solve-for-several-communicating-services)
+2. [What does the data plane do to one request?](#what-does-the-data-plane-do-to-one-request)
+3. [What does the control plane configure and distribute?](#what-does-the-control-plane-configure-and-distribute)
+4. [Which workloads and traffic paths participate in the mesh?](#which-workloads-and-traffic-paths-participate-in-the-mesh)
+5. [How do sidecar and ambient-style data planes change application Pods and operations?](#how-do-sidecar-and-ambient-style-data-planes-change-application-pods-and-operations)
+6. [Which benefits justify the added latency, capacity, and operational work?](#which-benefits-justify-the-added-latency-capacity-and-operational-work)
+7. [How should a team choose its first mesh adoption boundary?](#how-should-a-team-choose-its-first-mesh-adoption-boundary)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## What a Service Mesh Is
-<!-- section-summary: A service mesh starts from a normal service-to-service call, then adds a managed proxy layer around repeated traffic, security, and telemetry concerns. -->
+Kubernetes gives Pods connectivity, Services stable names, EndpointSlices changing backends, and NetworkPolicy controls mainly at IP, port, and protocol boundaries. A service mesh adds shared rules for how selected service-to-service communication should behave.
 
-A **service mesh** is a platform layer for service-to-service communication. It puts managed proxies on the request path so teams can control traffic, identity, security, and observability without writing the same network behavior into every application.
+Seven questions define that additional layer:
 
-In a small online store, the `web` service calls `checkout`, `checkout` calls `inventory`, and later `checkout` calls `payments`. Kubernetes Services already give these workloads stable names. The mesh keeps that normal Service contract, then adds a proxy beside each workload so shared behavior can be managed centrally.
+1. **What problem does a service mesh solve for several communicating services?**
+2. **What does the data plane do to one request?**
+3. **What does the control plane configure and distribute?**
+4. **Which workloads and traffic paths participate in the mesh?**
+5. **How do sidecar and ambient-style data planes change application Pods and operations?**
+6. **Which benefits justify the added latency, capacity, and operational work?**
+7. **How should a team choose its first mesh adoption boundary?**
 
-The beginner-friendly way to read this is simple. Kubernetes already helps a caller find the right Service. A service mesh helps the platform decide how that call should behave, how it should be secured, and what evidence should be recorded while the call moves between services.
+## What problem does a service mesh solve for several communicating services?
+<!-- section-summary: A mesh moves repeated communication mechanics from many application libraries into a programmable infrastructure layer close to workloads. -->
 
-![Service mesh big picture infographic showing web, checkout, and inventory Pods using Envoy sidecars while istiod pushes configuration above the Kubernetes Services and DNS layer](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-service-request-path.png)
+For `checkout → payments`, connectivity answers only whether one workload can reach the other. Production communication also asks:
 
-*The request path still uses Service names, but each Pod now has a proxy on the way in and out.*
+- is the caller really `checkout` and is it authorized?
+- is the connection encrypted with mutual authentication?
+- which version and endpoint should receive the request?
+- what timeout and retry policy applies?
+- what latency, error, and trace evidence should be recorded?
 
-## The Repeated Cross-Service Concerns
-<!-- section-summary: Mesh value appears when many services need the same traffic rules, identity checks, and telemetry behavior. -->
+Applications can implement TLS, identity, retries, load balancing, circuit breaking, metrics, tracing, rate limits, and traffic splitting themselves. Across Java, Go, Python, Rust, Node.js, and .NET services, compatible libraries and upgrades become a repeated organizational problem.
 
-One service call is easy to manage in application code. A store with many services repeats the same concerns across every call:
+### The repeated work begins inside otherwise simple application calls
 
-| Concern | Store example |
+Imagine `Frontend → Orders → Payments`. The first version of the Orders code may appear to need only one call:
+
+```python
+response = http.get("http://payments/charge")
+```
+
+Production requirements turn that line into a collection of communication responsibilities: a deadline, retry policy, TLS credentials, connection pooling, load balancing, caller identity, authorization, metrics, and trace propagation. Those responsibilities are real even when they remain hidden behind a client library.
+
+With one language and a few services, a shared library may be sufficient. With many languages and teams, the same behavior must be implemented, configured, upgraded, and diagnosed repeatedly. A security change such as requiring mutual TLS to `payments` can otherwise become an application-release project for dozens of owners.
+
+The first-principles separation is therefore:
+
+```text
+business operation: charge this order
+communication machinery: reach, identify, secure, route, limit, and observe the call
+```
+
+The mesh moves much of the second category into separately operated infrastructure. The application still owns the business operation.
+
+### Communication machinery can live in three different places
+
+A central gateway is valuable for north-south traffic, but forcing every east-west call through one gateway creates a shared path and failure domain. A mesh puts communication intermediaries close to participating workloads while managing them as one system.
+
+The alternatives make the mesh design easier to understand:
+
+| Placement | Advantage | Cost or boundary |
+|---|---|---|
+| Inside each application | The application controls every detail | Every language and service must implement and upgrade compatible behavior |
+| One central gateway | A strong boundary for internet-facing north-south traffic | Routing all internal east-west calls through it creates longer paths and a shared bottleneck |
+| Close to participating workloads | Policy can be common while traffic remains distributed | The proxy layer and its control plane become another production system |
+
+The word *mesh* describes the third shape: many local traffic intermediaries form a distributed communication layer rather than sending every internal request through one central point.
+
+### Kubernetes location and mesh communication policy solve different layers
+
+Suppose `payments` has three ephemeral Pods. A Kubernetes Service and its EndpointSlices maintain a stable name and the changing endpoint set behind it:
+
+```text
+payments.default.svc.cluster.local
+              ↓
+       Service payments
+       ↙      ↓      ↘
+    Pod A   Pod B   Pod C
+```
+
+That machinery primarily answers where a connection can go. The mesh can attach interaction behavior to the same logical call: who `checkout` is, whether it may call `POST /charge`, whether transport uses mTLS, whether `payments-v2` receives 5%, how long the call may wait, and which telemetry describes the result.
+
+Layer 4 and Layer 7 mark an important boundary. L4 policy reasons about identity, address, port, protocol, and connections. L7 processing understands requests such as `POST /charge`, headers, status codes, and gRPC methods. Request routing, request-level authorization, HTTP retries, and HTTP telemetry require that deeper understanding.
+
+Kubernetes mainly answers “where is the service?” A mesh increasingly answers “how should this interaction behave?”
+
+### Keep discovery, connectivity, and communication semantics distinct
+
+Follow `checkout → payments` from the caller's point of view. DNS can resolve the stable Service name. The Service and EndpointSlices can identify current ready backends. The cluster network can carry packets to one selected Pod. NetworkPolicy can decide whether the connection is permitted at the supported network boundary. Those mechanisms establish a usable route, but they do not by themselves establish an application-aware caller identity, select a canary by an HTTP header, enforce a method-level rule, or standardize request telemetry.
+
+```text
+DNS and Service discovery → Which logical destination and endpoints exist?
+cluster networking        → Can packets reach the selected endpoint?
+NetworkPolicy             → Is this network flow permitted?
+mesh identity and policy  → Which workload is calling, and may it perform this interaction?
+mesh L7 behavior          → How should this HTTP or gRPC request be routed and observed?
+application               → What does the business operation mean?
+```
+
+These layers complement rather than replace one another. A mesh does not make a missing Service selector correct. Method-level authorization does not make the application idempotent. mTLS authenticates and encrypts the mediated connection, but it does not decide whether charging the same order twice is valid.
+
+This separation also prevents feature inflation. If the only requirement is to block one namespace from opening a TCP connection to another, the existing network-policy layer may solve it. If the requirement is stable workload identity, automatic mutual authentication, or consistent traffic evidence across many languages, a mesh solves a different repeated problem. If the requirement is safe payment retries, application design is still required even when the proxy implements the retry mechanism.
+
+A useful design review therefore starts with the missing semantic rather than the product feature. Name the exact call, the identity needed, the policy or reliability behavior desired, the layer capable of enforcing it, and the evidence that will prove it. Only the paths that need mesh mediation should pay the operational cost.
+
+## What does the data plane do to one request?
+<!-- section-summary: Data-plane proxies carry the real request, select and secure its destination, enforce policy, apply reliability rules, and observe the result. -->
+
+In a sidecar path:
+
+```mermaid
+flowchart LR
+    Checkout[Checkout application] --> SourceProxy[Source proxy]
+    SourceProxy --> Network[Network]
+    Network --> DestinationProxy[Destination proxy]
+    DestinationProxy --> Payments[Payments application]
+```
+
+The application still calls a normal address such as `payments:8080`; traffic interception sends the request through the local proxy.
+
+### Follow one request through the enforcement path
+
+For one request, the source proxy can:
+
+1. identify source `checkout`, destination `payments`, and protocol;
+2. choose `payments-v1` or `payments-v2` from routing policy;
+3. select an eligible endpoint such as `10.0.8.27`;
+4. establish an authenticated, encrypted mTLS connection;
+5. apply timeout and safe retry rules;
+6. let the destination proxy enforce caller and request policy;
+7. deliver the business operation to `payments`;
+8. record source, destination, status, latency, bytes, and trace context.
+
+Suppose the application sends:
+
+```http
+POST http://payments:8080/charge
+```
+
+The source proxy can learn that `payments` currently has endpoints `10.0.2.14`, `10.0.5.19`, and `10.0.8.27`, then apply a rule that sends 90% of requests to v1 and 10% to v2. If it chooses v2 at `10.0.8.27`, it establishes the secured proxy-to-proxy connection and spends the configured timeout and retry budget. The destination proxy can then evaluate whether the certified `checkout` identity may perform this operation before the Payments application sees it.
+
+The result returns through the same intermediaries. That position lets them record the chosen route, endpoint, response status, latency, transferred bytes, and trace context without requiring every application library to invent a different representation.
+
+At Layer 4, policy understands identity, address, port, protocol, and connection. Layer 7 processing understands HTTP or gRPC methods, paths, headers, status, retries, and request-level authorization. That difference determines which features a traffic path can receive.
+
+### The proxy is a policy enforcement point, not only a load balancer
+
+The proxy is more than a load balancer because every mediated request passes an identity, security, routing, reliability, and telemetry enforcement point.
+
+That placement lets infrastructure change communication behavior without changing the caller. `checkout` can continue calling `payments` while policy changes the destination split from 100% v1 to 95% v1 and 5% v2. The same power creates operational risk: a mistaken route, authorization rule, timeout, or retry policy can affect live traffic even when application code has not changed.
+
+## What does the control plane configure and distribute?
+<!-- section-summary: The control plane watches Kubernetes and mesh policy, compiles desired behavior, and distributes proxy configuration without carrying normal application requests. -->
+
+Thousands of proxies need current knowledge of Services, endpoints, workload identities, routes, certificates, and authorization rules. A control plane watches Kubernetes state and mesh configuration and programs the data plane:
+
+```mermaid
+flowchart TD
+    Inputs[Kubernetes API and mesh policy] --> Control[Control plane]
+    Control -->|Compiled configuration| ProxyA[Proxy A]
+    Control -->|Compiled configuration| ProxyB[Proxy B]
+    Control -->|Compiled configuration| ProxyC[Proxy C]
+```
+
+In Istio, `istiod` performs that control-plane role.
+
+### Desired communication becomes compiled proxy configuration
+
+The split resembles Kubernetes reconciliation. A mesh policy might say “checkout may call payments, payments-v2 receives 5%, and the timeout is 500 ms.” The control plane turns that desired behavior into proxy instructions.
+
+Conceptually, the transformation is:
+
+```text
+Kubernetes Services, Pods, and endpoints
+                  +
+mesh routes, identities, certificates, and policies
+                  ↓
+             control plane
+                  ↓
+     proxy-specific networking instructions
+```
+
+This resembles a Deployment controller translating a replica target into Pods. Operators author desired behavior; the control plane calculates the instructions each intermediary needs. Thousands of proxies therefore do not need to be configured manually.
+
+### Configuration traffic and application traffic follow separate paths
+
+Normal application traffic does not travel through the control plane:
+
+```mermaid
+flowchart LR
+    Control[Control plane] -. configuration .-> SourceProxy[Source proxy]
+    Control -. configuration .-> DestinationProxy[Destination proxy]
+    Application[Application] --> SourceProxy
+    SourceProxy --> DestinationProxy
+    DestinationProxy --> Peer[Peer application]
+```
+
+The control plane decides and distributes; the data plane executes.
+
+If the control plane becomes unavailable, that does not mean every existing request must pass through the failed component. It means configuration distribution, certificate work, discovery updates, or future changes may be affected. Keeping the two paths separate helps an operator ask whether a failure is in request execution or in the system that programmed that execution.
+
+## Which workloads and traffic paths participate in the mesh?
+<!-- section-summary: Mesh installation does not enroll every workload, and each boundary crossing can have different security, routing, and telemetry behavior. -->
+
+Namespaces or workloads can join selectively. `orders`, `payments`, and `checkout` can be inside the mesh while a legacy service, batch Job, and database remain outside.
+
+### Installation, enrollment, and traffic mediation are separate facts
+
+Installing mesh components creates the ability to operate a mesh. Enrollment determines which namespaces or workloads participate. The actual request path determines which controls apply to one call. Treating those as separate questions avoids assuming that every packet automatically receives identity, mTLS, L7 policy, and telemetry.
+
+Membership and path are separate. A call from meshed A to meshed B can receive identity, mTLS, authorization, and telemetry. A call from meshed A to outside C leaves the boundary. A call from outside C to meshed B crosses it in the other direction.
+
+| Path | Boundary question |
 |---|---|
-| Traffic control | Send 5% of checkout traffic to `checkout-v2` |
-| Timeouts | Stop waiting forever on slow inventory calls |
-| Retries | Retry only safe failures with a small limit |
-| Security | Allow checkout to call payments, block analytics |
-| Telemetry | Record which service called which service and how long it took |
+| Meshed A → meshed B | Which mesh capabilities mediate both sides? |
+| Meshed A → outside C | Where does mesh control end on egress? |
+| Outside C → meshed B | What identity and policy apply when traffic enters? |
+| Cluster ingress or cross-cluster traffic | Which gateway or mesh boundary carries the path? |
 
-Without a mesh, each service team implements these behaviors in its own language and library. With a mesh, the platform can push shared behavior to proxies while application teams keep normal HTTP or gRPC calls.
+Ingress, egress, east-west, cross-cluster, and external-service paths can therefore have different controls. Installing a mesh does not mean every packet in the cluster automatically receives every feature.
 
-## What the Mesh Adds
-<!-- section-summary: The mesh adds proxies, shared configuration, workload identity, mTLS, routing policy, and proxy-level telemetry. -->
+This selective boundary is operationally useful: teams can adopt one namespace or communication relationship, measure it, and expand deliberately.
 
-The mesh adds three practical things:
+## How do sidecar and ambient-style data planes change application Pods and operations?
+<!-- section-summary: Sidecars place a full workload-local proxy in every participating Pod, while ambient separates a shared Node-level L4 layer from optional destination-oriented L7 waypoints. -->
 
-| Mesh piece | What it does |
-|---|---|
-| Proxy beside each workload | Intercepts inbound and outbound service traffic |
-| Control plane | Distributes routing, security, and telemetry config to proxies |
-| Mesh APIs | Let teams declare traffic splits, mTLS, authorization, and logging behavior |
+The traditional sidecar model is:
 
-In Istio sidecar mode, the proxy is usually Envoy and the control plane is `istiod`. The application still listens on its normal port. The proxy handles mesh behavior around the application process.
-
-## Data Plane and Control Plane
-<!-- section-summary: The data plane handles live requests, while the control plane distributes configuration to the data plane. -->
-
-The **data plane** is the set of proxies that handle actual service traffic. The **control plane** tells those proxies what to do.
-
-For the store:
-
-| Plane | Store role |
-|---|---|
-| Data plane | Envoy sidecars next to `web`, `checkout`, `inventory`, and `payments` |
-| Control plane | `istiod` watches Kubernetes and Istio resources, then pushes config to Envoy |
-
-This split is useful during operations. If a request fails, inspect the application and its proxy. If many proxies have stale rules, inspect control-plane sync.
-
-## Sidecar Proxies and Admission Webhooks
-<!-- section-summary: In sidecar mode, Istio uses admission to add an istio-proxy container to new Pods in selected namespaces. -->
-
-In sidecar mode, a meshed Pod contains the app container plus `istio-proxy`. Istio usually adds that proxy through a mutating admission webhook when a Pod is created.
-
-```bash
-$ kubectl label namespace store istio-injection=enabled
-namespace/store labeled
+```mermaid
+flowchart LR
+    PodA[Pod A<br/>application and proxy] --> PodB[Pod B<br/>proxy and application]
 ```
 
-What this output means:
+It provides strong workload-local context and mature L4/L7 features. Proxy failure and load are usually isolated with that workload. The cost is another container, CPU, memory, injection, lifecycle, configuration, and debugging in every enrolled Pod.
 
-- New Pods created in `store` are eligible for automatic sidecar injection.
-- Existing Pods need a restart before they receive a sidecar.
-- The label affects future Pod admission, not old running Pods.
+### Sidecars couple proxy capacity and lifecycle to each application replica
 
-![Istio sidecar injection flow infographic showing a namespace label, Pod creation, mutating webhook, app plus istio-proxy container, and 2/2 ready Pods after restart](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/sidecar-injection-flow.png)
+For 1,000 participating Pods, the sidecar model creates roughly 1,000 workload-local proxies. Each proxy knows which workload it belongs to and can perform both connection-level and request-level processing close to that application. Failure and overload tend to remain associated with one workload proxy.
 
-*Sidecar injection happens at Pod creation time, so restarting workloads is part of enabling the mesh.*
+The same coupling multiplies small costs. Every application replica now carries another container with CPU, memory, injection, startup, upgrade, configuration, and debugging requirements. Scaling the application scales proxy capacity too, even when the application needs only secure L4 transport.
 
-## Install Istio for a First Look
-<!-- section-summary: A first Istio install should be small, verified, and treated as platform infrastructure. -->
+### Ambient mode separates the common L4 layer from optional L7 work
 
-For a lab or first look, `istioctl install` can install the control plane. In production, teams usually manage this through GitOps or a platform release process.
+Istio ambient mode uses a lightweight `ztunnel` per Node for secure L4 transport. Application Pods need no sidecar. Workloads that need HTTP routing, L7 authorization, retries, or HTTP telemetry can use a shared waypoint:
 
-```bash
-$ istioctl install --set profile=demo -y
-✔ Istio core installed
-✔ Istiod installed
-✔ Ingress gateways installed
-✔ Installation complete
+```mermaid
+flowchart LR
+    AppA[Application] --> ZtunnelA[ztunnel]
+    ZtunnelA --> Waypoint[Optional waypoint]
+    Waypoint --> ZtunnelB[ztunnel]
+    ZtunnelB --> AppB[Application]
 ```
 
-What this output proves:
+The L4 layer can provide workload identity, mTLS, L4 authorization, and TCP telemetry. A waypoint adds request-aware policy and can serve a namespace, Service, or workload boundary while scaling independently.
 
-- Istio control-plane components were installed.
-- The demo profile includes an ingress gateway for learning.
-- A production profile should be reviewed for resource, security, and availability settings.
+Without a waypoint, an ambient request can travel from the source application through its Node's `ztunnel`, across an encrypted tunnel, through the destination Node's `ztunnel`, and into the destination workload. This path supplies the secure L4 layer without placing a full L7 proxy in either application Pod.
 
-Check control-plane Pods:
+When `payments` needs HTTP authorization, HTTP metrics, or traffic splitting, a waypoint adds request-aware processing:
 
-```bash
-$ kubectl -n istio-system get pods
-NAME                                    READY   STATUS    RESTARTS
-istiod-6f9bdbdbf7-q8r8v                 1/1     Running   0
-istio-ingressgateway-7c6f9d6d5f-g4z9m    1/1     Running   0
+```text
+checkout
+   ↓
+source ztunnel
+   ↓ secure transport
+payments waypoint
+   ↓ inspect HTTP, enforce policy, choose endpoint
+destination ztunnel
+   ↓
+payments
 ```
 
-The control plane is running and ready to accept mesh configuration.
+The architectural principle is to pay for deeper request understanding where it is required. It does not make sidecars or ambient universally superior; it changes isolation, resource sharing, upgrade coupling, and where L7 policy executes.
 
-## Enable Injection for the Store Namespace
-<!-- section-summary: After enabling injection, restart workloads and verify each Pod contains both the app and the proxy. -->
+Sidecars couple full proxy capacity and upgrades to application replicas. Ambient shares more infrastructure and pays for L7 processing where required. They optimize different isolation, cost, lifecycle, and feature-placement choices.
 
-Restart the store workloads after labeling the namespace:
+## Which benefits justify the added latency, capacity, and operational work?
+<!-- section-summary: A mesh earns its cost when standardized identity, encryption, policy, telemetry, and rollout control solve repeated multi-team problems better than application-specific implementations. -->
 
-```bash
-$ kubectl -n store rollout restart deploy/web deploy/checkout deploy/inventory
-deployment.apps/web restarted
-deployment.apps/checkout restarted
-deployment.apps/inventory restarted
+The value grows when many services and teams need:
+
+- stable workload identity rather than trust in changing IP addresses;
+- uniform certificate distribution, rotation, and mTLS;
+- common network telemetry across different languages and libraries;
+- declarative authorization;
+- traffic splitting, timeouts, and other policy without application releases;
+- consistent behavior across clusters.
+
+### The benefits follow from standardizing repeated communication work
+
+Stable workload identity makes a rule such as “checkout may call payments” more durable than a rule tied to changing Pod IPs. Infrastructure-managed certificates avoid every application independently distributing and rotating TLS material. A shared traffic layer can produce consistent networking telemetry even when teams use different languages and HTTP libraries. Declarative policy and routing can also change an interaction without coordinating application releases across every caller.
+
+The cost also grows: proxies consume capacity and add latency; the control plane and certificates need operation; traffic can fail because of proxy state, policy, routing, identity, or mesh configuration; ownership and debugging become more complex.
+
+The complexity has moved rather than disappeared. An operator must now be able to ask why a proxy rejected a request, why a route selected v2, whether mTLS failed, which policy applied, whether the control plane distributed current configuration, and which team owns the rule.
+
+### Look for the point where standardization is cheaper than repetition
+
+A small single-team system with five services, one language, and simple security may pay more for the mesh than it gains. Hundreds of services, many teams and languages, strong identity requirements, canaries, multiple clusters, and required common telemetry create a stronger case. Organizational scale can matter as much as request volume.
+
+The decision can be expressed as a comparison:
+
+```text
+value of standardized communication behavior
+                     >
+cost of operating another distributed system
 ```
 
-Verify sidecars:
+The left side rises with service count, team count, language diversity, identity and authorization requirements, progressive releases, cross-cluster communication, and the difficulty of keeping client behavior consistent. The right side includes proxy capacity and latency, control-plane operation, certificate management, policy ownership, upgrades, and a larger debugging surface.
 
-```bash
-$ kubectl -n store get pods
-NAME                         READY   STATUS    RESTARTS
-web-6d8c7ccf6c-l2x9p          2/2     Running   0
-checkout-5c79c7b9d9-kx4mv     2/2     Running   0
-inventory-6698d9b75d-mp7lh    2/2     Running   0
+A mesh also cannot replace sound application design. It cannot make a long fragile call chain reliable, and it cannot know whether retrying `POST /charge-card` is safe after a lost response. Infrastructure supplies generic mechanics; applications still own business semantics.
+
+## How should a team choose its first mesh adoption boundary?
+<!-- section-summary: Begin with one measurable communication problem and a narrow owner-aligned boundary, then add capabilities and enrollment in stages. -->
+
+Suppose Storefront calls Orders, and Orders calls Inventory and Payments. If the real need is “Orders to Payments must have authenticated identity, encryption, authorization, and reliable telemetry,” begin with those two workloads.
+
+### Start from one communication problem, not a cluster-wide installation goal
+
+The narrow boundary gives the team a falsifiable result. It can prove that Orders and Payments receive the intended identities, that transport is encrypted, that unexpected callers are rejected, that request evidence appears, and that the added layer stays within its capacity and latency budget. A cluster-wide rollout makes those questions harder to isolate.
+
+Choose a boundary with measurable value:
+
+- **security:** only checkout may call payments, and calls use workload mTLS;
+- **observability:** trace latency and errors across API, recommendation, and ranking;
+- **deployment:** route 95% to catalog-v1 and 5% to catalog-v2;
+- **ownership:** enroll one payments namespace containing payments-api, fraud, ledger, and settlement.
+
+A staged progression is normal Kubernetes networking, one boundary, identity/mTLS/basic telemetry, authorization, L7 observation where needed, traffic management for a concrete problem, then more boundaries.
+
+```text
+normal Kubernetes networking
+        ↓
+one namespace or application boundary
+        ↓
+identity, mTLS, and basic telemetry
+        ↓
+authorization policy
+        ↓
+L7 observation where it is valuable
+        ↓
+traffic management for a concrete release problem
+        ↓
+additional proven boundaries
 ```
 
-What this output means:
+### Keep business semantics in the application
 
-- `2/2` means each Pod has two ready containers: app plus proxy.
-- If a Pod stays `1/1`, injection likely did not happen.
-- If a Pod stays `1/2`, inspect the `istio-proxy` container logs and readiness.
+Retries make the remaining boundary concrete. The mesh can repeat a failed request, but it cannot know whether `POST /charge-card` completed before the response was lost. A retry without application-level idempotency can charge twice. Generic communication mechanics can move into infrastructure; the meaning and repeatability of the business operation stay with the application.
 
-## How Traffic Interception Works
-<!-- section-summary: The proxy enters the request path through traffic redirection, then applies mesh rules before forwarding traffic. -->
+A mesh also cannot repair a fragile chain such as `A → B → C → D → E → F`. Per-hop availability still compounds, and retries at several layers can amplify traffic against a failing dependency. The mesh supplies powerful controls, while teams remain responsible for choosing settings that fit the application.
 
-In sidecar mode, traffic redirection puts Envoy on the inbound and outbound path. The exact mechanism depends on Istio CNI or init-container setup, but the operator-facing result is the same: application traffic flows through the local proxy.
+Avoid enabling every feature across every namespace at once. Prove that the selected path receives the intended policy, measure overhead and reliability, clarify ownership, and only then expand.
 
-The application still calls:
+For the Orders-to-Payments boundary, define the proof before enrollment: both workloads expose distinct ServiceAccount identities; normal calls establish mTLS; an unexpected caller is denied; request rate, latency, errors, and traces show the relationship; proxy and control-plane capacity remain within budget; and the team can remove or bypass the new policy without changing unrelated namespaces.
 
-```bash
-$ curl -sS http://checkout.store.svc.cluster.local:8080/readyz
-{"status":"ok"}
-```
+Then add one capability at a time. First prove mediation and identity, then strict transport, then authorization, then any L7 routing or retry behavior. This sequence separates a traffic-capture failure from a certificate failure, and both from a request-policy mistake. It also gives each new operational cost a measurable benefit.
 
-What changes with the mesh:
+Expansion should reuse the method, not blindly copy every setting. A read-only catalogue call and a payment mutation have different retry safety, latency budgets, policy sensitivity, and evidence requirements. The mesh standardizes the mechanism while each communication relationship still supplies its application semantics.
 
-- The outbound proxy sees the request before it leaves the caller Pod.
-- The inbound proxy sees the request before it reaches the destination app.
-- Mesh traffic, security, and telemetry rules can apply at the proxy layer.
+## Check Your Answers
+<!-- section-summary: Reconstruct the mesh from its communication problem, data and control planes, membership boundary, deployment models, value threshold, and adoption path. -->
 
-## Verify the Mesh Path With Curl
-<!-- section-summary: Verification should prove the request still works and the proxy is present on the path. -->
+:::expand[What problem does a service mesh solve for several communicating services?]{kind="recap"}
+It centralizes repeated identity, security, routing, reliability, and telemetry mechanics that would otherwise be implemented inconsistently in many applications.
+:::
 
-Use a normal app-level check first:
+:::expand[What does the data plane do to one request?]{kind="recap"}
+Proxies carry the request, choose and secure the destination, enforce policy, apply traffic behavior, and observe the result.
+:::
 
-```bash
-$ kubectl -n store exec deploy/web -c web -- curl -sS http://checkout:8080/readyz
-{"status":"ok"}
-```
+:::expand[What does the control plane configure and distribute?]{kind="recap"}
+It watches services, endpoints, identities, and mesh policy, then distributes compiled instructions to proxies. It normally does not carry application traffic.
+:::
 
-What this output proves:
+:::expand[Which workloads and traffic paths participate in the mesh?]{kind="recap"}
+Enrollment is selective, and calls inside, into, or out of the boundary can receive different controls. Cluster installation alone does not mesh everything.
+:::
 
-- Kubernetes Service discovery still works.
-- The checkout app still answers normally.
-- The mesh did not break the basic request path.
+:::expand[How do sidecar and ambient-style data planes change application Pods and operations?]{kind="recap"}
+Sidecars provide a full workload-local proxy per Pod. Ambient uses a shared Node L4 layer and adds shared L7 waypoints only where needed.
+:::
 
-Then inspect proxy state:
+:::expand[Which benefits justify the added latency, capacity, and operational work?]{kind="recap"}
+The mesh is justified when repeated cross-team identity, mTLS, policy, telemetry, and rollout needs cost more than operating the additional distributed system.
+:::
 
-```bash
-$ istioctl proxy-status
-NAME                                                   CLUSTER        CDS        LDS        EDS        RDS
-checkout-5c79c7b9d9-kx4mv.store                       Kubernetes     SYNCED     SYNCED     SYNCED     SYNCED
-web-6d8c7ccf6c-l2x9p.store                            Kubernetes     SYNCED     SYNCED     SYNCED     SYNCED
-```
-
-What this output adds:
-
-- Envoy config is synced from `istiod`.
-- Both the caller and destination have active proxies.
-- A `STALE` or missing row would move debugging toward control-plane sync or injection.
-
-## Production Gotchas
-<!-- section-summary: Production mesh adoption needs port naming, startup timing, proxy resources, and clear ownership. -->
-
-Before rolling a mesh into production traffic, review these common gotchas:
-
-| Gotcha | Practical check |
-|---|---|
-| Port protocol detection | Name Service ports clearly, such as `http` or `grpc` |
-| Startup race | Apps that call dependencies at boot may need proxy-start ordering |
-| Proxy resources | Add CPU and memory budgets for `istio-proxy` |
-| Health checks | Keep probes compatible with sidecar behavior |
-| Ownership | Platform owns mesh health; app teams own app behavior |
-
-The mesh adds a new runtime component to every Pod. That is powerful, but it also adds new operational evidence to read.
-
-## Putting It All Together
-<!-- section-summary: A service mesh keeps Kubernetes Services as the app contract, then uses proxies and a control plane to manage repeated service-to-service behavior. -->
-
-A service mesh is useful when service calls need shared behavior across many teams and many languages. The store keeps normal Service names, adds sidecar proxies, lets `istiod` distribute rules, and gains a platform place for traffic control, identity, mTLS, authorization, and telemetry.
-
-![Service mesh foundation summary infographic showing Service name, sidecar injection, proxy on path, istiod config, and shared traffic, security, and observability behavior](/content-assets/articles/article-containers-orchestration-kubernetes-service-mesh-what-is-a-service-mesh/mesh-foundation-summary.png)
-
-*The foundation is a sequence: keep the Service contract, add sidecars, put proxies on the path, and let the control plane distribute shared behavior.*
+:::expand[How should a team choose its first mesh adoption boundary?]{kind="recap"}
+Choose one owner-aligned communication problem with measurable value, add capabilities in stages, verify the path, and expand only with evidence.
+:::
 
 ## References
 
-- [Istio Architecture](https://istio.io/latest/docs/ops/deployment/architecture/) - Defines Istio's control plane and data plane, including Envoy sidecars and `istiod`.
-- [Istio Sidecar or Ambient](https://istio.io/latest/docs/overview/dataplane-modes/) - Explains the sidecar and ambient data plane modes.
-- [Istio Install with Istioctl](https://istio.io/latest/docs/setup/install/istioctl/) - Documents `istioctl install`, profiles, and install customization.
-- [Istio Installing the Sidecar](https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/) - Documents automatic sidecar injection, namespace labels, and webhook behavior.
-- [Istio Check-Inject](https://istio.io/latest/docs/ops/diagnostic-tools/check-inject/) - Documents `istioctl experimental check-inject` for injection diagnostics.
-- [Istio CNI Node Agent](https://istio.io/latest/docs/setup/additional-setup/cni/) - Explains CNI-based traffic redirection and the relationship to privileged init containers.
-- [Istio Application Requirements](https://istio.io/latest/docs/ops/deployment/application-requirements/) - Covers sidecar-related Pod requirements, Istio ports, outbound traffic, and Service usage.
-- [Istio Protocol Selection](https://istio.io/latest/docs/ops/configuration/traffic-management/protocol-selection/) - Explains protocol detection and explicit Service port naming.
-- [Envoy: What Is Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy) - Defines Envoy as a proxy designed for modern service-oriented architectures.
-- [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/) - Explains stable Service names, selectors, and Service-to-Pod traffic.
-- [Kubernetes EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Explains how Kubernetes tracks subsets of Service backend endpoints.
-- [Kubernetes Dynamic Admission Control](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/) - Explains admission webhooks and mutating admission webhooks.
-- [Kubernetes Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/) - Defines sidecar containers and how they run alongside application containers in a Pod.
+- [Istio architecture](https://istio.io/latest/docs/ops/deployment/architecture/)
+- [Istio ambient mode](https://istio.io/latest/docs/ambient/overview/)
+- [Kubernetes Services](https://kubernetes.io/docs/concepts/services-networking/service/)
+- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/)
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)

@@ -1,7 +1,7 @@
 ---
 title: "Guardrails and Access Evidence"
-description: "Use AWS Organizations, SCPs, cross-account roles, CloudTrail, Access Analyzer, credential reports, and review cadence to keep IAM safe across accounts."
-overview: "IAM gets harder after one account grows into many accounts. This article follows one payments workload as the team adds account structure, guardrails, cross-account access, audit evidence, credential review, and a repeatable cleanup rhythm."
+description: "Learn how organization guardrails limit AWS authority and how CloudTrail, Access Analyzer, last-accessed data, and credential reports support access reviews."
+overview: "A multi-account AWS environment needs two different security systems: guardrails that prevent unacceptable actions and evidence that shows which access paths exist or have been used. This article builds both systems from the IAM authorization model, then combines them in a repeatable review loop."
 tags: ["iam", "organizations", "cloudtrail", "access-analyzer"]
 order: 4
 id: article-cloud-providers-aws-identity-security-account-guardrails
@@ -24,572 +24,739 @@ aliases:
 
 ## Table of Contents
 
-1. [When One Account Grows Into Many](#when-one-account-grows-into-many)
-2. [The Account Map](#the-account-map)
-3. [Service Control Policies](#service-control-policies)
-4. [Common Guardrails](#common-guardrails)
-5. [Cross-Account Access](#cross-account-access)
-6. [CloudTrail Evidence](#cloudtrail-evidence)
-7. [Access Analyzer and Last Accessed](#access-analyzer-and-last-accessed)
-8. [Static Credentials and Secrets](#static-credentials-and-secrets)
-9. [The Review Loop](#the-review-loop)
-10. [Putting It All Together](#putting-it-all-together)
+1. [How Are Guardrails Different From Access Evidence?](#how-are-guardrails-different-from-access-evidence)
+2. [How Does the Account Map Show Where Authority Can Travel?](#how-does-the-account-map-show-where-authority-can-travel)
+3. [Which Capabilities Belong in Guardrails?](#which-capabilities-belong-in-guardrails)
+4. [How Does Cross-Account Access Work?](#how-does-cross-account-access-work)
+5. [What Does CloudTrail Prove?](#what-does-cloudtrail-prove)
+6. [What Do Access Analyzer and Last-Accessed Data Prove?](#what-do-access-analyzer-and-last-accessed-data-prove)
+7. [How Do Can, Did, and Should Guide an Access Review?](#how-do-can-did-and-should-guide-an-access-review)
+8. [How Does the Review Loop Combine Guardrails and Evidence?](#how-does-the-review-loop-combine-guardrails-and-evidence)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## When One Account Grows Into Many
-<!-- section-summary: Multi-account AWS needs rules above local IAM and evidence after changes, because access can drift after teams, accounts, and workloads grow. -->
+An IAM policy answers an important question: what may this principal request? In a growing AWS environment, however, that is only one part of the security problem. Teams also need to prevent certain actions even when an account administrator makes a bad permission change. They need to understand how authority crosses account boundaries. Finally, they need evidence for deciding whether the access they granted still matches what people and workloads actually require.
 
-The earlier IAM articles followed one workflow: a receipt export function needs the right role, the right policy, the right bucket path, and the right KMS key. That is already a lot for one production account. Now the same company grows past one account, and the access problem changes shape.
+The sections below answer these questions in order:
 
-The running example is a small payments company. The first version has one AWS account with an S3 bucket for receipt files, a Lambda function that writes receipt exports, CloudWatch logs, and a few IAM roles. S3 stores objects such as files and reports. Lambda runs code without managing servers. CloudWatch collects logs, metrics, and alarms. IAM roles give workloads temporary AWS credentials.
+1. **How Are Guardrails Different From Access Evidence?**
+2. **How Does the Account Map Show Where Authority Can Travel?**
+3. **Which Capabilities Belong in Guardrails?**
+4. **How Does Cross-Account Access Work?**
+5. **What Does CloudTrail Prove?**
+6. **What Do Access Analyzer and Last-Accessed Data Prove?**
+7. **How Do Can, Did, and Should Guide an Access Review?**
+8. **How Does the Review Loop Combine Guardrails and Evidence?**
 
-After a few months, one account turns into several accounts. `payments-dev` holds experiments, `payments-prod` handles customer traffic, `security-log-archive` stores audit logs, `tooling` runs CI/CD pipelines, and `engineer-lab` lets engineers learn safely. CI/CD means the automated build and deployment system that tests and ships application changes.
+## How Are Guardrails Different From Access Evidence?
+<!-- section-summary: Guardrails affect authorization, while access evidence describes configured, reachable, attempted, or used access. -->
 
-This split helps the company. Development mistakes stay away from production data. Security logs sit in a separate account. The deployment pipeline can have its own account instead of sharing space with the application. Account boundaries give AWS teams one of the strongest ways to separate risk.
+The first distinction is the foundation for everything else in this article.
 
-The split also creates new IAM work. A local administrator in one account might create a broad policy during an incident and forget to remove it. A lab account might launch resources in a Region the company never approved for customer data. A vendor role created for a two-week project might survive for a year. A static access key might keep working after the scanner that used it has been retired.
+A **guardrail** changes the range of requests that AWS can authorize. It expresses a limit such as, "ordinary principals in production must not disable central audit logging." Service control policies, resource control policies, permissions boundaries, resource restrictions, and session restrictions can all act as guardrails in different parts of the authorization system.
 
-This article is about two habits that keep that larger environment understandable. **Guardrails** set rules above local IAM, so each account stays inside company limits. **Access evidence** shows what access exists, what requests happened, which credentials remain active, and which permissions can be removed.
+**Access evidence** describes that system or activity around it. CloudTrail can show that a principal made a request. IAM Access Analyzer can show that a policy creates an access path. Last-accessed information can show that an identity attempted to use a service or supported action during the tracking period. A credential report can show which IAM users have passwords or access keys. These sources normally do not change whether the next request is allowed.
 
-The team needs the account map before it can place guardrails on it. That map comes from AWS Organizations.
+```text
+GUARDRAILS                         ACCESS EVIDENCE
 
-## The Account Map
-<!-- section-summary: AWS Organizations gives multiple AWS accounts one central structure, so teams can group accounts and attach shared controls to the right branches. -->
+What must not be possible?         What access exists or was attempted?
 
-**AWS Organizations** is the AWS service for centrally managing multiple AWS accounts. It lets a company create accounts, invite existing accounts, group accounts, attach organization policies, and manage billing from one organization structure. In plain terms, it gives the company a tree for its AWS accounts instead of a pile of separate logins.
-
-The top account in that structure is the **management account**. It creates and manages the organization, attaches policies, designates delegated administrator accounts, and handles consolidated billing. Because this account has such broad control over the organization, the payments company keeps normal application workloads out of it.
-
-The other accounts are **member accounts**. `payments-dev`, `payments-prod`, `tooling`, `security-log-archive`, and `engineer-lab` are all member accounts in the example. Each member account still has its own resources, IAM roles, CloudTrail events, Region settings, and root user, but the organization can group and govern those accounts from above.
-
-An **organizational unit**, usually shortened to **OU**, is a group of accounts in the organization tree. OUs can contain accounts, and they can also contain other OUs. The payments company can place production accounts under a `Workloads/Prod` OU, development accounts under `Workloads/Dev`, security accounts under `Security`, and learning accounts under `Labs`.
-
-```mermaid
-flowchart TD
-    Mgmt["Management account"]
-    Root["Organization root"]
-    Security["Security OU"]
-    Workloads["Workloads OU"]
-    Labs["Labs OU"]
-    Prod["Prod OU"]
-    Dev["Dev OU"]
-    Logs["security-log-archive"]
-    Tooling["tooling"]
-    PaymentsProd["payments-prod"]
-    PaymentsDev["payments-dev"]
-    Lab["engineer-lab"]
-
-    Mgmt --> Root
-    Root --> Security
-    Root --> Workloads
-    Root --> Labs
-    Security --> Logs
-    Security --> Tooling
-    Workloads --> Prod
-    Workloads --> Dev
-    Prod --> PaymentsProd
-    Dev --> PaymentsDev
-    Labs --> Lab
+SCPs                               CloudTrail
+RCPs                               Access Analyzer
+permissions boundaries             Last Accessed
+resource restrictions              credential reports
+session restrictions               policy and credential inventory
 ```
 
-This tree matters because policies can attach to the root, an OU, or a specific account. Accounts inherit applicable policies from the branches above them. If `payments-prod` sits under `Workloads/Prod`, it can inherit stricter production rules. If `engineer-lab` sits under `Labs`, it can inherit rules that allow experiments but block expensive or risky services.
+Consider three statements:
 
-A reviewer can confirm the account list from the management account or a delegated administration path:
+```text
+SCP:
+Production principals cannot delete a CloudTrail trail.
 
-```bash
-aws organizations list-accounts \
-  --query 'Accounts[].{Name:Name,Id:Id,Status:Status}' \
-  --output json
+CloudTrail event:
+A role session called iam:CreateRole yesterday.
+
+Access Analyzer finding:
+A role can be assumed from an external account.
 ```
 
-```json
-[
-  {
-    "Name": "payments-dev",
-    "Id": "111122223333",
-    "Status": "ACTIVE"
-  },
-  {
-    "Name": "payments-prod",
-    "Id": "999900001111",
-    "Status": "ACTIVE"
-  },
-  {
-    "Name": "tooling",
-    "Id": "444455556666",
-    "Status": "ACTIVE"
-  },
-  {
-    "Name": "security-log-archive",
-    "Id": "777788889999",
-    "Status": "ACTIVE"
-  }
-]
+The first statement affects authorization. The second is evidence of an attempted request. The third is evidence that a reachable path exists whether or not anyone has used it. Treating all three as "IAM controls" hides their different jobs.
+
+A useful end-to-end model begins with required access. A team decides what a person or workload should need, translates that need into IAM and resource-policy grants, and places guardrails around the maximum authority those grants may create. AWS evaluates actual requests inside those limits. Evidence from the resulting configuration and activity then feeds the next access review.
+
+```text
+Desired access
+     ↓
+IAM and resource-policy grants
+     ↓ constrained by
+Guardrails that define maximum power
+     ↓
+AWS requests and authorization decisions
+     ↓
+Access evidence
+     ↓
+Review and refine desired access
 ```
 
-This output proves which accounts are active in the organization. OU placement comes from the organization tree, so the next review step is to check that `payments-prod` sits under the production branch before production guardrails are attached.
+The loop matters because the desired answer changes. A deployment role may stop using EC2 after a system moves to Lambda. A vendor contract may end. A new resource policy may accidentally trust an outside account. Evidence helps the team discover those changes; guardrails limit the worst consequences while the team catches up.
 
-The organization structure gives the team a place to put shared rules. The first shared rule type to understand is the service control policy.
+This model builds on IAM's default-deny behavior. With no applicable permission, a request is denied. An applicable `Allow` may make the request possible, but an applicable explicit `Deny` wins. AWS may evaluate identity policies, resource policies, permissions boundaries, session policies, Organizations service control policies, and, where supported, resource control policies.
+
+You can summarize the idea—not the literal AWS evaluation algorithm—with this equation:
+
+```text
+Effective permissions
+    ≈ possible grants
+    ∩ organization guardrails
+    ∩ principal guardrails
+    ∩ session restrictions
+    − explicit denies
+```
+
+Identity policies and resource policies create possible grants. SCPs and RCPs place organization limits around them. Permissions boundaries limit a principal. Session policies restrict a particular temporary session. Resource-based policy evaluation introduces details that this shorthand does not show, so use it as a mental model rather than an implementation specification.
+
+The most important consequence is simple: an organization guardrail is not automatically a grant. A ceiling can limit the height of a room, but it cannot lift a person off the floor. The next sections make that distinction concrete.
+
+## How Does the Account Map Show Where Authority Can Travel?
+<!-- section-summary: A useful account map combines the Organizations hierarchy with trust and resource-policy edges that move authority between security domains. -->
+
+Before reviewing individual policies, map where authority can start and where it can travel. An AWS account is a strong administrative and security boundary. A multi-account environment therefore needs more than a spreadsheet of account IDs.
+
+The AWS Organizations hierarchy gives the first view:
+
+```text
+AWS Organization
+│
+├── Security OU
+│   ├── Log Archive
+│   └── Security Tooling
+│
+├── Production OU
+│   ├── Payments Prod
+│   └── Customer Prod
+│
+└── NonProd OU
+    ├── Development
+    └── Sandbox
+```
+
+An **organizational unit**, or OU, groups accounts so that governance policies can be attached to a branch. This tree shows containment and inheritance: an account under the Production OU is affected by policies on the organization root, that OU, any child OUs, and the account itself.
+
+Containment is not the same as access. Authority can cross the tree through role trusts and resource policies:
+
+```text
+Developer identity ──AssumeRole──────► production role
+CI system ───────────AssumeRole──────► deployment role
+Vendor account ──────AssumeRole──────► support role
+Another account ─────bucket policy───► production bucket
+Security tooling ────resource access─► log archive
+```
+
+The real account map is therefore a graph. The Organizations hierarchy supplies one set of edges; cross-account trusts and resource policies supply others. A vendor may sit outside the organization tree but still reach a support role. A development identity may enter a deployment role and then pass an execution role to a workload. A bucket policy may grant a principal in another account direct access without role assumption.
+
+The better inventory question is not merely, "How many accounts do we own?" It is, **"Where can authority originate, and through which edges can it reach another account or resource?"**
+
+For every important account, record the information needed to answer that question:
+
+- the account's purpose, OU, and environment classification;
+- the approved human and workload access paths;
+- inbound role trusts and outbound role assumptions;
+- resource shares and resource-based policies;
+- external accounts and third parties with a relationship;
+- attached SCPs and RCPs;
+- the central logging destination and security administrator; and
+- the AWS Regions that the account is expected to use.
+
+This map becomes the skeleton of the review. It tells reviewers which policies need to be inspected together and which evidence stores must contain relevant activity. It also exposes **transitive authority**: access gained through a chain rather than one direct grant.
+
+Imagine the following chain:
+
+```text
+Alice
+  └─ AssumeRole → DevAdmin
+         └─ AssumeRole → DeploymentRole
+                └─ iam:PassRole → LambdaExecutionRole
+                       └─ S3 bucket policy → SensitiveBucket
+```
+
+Alice's original identity policy may only allow `sts:AssumeRole` on `DevAdmin`. Read in isolation, that policy appears modest. The security question is not limited to that first hop. Reviewers must ask which resources become reachable through all allowed transitions. IAM security often depends on chains of authority rather than one obviously broad policy.
 
 ![The guardrails map shows which controls usually sit at the organization, account, identity, network, data, and evidence layers](/content-assets/articles/article-cloud-providers-aws-identity-security-account-guardrails/common-guardrails-map.png)
 
-*The guardrails map shows which controls usually sit at the organization, account, identity, network, data, and evidence layers.*
+*The account and control map helps reviewers connect organization boundaries, identity controls, resource controls, and evidence instead of reviewing each one alone.*
 
+### How Do SCPs and RCPs Set Organization Limits?
+<!-- section-summary: SCPs limit the authority available to principals in member accounts, while RCPs limit the authority that supported resources can accept. -->
 
-## Service Control Policies
-<!-- section-summary: Service control policies set permission ceilings for member accounts, so local IAM administrators cannot grant actions above the organization limit. -->
+A **service control policy**, or SCP, defines the maximum permissions available to principals governed by an AWS Organizations branch. That makes an SCP a ceiling.
 
-A **service control policy**, usually shortened to **SCP**, is an AWS Organizations policy that sets the maximum permissions available to IAM users and IAM roles in member accounts. An SCP grants zero permissions on its own. It works as a ceiling over local IAM.
-
-AWS still evaluates the local identity policies, resource policies, session policies, permissions boundaries, and other IAM layers for each request. The SCP answers a separate question: is this action still available inside this account according to the organization rules? The request succeeds only when the local IAM layers allow it and the organization ceiling leaves it available.
-
-Here is a small SCP that denies member accounts the ability to leave the organization. This example is intentionally small, because the important part is seeing the ceiling above local IAM:
+Suppose a developer's identity policy effectively says:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyLeavingOrganization",
-      "Effect": "Deny",
-      "Action": "organizations:LeaveOrganization",
-      "Resource": "*"
-    }
-  ]
+  "Effect": "Allow",
+  "Action": "*",
+  "Resource": "*"
 }
 ```
 
-If a local administrator in `payments-prod` has the AWS managed `AdministratorAccess` policy, this SCP still blocks the denied action. The local administrator can manage many resources inside the account, but the organization ceiling removes this action from the account's available permissions.
+This resembles administrator access. Now suppose an SCP affecting the production account denies these capabilities:
 
-The statement is small, but every field matters. `Effect` is `Deny`, so it removes this action wherever the SCP applies. `Action` names `organizations:LeaveOrganization`, the operation member accounts should not use during normal work. `Resource` is `*` because this Organizations action does not narrow cleanly to one application resource. The review question is whether the denied action should be unavailable for every account under the target OU.
-
-SCPs have boundaries that matter in production. AWS applies SCPs to member accounts, including root users in member accounts. The management account sits outside that SCP effect, which is one reason production workloads should live in member accounts. Service-linked roles also sit outside SCP restrictions because AWS services use those roles to operate integrations inside the account.
-
-The `FullAWSAccess` SCP is part of the default starting point in Organizations. If a team removes it without replacing it with allow statements that keep needed services available, member-account actions can fail broadly. For beginners, the most practical SCP pattern is an explicit deny guardrail: leave the normal allow baseline in place, then deny the actions the company wants to block everywhere under a branch.
-
-SCPs deserve slow rollout. The payments company should attach a new SCP to a small test OU first, move one low-risk account into that OU, and watch normal workflows. Last accessed data and CloudTrail events can show which services accounts use before the policy moves closer to production.
-
-The attached SCPs on an OU are part of the operating evidence. This command asks Organizations which SCPs currently apply directly to the production OU:
-
-```bash
-aws organizations list-policies-for-target \
-  --target-id ou-a1b2-prod \
-  --filter SERVICE_CONTROL_POLICY \
-  --query 'Policies[].{Name:Name,Id:Id,AwsManaged:AwsManaged}' \
-  --output json
+```text
+organizations:LeaveOrganization
+cloudtrail:StopLogging
+cloudtrail:DeleteTrail
+iam:CreateUser
+iam:CreateAccessKey
 ```
 
-```json
-[
-  {
-    "Name": "FullAWSAccess",
-    "Id": "p-FullAWSAccess",
-    "AwsManaged": true
-  },
-  {
-    "Name": "DenyOutsideApprovedRegions",
-    "Id": "p-abcd1234",
-    "AwsManaged": false
-  },
-  {
-    "Name": "ProtectCloudTrail",
-    "Id": "p-efgh5678",
-    "AwsManaged": false
-  }
-]
-```
-
-This output says the OU still has the normal allow baseline and two customer guardrails. A missing `FullAWSAccess` row would deserve careful investigation unless the organization intentionally uses a custom allow-list SCP model.
-
-
-Now that the ceiling makes sense, the next question is which actions belong in shared guardrails. The payments company starts with risks that repeat across accounts: Regions, logging, public storage, and root usage.
+The identity policy still attempts to grant every action, but the organization has removed those prohibited capabilities from the maximum. Effective authority is approximately `AdministratorAccess` minus the denied operations. Attaching another broad identity policy inside the member account cannot restore power that the SCP ceiling removed.
 
 ![The SCP ceiling view shows how organization-level policy limits the maximum actions an account can use even when an identity policy allows more](/content-assets/articles/article-cloud-providers-aws-identity-security-account-guardrails/scp-ceiling-map.png)
 
-*The SCP ceiling view shows how organization-level policy limits the maximum actions an account can use even when an identity policy allows more.*
+*An SCP can remove dangerous capabilities from the member account's maximum authority even when a local identity policy is overly broad.*
 
+SCPs inherit along the Organizations path:
 
-## Common Guardrails
-<!-- section-summary: Common guardrails protect approved Regions, audit logging, public storage settings, and root usage where the same rule should hold across many accounts. -->
-
-A **guardrail** is a shared rule that prevents a class of mistakes across many accounts. In AWS, guardrails can use SCPs, organization-level service policies, account baselines, or security service settings. The important idea is simple: the company decides which risks should be controlled centrally, instead of asking every account team to remember them separately.
-
-Approved Regions are a common first guardrail. A **Region** is an AWS geographic location such as `us-east-1`, `eu-west-1`, or `ap-southeast-2`. If the payments company stores customer data only in Ireland and London, a production account should not create a database in a different Region during a rushed release.
-
-An SCP can use the `aws:RequestedRegion` condition key to deny actions outside approved Regions. Global services need special care because services such as IAM, Route 53, CloudFront, AWS Support, and some Organizations operations use global or special endpoints. A Region guardrail should begin in a test OU because a missing exception can break account administration.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyOutsideApprovedRegions",
-      "Effect": "Deny",
-      "NotAction": [
-        "iam:*",
-        "organizations:*",
-        "route53:*",
-        "cloudfront:*",
-        "support:*",
-        "sts:*"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringNotEquals": {
-          "aws:RequestedRegion": [
-            "eu-west-1",
-            "eu-west-2"
-          ]
-        }
-      }
-    }
-  ]
-}
+```text
+Organization root guardrail
+        ∩ Production OU guardrail
+        ∩ Payments child OU guardrail
+        ∩ account guardrail
+        ∩ IAM and resource-policy grants
+        = effective permissions
 ```
 
-The important part is the combination of `NotAction` and `aws:RequestedRegion`. `NotAction` lists global or special services that should keep working even when the requested Region is outside the approved list. `StringNotEquals` denies every other action when the requested Region is outside `eu-west-1` and `eu-west-2`. The review question is whether the exception list covers real global administration paths without quietly allowing data services outside the approved Regions.
+An explicit deny at a relevant level blocks the request lower in the hierarchy. In an allow-list SCP strategy, the action must remain allowed through the relevant hierarchy. This is why a member-account administrator cannot simply attach `AdministratorAccess` to escape the company's organization policy. The organization control sits outside the administrator's normal account-level permission domain.
 
-Audit logging is another guardrail. **AWS CloudTrail** records AWS API activity, and an organization trail can log events for all accounts in the organization. The payments company can create an organization trail from the management account or a delegated administrator account, send the logs to `security-log-archive`, and keep member accounts from changing the organization trail.
+The reverse is equally important: SCPs do not grant access. Imagine an SCP that allows every action on every resource. If Alice has no IAM or resource-policy grant, her effective permissions remain empty.
 
-An SCP can also block local tampering actions such as `cloudtrail:StopLogging` and `cloudtrail:DeleteTrail` in workload accounts. The organization trail remains the main evidence path, and the SCP adds a second layer that keeps local administrators from turning off local trails or weakening logging settings during an investigation.
+```text
+SCP maximum = everything
+IAM grants  = nothing
 
-Public S3 access needs a specific guardrail because one public bucket policy can expose a lot of data. **Amazon S3 Block Public Access** has settings that block public ACLs, block public bucket policies, ignore public ACLs, and restrict public buckets. AWS Organizations can manage S3 Block Public Access through an Amazon S3 policy for the organization, which is often clearer than trying to catch every public-storage path with one giant SCP.
-
-```json
-{
-  "s3_attributes": {
-    "public_access_block_configuration": {
-      "@@assign": "all"
-    }
-  }
-}
+everything ∩ nothing = nothing
 ```
 
-This organization S3 policy uses the Organizations policy language rather than IAM policy syntax. `public_access_block_configuration` is the S3 Block Public Access setting group, and `@@assign: "all"` means the policy assigns all four public-access block settings. The review question is whether any account has a documented business exception for public buckets; for receipt and payment data, the expected operating answer should be no.
+The SCP only says that the organization does not remove a capability. Alice must still receive an applicable grant before AWS can allow her request.
 
-Root usage also belongs in guardrail conversations. Every member account has a **root user**, and that identity has account ownership power. The payments company should keep root protected with MFA, avoid root access keys, and use root only for documented account recovery or root-only tasks. SCPs can restrict root users in member accounts, so production OUs can block routine root administration paths while keeping a clear break-glass process.
+SCP scope also has boundaries. SCPs affect member accounts, including their root users. They do not constrain principals operating in the Organizations management account. Service-linked roles are also outside normal SCP restriction. A **service-linked role** is an IAM role linked to an AWS service so that the service can perform required actions on your behalf.
 
+Those exceptions explain two design rules. First, keep routine workloads and day-to-day human administration out of the management account as much as practical. Second, do not assume an SCP is a universal deny mechanism for every AWS principal and service interaction.
 
-These guardrails reduce account-level mistakes. The accounts still need to work together, and that brings the next access pattern: crossing account boundaries without sharing permanent keys.
+SCPs primarily constrain principals governed by the organization. They do not automatically constrain an external principal merely because it accesses a resource in one of your accounts. Resource-side access requires resource-side reasoning.
 
-## Cross-Account Access
-<!-- section-summary: Cross-account roles and resource policies let accounts collaborate while avoiding shared production access keys. -->
+That is where **resource control policies**, or RCPs, provide a useful mirror:
 
-After the account split, work starts crossing boundaries. The `tooling` account needs to deploy to `payments-prod`. The security team needs read access to selected evidence in workload accounts. The `payments-prod` receipt exporter may need to write audit copies into a bucket in `security-log-archive`.
-
-The risky shortcut is a production IAM user with access keys copied into another account's CI/CD system. That key can keep working for years, and anyone who finds it can call production APIs. The safer AWS pattern is **cross-account access** through roles or resource policies.
-
-A **cross-account role** is an IAM role in one account that a principal from another account can assume. The target account owns the role. The role's trust policy names the external principal that may assume it. The source account also grants its caller permission to call `sts:AssumeRole` on that target role.
-
-STS means **AWS Security Token Service**. When a caller assumes a role, STS returns temporary credentials for that role session. Those credentials expire automatically, and CloudTrail records the assumed-role session as it uses AWS services.
-
-For the payments company, `payments-prod` can create a role named `ProdDeployRole`. Its trust policy can allow only the deployment pipeline role in `tooling`. The role name and source principal make the production deployment path visible to a reviewer:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::111122223333:role/DeployPipeline"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
+```text
+SCP: How powerful may principals in these accounts become?
+RCP: How much access may resources in these accounts accept?
 ```
 
-The trust policy lives in `payments-prod`. `Principal.AWS` names the exact source role in `tooling` that may request the production deploy session. `Action` is `sts:AssumeRole` because the source role asks STS for temporary credentials in the target account. A production trust policy should avoid trusting a whole account root unless the team has another control that narrows which source principals can use it.
+Conceptually, an SCP limits the maximum outbound authority held by principals. An RCP limits the maximum inbound exposure accepted by supported resources. RCPs participate in AWS's current policy-evaluation model but have their own service support and applicability rules. You do not need them for every IAM design, yet the symmetry prevents a common blind spot: some access paths begin in identity policies, while others begin on the resource side.
 
-The source role in `tooling` also needs an identity policy that allows the assume-role request. This second policy lives with the caller, so the source account controls who can ask for the production session:
+## Which Capabilities Belong in Guardrails?
+<!-- section-summary: Strong guardrails express company invariants around catastrophic failure modes rather than trying to duplicate every role's detailed permission policy. -->
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": "arn:aws:iam::999900001111:role/ProdDeployRole"
-    }
-  ]
-}
+Do not begin guardrail design by listing hundreds of AWS API operations that developers should use. Begin with failure modes. Ask, **"What event would be so damaging that no ordinary administrator should be able to cause it?"**
+
+This question identifies **invariants**: facts that must remain true despite local policy mistakes or routine changes.
+
+### Protect audit evidence
+
+Workload administrators should not be able to disable central logging, delete the protected log archive, or modify the roles that manage the audit system. Security automation and tightly controlled security administrators may need exceptions, but those paths should be explicit.
+
+```text
+Ordinary account administrator
+  ├─ stop central logging ─────── denied
+  ├─ delete protected logs ────── denied
+  └─ change security role ─────── denied
+
+Approved security path
+  └─ controlled exception
 ```
 
-Both sides matter. The target role must trust the source principal. The source principal must have permission to ask for the target role. In the source policy, `Resource` points at the production role ARN, so the pipeline cannot use this statement to assume a different role. After STS creates the session, the role permissions in `payments-prod` control what the pipeline can do, and the SCPs above `payments-prod` still set the account ceiling.
+### Restrict unapproved Regions
 
-Sometimes a caller needs one resource instead of a full session in another account. A **resource-based policy** attaches directly to a resource and names the principals that may use it. An S3 bucket policy in `security-log-archive` can allow `payments-prod` to write objects under one audit prefix, while the caller keeps using its own role session.
+An organization may permit workloads only in Regions such as `eu-west-1`, `eu-west-2`, and `us-east-1`. A guardrail can deny requests targeting other Regions. This control needs care because some AWS services are global or use a specific endpoint. A Region deny based on `aws:RequestedRegion` therefore needs appropriate exclusions for global services rather than assuming every request maps cleanly to a regional endpoint.
 
-Roles and resource policies solve different access shapes. A role works well when the caller needs to operate inside another account. A resource policy works well when another account needs access to one supported resource. Both patterns keep production away from shared long-lived access keys.
+### Reduce long-lived identities
 
+A production OU can deny operations such as `iam:CreateUser` and `iam:CreateAccessKey` when humans authenticate through federation and workloads use roles. The invariant is not "no one can ever authenticate." It is "normal production access does not depend on newly created, long-lived IAM-user credentials."
 
-The accounts can now work together. The next problem is proof: who assumed which role, who changed which policy, and which request failed or succeeded.
+### Block privilege-escalation paths
+
+An attacker does not need a policy named `AdministratorAccess` if they can manufacture equivalent authority. Capabilities such as `iam:CreatePolicyVersion`, `iam:AttachRolePolicy`, `iam:PutRolePolicy`, `iam:UpdateAssumeRolePolicy`, and `iam:PassRole` can become escalation paths in the wrong context. Guardrails can reserve sensitive identity administration for dedicated security or automation roles.
+
+### Protect organization integrity
+
+Member accounts should not casually leave the organization, remove central integrations, or modify security infrastructure. These operations affect the control plane that keeps account governance consistent, so they are natural candidates for an organization-level invariant.
+
+### Limit root-user activity
+
+The root user in a member account is extremely powerful, yet member-account root users are within SCP scope. Organizations also supports centralized root-access management. Normal administration should not depend on root, and SCP-based controls can restrict routine root activity while preserving a deliberate recovery process.
+
+These examples share a shape. They do not attempt to define every legitimate application action. They protect a small set of catastrophic boundaries:
+
+```text
+Production stays inside the organization.
+Central audit logging cannot be disabled by workload administrators.
+Workload accounts do not create ordinary long-lived IAM users.
+Production stays in approved Regions.
+Ordinary principals cannot rewrite security administration paths.
+Member-account root is not used for routine work.
+```
+
+Least privilege and guardrails solve different problems. Least privilege tries to make today's grants match today's legitimate need. Guardrails make sure that tomorrow's mistaken grant still cannot authorize selected catastrophic operations. A good review needs both.
+
+## How Does Cross-Account Access Work?
+<!-- section-summary: Cross-account access requires authorization in separate security domains and can use either temporary role sessions or supported resource-based policies. -->
+
+Two AWS accounts are separate security domains. If Alice in Account A needs production access in Account B, both domains normally participate in authorizing the path.
+
+The first major pattern is `AssumeRole`. Account B contains a role such as `ProdReadOnlyRole`. The role's **trust policy** identifies who may become that role. Alice's permissions in Account A allow her to call `sts:AssumeRole` on that target role.
+
+Think of the entry step as two locks:
+
+```text
+Account A identity policy
+  allows sts:AssumeRole on ProdReadOnlyRole?
+                  ↓ yes
+
+Account B role trust policy
+  trusts Alice's principal or account?
+                  ↓ yes
+
+AWS STS issues an assumed-role session
+```
+
+**AWS Security Token Service**, or STS, issues temporary credentials for the new role session. Its ARN has a form like:
+
+```text
+arn:aws:sts::222222222222:assumed-role/ProdReadOnlyRole/alice
+```
+
+Cross-account role access has two distinct authorization questions:
+
+1. May Alice enter the role? Her source permissions, the target trust policy, and applicable guardrails determine whether `AssumeRole` succeeds.
+2. After she becomes the role, what may the role session do? The role's permissions, SCPs, permissions boundary or session restrictions, and resource controls determine requests such as `s3:GetObject` or a database description call.
+
+Keeping entry separate from action prevents a great deal of IAM confusion.
+
+A role's trust and permissions policies therefore answer different questions:
+
+```text
+Trust policy:       Who may become this role?
+Permissions policy: What may the resulting role session do?
+```
+
+For example, `VendorSupportRole` may trust a specific vendor account, while its permissions allow only `cloudwatch:GetMetricData` and `logs:GetLogEvents`. Trusting the vendor to enter the role does not give the vendor administrator access. The session receives only the role's effective capabilities.
+
+Third-party access needs another layer of care. A software provider may operate one AWS account for thousands of customers. If your trust policy recognizes only that provider account, another customer could potentially cause the provider to request your role on the wrong customer's behalf. This is the **confused deputy problem**.
+
+An `ExternalId` condition helps bind role assumption to the intended customer relationship:
+
+```text
+Provider principal matches
+        AND
+ExternalId matches this customer relationship
+        ↓
+AssumeRole may proceed
+```
+
+The deeper lesson is that the provider's identity may not be enough. The trust decision sometimes must also identify which tenant or relationship caused the provider's request.
+
+The second major pattern is direct cross-account resource access. A principal in Account A can request an S3 object in Account B when the requesting side permits the principal and the bucket policy on the resource-owning side permits the cross-account request. No target role session is required.
+
+```text
+Account A identity policy
+          +
+Account B resource policy
+          =
+possible cross-account resource access
+```
+
+This is why an access review cannot stop at IAM users, roles, and identity policies. Resource-side edges can appear in S3 bucket policies, KMS key policies, SQS queue policies, SNS topic policies, Secrets Manager resource policies, role trust policies, and other supported resource policies.
 
 ![The cross-account flow shows how temporary role sessions give central tooling access without sharing permanent credentials across accounts](/content-assets/articles/article-cloud-providers-aws-identity-security-account-guardrails/cross-account-temporary-access.png)
 
-*The cross-account flow shows how temporary role sessions give central tooling access without sharing permanent credentials across accounts.*
+*Cross-account role assumption uses temporary sessions, but reviewers must evaluate both the entry trust and the permissions available after entry.*
 
+Combine these ideas with the account graph. A harmless-looking first role assumption may lead to another role, `iam:PassRole`, and a resource policy. Reviewing the full reachable chain is more accurate than reviewing one policy document at a time.
 
-## CloudTrail Evidence
-<!-- section-summary: CloudTrail records AWS API activity, so reviewers can see the caller, action, account, source, request details, and denial evidence. -->
+## What Does CloudTrail Prove?
+<!-- section-summary: CloudTrail is activity evidence for observed AWS requests, but its ability to prove absence depends on event coverage, retention, Region, and search scope. -->
 
-**CloudTrail** is AWS's activity record for API calls. It records requests made through the AWS Console, AWS CLI, SDKs, AWS services, and automation tools. For IAM operations, it helps answer practical review questions: who asked AWS to do this, from which account, using which session, and did AWS allow the request?
+**AWS CloudTrail** records AWS activity as events. A relevant event can answer questions such as:
 
-A CloudTrail event is a JSON record with fields that connect an action to a caller. The exact fields vary by service and event type, but the IAM evidence usually starts with `eventTime`, `eventSource`, `eventName`, `userIdentity`, `sourceIPAddress`, `requestParameters`, and `errorCode`.
+- Who made the request: a user, role session, workload, or AWS service?
+- What API action was requested?
+- When and in which Region did the request occur?
+- What source context, request parameters, and resources were involved?
+- Did the event include success or error information?
 
-```json
-{
-  "eventTime": "2026-05-14T10:22:31Z",
-  "eventSource": "iam.amazonaws.com",
-  "eventName": "CreateAccessKey",
-  "awsRegion": "us-east-1",
-  "userIdentity": {
-    "type": "AssumedRole",
-    "arn": "arn:aws:sts::123456789012:assumed-role/prod-support/senlin-prod-support",
-    "accountId": "123456789012",
-    "sessionContext": {
-      "sessionIssuer": {
-        "type": "Role",
-        "arn": "arn:aws:iam::123456789012:role/prod-support",
-        "userName": "prod-support"
-      }
-    }
-  },
-  "sourceIPAddress": "203.0.113.40",
-  "requestParameters": {
-    "userName": "backup-scanner"
-  },
-  "errorCode": "AccessDenied"
-}
+Conceptually, a configured access path makes a request possible. A human or workload makes an actual request. AWS authorizes or denies it. CloudTrail records activity evidence for the request when the event type is covered by the logging configuration.
+
+CloudTrail is especially useful because last-accessed summaries can include attempts. A summary saying that IAM was accessed yesterday does not tell you whether the principal changed IAM successfully. The CloudTrail event can reveal the precise API operation, actor, parameters, and an `AccessDenied` result.
+
+CloudTrail's strength does not make every missing event proof that nothing happened. Observation coverage matters.
+
+The built-in CloudTrail Event history provides 90 days of management events in each Region. **Management events** describe control-plane operations such as creating or changing AWS resources. Event history does not provide data events, network activity events, or Insights events. Longer retention and additional event classes require the appropriate trail, event data store, and event selectors.
+
+For example, creating an S3 bucket is normally a management event. Reading an object with `GetObject` is data-plane activity and requires appropriate S3 data-event collection. A reviewer who searches only Event history for `GetObject` is not observing the full question.
+
+Therefore a missing result can mean several different things:
+
+```text
+1. The request did not happen.
+2. The relevant time is outside retention.
+3. That event type was not collected.
+4. The reviewer searched the wrong Region, account, trail, or store.
 ```
 
-This event tells a concrete story. A role session named `prod-support` tried to call `CreateAccessKey` in IAM. The request came from `203.0.113.40`. AWS denied it. A reviewer can now ask whether support should ever create access keys, which SCP or IAM layer denied the request, and whether the support workflow needs a safer path.
+This distinction is a general evidence rule: **evidence of absence requires sufficiently complete observation coverage; absence of evidence does not.** Before using CloudTrail to justify deleting access, confirm that the event class, resources, accounts, Regions, and time window were actually collected and retained.
 
-CloudTrail Event history can help with quick lookup, and trails or event data stores handle longer retention and analysis. For organization-wide evidence, the payments company should use an organization trail that logs all accounts and sends the records to a protected location. Member accounts can see the organization trail, but they cannot delete it, turn logging on or off, or change what it logs.
+CloudTrail answers "what request happened?" It does not by itself enumerate every path that policy configuration would allow. A resource can be exposed to an external account even when that account has never made a request. That is the next evidence problem.
 
-When the question crosses accounts or needs SQL-style filtering, CloudTrail Lake can turn the same evidence into a query. A security reviewer investigating access-key creation can search the organization event data store for the account, action, and time window:
+## What Do Access Analyzer and Last-Accessed Data Prove?
+<!-- section-summary: Access Analyzer finds possible policy paths, while last-accessed and unused-access data create review hypotheses about permissions and credentials that may no longer be needed. -->
 
-```sql
-SELECT eventTime, recipientAccountId, eventName, userIdentity.arn, sourceIPAddress, errorCode
-FROM $EDS_ID
-WHERE eventSource = 'iam.amazonaws.com'
-  AND eventName IN ('CreateAccessKey', 'UpdateAccessKey', 'DeleteAccessKey')
-  AND eventTime BETWEEN '2026-05-14 00:00:00' AND '2026-05-15 00:00:00'
-ORDER BY eventTime DESC
-LIMIT 50;
+**IAM Access Analyzer** analyzes policies and access paths. Suppose a production bucket policy allows account `888888888888`, but that account has never read an object. CloudTrail may show no observed access. Access Analyzer can still report that external access exists.
+
+Both results can be correct:
+
+```text
+CloudTrail:      Did a covered request occur?
+Access Analyzer: Does policy analysis expose an access path?
 ```
 
-The result should give the review meeting a short evidence list instead of a vague concern about keys:
+An external-access finding is about possible access, not proof that the external entity used it. That makes the finding valuable even when activity logs are quiet: the door may be open although nobody appears to have walked through it.
 
-```console
-eventTime                 recipientAccountId  eventName       arn                                                       sourceIPAddress  errorCode
-2026-05-14 10:22:31.000   123456789012        CreateAccessKey arn:aws:sts::123456789012:assumed-role/prod-support/senlin-prod-support 203.0.113.40     AccessDenied
-2026-05-14 09:10:02.000   999900001111        DeleteAccessKey arn:aws:sts::999900001111:assumed-role/security-audit/priya             198.51.100.12    null
+External analysis needs a boundary between expected and unexpected principals. Access Analyzer calls this the **zone of trust**. The zone may be an account or the whole AWS Organization. A relationship between two accounts inside the organization may be considered internal; a path from a vendor account outside the organization can appear as external access.
+
+```text
+Account map + zone of trust + policy analysis
+                    ↓
+Which access edges cross the intended boundary?
 ```
 
-The first row shows a denied attempt by a production support session. The second row shows a security-audit session deleting an access key in another account. The next step is still human: confirm whether each key belongs to an approved exception, an emergency identity, a legacy vendor, or something that should be disabled.
+Access Analyzer supports several useful evidence categories:
 
-During hands-on debugging, the current caller is the first fact to prove. A human using the CLI can run this before changing anything else. The command does not change resources, so it is a useful first check during an incident:
+- **External access:** Which supported resources are reachable from outside the chosen trust zone?
+- **Internal access:** Which principals inside the organization or account have effective paths to selected resources?
+- **Unused access:** Which roles, permissions, access keys, or passwords appear not to have been used within a configured period?
 
-```bash
-aws sts get-caller-identity --output json
+Internal analysis is not merely a list of identity policies. For the selected resources, effective paths can depend on identity policies, resource policies, SCPs, RCPs, and permissions boundaries. It helps answer, "Who inside can reach the crown jewels?"
+
+IAM **last-accessed information** answers another question: when did an identity attempt to use a service or supported management action? Imagine a principal granted access to S3, DynamoDB, EC2, Lambda, RDS, and KMS. The evidence shows recent S3 and DynamoDB activity, Lambda activity 70 days ago, and no EC2, RDS, or KMS activity within the tracking data.
+
+That creates a least-privilege hypothesis: perhaps the principal no longer needs EC2, RDS, and KMS. It is not yet proof. Service-level last-accessed information has a tracking period of at least 400 days, and the data includes attempted access rather than only successful access. An old disaster-recovery capability may also be legitimate despite rare use.
+
+A compact comparison helps keep the tools straight:
+
+| Review question | Better evidence |
+|---|---|
+| Was a service used recently? | Last-accessed information |
+| Exactly who requested an API and with which parameters? | CloudTrail |
+| Did an attempted request fail? | CloudTrail |
+| Which granted services or permissions appear unused? | Last Accessed or unused Access Analyzer |
+| Could an outside account reach a supported resource? | Access Analyzer |
+
+Think of last-accessed information as a summary index and CloudTrail as an event ledger. The summary can point a reviewer toward IAM usage; the ledger supplies the event-level detail needed to understand success, failure, caller, target, and context.
+
+Unused-access analysis helps at scale. In an environment with thousands of roles, manually inspecting each one is not practical. An unused-access analyzer can use a threshold from 1 to 365 days and identify review candidates such as inactive roles, unused permissions, unused access keys, and unused passwords.
+
+The output is a queue for investigation, not an automatic deletion list. A disaster-recovery role, break-glass identity, annual financial process, incident-response permission, or failover automation may legitimately remain quiet for months. The correct flow is:
+
+```text
+Granted access
+    ↓ no observed need during the threshold
+Review candidate
+    ├─ still justified → document and retain
+    └─ not justified  → narrow or remove
 ```
 
-```json
-{
-  "UserId": "AROA999999999EXAMPLE:priya",
-  "Account": "777788889999",
-  "Arn": "arn:aws:sts::777788889999:assumed-role/SecurityAudit/priya"
-}
+Evidence informs judgment. It cannot replace ownership, architecture knowledge, and an explanation of why the capability should exist.
+
+### How Do Static Credentials and Credential Reports Fit?
+<!-- section-summary: Static credentials describe how an identity authenticates, and credential reports inventory IAM-user password, MFA, and access-key state for review. -->
+
+An **identity** is the person or workload that AWS recognizes. A **credential** is evidence presented to authenticate as that identity. An IAM user named `ci-system` is an identity; its access key ID and secret access key form a credential.
+
+IAM-user access keys are long-lived. They remain usable until someone rotates, disables, or deletes them. Temporary credentials come from patterns such as:
+
+```text
+EC2 instance → IAM role
+Lambda function → execution role
+federated human → AssumeRole
+GitHub OIDC identity → AssumeRoleWithWebIdentity
 ```
 
-That response shows the account, ARN, and user ID behind the current credentials. This example says Priya is using a temporary `SecurityAudit` role session in the `security-log-archive` account. It helps catch simple but dangerous mistakes, such as working in `payments-prod` while thinking the terminal profile points at `payments-dev`, or using an old IAM user key instead of an Identity Center role session.
+AWS recommends temporary credentials where possible: federation or IAM Identity Center for humans, and IAM roles for workloads. Expiration does not make credential theft harmless, but it limits how long stolen credentials remain useful. A leaked static key can work until revocation; a leaked temporary credential stops working when the session expires.
 
-CloudTrail shows what happened. Access reviews also need evidence about what policy paths currently allow, even before anyone uses them.
+Do not confuse an AWS credential secret with an application secret. An AWS access key contains an access key ID and a secret access key; that secret proves the caller is an AWS principal. An application may separately need a database password, payment-provider API key, GitHub token, OAuth client secret, or TLS private key.
 
-## Access Analyzer and Last Accessed
-<!-- section-summary: IAM Access Analyzer and last accessed data help teams find external access, internal access paths, unused roles, stale keys, and permissions that can be narrowed. -->
+```text
+IAM credential:
+Proves that the caller is principal P.
 
-**IAM Access Analyzer** is AWS tooling that analyzes access paths and policy intent. It can produce findings for external access, internal access, and unused access. A finding is a piece of evidence that says a policy or credential deserves review.
-
-External access findings begin with a **zone of trust**. The zone of trust is the account or organization boundary the analyzer treats as expected. If an S3 bucket policy in `payments-prod` grants access to an account outside the organization, Access Analyzer can create an external access finding because the principal sits outside the trusted boundary.
-
-Internal access findings help with a different question. They can show possible access paths between principals and resources inside the selected account or organization scope. For example, the security team may want to know which roles inside the organization can read a production DynamoDB table or a sensitive S3 bucket. DynamoDB is AWS's managed key-value and document database.
-
-Unused access findings focus on cleanup. They can identify roles with no access activity in the configured usage window, IAM user passwords or access keys that have not been used, and permissions that appear unused. For a payments team, this is where the old vendor role, forgotten scanner key, and broad support policy start to show up as review items.
-
-| Evidence type | Question it helps answer | Payments example |
-|---|---|---|
-| External access | Can someone outside the trusted account or organization reach this resource? | A bucket policy allows a vendor account to read receipt exports. |
-| Internal access | Which internal principals can reach this sensitive resource? | A support role can read a production customer table. |
-| Unused access | Which roles, keys, passwords, or permissions appear stale? | A migration role has had no activity in 120 days. |
-| Last accessed | Which services or supported actions were attempted recently? | A role has `ec2:*`, but evidence only shows read-only EC2 use. |
-
-**Last accessed information** helps reviewers narrow permissions. It can show service-level access and, for supported services and management actions, action-level access. It includes attempted API access, so a denied request can still appear in the data. CloudTrail remains the source to check whether the request succeeded or failed.
-
-For external access review, a security team can list active analyzer findings and keep the output focused on the resource, principal, and status:
-
-```bash
-aws accessanalyzer list-findings \
-  --analyzer-arn arn:aws:access-analyzer:us-east-1:777788889999:analyzer/org-access-analyzer \
-  --filter '{"status":{"eq":["ACTIVE"]}}' \
-  --query 'findings[].{Resource:resource,ResourceType:resourceType,Principal:principal,Status:status}' \
-  --output json
+Application secret:
+Provides a confidential value the application needs.
 ```
 
-```json
-[
-  {
-    "Resource": "arn:aws:s3:::payments-prod-receipts",
-    "ResourceType": "AWS::S3::Bucket",
-    "Principal": {
-      "AWS": "arn:aws:iam::555566667777:role/vendor-export"
-    },
-    "Status": "ACTIVE"
-  }
-]
+Moving `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from source code into Secrets Manager is safer than committing them to a repository. It does not remove the architectural problem that a long-lived AWS credential still exists and must be distributed, rotated, and revoked. When possible, give the workload an IAM role and let it receive temporary credentials instead.
+
+If IAM users still exist, the team needs an inventory of their authentication state. The **IAM credential report** contains account-level fields such as:
+
+- whether a user has a console password and when it was last used;
+- whether multi-factor authentication is active;
+- whether either of the user's access keys is active;
+- when each key was created or rotated;
+- when a key was last used, including the last service and Region; and
+- credential information for the account root user.
+
+The report supports concrete questions: Which IAM users still have console passwords? Who lacks MFA? Which keys appear unused? Does a retired identity retain active credentials? Does root have credentials? Did a key rotation leave two active keys indefinitely?
+
+This report is **credential-state evidence**, not authorization evidence. It describes how an IAM user can authenticate. The user's IAM policies describe what the authenticated identity may do. CloudTrail describes covered requests that the identity made. Access Analyzer describes supported paths that policies make reachable.
+
+Keeping those categories separate prevents misleading conclusions. An inactive access key does not prove the identity has no permissions. A broad policy does not prove that a usable credential exists. A successful authentication mechanism does not prove that the principal exercised a particular permission.
+
+## How Do Can, Did, and Should Guide an Access Review?
+<!-- section-summary: A sound access decision combines configuration, reachability, activity, usage summaries, and the organization's own statement of legitimate need. -->
+
+The evidence sources in this article fall into four groups.
+
+1. **Configuration evidence** answers, "What is configured?" It includes IAM policies, role trust policies, SCPs, RCPs, resource policies, permissions boundaries, and access-key state.
+2. **Reachability evidence** answers, "Which paths are possible?" It includes Access Analyzer, authorization analysis, and policy simulation.
+3. **Activity evidence** answers, "What happened?" CloudTrail is the main example here.
+4. **Usage-summary evidence** answers, "What seems to have been needed over time?" It includes last-accessed information, unused-access findings, and credential last-used fields.
+
+One category cannot substitute for another:
+
+```text
+No CloudTrail activity
+    ≠ no access path exists
+
+Access Analyzer finds a path
+    ≠ the path was exercised
+
+Last accessed shows no attempt
+    ≠ deletion is definitely safe
 ```
 
-This finding does not automatically mean the bucket is compromised. It means a principal outside the trusted zone can reach the bucket according to policy analysis. The reviewer should confirm the vendor owner, the allowed prefix, the contract reason, the expiration date, and the CloudTrail evidence for recent use.
+For each important relationship between principal P and resource R, ask three questions.
 
-This evidence has limits. Action-level last accessed information does not cover data plane events, and `iam:PassRole` is not tracked in IAM action last accessed information. A reviewer should use last accessed data as a guide, then confirm important decisions with CloudTrail, application owners, and the policy itself.
+**CAN?** Can P access R under the current authorization system? Inspect identity policies, resource policies, trust policies, SCPs, RCPs, permissions boundaries, session restrictions, and reachability analysis.
 
-The payments company can use this evidence without making the first cleanup destructive. If a vendor role looks unused, the first change can remove the trust path or detach the broad policy. If normal work stays healthy and the owner confirms the contract ended, the team can delete the role later. Reversible changes give evidence time to prove the access really went stale.
+**DID?** Did P actually request access to R? Inspect CloudTrail with event coverage and retention appropriate to that request.
 
-Access Analyzer and last accessed data point at stale access. Static credentials deserve their own section because they can outlive every reason they were created.
+**SHOULD?** Does P have a legitimate reason to access R? This answer comes from business ownership, job responsibility, application architecture, system design, an approved change, and security policy. AWS cannot decide the organization's intent.
 
-## Static Credentials and Secrets
-<!-- section-summary: Credential reports and secret metadata help teams review long-lived access keys, passwords, MFA status, and secret usage without exposing sensitive values. -->
+The three questions intersect:
 
-A **static credential** is a credential that keeps working until someone rotates, disables, or deletes it. IAM user passwords and IAM access keys are the usual AWS examples. They are useful for a few legacy or emergency cases, but they need review because they do not expire like role sessions.
-
-The **IAM credential report** lists all users in an account and the status of IAM-managed credentials such as passwords, MFA devices, and the first two access keys for each user. MFA means multi-factor authentication, the second proof used during sign-in. The report gives auditors and administrators a CSV view of credential age, activity, and status.
-
-A security reviewer can generate and download the report with the AWS CLI. The command pair asks IAM to prepare the report, then decodes the CSV content into a local file for review:
-
-```bash
-aws iam generate-credential-report
-
-aws iam get-credential-report \
-  --query Content \
-  --output text | base64 --decode > credential-report.csv
+```text
+CAN ∩ DID ∩ SHOULD
 ```
 
-The first command returns a generation status:
+The **should** question is primary. A permission can be used regularly and still be illegitimate. A permission can be unused and still be required for tested disaster recovery. Technical evidence becomes meaningful only when compared with an explicit requirement.
 
-```json
-{
-  "State": "COMPLETE",
-  "Description": "A credential report was generated successfully."
-}
+Consider `FinanceReportingRole` with these effective grants:
+
+```text
+s3:GetObject on finance-data/*
+kms:Decrypt using FinanceKey
+dynamodb:*
+ec2:*
 ```
 
-The second command pulls the base64-encoded CSV content from the `Content` field and decodes it into `credential-report.csv`. The report contains metadata about IAM-managed credentials. It does not print secret access key values.
+First, configuration evidence says the role can read encrypted finance objects and has broad DynamoDB and EC2 permissions. Next, the production SCP blocks IAM administration, unapproved-Region requests, and CloudTrail tampering, but does not remove DynamoDB or EC2. Those broad grants are therefore real within the remaining controls.
 
-A small slice of that CSV can reveal the next cleanup items. The reviewer is looking for active keys, old rotation dates, missing MFA, and credentials with no useful owner:
+Access Analyzer shows that the role is reachable from the Finance identity account and has no external path. That is useful reachability evidence, but it does not prove the permission set is narrow.
 
-```csv
-user,password_enabled,mfa_active,access_key_1_active,access_key_1_last_rotated,access_key_1_last_used_date,access_key_1_last_used_service
-backup-scanner,false,false,true,2025-01-09T12:30:41+00:00,2025-02-04T08:12:09+00:00,s3
-breakglass-admin,true,true,false,N/A,N/A,N/A
-vendor-export,false,false,true,2024-11-18T17:50:10+00:00,N/A,N/A
+CloudTrail and usage summaries show regular S3 and KMS activity, with no observed DynamoDB or EC2 use. The application owner explains that reports only read encrypted objects from S3. The architecture, the current grants, the reachable path, and observed use now point in the same direction: `dynamodb:*` and `ec2:*` are not supported by the role's legitimate purpose.
+
+The evidence-driven change is:
+
+```text
+Before:
+s3:GetObject + kms:Decrypt + dynamodb:* + ec2:*
+
+After:
+s3:GetObject + kms:Decrypt
 ```
 
-`backup-scanner` has an active key that last used S3 months ago. That might be an old scanner integration, or it might be a script nobody owns anymore. `breakglass-admin` has a password and MFA with no active access key, which can fit an emergency process if the owner and storage procedure are documented. `vendor-export` has an active key with no recorded use, which makes it a strong cleanup candidate.
+This is iterative least privilege. The team did not assume that one tool could declare the policy correct. It began with a business requirement, analyzed what could happen, inspected what did happen, narrowed the policy, and can observe again.
 
-Credential review should avoid exposing secret values. AWS shows the secret access key only when the key is created. Later reviews should inspect the key ID, status, age, and last-used data. Printing or copying secret material during an audit creates a new place where the secret can leak.
+Even a perfect reduction today is not enough forever. Someone may attach a broader policy next month. Guardrails provide defense in depth by continuing to deny selected catastrophic actions even when the role's detailed grant becomes wrong.
 
-Secrets stored in **AWS Secrets Manager** need the same discipline. Secrets Manager stores sensitive values such as database passwords, API tokens, and application credentials. A reviewer often needs to know who can read a secret, when it was changed, whether rotation is enabled, and which KMS key protects it. KMS is AWS's key management service for encryption keys.
+A practical evidence hierarchy is therefore:
 
-For secret review, metadata comes first. The reviewer can learn the name, ARN, KMS key, rotation status, and last change time before anyone retrieves the sensitive value:
-
-```bash
-aws secretsmanager describe-secret \
-  --secret-id prod/payments/db-password \
-  --query '{ARN:ARN,Name:Name,KmsKeyId:KmsKeyId,RotationEnabled:RotationEnabled,LastChangedDate:LastChangedDate}' \
-  --output json
+```text
+Business and system requirement → Why should access exist?
+Policy and reachability analysis → Can access exist?
+CloudTrail                    → Did access occur?
+Last Accessed / unused access → How recently does it appear needed?
+Decision                      → Retain, narrow, or remove
 ```
 
-```json
-{
-  "ARN": "arn:aws:secretsmanager:eu-west-1:999900001111:secret:prod/payments/db-password-AbCdEf",
-  "Name": "prod/payments/db-password",
-  "KmsKeyId": "arn:aws:kms:eu-west-1:999900001111:key/22222222-3333-4444-5555-666666666666",
-  "RotationEnabled": true,
-  "LastChangedDate": "2026-05-30T21:14:08.281000+00:00"
-}
+No AWS tool can answer "Is this permission correct?" alone. Correctness is a judgment built from intended architecture, current authorization, observed activity, and accountable ownership.
+
+## How Does the Review Loop Combine Guardrails and Evidence?
+<!-- section-summary: A continuous loop maps authority, defines invariants, applies guardrails, measures access, narrows grants, and repeats as systems change. -->
+
+An AWS environment changes continuously, so a one-time audit cannot create permanent least privilege. A mature review process repeats:
+
+```text
+1. Map accounts and trust edges.
+2. Define the invariants that must remain true.
+3. Apply guardrails around those invariants.
+4. Measure covered activity.
+5. Find reachable, external, and apparently unused access.
+6. Reduce unsupported grants and credentials.
+7. Repeat as identities, workloads, vendors, and policies change.
 ```
 
-This metadata output is safe for a normal review because it leaves the password value out of the terminal. `RotationEnabled` should match the team's rotation policy. `KmsKeyId` shows which encryption key protects the secret. `LastChangedDate` tells the reviewer when the secret metadata or value last changed, which is useful when a deployment suddenly starts failing after a credential update.
+The desired direction is:
 
-The secret value itself should stay out of the terminal during normal review. `GetSecretValue` retrieves `SecretString` or `SecretBinary`, and AWS records the API call in CloudTrail. Secrets Manager omits the sensitive secret value fields from CloudTrail, but request parameters can still appear in logs, so reviewers should keep sensitive data out of parameters and custom logs.
+```text
+actual granted permissions ≈ legitimate required permissions
+```
 
-Secrets Manager access also crosses IAM and KMS. A caller needs `secretsmanager:GetSecretValue`, and if the secret uses a customer-managed KMS key, the caller also needs `kms:Decrypt` for that key. CloudTrail can show the `GetSecretValue` activity, and KMS evidence can explain encryption-key access when a secret read succeeds or fails.
+Guardrails form an outer ceiling. Inside that ceiling sit the permissions that policy configuration makes possible. Inside that set is the smaller collection observed in use. The gaps deserve investigation: some are excessive grants; others are legitimate but rare emergency capabilities.
 
-At this point, the team has account structure, guardrails, cross-account access patterns, CloudTrail events, analyzer findings, last accessed data, credential reports, and secret metadata. The final piece is a review loop that turns all of that evidence into actual permission changes.
+Guardrails should express invariants. Instead of asking which hundreds of API operations developers need, ask what must remain true regardless of a local administrator's next policy edit. Examples include protected audit logging, organization membership, approved Regions, restricted long-lived IAM users, protected security roles, and non-routine member-account root use.
 
-## The Review Loop
-<!-- section-summary: A recurring access review turns evidence into owner decisions, narrower policies, disabled keys, removed trusts, and deleted stale roles. -->
+Evidence tests hypotheses. A deployment team may initially believe that `DeploymentRole` needs broad EC2, S3, DynamoDB, and Lambda access. CloudTrail shows Lambda and S3 requests. Last-accessed and unused-access analysis show no EC2 or DynamoDB activity. The architecture confirms that the system uses only Lambda and S3. The team can replace the original hypothesis with a narrower one, deploy a constrained Lambda-and-S3 policy, and observe again.
 
-An **access review** is a repeated check of who can access what and whether that access still has a clear owner and reason. It should produce decisions, not just dashboards. The payments company reviews access because teams change, vendors leave, pipelines move, emergency exceptions age, and old permissions keep working until someone removes them.
+That approach does not pretend that perfect permissions can always be derived on the first day. It makes least privilege an evidence-guided process with feedback.
 
-Different evidence belongs on different rhythms. High-risk changes need review before and after the work. Slower drift, such as unused roles and stale keys, can move through monthly or quarterly review. The rhythm should match the risk and the team's ability to act on findings.
+The whole system can be assembled in layers:
 
-| When | Evidence to collect | Decision to make |
-|---|---|---|
-| Before risky IAM changes | Current caller, planned policy diff, target account, expected CloudTrail events | Are we changing the intended account, role, and resource? |
-| After a production access window | `AssumeRole`, policy-change, secret-read, and denied-request events | Should the exception path be removed or narrowed now? |
-| Monthly | Active Access Analyzer findings, credential report changes, static keys, root and IAM user status | Which external access, passwords, and keys need an owner response? |
-| Quarterly | Last accessed data, unused access findings, broad policies, old role trusts, SCP service usage | Which roles, permissions, or account guardrails can be narrowed? |
+1. **Account architecture:** management, security, logging, production, and development accounts each have a clear purpose.
+2. **Human authentication:** people enter through an identity provider and IAM Identity Center, then use temporary role credentials rather than ordinary IAM-user keys.
+3. **Workload authentication:** EC2, Lambda, ECS, and other workloads use IAM roles and temporary credentials instead of embedded access keys.
+4. **Organization guardrails:** production SCPs prevent long-lived identity creation, audit tampering, organization departure, unapproved-Region activity, and dangerous security modifications.
+5. **Explicit cross-account trust:** workforce roles enter selected production roles; vendor access uses a separate trust path and an `ExternalId` where appropriate.
+6. **Resource controls:** S3, KMS, Secrets Manager, queues, and other sensitive resources receive deliberately scoped resource policies and controls.
+7. **Access evidence:** CloudTrail shows requests; Access Analyzer shows external, internal, and unused paths; last-accessed data provides usage clues; credential reports inventory static authentication state.
+8. **Review:** owners combine those sources, then retain, narrow, or remove access and repeat the process.
 
-The review should name an owner for every accepted access path. If the vendor export role stays, the vendor owner, business reason, allowed account, allowed actions, and next review date should be visible. If nobody owns it, the access should move toward removal.
-
-Cleanup works best in small reversible steps. A key can be deactivated before deletion. A role trust can be removed before the whole role disappears. A broad policy can lose one unused service before the team rewrites the entire permission set. CloudTrail and application owners can then confirm normal work still behaves as expected.
-
-A good cleanup item is specific enough for a reviewer to understand. "Clean IAM" gives the team no decision. "Deactivate access key `AKIAIOSFODNN7EXAMPLE` for `backup-scanner`, observe for two business days, then delete it because CloudTrail shows no successful use since February and the scanner was retired" gives the team evidence, timing, and a clear next step.
-
-Now the article can put the pieces back together as one operating model for the payments company. The parts matter most when they work together instead of drifting into separate security checklists.
+Imagine unused-access analysis reports that `ProdReportingRole` has unused EC2 permissions. The reviewer confirms the finding with CloudTrail coverage, the application owner, and a policy review, then removes EC2 access. If someone later attaches a broad policy by mistake, the production SCP still blocks the catastrophic operations chosen as invariants. That is defense in depth: the detailed grant and outer boundary protect against different failures.
 
 ![The operating loop connects guardrails to CloudTrail, Access Analyzer, credential reports, remediation, and regular review](/content-assets/articles/article-cloud-providers-aws-identity-security-account-guardrails/guardrails-evidence-operating-loop.png)
 
-*The operating loop connects guardrails to CloudTrail, Access Analyzer, credential reports, remediation, and regular review.*
+*The review loop feeds evidence back into permission design while organization guardrails preserve the outer safety boundary.*
 
+The compact mental model is:
 
-## Putting It All Together
-<!-- section-summary: The final IAM operating model combines account structure, guardrails, cross-account roles, activity logs, access analysis, credential review, and recurring cleanup. -->
+```text
+ACCOUNT MAP
+Where can authority travel?
+        ↓
+GRANTS
+Identity and resource policies
+        ↓
+GUARDRAILS
+SCPs, RCPs, boundaries, and session restrictions
+        ↓
+AUTHORIZATION → allow or deny
+        ↓
+ACTIVITY AND EVIDENCE
+CloudTrail      → what happened
+Access Analyzer → what can happen
+Last Accessed   → what appears used
+Cred reports    → which static credentials exist
+        ↓
+Refine grants and guardrails
+```
 
-The payments company started with one production account and one receipt export function. As the system grew, the team split work across `payments-dev`, `payments-prod`, `tooling`, `security-log-archive`, and `engineer-lab`. That split gave the company better isolation, but it also created access paths that needed shared rules and shared evidence.
+Behind that diagram are four final questions:
 
-AWS Organizations gives the account map. The management account owns the organization and stays quiet. Member accounts hold workloads. OUs group production, development, security, tooling, and labs so the company can attach the right controls to the right branches.
+1. **Should** this person or workload have access, according to architecture and business intent?
+2. **Can** it have access under IAM, resource policies, and the trust graph?
+3. Can organization guardrails stop dangerous access even when someone makes a grant mistake?
+4. **Did** the principal actually attempt or use the access according to evidence with adequate coverage?
 
-SCPs set permission ceilings for member accounts. Region guardrails keep workloads in approved locations. CloudTrail guardrails protect activity logging. S3 Block Public Access policies reduce accidental public storage exposure. Root guardrails keep daily work away from the most powerful identity in each member account.
+Permissions create authority. Trust moves authority across boundaries. Guardrails bound the maximum authority. Evidence lets the organization compare what it granted with what its systems actually need, then repeat that comparison as the environment changes.
 
-Cross-account roles let `tooling` deploy to `payments-prod` with temporary credentials instead of production access keys. Resource policies let `payments-prod` write selected audit objects into `security-log-archive` without receiving a whole session in the log archive account. SCPs still apply to member accounts after those cross-account paths are in use.
+## Check Your Answers
+<!-- section-summary: Review the core distinctions between authorization limits, access paths, activity records, usage summaries, and legitimate need. -->
 
-CloudTrail records who asked for what. `sts get-caller-identity` proves the active terminal session. Access Analyzer finds external access, internal access paths, and unused access. Last accessed data helps reviewers narrow permissions. Credential reports reveal active user passwords and keys. Secrets Manager metadata and CloudTrail events let reviewers inspect secret access without printing secret values.
+:::expand[How Are Guardrails Different From Access Evidence?]{kind="recap"}
+Guardrails affect authorization, while access evidence describes configured, reachable, attempted, or used access.
 
-The review loop turns evidence into change. Access stays when it has an owner, a reason, and a review date. Evidence can also show that a workflow needs less permission than it has today. Stale keys, role trusts, broad permissions, and vendor paths can move through reversible cleanup steps, then deletion after normal work proves the cleanup was safe.
+Guardrails participate in limiting authorization: they reduce what a principal or resource may ultimately accept. Access evidence describes configuration, reachability, activity, usage, or credential state. Evidence informs a decision but normally does not change whether the next AWS request is authorized.
+:::
 
-Guardrails and access evidence make IAM manageable after AWS grows into a multi-account system. Guardrails keep each account inside company limits. Evidence helps the team prove which access exists, which request happened, and which old permission can leave.
+:::expand[How Does the Account Map Show Where Authority Can Travel?]{kind="recap"}
+A useful account map combines the Organizations hierarchy with trust and resource-policy edges that move authority between security domains.
 
+The tree shows accounts, OUs, and inherited organization policies. Authority also moves through role trusts, role chaining, `iam:PassRole`, and resource-based policies. Those extra edges can create transitive paths to resources that are invisible when each account or policy is read alone.
 
----
+SCPs limit the authority available to principals in member accounts, while RCPs limit the authority that supported resources can accept.
 
-**References**
+An SCP defines the maximum actions available to governed principals in member accounts. A principal still needs an applicable IAM or resource-policy `Allow`. An SCP that permits everything gives a principal with no grants no effective permission, while an SCP deny can remove a capability even from a broad administrator policy.
 
-- [Terminology and concepts for AWS Organizations](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_getting-started_concepts.html) - Explains organizations, management accounts, member accounts, roots, OUs, delegated administrators, and the recommendation to keep workloads out of the management account.
-- [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Documents SCP permission ceilings, member-account scope, management-account exception, root-user coverage, service-linked role exception, rollout guidance, and last-accessed usage for SCP refinement.
-- [SCP syntax](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_syntax.html) - Describes SCP JSON elements, deny and allow behavior, condition usage, and Region restriction patterns.
-- [Service control policy examples](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_examples.html) - Provides AWS examples for common SCP guardrails and guidance for testing SCPs before broad attachment.
-- [AWS global condition context keys](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html) - Covers global condition keys such as `aws:RequestedRegion` and related policy-condition behavior.
-- [Creating a trail for an organization](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/creating-trail-organization.html) - Explains organization trails, member-account copies, member-account modification limits, multi-Region behavior, and protected log destinations.
-- [CloudTrail record contents](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html) - Defines CloudTrail event fields such as `eventSource`, `eventName`, `sourceIPAddress`, request parameters, and error fields.
-- [CloudTrail userIdentity element](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html) - Explains how CloudTrail represents IAM users, role sessions, federated users, AWS services, and session issuers.
-- [get-caller-identity - AWS CLI Command Reference](https://docs.aws.amazon.com/cli/latest/reference/sts/get-caller-identity.html) - Documents the caller identity response fields and permission behavior.
-- [Delegate access across AWS accounts using IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html) - Shows cross-account role setup, trust, `sts:AssumeRole`, temporary credentials, and destination-account permissions.
-- [Cross-account resource access in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies-cross-account-resource-access.html) - Compares cross-account roles with resource-based policies for sharing supported resources across accounts.
-- [Amazon S3 policy syntax and examples](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_s3_syntax.html) - Documents organization-level S3 Block Public Access policy syntax and the four Block Public Access settings.
-- [IAM Access Analyzer findings](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-findings.html) - Documents external access, internal access, and unused access finding families.
-- [Refine permissions using last accessed information](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_last-accessed.html) - Describes service and action last accessed information, tracking limitations, Organizations reports, and the need to confirm success or denial in CloudTrail.
-- [Generate credential reports](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_getting-report.html) - Documents credential report generation, CSV fields, IAM-managed credential coverage, report refresh behavior, passwords, MFA, and access key status fields.
-- [GetSecretValue - AWS Secrets Manager API Reference](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html) - Documents secret retrieval, CloudTrail logging, sensitive response fields, and required `secretsmanager:GetSecretValue` plus `kms:Decrypt` permissions for customer-managed KMS keys.
+An SCP limits the maximum authority available to principals in governed accounts. An RCP limits how much authority supported resources in governed accounts may accept. They address the principal and resource sides of authorization respectively and have their own scope and service rules.
+:::
+
+:::expand[Which Capabilities Belong in Guardrails?]{kind="recap"}
+Strong guardrails express company invariants around catastrophic failure modes rather than trying to duplicate every role's detailed permission policy.
+
+It represents a company invariant or catastrophic failure mode that should remain impossible despite ordinary account-level permission mistakes. Examples include audit tampering, organization departure, unapproved-Region activity, routine root use, creation of long-lived identities, and sensitive privilege-escalation operations.
+:::
+
+:::expand[How Does Cross-Account Access Work?]{kind="recap"}
+Cross-account access requires authorization in separate security domains and can use either temporary role sessions or supported resource-based policies.
+
+First, the source principal must be allowed to call `sts:AssumeRole` and the target role's trust policy must accept the caller. Second, after STS creates the session, the assumed role's permissions and applicable SCPs, boundaries, session restrictions, and resource controls determine what that session may do.
+:::
+
+:::expand[What Does CloudTrail Prove?]{kind="recap"}
+CloudTrail is activity evidence for observed AWS requests, but its ability to prove absence depends on event coverage, retention, Region, and search scope.
+
+The event may be outside retention, the relevant event class may not have been collected, or the reviewer may be searching the wrong Region, account, trail, or event store. Proving absence requires adequate observation coverage, not merely an empty search result.
+:::
+
+:::expand[What Do Access Analyzer and Last-Accessed Data Prove?]{kind="recap"}
+Access Analyzer finds possible policy paths, while last-accessed and unused-access data create review hypotheses about permissions and credentials that may no longer be needed.
+
+Access Analyzer reasons about possible access paths created by policies. CloudTrail records covered AWS activity. An external path can exist without being used, so an Analyzer finding and an empty activity search can both be correct.
+
+Rare but legitimate capabilities—such as disaster recovery, break-glass access, annual financial work, or incident response—may remain unused for a long time. Last-accessed and unused-access evidence must be combined with coverage, ownership, architecture, and business intent.
+
+Static credentials describe how an identity authenticates, and credential reports inventory IAM-user password, MFA, and access-key state for review.
+
+It inventories IAM-user and root credential state, including passwords, MFA, access-key status, rotation, and last-use fields. It describes how an identity can authenticate; policies describe authorization, CloudTrail describes activity, and Access Analyzer describes reachable paths.
+:::
+
+:::expand[How Do Can, Did, and Should Guide an Access Review?]{kind="recap"}
+A sound access decision combines configuration, reachability, activity, usage summaries, and the organization's own statement of legitimate need.
+
+`Can` comes from policy and reachability analysis. `Did` comes from activity evidence with sufficient collection and retention. `Should` comes from the organization's business and system requirements. Comparing all three supports a decision to retain, narrow, or remove access.
+:::
+
+:::expand[How Does the Review Loop Combine Guardrails and Evidence?]{kind="recap"}
+A continuous loop maps authority, defines invariants, applies guardrails, measures access, narrows grants, and repeats as systems change.
+
+Workloads, teams, vendors, and AWS policies change. A good loop remaps access, rechecks invariants, measures activity and reachability, narrows unsupported grants, and observes again. Guardrails preserve an outer safety boundary when detailed permissions later drift.
+:::
+
+## References
+
+- [Policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html) - Explains how AWS combines identity policies, resource policies, boundaries, SCPs, and RCPs, including explicit-deny behavior.
+- [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) - Defines SCPs as maximum-permission guardrails and documents their scope and important exceptions.
+- [SCP evaluation](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_evaluation.html) - Explains how SCPs attached along the Organizations hierarchy affect effective permissions.
+- [Deny access based on the requested Region](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_examples_aws_deny-requested-region.html) - Shows Region-restriction policy considerations, including global services.
+- [Best practices for member accounts](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_best-practices_member-acct.html) - Covers member-account security and root-access practices in an organization.
+- [Cross-account policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic-cross-account.html) - Describes authorization across the trusted and trusting accounts.
+- [Understanding CloudTrail events](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-events.html) - Defines CloudTrail events and the types of AWS activity they record.
+- [Working with CloudTrail Event history](https://docs.aws.amazon.com/en_en/awscloudtrail/latest/userguide/view-cloudtrail-events.html) - Documents the 90-day, per-Region management-event history and its coverage limits.
+- [How IAM Access Analyzer findings work](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-concepts.html) - Explains policy-based findings and why possible access is different from observed activity.
+- [IAM Access Analyzer](https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html) - Covers external, internal, and unused-access analysis and zones of trust.
+- [Refine permissions using last-accessed information](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_last-accessed.html) - Describes tracking periods, attempted access, and the role of last-accessed data in least-privilege reviews.
+- [UnusedAccessConfiguration](https://docs.aws.amazon.com/access-analyzer/latest/APIReference/API_UnusedAccessConfiguration.html) - Documents the configurable unused-access tracking threshold.
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Recommends federation and temporary credentials for humans and workloads where possible.
+- [Generate credential reports](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_getting-report.html) - Describes IAM credential-report fields for passwords, MFA, and access keys.

@@ -9,18 +9,31 @@ id: article-cloud-providers-aws-observability-lambda-ecs-eks-observability
 
 ## Table of Contents
 
-1. [One Checkout Flow, Three Compute Shapes](#one-checkout-flow-three-compute-shapes)
-2. [Lambda Observability](#lambda-observability)
-3. [Lambda Insights and Tracing](#lambda-insights-and-tracing)
-4. [ECS Observability](#ecs-observability)
-5. [ECS Container Insights](#ecs-container-insights)
-6. [EKS Observability](#eks-observability)
-7. [EKS Add-ons, Agents, and OpenTelemetry](#eks-add-ons-agents-and-opentelemetry)
-8. [Correlating Logs, Metrics, and Traces](#correlating-logs-metrics-and-traces)
-9. [Production Checklist](#production-checklist)
-10. [What's Next](#whats-next)
+1. [Why Do Lambda, ECS, and EKS Need Different Starting Points?](#why-do-lambda-ecs-and-eks-need-different-starting-points)
+2. [How Do You Observe a Lambda Function?](#how-do-you-observe-a-lambda-function)
+3. [When Do Lambda Insights and Tracing Help?](#when-do-lambda-insights-and-tracing-help)
+4. [How Do You Observe an ECS Service?](#how-do-you-observe-an-ecs-service)
+5. [How Do You Observe an EKS Workload?](#how-do-you-observe-an-eks-workload)
+6. [How Do EKS Add-ons, Agents, Collectors, and Instrumentation Differ?](#how-do-eks-add-ons-agents-collectors-and-instrumentation-differ)
+7. [How Do You Correlate Logs, Metrics, and Traces Across Runtimes?](#how-do-you-correlate-logs-metrics-and-traces-across-runtimes)
+8. [What Should a Production Runtime Checklist Include?](#what-should-a-production-runtime-checklist-include)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## One Checkout Flow, Three Compute Shapes
+Every compute platform follows the same telemetry pipeline: the workload produces evidence, instrumentation and agents collect it, exporters transport it, backends store it, and dashboards or alarms make it usable. Lambda, ECS, and EKS differ because you control different layers underneath the application.
+
+The sections below answer these questions in order:
+
+1. **Why Do Lambda, ECS, and EKS Need Different Starting Points?**
+2. **How Do You Observe a Lambda Function?**
+3. **When Do Lambda Insights and Tracing Help?**
+4. **How Do You Observe an ECS Service?**
+5. **How Do You Observe an EKS Workload?**
+6. **How Do EKS Add-ons, Agents, Collectors, and Instrumentation Differ?**
+7. **How Do You Correlate Logs, Metrics, and Traces Across Runtimes?**
+8. **What Should a Production Runtime Checklist Include?**
+
+## Why Do Lambda, ECS, and EKS Need Different Starting Points?
 <!-- section-summary: The same customer request can cross Lambda, ECS, and EKS, so observability has to follow the workload shape instead of assuming one setup fits everything. -->
 
 Imagine a production checkout system. The customer clicks **Place order**, an **ECS** service called `orders-api` receives the HTTP request, an **EKS** deployment called `inventory-worker` reserves stock, and a **Lambda** function called `receipt-renderer` creates a PDF receipt. One customer action crossed three compute models in a few seconds.
@@ -37,6 +50,16 @@ Here is the shape we will use through the article:
 
 The important idea is simple: **observability starts with the runtime boundary**. Lambda already knows about invocations, duration, errors, throttles, and memory. ECS knows about clusters, services, tasks, and containers. EKS knows about Kubernetes objects such as namespaces, pods, deployments, nodes, and DaemonSets. A good setup respects those native shapes, then adds a shared trace ID and shared log fields so one checkout can be followed across all of them.
 
+The ownership spectrum explains the difference:
+
+```text
+Lambda -> you own application code; AWS hides most runtime and host layers
+ECS    -> you own application, container, task, and service configuration
+EKS    -> you also observe pods, nodes, scheduling, networking, storage, and control-plane state
+```
+
+Across every platform, metrics answer whether behavior changed, logs preserve what happened, and traces show where one transaction spent time. Their collection mechanics change; their jobs do not.
+
 
 We will start with Lambda because it gives the most managed experience. AWS runs the host, the runtime lifecycle, and the scaling path, so your first job is to read the signals Lambda already emits and then add the missing detail.
 
@@ -45,7 +68,7 @@ We will start with Lambda because it gives the most managed experience. AWS runs
 *The runtime comparison shows how Lambda invocations, ECS tasks, and EKS pods expose different observability units for the same checkout flow.*
 
 
-## Lambda Observability
+## How Do You Observe a Lambda Function?
 <!-- section-summary: Lambda gives every invocation logs and metrics, but production troubleshooting depends on structured logs, execution-role permissions, and focused Logs Insights queries. -->
 
 An **invocation** is one attempt to run a Lambda function handler. The handler is the function in your code that Lambda calls when an event arrives. For `receipt-renderer`, one invocation might receive an order ID, fetch order details, create a PDF, write the PDF to S3, and return a receipt URL.
@@ -167,7 +190,7 @@ This gives you the first Lambda layer: logs and service metrics. Lambda service 
 
 Sometimes the broad metrics and the application logs still leave a gap. If the function spends more time initializing, uses more memory than expected, or struggles with network calls, the team needs deeper runtime telemetry. That is where Lambda Insights and tracing fit.
 
-## Lambda Insights and Tracing
+## When Do Lambda Insights and Tracing Help?
 <!-- section-summary: Lambda Insights adds runtime performance detail, while tracing links the function invocation to the upstream and downstream request path. -->
 
 **Lambda Insights** is a CloudWatch feature for troubleshooting Lambda runtime performance. It uses a Lambda extension delivered as a Lambda layer. A **Lambda extension** is code that runs beside your function inside the Lambda execution environment, and a **layer** is the packaging mechanism that adds shared code or tools to a function.
@@ -215,7 +238,7 @@ For new application instrumentation, AWS now points teams toward **OpenTelemetry
 
 That gives Lambda a clear production path: CloudWatch Logs for invocation detail, Lambda service metrics for health, Lambda Insights for runtime performance, and tracing for request flow. The next runtime, ECS, has the same goals, but the units change from invocations to containers and tasks.
 
-## ECS Observability
+## How Do You Observe an ECS Service?
 <!-- section-summary: ECS observability starts with task logs and service metrics, then adds task-level and container-level detail for real production debugging. -->
 
 **Amazon ECS** runs containers as **tasks**. A task is one running copy of a task definition, and a task definition is the JSON blueprint that describes containers, CPU, memory, networking, environment variables, and log configuration. A **service** keeps the desired number of tasks running and replaces failed tasks.
@@ -287,7 +310,7 @@ This query assumes the application writes JSON logs. If the service still writes
 
 ECS also sends ordinary CloudWatch metrics for cluster and service health, but those metrics stay fairly high level. When an incident depends on a single task using too much memory, one container restarting, or one deployment creating noisy task churn, the team needs Container Insights.
 
-## ECS Container Insights
+### When Does ECS Container Insights Help?
 <!-- section-summary: Container Insights with enhanced observability adds cluster, service, task, and container detail so ECS incidents can be debugged at the right level. -->
 
 **Container Insights** is a CloudWatch feature that collects, aggregates, and summarizes metrics and logs from containerized applications. For ECS, the current AWS guidance points teams toward **Container Insights with enhanced observability** because it adds more task and container detail than the original Container Insights setup.
@@ -347,7 +370,7 @@ Now the same checkout flow moves into EKS, where the container unit changes agai
 *The Container Insights view shows why task-level and container-level signals matter when a service has many running copies.*
 
 
-## EKS Observability
+## How Do You Observe an EKS Workload?
 <!-- section-summary: EKS observability has to cover Kubernetes objects, node behavior, pod logs, control plane signals, and application telemetry together. -->
 
 **Amazon EKS** is AWS's managed Kubernetes service. Kubernetes schedules containers inside **pods**, groups pods with **deployments**, places pods on **nodes**, and organizes resources into **namespaces**. A **DaemonSet** runs one pod on each selected node, which makes it a common pattern for log and metric collectors.
@@ -363,6 +386,10 @@ That creates a wider observability surface than Lambda or ECS:
 | **Node** | Node CPU, memory, disk, kubelet health | Did the node run out of allocatable memory? |
 | **Cluster** | Namespace, deployment, service, scheduling signals | Did a rollout create pending pods? |
 | **Control plane** | API server, audit, scheduler, authenticator logs when enabled | Did Kubernetes reject or throttle changes? |
+
+Kubernetes failures can originate outside the application. A pod may remain Pending because a persistent volume cannot mount, restart because it was OOM-killed, or stay outside service traffic because its readiness probe fails. The platform context is not extra decoration; it is necessary to distinguish application defects from scheduling, storage, networking, or node failures.
+
+That context also creates a **cardinality** problem. Pods are ephemeral and names may change with each rollout or scale event. Combining pod, namespace, node, container, zone, version, deployment, customer, and request values can create a large number of metric series. Keep enough resource context to localize a workload, but reserve request and customer identifiers for logs or traces rather than metric dimensions.
 
 Kubernetes writes container logs on nodes, but CloudWatch needs an agent or collector to ship and enrich those logs. Without that collection path, the team may see pods failing in `kubectl` while the central log system stays quiet. In production, that gap causes slow handoffs between platform and application teams.
 
@@ -380,7 +407,7 @@ The Kubernetes fields let responders filter by namespace, pod, and container ins
 
 EKS can also publish Kubernetes metrics into CloudWatch through Container Insights. The setup path matters because AWS currently documents several choices, and the preferred path has changed as OpenTelemetry support matured.
 
-## EKS Add-ons, Agents, and OpenTelemetry
+## How Do EKS Add-ons, Agents, Collectors, and Instrumentation Differ?
 <!-- section-summary: The current EKS path uses the CloudWatch Observability add-on or related collectors, with version, Fargate, Windows, and OpenTelemetry caveats that affect real deployments. -->
 
 The **Amazon CloudWatch Observability EKS add-on** is the managed EKS add-on for CloudWatch observability. AWS documents that the add-on or Helm chart can install the CloudWatch agent and Fluent Bit on EKS, enabling Container Insights with enhanced observability and CloudWatch Application Signals by default in the classic path. AWS also documents **OTel Container Insights** as the recommended EKS Container Insights approach for new EKS customers, using the same `amazon-cloudwatch-observability` add-on with OpenTelemetry-based configuration.
@@ -444,11 +471,21 @@ fluent-bit-j2k4q                      1/1     Running   0          12m
 
 The add-on status should print `ACTIVE`. The pod list should show CloudWatch agent pods in `Running` state with ready containers. Failed or pending pods usually point to IAM, image pull, scheduling, network, or add-on configuration problems.
 
+The terms around this setup describe different jobs:
+
+| Component | Job |
+|---|---|
+| Application instrumentation | Creates spans, metrics, and structured context for application work |
+| Collector | Receives telemetry, then batches, filters, enriches, samples, and exports it |
+| Agent | Runs beside infrastructure, often as a DaemonSet, to gather node-local metrics or logs |
+| Operator | Watches Kubernetes resources and automates observability configuration or injection |
+| EKS add-on | Provides an AWS-managed installation and lifecycle mechanism for components |
+
 The add-on handles the platform collection path. Application instrumentation still belongs to the application. For `inventory-worker`, the team usually adds OpenTelemetry SDK instrumentation in the service code and sends traces to an ADOT collector or CloudWatch-supported OTLP endpoint. The collector path keeps instrumentation portable and avoids tying application code to one backend forever.
 
 Now all three compute shapes have their local telemetry. The last step is correlation, because the checkout incident will rarely stay inside one runtime.
 
-## Correlating Logs, Metrics, and Traces
+## How Do You Correlate Logs, Metrics, and Traces Across Runtimes?
 <!-- section-summary: A shared request identity turns separate Lambda, ECS, and EKS telemetry into one investigation path. -->
 
 **Correlation** means carrying the same request identity through every service that handles the customer action. In practice, teams usually carry a `traceId`, an `orderId`, and a small set of stable service fields in every log line. The trace ID connects telemetry systems, while the business ID helps humans understand which customer or transaction they are following.
@@ -476,7 +513,7 @@ This is the production pattern worth practicing:
 
 No one signal carries the whole story. Metrics compress behavior, logs preserve detail, and traces connect service boundaries. Lambda, ECS, and EKS simply give you different starting points for those same three jobs.
 
-## Production Checklist
+## What Should a Production Runtime Checklist Include?
 <!-- section-summary: A strong compute observability setup makes the default AWS signals useful, adds runtime-specific depth, and keeps shared request fields consistent. -->
 
 For Lambda, start with the execution role and log format. The function role needs CloudWatch Logs permissions, the log group needs a useful retention policy, and application logs should use JSON with `service`, `env`, `requestId`, `traceId`, and business IDs. Add Lambda Insights to functions where runtime performance matters, and enable tracing for functions in important request paths.
@@ -504,16 +541,74 @@ The final setup should feel practical in a real incident. A responder should mov
 
 
 
-## What's Next
-<!-- section-summary: The next article moves from runtime symptoms to audit evidence about who changed AWS and what the resource looked like. -->
+## What Should You Remember?
+<!-- section-summary: Lambda, ECS, and EKS expose different runtime units, but all three need correlated metrics, logs, traces, and platform context. -->
 
-CloudWatch explains how the workload behaved. It shows slow requests, high memory, container restarts, Lambda errors, and noisy logs. After the team fixes the immediate symptom, the next question usually sounds different: who changed the security group, who updated the Lambda environment variable, or who replaced the ECS task definition?
+Use one mental model per platform:
 
-The next article uses CloudTrail and AWS Config to answer that change question. CloudTrail records the API activity, and AWS Config records resource configuration history. Together, they help the team connect a production symptom to the person, role, pipeline, or service that changed AWS.
+```text
+Lambda -> invocation, service metrics, logs, Insights, trace
+ECS    -> service, task, container, optional host, trace
+EKS    -> application, pod, container, node, Kubernetes state, control plane, trace
+```
 
----
+Detection should begin with availability, latency, errors, or failed business work. Runtime telemetry then localizes a function, task, container, pod, or node. A trace follows the slow transaction, and logs explain the exact error. CPU and memory are valuable diagnostic evidence, but they are not automatically user-impact pages.
 
-**References**
+:::expand[Why Do Lambda, ECS, and EKS Need Different Starting Points?]{kind="recap"}
+The same customer request can cross Lambda, ECS, and EKS, so observability has to follow the workload shape instead of assuming one setup fits everything.
+:::
+
+:::expand[How Do You Observe a Lambda Function?]{kind="recap"}
+Lambda gives every invocation logs and metrics, but production troubleshooting depends on structured logs, execution-role permissions, and focused Logs Insights queries.
+:::
+
+:::expand[When Do Lambda Insights and Tracing Help?]{kind="recap"}
+Lambda Insights adds runtime performance detail, while tracing links the function invocation to the upstream and downstream request path.
+
+Start with invocations, errors, duration, throttles, concurrency, async, and event-source metrics. Use structured invocation and platform logs for exact failures, Lambda Insights for runtime CPU, memory, disk, network, and cold-start detail, and tracing for upstream and downstream request paths.
+:::
+
+:::expand[How Do You Observe an ECS Service?]{kind="recap"}
+ECS observability starts with task logs and service metrics, then adds task-level and container-level detail for real production debugging.
+
+Trigger a known safe failure and prove that responders can move from alarm to metric, service, trace, span, log, and affected function, task, container, pod, or node. Monitor collectors and agents too, because silently dropped telemetry is itself a production failure.
+
+Container Insights with enhanced observability adds cluster, service, task, and container detail so ECS incidents can be debugged at the right level.
+
+Use service metrics and events for broad health, route container stdout and stderr with `awslogs` or FireLens, and use enhanced Container Insights to move from cluster to service, task, and container. On EC2-backed ECS, include host capacity as another layer.
+:::
+
+:::expand[How Do You Observe an EKS Workload?]{kind="recap"}
+EKS observability has to cover Kubernetes objects, node behavior, pod logs, control plane signals, and application telemetry together.
+
+AWS hides most layers beneath Lambda, exposes tasks and containers in ECS, and exposes Kubernetes objects plus nodes and control-plane behavior in EKS. The native runtime unit determines which platform metrics and logs are available before application instrumentation is added.
+
+Application telemetry explains routes and dependencies. Pod and container signals show restarts, CPU, memory, and throttling. Node signals show capacity, disk, networking, and kubelet health. Control-plane logs and Kubernetes state explain scheduling, API, controller, authenticator, and audit behavior.
+
+Instrumentation generates application telemetry. A collector processes and exports it. An agent gathers node-local or infrastructure telemetry. An operator automates Kubernetes observability configuration. An EKS add-on packages and manages the lifecycle of AWS-supported components.
+
+Page on user or business symptoms such as low availability, high latency, or failed transactions. Use application, compute, and platform conditions to diagnose or create lower-urgency work unless they reliably predict imminent user impact.
+:::
+
+:::expand[How Do EKS Add-ons, Agents, Collectors, and Instrumentation Differ?]{kind="recap"}
+The current EKS path uses the CloudWatch Observability add-on or related collectors, with version, Fargate, Windows, and OpenTelemetry caveats that affect real deployments.
+
+Applications and infrastructure produce telemetry. Instrumentation, agents, or collectors gather and process it. Exporters transport it to CloudWatch, X-Ray, or another backend. Queries, dashboards, and alarms turn stored evidence into investigation and action.
+:::
+
+:::expand[How Do You Correlate Logs, Metrics, and Traces Across Runtimes?]{kind="recap"}
+A shared request identity turns separate Lambda, ECS, and EKS telemetry into one investigation path.
+
+Keep bounded resource context such as cluster, namespace, workload, node, and necessary pod or container identity. Avoid turning request, customer, order, or arbitrary unique IDs into metric dimensions; preserve those values in logs and traces.
+
+Propagate trace context through calls and messages, and write stable service, environment, trace, span, and business identifiers into structured logs. Metrics locate the affected runtime, the trace reconstructs the path, and a shared ID retrieves exact logs from every platform.
+:::
+
+:::expand[What Should a Production Runtime Checklist Include?]{kind="recap"}
+A strong compute observability setup makes the default AWS signals useful, adds runtime-specific depth, and keeps shared request fields consistent.
+:::
+
+## References
 
 - [Sending Lambda function logs to CloudWatch Logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs.html) - Documents default Lambda log delivery, log group naming, execution-role permissions, and the `AWSLambdaBasicExecutionRole` policy.
 - [Working with Lambda function logs](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-logs.html) - Covers Lambda log destinations, JSON/plain text formats, log levels, and custom log groups.

@@ -28,7 +28,7 @@ const ROADMAP_ACCENT_ORDER = [
   COLORS.lavender,
 ];
 
-const ARTICLE_EXPANDABLE_KINDS = new Set(['design', 'pattern', 'pitfall', 'history', 'example']);
+const ARTICLE_EXPANDABLE_KINDS = new Set(['design', 'pattern', 'pitfall', 'history', 'example', 'recap']);
 const ARTICLE_EXPANDABLE_START_RE = /^:::expand(?:\[([^\]]+)\])?(?:\{([^}]*)\})?\s*$/;
 const ARTICLE_EXPANDABLE_END_RE = /^:::\s*$/;
 
@@ -56,17 +56,6 @@ const PLANNED_ROADMAP_BASES: Array<Omit<RoadmapSummary, 'rootCount' | 'articleCo
     tags: ['SQL', 'Pipelines', 'Warehouses', 'Streaming'],
     icon: 'Database',
     order: 2,
-    available: false,
-  },
-  {
-    id: 'roadmap-rust',
-    slug: 'rust',
-    title: 'Rust Roadmap',
-    description: 'Build language fluency from ownership and borrowing through traits, generics, async Rust, crates, tooling, and production patterns.',
-    category: 'language',
-    tags: ['Ownership', 'Traits', 'Async', 'Cargo'],
-    icon: 'Code2',
-    order: 3,
     available: false,
   },
 ];
@@ -139,6 +128,7 @@ type RoadmapSummary = {
   icon: string;
   order: number;
   available: boolean;
+  hidden?: boolean;
   rootCount: number;
   articleCount: number;
 };
@@ -436,7 +426,8 @@ function parseExpandableAttributes(raw: string): Record<string, string> {
 
 function validateArticleExpandables(content: string, filePath: string): void {
   const lines = content.split(/\r?\n/);
-  let count = 0;
+  let optionalBlockCount = 0;
+  let recapCount = 0;
   let inBlock = false;
   let inFence = false;
   let blockStartLine = 0;
@@ -465,7 +456,6 @@ function validateArticleExpandables(content: string, filePath: string): void {
       const start = ARTICLE_EXPANDABLE_START_RE.exec(trimmed);
       if (!start) continue;
 
-      count += 1;
       blockStartLine = lineNo;
       blockHasContent = false;
 
@@ -477,6 +467,11 @@ function validateArticleExpandables(content: string, filePath: string): void {
       const attrs = parseExpandableAttributes(start[2] ?? '');
       if (!attrs.kind || !ARTICLE_EXPANDABLE_KINDS.has(attrs.kind)) {
         throw new Error(`${filePath}:${lineNo} expandable block must use kind="${Array.from(ARTICLE_EXPANDABLE_KINDS).join('|')}".`);
+      }
+      if (attrs.kind === 'recap') {
+        recapCount += 1;
+      } else {
+        optionalBlockCount += 1;
       }
 
       inBlock = true;
@@ -510,8 +505,12 @@ function validateArticleExpandables(content: string, filePath: string): void {
     throw new Error(`${filePath}:${blockStartLine} expandable block is missing a closing ::: line.`);
   }
 
-  if (count > 3) {
-    throw new Error(`${filePath} has ${count} expandable blocks. Keep article expandables to 0-3 high-signal blocks.`);
+  if (optionalBlockCount > 3) {
+    throw new Error(`${filePath} has ${optionalBlockCount} optional expandable blocks. Keep optional article depth to 0-3 high-signal blocks.`);
+  }
+
+  if (recapCount > 8) {
+    throw new Error(`${filePath} has ${recapCount} recap blocks. Keep the closing self-check to eight questions or fewer.`);
   }
 }
 
@@ -862,6 +861,7 @@ function readRoadmapBase(slug: string): Omit<RoadmapSummary, 'rootCount' | 'arti
     icon: asString(meta.icon, 'Map'),
     order: asNumber(meta.order, 99),
     available: asBoolean(meta.available, true),
+    hidden: asBoolean(meta.hidden, false),
   };
 }
 
@@ -874,13 +874,17 @@ function loadRoadmapFromDirectory(slug: string): Roadmap | null {
     return null;
   }
 
+  const base = readRoadmapBase(slug);
+  if (!base) {
+    return null;
+  }
+
   const hasModulesDir = exists(modulesDir);
   const rootBaseDir = hasModulesDir ? modulesDir : roadmapDir;
   const contentPathPrefix = hasModulesDir ? ['roadmaps', slug, 'modules'] : ['roadmaps', slug];
   const roots = loadRootModulesFromBase(rootBaseDir, contentPathPrefix, slug);
-  const base = readRoadmapBase(slug);
 
-  return base ? createRoadmap(base, roots) : null;
+  return createRoadmap(base, roots);
 }
 
 function loadExplicitRoadmaps(): Roadmap[] {
@@ -1701,15 +1705,18 @@ function writeGroupArtifacts(
 }
 
 function buildManifest(): Manifest {
-  const roadmaps = loadRoadmaps();
+  const allRoadmaps = loadRoadmaps();
+  const roadmaps = allRoadmaps.filter((roadmap) => !roadmap.hidden);
   const roadmapData = roadmaps.find((roadmap) => roadmap.slug === DEFAULT_ROADMAP_SLUG)?.roots ?? roadmaps[0]?.roots ?? [];
-  const allRoadmapData = roadmaps.flatMap((roadmap) => roadmap.roots);
-  const articleCatalog = buildArticleCatalog(allRoadmapData);
+  const allRoadmapData = allRoadmaps.flatMap((roadmap) => roadmap.roots);
+  const publishedRoadmapData = roadmaps.flatMap((roadmap) => roadmap.roots);
+  const articleLinkCatalog = buildArticleCatalog(allRoadmapData);
+  const articleCatalog = buildArticleCatalog(publishedRoadmapData);
   const categories = loadCategories();
   const rawGroupsByCategory = Object.fromEntries(
     categories.map((category) => [category.id, loadGroupsForCategory(category.id)]),
   );
-  const groupsByCategory = resolveArticleIdsForGroups(rawGroupsByCategory, articleCatalog);
+  const groupsByCategory = resolveArticleIdsForGroups(rawGroupsByCategory, articleLinkCatalog);
   validateQuizCorpus(groupsByCategory);
 
   const groupsByArticle: Record<string, ChallengeGroupMeta[]> = {};

@@ -1,7 +1,7 @@
 ---
 title: "What Is a Release in AWS"
-description: "Understand an AWS release as a controlled production change across artifact, runtime target, infrastructure, configuration, identity, traffic, health evidence, and rollback."
-overview: "A build can pass while the production release still has unanswered questions. This article explains an AWS release as the connected change across image digest, runtime target, task definition or alias, infrastructure, configuration, IAM role, traffic, health evidence, and rollback."
+description: "Understand an AWS release as a controlled transition across exact artifacts, runtime targets, configuration, identity, traffic, health evidence, and rollback."
+overview: "Separate build, deployment, rollout, and release, then follow an immutable container through ECS candidate capacity, health gates, canary traffic, bake time, acceptance, and rollback."
 tags: ["aws", "deployment", "release", "runtime", "rollback"]
 order: 1
 id: article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model
@@ -16,326 +16,634 @@ aliases:
 
 ## Table of Contents
 
-1. [From Local Deploy to AWS Release](#from-local-deploy-to-aws-release)
-2. [Artifact: The Exact Package](#artifact-the-exact-package)
-3. [Runtime Target: Where the Package Runs](#runtime-target-where-the-package-runs)
-4. [Runtime Settings and Identity](#runtime-settings-and-identity)
-5. [Traffic Movement and Health Evidence](#traffic-movement-and-health-evidence)
-6. [Rollback Belongs in the Release](#rollback-belongs-in-the-release)
-7. [A Release Record Example](#a-release-record-example)
-8. [Official References](#official-references)
+1. [How Is a Release Different from a Deployment?](#how-is-a-release-different-from-a-deployment)
+2. [Why Must a Release Use an Exact Artifact?](#why-must-a-release-use-an-exact-artifact)
+3. [Why Are Configuration and Identity Part of a Release?](#why-are-configuration-and-identity-part-of-a-release)
+4. [How Does Traffic Turn a Deployment into User Experience?](#how-does-traffic-turn-a-deployment-into-user-experience)
+5. [Which Health Evidence Should Control a Rollout?](#which-health-evidence-should-control-a-rollout)
+6. [Why Must Rollback Be Designed Before Release?](#why-must-rollback-be-designed-before-release)
+7. [How Does a Complete ECS Release Run?](#how-does-a-complete-ecs-release-run)
+8. [What Is the First-Principles Release Model?](#what-is-the-first-principles-release-model)
+9. [References](#references)
 
-## From Local Deploy to AWS Release
-<!-- section-summary: A release moves production from one known state to another known state with evidence. -->
+A release is a controlled change to what users experience in a running production system. A deployment puts a change into the runtime environment. A release makes the intended production behavior depend on that change, observes whether the new state is acceptable, and retains a known way back.
 
-Imagine the first version of an app on one small server. You build the code on your laptop, copy the files to the server, edit an `.env` file, restart the process, run `curl /health`, and keep the previous folder nearby in case the new version fails. That is still a release, even if it feels like a manual deploy.
+AWS has no single universal resource named "release." ECR stores artifacts, ECS runs tasks, CodeDeploy shifts traffic, AppConfig deploys configuration and feature flags, CloudWatch supplies evidence, and IAM gives workloads security identities. Release engineering connects those service-specific pieces into one production-state transition.
 
-AWS keeps the same practical questions, but the answers live in named services. The copied folder turns into an **artifact**, such as an image in Amazon ECR or a published Lambda version. The restarted process turns into a **runtime target**, such as an ECS service, Lambda alias, or Auto Scaling group. The `.env` file turns into runtime configuration, secrets, and IAM permissions. The `curl /health` check turns into load balancer health, logs, metrics, smoke tests, and alarms. The old folder nearby turns into a rollback target.
+The sections below answer these questions in order:
 
-This article follows `orders-api`, a small checkout service running as an ECS service behind an Application Load Balancer. Production currently runs task definition `orders-api:41`. The team wants to release `orders-api:42`, which contains a new checkout response and writes receipt PDFs to a new S3 prefix. That change sounds like code, but production also needs the right image, task definition, IAM permission, traffic movement, health evidence, and rollback plan.
+1. **How Is a Release Different from a Deployment?**
+2. **Why Must a Release Use an Exact Artifact?**
+3. **Why Are Configuration and Identity Part of a Release?**
+4. **How Does Traffic Turn a Deployment into User Experience?**
+5. **Which Health Evidence Should Control a Rollout?**
+6. **Why Must Rollback Be Designed Before Release?**
+7. **How Does a Complete ECS Release Run?**
+8. **What Is the First-Principles Release Model?**
 
-Here is the release flow before we go into each part:
+## How Is a Release Different from a Deployment?
+<!-- section-summary: Build creates bytes, deployment runs them, rollout changes exposure, and release accepts the resulting production behavior. -->
 
-| Release part | Plain meaning | AWS example |
-|---|---|---|
-| Artifact | The exact package production should run | ECR image tag plus image digest |
-| Runtime target | The AWS place that runs the package | ECS service `orders-api` in cluster `prod-web` |
-| Runtime settings | Values the package reads at runtime | Environment variables, Parameter Store values, secret references |
-| Identity | The AWS permissions the running code uses | ECS task role for S3 receipt writes |
-| Traffic | How users reach the candidate version | ALB target group and ECS rolling deployment |
-| Evidence | Proof that the new state works | Target health, CloudWatch logs, alarms, smoke tests |
-| Rollback | The known-good state to restore | Previous task definition `orders-api:41` |
-
-We will name the moving parts and show the kind of evidence a real release record should capture. The next two articles go deeper into configuration, traffic shifting, verification, and rollback operations.
-
-![The release anatomy view shows the pieces a production change needs: artifact, target, config, identity, traffic, health evidence, and rollback path](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model/release-anatomy.png)
-
-*The release anatomy view shows the pieces a production change needs: artifact, target, config, identity, traffic, health evidence, and rollback path.*
-
-
-## Artifact: The Exact Package
-<!-- section-summary: The artifact is the immutable deployable package that production should run. -->
-
-An **artifact** is the thing you deploy. For ECS, the artifact is usually a container image in Amazon ECR. For Lambda, it can be a zip package or container image tied to a published version. For EC2, it may be an AMI plus an application bundle. The artifact gives the release a concrete object instead of a vague phrase like "the latest code."
-
-Tags such as `latest`, `prod`, or `2026-06-24.3` help humans talk about an image. A tag can move to a different image later, so the release record should also capture an immutable identifier. For containers, that identifier is the **image digest**. The digest is a hash of the image content, which gives the team a stable answer to the question: which bytes did production receive?
-
-```bash
-aws ecr describe-images \
-  --repository-name orders-api \
-  --image-ids imageTag=2026-06-24.3 \
-  --region eu-west-2 \
-  --query 'imageDetails[].{Digest:imageDigest,Pushed:imagePushedAt,Tags:imageTags}'
-```
-
-Example output:
-
-```json
-[
-  {
-    "Digest": "sha256:9d8b7f6a5e4c3b2a111111111111111111111111111111111111111111111111",
-    "Pushed": "2026-06-24T09:41:12+00:00",
-    "Tags": [
-      "2026-06-24.3",
-      "release-candidate"
-    ]
-  }
-]
-```
-
-The command asks ECR for the image behind tag `2026-06-24.3`. `Digest` is the immutable artifact identity. `Pushed` connects the image to the build timeline. `Tags` shows the human labels currently attached to the same image. The next action is to copy the digest into the release record and compare it with the image reference in the task definition or deployment manifest.
-
-Artifact evidence should also name the source commit, CI run, test result, and image scan result where your team has those controls. During an incident, this lets an operator answer three direct questions: what source created the package, what checks ran before production, and what exact package is running now.
-
-For Lambda, the same idea usually appears as a published version:
-
-```bash
-aws lambda get-function \
-  --function-name checkout-handler:17 \
-  --region eu-west-2 \
-  --query '{Version:Configuration.Version,RevisionId:Configuration.RevisionId,LastModified:Configuration.LastModified}'
-```
-
-Example output:
+Suppose version 1 of an orders API returns:
 
 ```json
 {
-  "Version": "17",
-  "RevisionId": "4f7d1a9e-8fb1-47d7-9e1d-2d3b2ef8b756",
-  "LastModified": "2026-06-24T09:44:18.000+0000"
+  "id": 123,
+  "status": "SHIPPED"
 }
 ```
 
-`Version` identifies the immutable Lambda version. `RevisionId` helps detect whether the function configuration changed between reads. `LastModified` places the version in the release timeline. The next action is to make sure any production alias or deployment tool points at the intended version before moving traffic.
+Version 2 adds a tracking URL. Compiling and testing it on a laptop changes nothing for production users because requests still reach running version 1 processes.
 
-## Runtime Target: Where the Package Runs
-<!-- section-summary: The runtime target is the AWS resource that receives the new artifact. -->
+Production must move from:
 
-The **runtime target** is the AWS place that will run the artifact. In ECS, that target is a service moving to a task definition revision. In Lambda, it is usually an alias moving to a published version. In EC2, it might be an Auto Scaling group moving to a launch template version or AMI.
-
-A release note should name the target with enough scope for another operator to find it. "Deploy orders" leaves room for confusion. "Update ECS service `orders-api` in cluster `prod-web`, account `123456789012`, Region `eu-west-2`, from task definition `orders-api:41` to `orders-api:42`" gives the team a checkable target and a rollback source.
-
-Before the release, confirm the account and current runtime state:
-
-```bash
-aws sts get-caller-identity --profile prod
-
-aws ecs describe-services \
-  --cluster prod-web \
-  --services orders-api \
-  --region eu-west-2 \
-  --query 'services[].{Service:serviceName,TaskDefinition:taskDefinition,Desired:desiredCount,Running:runningCount}'
+```text
+Requests -> running application v1
 ```
 
-Example output:
+to:
 
-```json
-[
-  {
-    "Service": "orders-api",
-    "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:41",
-    "Desired": 4,
-    "Running": 4
-  }
-]
+```text
+Requests -> running application v2
 ```
 
-The identity check proves the operator is using the intended account before changing production. The ECS query shows the current service state. `TaskDefinition` is the version currently running, `Desired` is how many tasks the service wants, and `Running` is how many tasks are active. The next action is to record `orders-api:41` as the rollback target before updating the service to `orders-api:42`.
+That transition raises questions beyond whether AWS can start a process:
 
-This same release idea works across runtimes. A Lambda release records the current alias target before moving it. An EC2 release records the current launch template version before an instance refresh. The command changes, but the release habit stays the same: capture the current state, move to the candidate state, then verify the candidate state with evidence.
-
-## Runtime Settings and Identity
-<!-- section-summary: Runtime settings and IAM permissions must match the artifact being released. -->
-
-The artifact runs inside a runtime environment. That environment supplies configuration values, secrets, and AWS permissions. A build can pass and still fail in production if the runtime lacks the value or permission the new code expects.
-
-For `orders-api:42`, the new code writes receipt PDFs to `s3://prod-orders-receipts/receipts-v2/`. The release needs more than the image. It needs the task definition to carry the right settings, and it needs the ECS task role to allow `s3:PutObject` for that prefix. The release should check those before user traffic reaches the candidate.
-
-```bash
-aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::123456789012:role/prod-orders-task-role \
-  --action-names s3:PutObject \
-  --resource-arns arn:aws:s3:::prod-orders-receipts/receipts-v2/test.pdf \
-  --region eu-west-2 \
-  --query 'EvaluationResults[].{Action:EvalActionName,Resource:EvalResourceName,Decision:EvalDecision}'
+```text
+What exact bytes are v2?
+Where will they run?
+Which configuration and permissions will they use?
+When will production traffic reach them?
+Which evidence proves that they work?
+What known state will replace them if they fail?
 ```
 
-Example output:
+The answers together define the release.
 
-```json
-[
-  {
-    "Action": "s3:PutObject",
-    "Resource": "arn:aws:s3:::prod-orders-receipts/receipts-v2/test.pdf",
-    "Decision": "allowed"
-  }
-]
+A simplified path is:
+
+```text
+Source -> Git commit -> Build -> Tests -> Container image -> ECR
+       -> ECS task definition -> Candidate tasks -> Health checks
+       -> Traffic shift -> Observe -> Accept or roll back
 ```
 
-The command asks IAM whether the task role has an identity-policy path that allows the tested action on the tested object ARN. `allowed` means the role policy contains a matching allow. `implicitDeny` means no matching allow was found. `explicitDeny` means a deny statement matched and wins. The next action for `allowed` is to continue with a real runtime smoke test. The next action for `implicitDeny` or `explicitDeny` is to fix the IAM path before moving traffic.
+Several distinct activities appear:
 
-The simulator gives useful policy evidence, while a real request confirms the full runtime path. S3 bucket policies, KMS key policies, VPC endpoint policies, organization guardrails, and the exact application path can still affect production. A release record should say which role changed, which setting changed, and which smoke test proves the running service can use both.
+| Activity | Question |
+| --- | --- |
+| Build | Which executable bytes did source produce? |
+| Publish | Where can the runtime retrieve those bytes? |
+| Deploy | Where are those bytes running? |
+| Roll out | Which users or traffic are exposed? |
+| Release | Is this now accepted production behavior? |
 
-Configuration should also have rollback notes. If the release changes a Parameter Store value, a feature flag, or a secret version, the release note should include the previous value or version. Rolling back code without rolling back a shared setting can leave the old code reading the new value.
+CI/CD systems often trigger them in one pipeline, which makes the concepts appear identical. They remain distinct operational boundaries.
 
-## Traffic Movement and Health Evidence
-<!-- section-summary: Traffic movement should have platform evidence and user-facing evidence. -->
+The release can be modeled as:
 
-Traffic movement is the part of the release where users start touching the candidate version. ECS rolling deployments replace tasks while keeping healthy capacity alive. Lambda aliases can send all traffic to one version or split a percentage to a candidate version. EC2 deployments can refresh instances behind a load balancer.
-
-For the first article, keep the focus on the evidence shape. Platform evidence says the runtime is healthy: tasks are running, targets are healthy, aliases point where expected, and alarms stay quiet. User-facing evidence says important behavior still works: checkout succeeds, receipt writing works, latency stays inside the release threshold, and logs stay free of candidate-only errors.
-
-For an ECS service behind an Application Load Balancer, target health gives a quick platform check:
-
-```bash
-aws elbv2 describe-target-health \
-  --target-group-arn "$TG_ARN" \
-  --region eu-west-2 \
-  --query 'TargetHealthDescriptions[].{Target:Target.Id,State:TargetHealth.State,Reason:TargetHealth.Reason}'
+```text
+Release = Artifact
+        + Runtime target and specification
+        + Effective configuration
+        + Runtime identity
+        + Traffic policy
+        + Health evidence
+        + Rollback plan
 ```
 
-Example output:
+## Why Must a Release Use an Exact Artifact?
+<!-- section-summary: Immutable artifact identities make promotion, incident analysis, and rollback refer to one precise set of bytes. -->
 
-```json
-[
-  {
-    "Target": "10.0.24.81",
-    "State": "healthy",
-    "Reason": null
-  },
-  {
-    "Target": "10.0.31.44",
-    "State": "initial",
-    "Reason": "Elb.RegistrationInProgress"
-  }
-]
+A release must answer: **Exactly what software is running?**
+
+An image tag such as `orders-api:latest` can refer to image A at 10:00 and image B after someone pushes at 14:00. The label remains the same while its meaning changes. "Roll back to latest" therefore has no precise interpretation.
+
+Use immutable identities such as:
+
+```text
+Git commit:      91d8e452
+Image digest:    sha256:12ab34...
+Build ID:        orders-api-2026.08.23.17
 ```
 
-`healthy` means the load balancer can send traffic to that target. `initial` with `Elb.RegistrationInProgress` means the target has registered and is still warming up. A next action here is to wait through the expected warmup window and recheck. If the target moves to `unhealthy`, inspect the health check path, container port, security group, startup time, and application logs before sending more traffic.
+Amazon ECR supports image-tag immutability so an existing tag cannot be silently overwritten. Even with human-friendly tags, record and deploy the content digest where exact identity matters.
 
-Logs connect platform health to application behavior:
+The principle is **build once, promote the same artifact**:
 
-```bash
-aws logs tail /ecs/prod/orders-api \
-  --since 20m \
-  --region eu-west-2 \
-  --filter-pattern '"receipt"'
+```text
+source -> one tested image -> dev
+                         ├--> staging
+                         └--> production
 ```
 
-Example output:
+Avoid rebuilding separately for each environment:
 
-```console
-2026-06-24T10:07:33.421Z task/orders-api/8f12 INFO receipt_write_ok orderId=ord_4812 key=receipts-v2/ord_4812.pdf version=2026-06-24.3
-2026-06-24T10:08:04.190Z task/orders-api/8f12 INFO checkout_completed orderId=ord_4812 status=paid version=2026-06-24.3
+```text
+source -> dev image
+source -> staging image
+source -> production image
 ```
 
-The command tails the recent ECS log group and filters for lines about receipt behavior. The output shows the candidate wrote to the new prefix and completed checkout. The next action is to compare this with metrics and smoke tests during the watch window. A log line with `AccessDenied`, provider rejection, or repeated timeout would move the release toward pause or rollback.
+In the second flow, staging proved one set of bytes while production received another. Even if source commit and build instructions appear identical, dependency retrieval, toolchain drift, timestamps, or nondeterministic build behavior can change the result.
 
-## Rollback Belongs in the Release
-<!-- section-summary: Rollback is planned before production changes so the team knows the previous safe state. -->
+An exact artifact supports provenance:
 
-Rollback is the path back to a known-good state. It belongs in the release plan before traffic moves because the team thinks more clearly before an incident starts. For ECS, rollback often means updating the service back to the previous task definition. For Lambda, it often means pointing the production alias back to the previous version. For EC2, it may mean returning an Auto Scaling group to a previous launch template version and starting another refresh.
-
-For `orders-api`, the rollback target is `orders-api:41` because the pre-release check captured it. The command path is short:
-
-```bash
-aws ecs update-service \
-  --cluster prod-web \
-  --service orders-api \
-  --task-definition orders-api:41 \
-  --region eu-west-2 \
-  --query 'service.{Service:serviceName,TaskDefinition:taskDefinition,Deployments:deployments[].{Status:status,TaskDefinition:taskDefinition,Rollout:rolloutState}}'
+```text
+Production release -> runtime definition -> image digest
+                   -> build -> source commit
 ```
 
-Example output:
+It also makes a rollback target concrete. Operators restore the known-good digest and runtime definition rather than searching for "an older image that probably worked."
 
-```json
-{
-  "Service": "orders-api",
-  "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:41",
-  "Deployments": [
-    {
-      "Status": "PRIMARY",
-      "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:41",
-      "Rollout": "IN_PROGRESS"
-    },
-    {
-      "Status": "ACTIVE",
-      "TaskDefinition": "arn:aws:ecs:eu-west-2:123456789012:task-definition/orders-api:42",
-      "Rollout": "IN_PROGRESS"
-    }
-  ]
-}
+### How Does an Artifact Become a Running Application?
+<!-- section-summary: Stored bytes need a runtime specification, target, and running instance; each AWS compute platform exposes those layers differently. -->
+
+An ECR image is inert stored data. It does not answer HTTP requests. A runtime specification connects it to CPU, memory, networking, commands, logging, storage, and identities, and a runtime platform creates live processes.
+
+For ECS:
+
+```text
+ECR image digest
+       |
+ECS task definition revision
+       |
+ECS task
 ```
 
-`TaskDefinition` shows the service now points back to `orders-api:41`. The deployments array shows ECS replacing the candidate tasks. `PRIMARY` marks the deployment ECS is moving toward. The next action is to watch ECS service events, target health, logs, and user-facing smoke tests until the old revision is healthy and the bad symptoms stop.
+AWS describes the task definition as an application blueprint. It identifies the container image and can specify CPU and memory, ports and networking, commands, volumes, log configuration, task role, and execution role. A task is one running instantiation of that definition.
 
-Rollback also has data and configuration edges. If `orders-api:42` wrote receipt PDFs to a new S3 prefix, rolling back code may stop new writes, but the team still needs to decide what happens to objects already written. If a feature flag changed, restore the old flag rule. If a shared Parameter Store value changed, restore the old version. If a secret rotated, confirm the old code can still authenticate.
+An ECS service maintains a desired number of tasks. Changing its desired definition from `orders-api:41` to `orders-api:42` asks ECS to replace the old runtime population with one described by revision 42. That is a deployment change. Whether production users should rely on revision 42 remains the release decision.
 
-A practical rollback note names the command and the follow-up checks. The command returns traffic. The follow-up checks prove the system recovered.
+The runtime target is part of release identity:
 
-![The rollback path shows how impact, config scope, artifact regression, and available evidence guide rollback, pause, or fix-forward choices](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model/rollback-decision-path.png)
+```text
+Account:  production
+Region:   eu-west-2
+Cluster:  prod-cluster
+Service:  orders-api
+```
 
-*The rollback path shows how impact, config scope, artifact regression, and available evidence guide rollback, pause, or fix-forward choices.*
+The same digest in development and production is not the same operational event. The same digest in two Regions can represent distinct production states and rollout schedules.
 
+AWS compute platforms express the layers differently:
 
-## A Release Record Example
-<!-- section-summary: A release record names the target, artifact, settings, identity, traffic plan, watch signals, and rollback path. -->
+| Runtime | Artifact or version | Target and runtime specification |
+| --- | --- | --- |
+| EC2 | Package, executable, or AMI | Instances or Auto Scaling group |
+| ECS | Container image | Task definition and ECS service |
+| EKS | Container image | Kubernetes workload and cluster |
+| Lambda | ZIP, image, or function version | Function and alias |
 
-A useful release record is small enough to write during normal work and complete enough for another operator to follow during an incident. It should answer what changed, what evidence matters, and how to return to the previous state.
+The common pattern remains:
+
+```text
+exact artifact -> runtime specification -> selected target -> running capacity
+```
+
+## Why Are Configuration and Identity Part of a Release?
+<!-- section-summary: Effective behavior is a function of code, configuration, dependencies, permissions, and data, so non-code changes can be releases. -->
+
+Identical code can produce different behavior:
+
+```python
+if ENABLE_NEW_CHECKOUT:
+    use_new_checkout()
+else:
+    use_old_checkout()
+```
+
+One environment runs with the flag false, and another with it true. The artifact is identical, but users experience different paths.
+
+A better model is:
+
+```text
+Running behavior = f(
+  code,
+  configuration,
+  dependencies,
+  permissions,
+  data
+)
+```
+
+Configuration can come from a task definition, environment variables, AWS AppConfig, Systems Manager Parameter Store, Secrets Manager, or command-line arguments. A release record therefore needs effective configuration identity, not only an image digest.
+
+### Configuration can itself be a release
+
+Suppose Monday deploys code v17 with `NEW_CHECKOUT=false`. The new code runs, but users continue on the old path. Tuesday changes the flag to true without creating a new container image. Production behavior changed on Tuesday, so that configuration deployment is meaningfully a release.
+
+AppConfig explicitly supports deploying code behind a feature flag and enabling it later. Therefore:
+
+```text
+Deployment does not always release behavior.
+Release does not always require new code deployment.
+```
+
+### Version identity and security identity are different
+
+Version identity answers what software and configuration this process represents:
+
+```text
+Git 91d8e452
+Image sha256:a72f...
+Task definition orders-api:42
+Release rel-2026-08-23-017
+```
+
+Security identity answers what the running process may do. An ECS task role might permit DynamoDB reads and writes and one Secrets Manager secret while forbidding S3 bucket deletion or IAM user creation.
+
+Changing the role can change runtime behavior without changing code. Version 42 with permission to retrieve its secret can start; version 42 without that permission can crash or fail requests. Release analysis must therefore include both identity types.
+
+## How Does Traffic Turn a Deployment into User Experience?
+<!-- section-summary: Candidate capacity becomes a release only when a traffic policy exposes users, and that policy determines blast radius and rollback speed. -->
+
+Suppose production traffic reaches three version 1 targets. Starting two healthy version 2 targets means version 2 is deployed, but if it receives no production traffic, users have not experienced it.
+
+```text
+Users -> v1, v1, v1
+
+Candidate capacity: v2, v2 with no production traffic
+```
+
+Traffic movement makes the change real.
+
+### All-at-once
+
+```text
+v1 100%, v2 0% -> v1 0%, v2 100%
+```
+
+This is easy to reason about and quick to complete. Its blast radius is all production traffic. A serious defect reaches every customer immediately.
+
+### Canary
+
+Expose a small sample first:
+
+```text
+Step 1: v1 95%, v2 5%
+Step 2: v1 75%, v2 25%
+Step 3: v1 0%,  v2 100%
+```
+
+Observe between steps. If version 2 error rate spikes at 5%, restore version 1 to 100%. Production supplies evidence under real traffic while limiting initial blast radius.
+
+### Blue/green
+
+Maintain two complete task sets or environments:
+
+```text
+Blue:  v1 serving production
+Green: v2 prepared and tested
+```
+
+Shift production from blue to green while retaining blue temporarily. A failure can often be reversed by routing traffic back rather than rebuilding old capacity. CodeDeploy supports ECS blue/green deployments by creating a replacement task set and transferring traffic between original and replacement sets.
+
+The strategies answer different risk and capacity needs. Blue/green can require duplicate capacity. Canary needs version-specific evidence and a traffic-shifting mechanism. All-at-once is simplest but accepts maximum exposure.
+
+## Which Health Evidence Should Control a Rollout?
+<!-- section-summary: Release acceptance moves from process and infrastructure health through application and customer signals to real business outcomes. -->
+
+A container in `RUNNING` state can still fail database connections, return `500`, or corrupt orders. Health has several layers:
+
+```text
+1. Process:        container has not exited
+2. Infrastructure: load balancer sees a healthy target
+3. Application:    health endpoint and dependencies work
+4. Customer:       latency and error experience remain acceptable
+5. Business:       checkout or other transactions behave normally
+```
+
+Useful rollout evidence can include:
+
+- HTTP 5xx rate
+- p50, p95, and p99 latency
+- ECS task exits and restarts
+- CPU and memory
+- ALB unhealthy targets
+- Queue backlog and oldest-message age
+- Database and dependency failures
+- Custom application metrics
+- Business transaction success, such as checkout completion
+
+The release should form a feedback loop:
+
+```text
+Deploy candidate -> limited traffic -> measure
+                                 |
+                         healthy? yes -> more traffic
+                                  no -> rollback
+```
+
+Without measurement, the process is `change -> hope`.
+
+### Bake time catches delayed defects
+
+Healthy metrics five seconds after full traffic do not prove success. Bugs can appear after cache expiry, connection-pool saturation, scheduled work, sustained load, or gradual memory leakage.
+
+A rollout can reach 100% and continue observing before acceptance:
+
+```text
+10% -> healthy -> 50% -> healthy -> 100% -> bake -> accept
+```
+
+AppConfig deployment strategies explicitly include bake time and continue monitoring CloudWatch alarms after configuration reaches all targets. The idea applies to code and other runtime changes as well.
+
+### Deployment health and release health are not identical
+
+ECS may report all twelve tasks healthy while checkout conversion falls from 42% to 19%. Infrastructure reached the desired state, but the production outcome is unacceptable.
+
+```text
+Deployment success does not imply release success.
+```
+
+Define thresholds before rollout so the controller does not improvise whether a bad metric is "bad enough" during an incident.
+
+## Why Must Rollback Be Designed Before Release?
+<!-- section-summary: A release is operationally ready only when its known-good recovery target, traffic action, data compatibility, and automatic triggers are defined. -->
+
+Rollback should not be an activity invented after production breaks. A release is not ready until the team knows how to reverse its production effect.
+
+Suppose release 117 uses image digest `sha256:AAAA` and task definition 41. Release 118 uses `sha256:BBBB` and task definition 42. Release 118 should record:
+
+```text
+forward target:  orders-api:42
+rollback target: orders-api:41 / release 117
+```
+
+CodeDeploy can automatically deploy the last known-good revision after deployment failure or configured alarm conditions. Technically, rollback is another deployment. Time does not move backward; the controller creates a new runtime state from a previous known-good specification.
+
+```text
+state A -> state B -> failure -> newly established state A'
+```
+
+### Data changes can make application rollback unsafe
+
+If version 2 changes a database from `name` to `first_name` and `last_name`, returning application code to version 1 may fail against the new schema.
+
+Use backward-compatible **expand-and-contract** transitions:
+
+1. Add new fields while retaining old fields so both application versions work.
+2. Move writers and readers to the new fields.
+3. Remove obsolete fields only after old software is no longer a valid rollback target.
+
+Safe release engineering maintains valid system states during transitions. Code, configuration, identity, and data must remain compatible for the planned rollback window.
+
+AppConfig provides the same feedback-loop concept for configuration: CloudWatch alarms can trigger automatic rollback to the previous configuration. Whether code or configuration changes, define the trigger, recovery version, authority, and evidence that rollback succeeded.
+
+### What Should a Release Record Contain?
+<!-- section-summary: A release record connects source, exact artifact, target, runtime definition, configuration, traffic, health thresholds, result, and known rollback state. -->
+
+Think of production as a state:
+
+```text
+S1:
+  artifact        = sha256:AAAA
+  task definition = 41
+  config          = config-7
+  checkoutV2      = false
+  IAM role        = orders-role-v3
+  traffic         = 100% v1
+```
+
+The release controls `S1 -> S2`, where one or more of those values change. A useful record can be:
 
 ```yaml
-release: orders-api-2026-06-24.3
-account: prod / 123456789012
-region: eu-west-2
-runtimeTarget:
-  type: ecs-service
-  cluster: prod-web
-  service: orders-api
-from:
-  taskDefinition: orders-api:41
-to:
-  taskDefinition: orders-api:42
-artifact:
-  repository: orders-api
-  tag: 2026-06-24.3
-  digest: sha256:9d8b7f6a5e4c3b2a111111111111111111111111111111111111111111111111
-runtimeSettings:
-  RECEIPT_PREFIX: receipts-v2/
-identity:
-  role: arn:aws:iam::123456789012:role/prod-orders-task-role
-  newPermission: s3:PutObject on arn:aws:s3:::prod-orders-receipts/receipts-v2/*
-traffic:
-  method: ecs rolling deployment
-watch:
-  duration: 20 minutes
-  checks:
-    - ALB target health stays healthy
-    - checkout smoke test passes
-    - receipt write logs show version 2026-06-24.3
-    - 5XX rate stays below 1 percent
-rollback:
-  ecsTaskDefinition: orders-api:41
-  command: aws ecs update-service --cluster prod-web --service orders-api --task-definition orders-api:41 --region eu-west-2
+release:
+  id: orders-prod-2026-08-23-017
+
+  application:
+    name: orders-api
+
+  source:
+    repository: orders-api
+    commit: 91d8e452
+
+  artifact:
+    type: container
+    repository: ECR/orders-api
+    digest: sha256:a72f894...
+
+  target:
+    account: production
+    region: eu-west-2
+    platform: ECS
+    cluster: prod
+    service: orders-api
+
+  runtime:
+    task_definition: orders-api:42
+    desired_count: 12
+    task_role: orders-api-prod-role
+
+  configuration:
+    version: config-18
+
+  traffic:
+    strategy: canary
+    steps: [10%, 50%, 100%]
+
+  health:
+    max_5xx_rate: 1%
+    max_p95_latency_ms: 500
+    min_healthy_tasks: 12
+
+  rollback:
+    previous_release: orders-prod-2026-08-20-016
+    task_definition: orders-api:41
+
+  status:
+    result: successful
 ```
 
-Each field connects to a release question. `artifact` tells what package is being released. `runtimeTarget` tells where it runs. `runtimeSettings` and `identity` tell what the package depends on. `traffic` tells how users reach it. `watch` tells which evidence decides whether to continue. `rollback` tells how to restore the previous known-good runtime.
+This lets an operator answer what changed, which source and bytes produced it, where it ran, which runtime and configuration were effective, how traffic moved, which thresholds defined health, and what previously known-good state can be restored.
 
-The next article takes the runtime settings part deeper. It shows how plain configuration, secrets, feature flags, candidate versions, and traffic controls fit into one rollout workflow.
+Preserve release ID, Git SHA, image digest, task definition or function version, configuration version, infrastructure revision, feature-flag state, deployment ID, timestamps, approving or automation identity, rollback target, and result as applicable.
 
-![The release record makes the change review concrete by showing what changed, where it runs, who owns it, and how to undo it](/content-assets/articles/article-cloud-providers-aws-deployment-runtime-operations-runtime-operations-mental-model/release-record-example.png)
+A higher-level release ID solves a human problem. Instead of discussing several unrelated hashes and AWS IDs, the team can say `release-017`, which points to all of them and to `release-016` as the recovery target.
 
-*The release record makes the change review concrete by showing what changed, where it runs, who owns it, and how to undo it.*
+#### Make the production state reconstructable
 
+Six months later, an incident or audit may ask what production was running at 14:23 on August 23. The answer cannot depend on whichever value a mutable tag has today. Preserve the release start and completion times, traffic-step times, deployment identity, task definition revision, exact image digest, configuration and feature-flag versions, infrastructure revision, task role, target account and Region, and the automation or approver that authorized the change.
 
-## Official References
+That evidence creates a chain in both directions:
 
-- [Amazon ECR image concepts](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html)
-- [Describing images in Amazon ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-pull-ecr-image.html)
-- [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)
-- [Amazon ECS service load balancing](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html)
-- [IAM policy simulator API](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html)
-- [Lambda versions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-versions.html)
-- [Lambda aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuration-aliases.html)
-- [Lambda weighted aliases](https://docs.aws.amazon.com/lambda/latest/dg/configuring-alias-routing.html)
-- [Amazon ECS blue/green deployments](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-blue-green.html)
+```text
+customer request at 14:23
+  -> active production release
+  -> runtime definition and configuration
+  -> exact artifact digest
+  -> build record
+  -> source commit
+```
+
+It also lets the team compare two states rather than guessing from a pipeline log:
+
+```text
+release-016
+  image OLD, task 41, config 17, flag false
+
+release-017
+  image NEW, task 42, config 18, flag true
+```
+
+If several changes were combined, this record shows that the observed behavior cannot be attributed to code alone.
+
+#### Record evidence and decisions, not just identifiers
+
+"Jenkins succeeded" proves only that the pipeline reached its own success state. A useful release record also preserves the evidence that justified each traffic increase, the alarm or threshold that stopped a rollout, the operator decision where automation did not decide, and the post-rollback verification.
+
+For a canary, record version-specific values rather than only fleet-wide averages. A bad 5% candidate can disappear inside a healthy 95% baseline. Capture candidate 5xx, latency, task health, and business success separately from the old version. Then the acceptance statement becomes falsifiable: version 42 stayed below the defined error and latency limits at 10%, 50%, and 100% through the bake period.
+
+If the release rolls back, retain the failed release as history. Its status should say which gate failed, when candidate traffic returned to zero, which known-good state was restored, and which metrics demonstrated recovery. Rollback does not erase the unsuccessful transition; preserving it helps future releases avoid repeating the same failure.
+
+## How Does a Complete ECS Release Run?
+<!-- section-summary: An ECS release builds and stores one immutable image, creates a new runtime definition, starts candidates, gates traffic on evidence, bakes, and records the new known-good state. -->
+
+Production begins with twelve tasks using task definition 41 and digest `sha256:OLD`, receiving 100% of traffic.
+
+### 1. Build one artifact
+
+CI builds commit `abc123`, runs tests, and produces `orders-api@sha256:NEW`.
+
+### 2. Publish the artifact
+
+Push the image to ECR. The bytes now exist in AWS, but production still serves version 41.
+
+### 3. Define the candidate runtime
+
+Create task definition `orders-api:42` with the new digest, CPU, memory, ports, logging, task role, and effective settings.
+
+### 4. Start candidate capacity
+
+ECS or CodeDeploy starts version 42 tasks while version 41 remains available. The new artifact is deployed but not yet accepted as production behavior.
+
+### 5. Establish basic health
+
+Verify process startup, ALB target health, application initialization, and dependency reachability. Abort before traffic if candidates cannot pass these gates.
+
+### 6. Send limited production traffic
+
+Route 10% to version 42 and keep 90% on 41.
+
+### 7. Compare evidence
+
+Measure version-specific 5xx, latency, CPU, memory, restarts, dependency failures, and business signals. If version 42 has 0.2% errors and acceptable p95 latency, expand. If it has 12% errors while version 41 has 0.1%, restore version 41 to 100% and record the violated threshold.
+
+### 8. Expand and complete
+
+Move to 50%, observe again, then reach 100% only if the defined gates remain healthy.
+
+### 9. Bake
+
+Continue observing at full exposure long enough to catch delayed defects.
+
+### 10. Accept and record
+
+Declare release 118 successful. Record digest `sha256:NEW`, task definition 42, configuration, traffic history, thresholds, timestamps, and release 117 as the next rollback target.
+
+This accepted state becomes the known-good baseline for release 119.
+
+## What Is the First-Principles Release Model?
+<!-- section-summary: A release is a controlled, observable, reversible transition from one recorded production state to another. -->
+
+Production cannot be proven safe from testing alone. Real traffic, customer behavior, scale, data, dependencies, timing, and failure modes differ from preproduction. Release engineering treats production exposure as controlled experimentation:
+
+This does not make production an uncontrolled test environment. The candidate has already passed build and preproduction checks. The release adds bounded evidence under conditions that only production can provide, with explicit traffic limits, stop conditions, and a recovery target. The experiment is controlled precisely because the expected signals and response to failure were defined before exposure.
+
+```text
+Immutable artifact
+  -> small exposure
+  -> evidence
+  -> more exposure
+  -> evidence
+  -> full exposure
+  -> bake
+```
+
+The blast radius is deliberately limited and an escape path is predefined.
+
+Three questions unify every release:
+
+1. **What state do we want?** Exact artifact, configuration, runtime, permission, and target.
+2. **How do we safely move production there?** Candidate capacity, validation, staged traffic, evidence, and bake time.
+3. **What if the assumption is wrong?** Stop expansion, remove traffic, and restore a known-good compatible state.
+
+The controlled state machine is:
+
+```text
+Source change -> exact artifact -> runtime specification -> candidate runs
+      -> health checks -> traffic shift -> observe
+      -> healthy? yes: expand and bake -> RELEASED
+                  no: restore known-good state
+```
+
+The shortest definition is: **An AWS release is a recorded, controlled transition from one known production state to another, using an exact artifact and effective runtime configuration, deliberate traffic exposure, measurable health criteria, and a known rollback path.**
+
+Deployment gets the change into the environment. Release decides whether production should live on it.
+
+:::expand[How Is a Release Different from a Deployment?]{kind="recap"}
+Build creates bytes, deployment runs them, rollout changes exposure, and release accepts the resulting production behavior.
+
+Build creates bytes, deployment runs them, rollout changes who sees them, and release accepts or rejects the resulting production behavior using evidence and a recovery path. Configuration can release behavior without a new code deployment.
+:::
+
+:::expand[Why Must a Release Use an Exact Artifact?]{kind="recap"}
+Immutable artifact identities make promotion, incident analysis, and rollback refer to one precise set of bytes.
+
+Mutable labels can point to different bytes over time. An immutable digest and build provenance make promotion, incident analysis, and rollback refer to the same tested artifact across environments.
+
+Stored bytes need a runtime specification, target, and running instance; each AWS compute platform exposes those layers differently.
+
+Stored bytes need a runtime specification and target. In ECS, an image digest enters a task definition, a service maintains tasks from that definition, and tasks are the running processes that can receive traffic.
+:::
+
+:::expand[Why Are Configuration and Identity Part of a Release?]{kind="recap"}
+Effective behavior is a function of code, configuration, dependencies, permissions, and data, so non-code changes can be releases.
+
+Behavior depends on code, configuration, dependencies, permissions, and data. Feature flags can release behavior without new code, and a changed task role can make identical code succeed or fail.
+:::
+
+:::expand[How Does Traffic Turn a Deployment into User Experience?]{kind="recap"}
+Candidate capacity becomes a release only when a traffic policy exposes users, and that policy determines blast radius and rollback speed.
+
+Candidate capacity is only deployed until users reach it. All-at-once exposes everyone, canary expands a small sample, and blue/green switches between complete task sets while retaining a quick traffic-based recovery path.
+:::
+
+:::expand[Which Health Evidence Should Control a Rollout?]{kind="recap"}
+Release acceptance moves from process and infrastructure health through application and customer signals to real business outcomes.
+
+Use process, infrastructure, application, customer, and business signals. Expand traffic only when predefined thresholds remain healthy, and continue through bake time so delayed defects can appear before acceptance.
+:::
+
+:::expand[Why Must Rollback Be Designed Before Release?]{kind="recap"}
+A release is operationally ready only when its known-good recovery target, traffic action, data compatibility, and automatic triggers are defined.
+
+Rollback is another deployment toward a recorded known-good state. Define the trigger and target in advance, and use backward-compatible data migrations so the previous application remains valid during the rollback window.
+
+A release record connects source, exact artifact, target, runtime definition, configuration, traffic, health thresholds, result, and known rollback state.
+
+Connect one human release ID to source commit, artifact digest, target, runtime revision, configuration, identity, traffic steps, health thresholds, timestamps, result, and previous known-good release.
+:::
+
+:::expand[How Does a Complete ECS Release Run?]{kind="recap"}
+An ECS release builds and stores one immutable image, creates a new runtime definition, starts candidates, gates traffic on evidence, bakes, and records the new known-good state.
+
+Build and publish one immutable image, define task revision 42, start candidates beside revision 41, pass basic health, expand traffic through evidence gates, bake at full exposure, and record the accepted state or rollback reason.
+:::
+
+:::expand[What Is the First-Principles Release Model?]{kind="recap"}
+A release is a controlled, observable, reversible transition from one recorded production state to another.
+
+A release controls the transition from one production state to another. It defines the intended state, the safe traffic-and-evidence path toward it, and the known action when production disproves the release assumption.
+:::
+
+## References
+
+- [Amazon ECR documentation: Image tag immutability](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html)
+- [Amazon ECS documentation: Task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html)
+- [AWS AppConfig documentation](https://docs.aws.amazon.com/appconfig/latest/userguide/what-is-appconfig.html)
+- [AWS CodeDeploy documentation](https://docs.aws.amazon.com/codedeploy/latest/userguide/welcome.html)
+- [AWS AppConfig documentation: Deployment strategies and bake time](https://docs.aws.amazon.com/appconfig/latest/userguide/appconfig-creating-deployment-strategy.html)
+- [AWS CodeDeploy documentation: Rollback and redeploy](https://docs.aws.amazon.com/codedeploy/latest/userguide/deployments-rollback-and-redeploy.html)
+- [AWS AppConfig documentation: Feature flags and automatic rollback](https://docs.aws.amazon.com/appconfig/latest/userguide/deploying-feature-flags.html)

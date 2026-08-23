@@ -12,20 +12,31 @@ aliases:
 
 ## Table of Contents
 
-1. [The User Experience Gap](#the-user-experience-gap)
-2. [What CloudWatch Synthetics Does](#what-cloudwatch-synthetics-does)
-3. [Designing Canaries for Real Journeys](#designing-canaries-for-real-journeys)
-4. [Canary Runtimes, Artifacts, and Safe Updates](#canary-runtimes-artifacts-and-safe-updates)
-5. [Canary Permissions and Security](#canary-permissions-and-security)
-6. [Groups, Alarms, and Canary SLOs](#groups-alarms-and-canary-slos)
-7. [What CloudWatch RUM Adds](#what-cloudwatch-rum-adds)
-8. [App Monitors, Sessions, and Privacy](#app-monitors-sessions-and-privacy)
-9. [Errors, Page Load Performance, and Custom Context](#errors-page-load-performance-and-custom-context)
-10. [X-Ray and Application Signals Integration](#x-ray-and-application-signals-integration)
-11. [Putting It All Together](#putting-it-all-together)
-12. [What's Next](#whats-next)
+1. [Why Can Healthy Backends Still Produce a Broken User Experience?](#why-can-healthy-backends-still-produce-a-broken-user-experience)
+2. [What Does CloudWatch Synthetics Test?](#what-does-cloudwatch-synthetics-test)
+3. [How Do You Maintain Canary Runtimes and Artifacts Safely?](#how-do-you-maintain-canary-runtimes-and-artifacts-safely)
+4. [How Do You Secure a Canary?](#how-do-you-secure-a-canary)
+5. [What Does CloudWatch RUM Observe?](#what-does-cloudwatch-rum-observe)
+6. [How Do App Monitors, Sessions, Sampling, and Privacy Work?](#how-do-app-monitors-sessions-sampling-and-privacy-work)
+7. [How Do RUM and Synthetics Connect to X-Ray and Application Signals?](#how-do-rum-and-synthetics-connect-to-x-ray-and-application-signals)
+8. [How Do All the User-Experience Signals Work Together?](#how-do-all-the-user-experience-signals-work-together)
+9. [What Should You Remember?](#what-should-you-remember)
+10. [References](#references)
 
-## The User Experience Gap
+User-experience observability is an inference problem: can a person accomplish what they came to do? Synthetics creates an artificial user and observes a controlled experiment. RUM observes what happened to real users in uncontrolled browsers, devices, networks, and geographies. They provide independent views of the same product journey.
+
+The sections below answer these questions in order:
+
+1. **Why Can Healthy Backends Still Produce a Broken User Experience?**
+2. **What Does CloudWatch Synthetics Test?**
+3. **How Do You Maintain Canary Runtimes and Artifacts Safely?**
+4. **How Do You Secure a Canary?**
+5. **What Does CloudWatch RUM Observe?**
+6. **How Do App Monitors, Sessions, Sampling, and Privacy Work?**
+7. **How Do RUM and Synthetics Connect to X-Ray and Application Signals?**
+8. **How Do All the User-Experience Signals Work Together?**
+
+## Why Can Healthy Backends Still Produce a Broken User Experience?
 <!-- section-summary: Service health can miss browser failures, public-route failures, and rare client-side problems that customers actually feel. -->
 
 Application Signals and SLOs give the checkout team a service-health layer. The team can see whether `orders-api` is available, whether `POST /checkout` is slow, and whether a dependency is burning the error budget. That view starts inside the instrumented service.
@@ -45,8 +56,20 @@ This is the user experience gap. To close it, teams add two more signals:
 
 Synthetics answers, "Can a known journey work from the outside right now?" RUM answers, "What are real users experiencing across browsers, devices, pages, and geographies?"
 
+| Property | Synthetics | RUM |
+|---|---|---|
+| Traffic | Artificial | Real users |
+| Measurement style | Active probe | Passive observation |
+| Environment | Controlled | Whatever users actually have |
+| Works without users | Yes | No |
+| Reproducibility | High | Lower |
+| Main strength | Continuous detection | Population impact and diversity |
+| Main limitation | Cannot represent every user environment | Needs traffic and a working client |
 
-## What CloudWatch Synthetics Does
+Neither source is universally better. Synthetics provides continuity; RUM provides representativeness.
+
+
+## What Does CloudWatch Synthetics Test?
 <!-- section-summary: CloudWatch Synthetics runs scheduled canary scripts from your AWS account to test endpoints, APIs, and browser journeys before customers report problems. -->
 
 **CloudWatch Synthetics** creates **canaries**. A canary is a configurable script that runs on a schedule to monitor endpoints and APIs. AWS says canaries follow the same routes and perform the same actions as a customer, so they can discover issues before customers do.
@@ -71,7 +94,7 @@ Canaries complement service SLOs. A service SLO tells you the instrumented backe
 *The comparison shows how synthetic canaries test chosen journeys while RUM reports what real users experienced.*
 
 
-## Designing Canaries for Real Journeys
+### How Do You Design a Canary Around a Real Journey?
 <!-- section-summary: Good canaries test important customer paths with safe data, clear step names, and enough depth to catch real failures without creating noisy traffic. -->
 
 A good canary is small, realistic, and safe.
@@ -81,6 +104,10 @@ A good canary is small, realistic, and safe.
 **Realistic** means the script follows the path customers use, including the browser page and important assets. A health endpoint can return 200 while the JavaScript bundle is missing, the CDN blocks an asset, or the checkout button throws a browser error. Browser canaries are valuable because they load the page and exercise browser behavior.
 
 **Safe** means the script uses controlled test data and avoids destructive actions. For checkout, the canary might stop at the payment quote step or use a test payment method in a sandbox path. It should avoid creating real customer orders every minute.
+
+An HTTP 200 response is not enough. A page can return `200 OK` while rendering "Something went wrong" or loading no working checkout button. A useful journey asserts the semantic result: the login form exists, authentication reaches the dashboard, search returns results, a product displays a price, and the cart count changes. The canary tests the contract users care about rather than transport alone.
+
+Step boundaries also make timing diagnostic. If one journey grows from four to seventeen seconds, a total duration says only that the journey slowed. Separate `login`, `search`, `product`, and `cart` steps can reveal that search alone consumes 11.4 seconds. Telemetry becomes easier to interpret when its boundaries match meaningful operations.
 
 CloudWatch Synthetics supports blueprint scripts and custom scripts. For API-style canaries, the Node.js library includes `executeHttpStep`, which runs an HTTP step, publishes `SuccessPercent` and `Duration` metrics, and records a step summary in the canary report. A production canary usually names every step clearly because those names appear in metrics and reports.
 
@@ -161,7 +188,7 @@ Example output:
 
 The newest failed row should line up with the canary script. The status says whether the whole run passed, the timestamps show how long the run took, and the failure reason should name the step that broke. A failure before the application step points toward the role, artifact bucket, runtime version, VPC configuration, or dependency package. A failure inside one named step points responders toward the exact endpoint, page action, or assertion that broke.
 
-## Canary Runtimes, Artifacts, and Safe Updates
+## How Do You Maintain Canary Runtimes and Artifacts Safely?
 <!-- section-summary: Canary runtime versions need active maintenance, and safe update dry runs reduce the chance of breaking monitoring while updating code or dependencies. -->
 
 A **Synthetics runtime** is the combination of the Synthetics code that calls your handler and the Lambda layers that contain bundled dependencies. AWS currently documents runtimes for Node.js, Python, and Java, with Puppeteer, Playwright, and Selenium as supported browser automation frameworks.
@@ -191,12 +218,14 @@ The dry run starts a test execution without committing the canary update. After 
 
 Canary artifacts also deserve attention. Canaries can store load timing data, screenshots, logs, reports, and HAR-style request evidence. This is useful during incidents because the responder can see what the synthetic browser saw. It also means artifact storage needs retention, encryption, and access controls. AWS documents that canaries store artifacts in Amazon S3 by default, with encryption at rest using an AWS-managed KMS key unless you choose another encryption option.
 
+A screenshot can show a page stuck on a loading spinner, while the HAR waterfall shows that `GET /recommendations` returned 503 after the main JavaScript bundle loaded successfully. Together they turn "the website failed" into a specific request and rendering consequence.
+
 ![The safe update view treats canary scripts like production code with artifacts, permissions, alarms, and rollback](/content-assets/articles/article-cloud-providers-aws-observability-synthetics-and-rum/safe-canary-update.png)
 
 *The safe update view treats canary scripts like production code with artifacts, permissions, alarms, and rollback.*
 
 
-## Canary Permissions and Security
+## How Do You Secure a Canary?
 <!-- section-summary: Canary roles need the permissions to write artifacts, logs, metrics, optional traces, and optional VPC network interfaces, while scripts and artifacts need tight access controls. -->
 
 Every canary runs with an IAM role. The trust policy allows `lambda.amazonaws.com` to assume the role because CloudWatch Synthetics runs the canary as a Lambda function.
@@ -219,7 +248,7 @@ Canaries also collect evidence that can contain sensitive data. AWS documents th
 
 One more safety rule is about ownership. AWS says to use Synthetics canaries only for endpoints and APIs where you have ownership or permission. A canary that runs every minute creates real traffic. Pointing it at a third-party or untrusted site can create security, cost, and policy problems.
 
-## Groups, Alarms, and Canary SLOs
+### How Do Groups, Alarms, and Canary SLOs Work?
 <!-- section-summary: Canary groups organize related checks, while CloudWatch alarms and SLOs turn canary success and duration into operational targets. -->
 
 As the number of canaries grows, teams need a way to organize them. **Synthetics groups** collect related canaries so a team can view and manage a customer journey or application surface together.
@@ -243,7 +272,7 @@ A practical checkout canary SLO might say: `checkout-journey-browser` should hav
 
 This is where Synthetics connects back to article 5. Service SLOs track instrumented backend behavior. Canary SLOs track a planned outside-in journey. During incidents, the difference between those two signals is valuable. If the service SLO is green and the canary SLO is red, the problem might be DNS, CDN, frontend assets, auth redirects, browser code, or public network reachability.
 
-## What CloudWatch RUM Adds
+## What Does CloudWatch RUM Observe?
 <!-- section-summary: CloudWatch RUM collects near real-time client-side telemetry from sampled real user sessions so teams can see browser, mobile, geography, and device impact. -->
 
 CloudWatch Synthetics tells you whether a scripted journey works from scheduled checks. **CloudWatch RUM**, or real user monitoring, tells you what actual users are experiencing.
@@ -262,7 +291,7 @@ RUM helps answer questions like:
 
 In the checkout incident from the opening section, RUM is the signal that reveals the browser error before the backend service receives any request.
 
-## App Monitors, Sessions, and Privacy
+## How Do App Monitors, Sessions, Sampling, and Privacy Work?
 <!-- section-summary: A RUM app monitor controls sampling, telemetry types, authorization, cookies, retention, page coverage, and optional X-Ray tracing. -->
 
 To use CloudWatch RUM, you create an **app monitor**. An app monitor is the CloudWatch RUM resource that receives telemetry for one web or mobile application. For a web app, the console generates a code snippet or NPM configuration that loads the RUM web client in the application.
@@ -280,6 +309,8 @@ The app monitor controls several choices:
 | **X-Ray tracing** | Whether sampled `XMLHttpRequest` and `fetch` calls create traces. | Enable for critical user journeys that need frontend-to-backend correlation. |
 
 AWS documents that RUM data is retained for 30 days and then deleted. If you want to keep copies longer, the app monitor can send telemetry to CloudWatch Logs, where the log group's retention can be adjusted.
+
+The sample rate is a statistical and cost choice. At one million sessions per day, a ten-percent rate records roughly one hundred thousand sessions. More samples improve visibility into smaller populations and rare failures but increase ingestion. A RUM view always describes the measured population, not a perfect census of every user.
 
 Privacy deserves a real review. AWS strongly recommends avoiding sensitive identifying information such as account numbers, email addresses, or other personal information in free-form fields. If cookies are enabled, the RUM web client can collect a randomly generated user ID and a session ID that persist across page loads. That enables unique user counts, session counts, sessions with errors, and user journeys. Without cookies, RUM can still record aggregated page-specific information such as browser, operating system, device type, web vitals, page views, and pages that experienced errors.
 
@@ -334,7 +365,7 @@ Example output:
 
 This output is the live collection contract. `State` should be `ACTIVE`, the domain should match the browser origin, the sample rate explains how much traffic sends telemetry, and the telemetry list tells responders which event types they can expect. The app monitor is only the receiver. The web application still needs the RUM client snippet or NPM package installed so browser sessions can send events.
 
-## Errors, Page Load Performance, and Custom Context
+### How Do You Interpret Browser Errors, Performance, and Context?
 <!-- section-summary: RUM gives teams better filters when they collect the right built-in telemetry and add safe release or page context. -->
 
 RUM has three everyday uses for a web application: **JavaScript errors**, **page load performance**, and **HTTP request behavior**.
@@ -343,7 +374,11 @@ A **JavaScript error** is a client-side exception thrown by browser code. RUM ca
 
 **Page load performance** is the time and resource behavior of page navigation and rendering. RUM performance telemetry can show page load times, Apdex scores in the dashboard, device breakdowns, and metrics in the `AWS/RUM` namespace. For checkout, this helps separate "the API is slow" from "the page bundle is too heavy" or "one geography has poor client-side load time."
 
+Backend response time is only one part of user-perceived speed. DNS, TLS, HTML, JavaScript download and execution, API calls, images, and layout work can add seconds around a fast 100-millisecond API. Browser measures such as Largest Contentful Paint, Interaction to Next Paint, and Cumulative Layout Shift act as proxies for when important content appears, how responsive interaction feels, and whether the layout jumps.
+
 **HTTP telemetry** is browser-side network behavior from calls made by the page. RUM can collect HTTP errors thrown by the application. This is useful when the backend returns 5xx only for real user headers, auth states, or geographies that a canary missed.
+
+For minified production JavaScript, an error location such as `app.94fc2.js:1:928417` is difficult to act on. Source maps stored in S3 can map that location back to the original component and function, turning a client symptom into a code location.
 
 Built-in dimensions are useful, and release context adds the detail responders need during rollout problems. AWS documents custom metadata with session attributes and page attributes. A team can add a release version as a session attribute and a route template as a page attribute. During an incident, responders can filter RUM errors by version and page template.
 
@@ -383,7 +418,7 @@ AWS documents limits for custom metadata: each event can include up to 10 custom
 
 RUM also supports custom events when the app monitor allows them. Use custom events sparingly. A custom event like `checkout_button_clicked` can help measure funnel behavior. A custom event that dumps form state creates privacy risk and noisy data.
 
-## X-Ray and Application Signals Integration
+## How Do RUM and Synthetics Connect to X-Ray and Application Signals?
 <!-- section-summary: X-Ray tracing connects canary and RUM client behavior back to backend services, and Application Signals can display those client and canary relationships. -->
 
 Synthetics and RUM give the team more context when they connect to traces.
@@ -409,7 +444,7 @@ Client tracing changes the handoff. The checkout team sees that real users have 
 
 Application Signals also brings the views together. AWS documents that when X-Ray tracing is enabled on Synthetics canaries, calls from canary scripts can be associated with services and displayed in the service detail page. When X-Ray tracing is enabled on the RUM web client, requests to services can be associated and displayed within the service detail page. This gives the responder one service page that includes backend operations, dependencies, canary checks, and client pages.
 
-## Putting It All Together
+## How Do All the User-Experience Signals Work Together?
 <!-- section-summary: Synthetics, RUM, X-Ray, and Application Signals close the gap between backend service health and actual customer experience. -->
 
 The AWS Observability module now has a full path from raw evidence to customer experience.
@@ -435,22 +470,101 @@ For the checkout platform, the final operating model is clear:
 
 This is the practical version of observability on AWS. The team starts before the customer screenshot arrives. It watches the service promise, tests the public journey, records real user experience, and keeps the trace and log path ready for diagnosis.
 
+Agreement and disagreement among independent views are both evidence:
+
+| Synthetics | RUM | Backend | Likely interpretation |
+|---|---|---|---|
+| Good | Good | Good | The measured path looks healthy |
+| Bad | Bad | Bad | Broad application or backend incident |
+| Bad | Bad | Good | Frontend, CDN, DNS, auth, or edge problem |
+| Good | Bad | Good | Browser, device, geography, network, or user-specific frontend problem |
+| Bad | Good | Good | Canary location, test account, or script problem |
+| Good | Bad | Bad | Partial backend issue not exercised by the canary |
+| No data | No data | Good | No traffic, broken instrumentation, or an edge failure before telemetry loads |
+
+Several perspectives reduce uncertainty like independent witnesses. A canary failure with healthy RUM may implicate the probe. A healthy backend with both canary and RUM failures points away from the service and toward the customer edge.
+
 ![The evidence summary joins canary results, RUM sessions, alarms, traces, and application signals around one user-facing journey](/content-assets/articles/article-cloud-providers-aws-observability-synthetics-and-rum/user-experience-evidence.png)
 
 *The evidence summary joins canary results, RUM sessions, alarms, traces, and application signals around one user-facing journey.*
 
 
 
-## What's Next
-<!-- section-summary: The next article applies the observability pieces to Lambda, ECS, and EKS runtime operations. -->
+## What Should You Remember?
+<!-- section-summary: Synthetics detects whether a controlled journey works, RUM measures real impact, and traces and service signals explain the backend path. -->
 
-You now have the customer edge covered. Synthetics checks whether the public journey works on schedule, and RUM shows what sampled real users experience in browsers and mobile clients.
+Remember the four observation jobs:
 
-The next article turns back toward the runtime layer. Lambda, ECS, and EKS all send logs, metrics, traces, and platform-specific health signals in different ways. Understanding those differences helps the team wire the same observability practice into serverless functions, container services, and Kubernetes clusters.
+```text
+Synthetics          -> Can the chosen journey work now?
+RUM                 -> What did real users experience?
+X-Ray               -> Where did a particular request go or fail?
+Application Signals -> How healthy are the services implementing it?
+```
 
----
+The operating sequence is detection, impact, and diagnosis. A canary detects that checkout stopped working. RUM shows that 17 percent of measured sessions are affected, mostly one browser population. X-Ray, logs, and Application Signals explain whether the request reached the backend and which dependency or release caused the behavior.
 
-**References**
+:::expand[Why Can Healthy Backends Still Produce a Broken User Experience?]{kind="recap"}
+Service health can miss browser failures, public-route failures, and rare client-side problems that customers actually feel.
+:::
+
+:::expand[What Does CloudWatch Synthetics Test?]{kind="recap"}
+CloudWatch Synthetics runs scheduled canary scripts from your AWS account to test endpoints, APIs, and browser journeys before customers report problems.
+
+Good canaries test important customer paths with safe data, clear step names, and enough depth to catch real failures without creating noisy traffic.
+
+Choose one user intent, assert semantic outcomes rather than HTTP status alone, divide the journey into named steps, use controlled and idempotent test data, and avoid creating harmful real transactions.
+:::
+
+:::expand[How Do You Maintain Canary Runtimes and Artifacts Safely?]{kind="recap"}
+Canary runtime versions need active maintenance, and safe update dry runs reduce the chance of breaking monitoring while updating code or dependencies.
+
+Treat the runtime, browser, libraries, script, role, and artifact bucket as production monitoring code. Dry-run updates before promotion, scope IAM and network access, keep secrets out of scripts, redact sensitive request data, and protect artifacts.
+:::
+
+:::expand[How Do You Secure a Canary?]{kind="recap"}
+Canary roles need the permissions to write artifacts, logs, metrics, optional traces, and optional VPC network interfaces, while scripts and artifacts need tight access controls.
+
+Step metrics localize timing, screenshots show what the browser rendered, browser logs show client errors, and HAR evidence shows the underlying request waterfall. Together they reduce a vague failed run to a specific broken step or request.
+
+Canary groups organize related checks, while CloudWatch alarms and SLOs turn canary success and duration into operational targets.
+
+Use run and step success or duration metrics for alarms. Group related canaries around a journey, and create canary SLOs when the outside-in contract needs an explicit attainment target distinct from backend service SLOs.
+:::
+
+:::expand[What Does CloudWatch RUM Observe?]{kind="recap"}
+CloudWatch RUM collects near real-time client-side telemetry from sampled real user sessions so teams can see browser, mobile, geography, and device impact.
+
+Synthetics actively runs a repeatable artificial journey even without user traffic. RUM passively observes sampled real users across actual browsers, devices, networks, and geographies. Synthetics provides continuity; RUM provides representativeness and impact.
+:::
+
+:::expand[How Do App Monitors, Sessions, Sampling, and Privacy Work?]{kind="recap"}
+A RUM app monitor controls sampling, telemetry types, authorization, cookies, retention, page coverage, and optional X-Ray tracing.
+
+An app monitor chooses telemetry, sample rate, cookies, authorization, page coverage, retention, and tracing. Cookies enable cross-page session stories but increase state and privacy considerations. Sampling trades population coverage for ingestion, and sensitive identifiers should stay out of URLs and free-form fields.
+
+RUM gives teams better filters when they collect the right built-in telemetry and add safe release or page context.
+
+Browser performance includes network, asset, JavaScript, rendering, responsiveness, and layout behavior beyond API latency. RUM records client exceptions and HTTP failures; source maps and safe release, route, experiment, or segment context make those events actionable.
+:::
+
+:::expand[How Do RUM and Synthetics Connect to X-Ray and Application Signals?]{kind="recap"}
+X-Ray tracing connects canary and RUM client behavior back to backend services, and Application Signals can display those client and canary relationships.
+
+Enable supported X-Ray tracing for canaries and sampled RUM HTTP calls, propagate trace context where appropriate, and use the trace to reach services and dependencies. Application Signals can then present canary and client relationships beside service health.
+
+When Synthetics, RUM, and backend signals disagree, the pattern narrows the search. Healthy backend plus failed canary and RUM suggests the frontend or edge; failed canary alone suggests the probe; RUM failures limited to a population suggest browser, device, network, or release-specific behavior.
+:::
+
+:::expand[How Do All the User-Experience Signals Work Together?]{kind="recap"}
+Synthetics, RUM, X-Ray, and Application Signals close the gap between backend service health and actual customer experience.
+
+A healthy application server does not prove that users can resolve DNS, load assets, execute JavaScript, authenticate, reach public routes, or render a working screen. User-experience monitoring observes the complete path outside the backend boundary.
+
+Canaries continuously probe critical journeys, RUM measures real-user impact, Application Signals summarizes service health and SLOs, X-Ray reconstructs individual request paths, and logs or artifacts provide the deepest evidence. The goal is a fast path from symptom to affected population, journey, operation, dependency, and change.
+:::
+
+## References
 
 * [Synthetic monitoring (canaries)](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html) - AWS overview of canaries, supported script languages, Lambda runtime model, browser support, scheduling, Application Signals integration, and X-Ray tracing requirement.
 * [Creating a canary](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_Create.html) - AWS steps for canary creation, blueprint and custom scripts, schedules, retention, artifacts, roles, alarms, and created resources.

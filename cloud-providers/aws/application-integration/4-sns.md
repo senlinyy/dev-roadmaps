@@ -1,8 +1,8 @@
 ---
-title: "SNS"
-description: "Use Amazon SNS topics for publish-subscribe delivery with publishers, subscriptions, fanout, SNS-to-SQS queues, filter policies, raw delivery, retries, DLQs, and endpoint choices."
-overview: "SNS is AWS's publish-subscribe notification service. This article follows a lesson publishing system as it publishes one lesson event to a topic, fans it out to email, search, analytics, and mobile subscribers, protects subscribers with SQS queues, uses message attributes and filter policies, and decides where EventBridge is a cleaner routing service."
-tags: ["aws", "sns", "pub-sub", "fanout", "messaging"]
+title: "Amazon SNS"
+description: "Learn how SNS lets one publisher fan a message out to independently configured subscribers through topics, filters, delivery policies, and queues."
+overview: "Build a first-principles model of publishers, topics, subscriptions, endpoints, filtering, raw delivery, retry boundaries, dead-letter queues, and SNS-to-SQS fanout."
+tags: ["aws", "sns", "pub-sub", "fanout", "application-integration"]
 order: 4
 id: article-cloud-providers-aws-application-integration-sns
 aliases:
@@ -10,353 +10,728 @@ aliases:
   - amazon-sns
   - pub-sub-topics
   - 4-sns
+  - cloud-providers/aws/application-integration/sns.md
   - cloud-providers/aws/application-integration/4-sns.md
 ---
 
 ## Table of Contents
 
-1. [The Fanout Problem](#the-fanout-problem)
-2. [What SNS Does](#what-sns-does)
-3. [Topics, Publishers, and Subscriptions](#topics-publishers-and-subscriptions)
-4. [Create a Topic and Subscribe Queues](#create-a-topic-and-subscribe-queues)
-5. [Publish a Lesson Notification](#publish-a-lesson-notification)
-6. [Inspect Subscriber Delivery](#inspect-subscriber-delivery)
-7. [Message Attributes and Filter Policies](#message-attributes-and-filter-policies)
-8. [Raw Delivery, Retries, and DLQs](#raw-delivery-retries-and-dlqs)
-9. [SNS, SQS, and EventBridge](#sns-sqs-and-eventbridge)
-10. [Putting It Together](#putting-it-together)
-11. [What's Next](#whats-next)
-12. [References](#references)
+1. [Why Does One Event Need a Fanout Service?](#why-does-one-event-need-a-fanout-service)
+2. [What Are Publishers, Topics, Subscriptions, and Endpoints?](#what-are-publishers-topics-subscriptions-and-endpoints)
+3. [How Do Subscription Filters Choose Messages?](#how-do-subscription-filters-choose-messages)
+4. [What Does an SQS Subscriber Actually Receive?](#what-does-an-sqs-subscriber-actually-receive)
+5. [How Do SNS Retries and Dead-Letter Queues Work?](#how-do-sns-retries-and-dead-letter-queues-work)
+6. [How Do SNS, SQS, and EventBridge Differ?](#how-do-sns-sqs-and-eventbridge-differ)
+7. [How Do You Build a Complete SNS Fanout Path?](#how-do-you-build-a-complete-sns-fanout-path)
+8. [How Do You Design with SNS?](#how-do-you-design-with-sns)
+9. [References](#references)
 
-## The Fanout Problem
-<!-- section-summary: SNS fits the moment one fact should reach several subscribers without the producer calling each one directly. -->
+Amazon Simple Notification Service does not execute application business logic. It lets independently deployed parts of a system communicate without the publisher directly knowing every receiver. Its core question is: **One thing happened; how do I tell many interested systems efficiently?**
 
-The SQS article handled one background work lane. A publish request created a transcode message, and a worker processed that message. Now the worker has finished the video and the lesson can go live.
+The sections below answer these questions in order:
 
-That creates a new fact: `LessonPublished`. Several systems care about it. Learner email wants to send a notification. Search wants to index the lesson. Analytics wants to count publishing activity. The mobile app wants to update a feed or push notification. Each system needs its own copy of the same fact.
+1. **Why Does One Event Need a Fanout Service?**
+2. **What Are Publishers, Topics, Subscriptions, and Endpoints?**
+3. **How Do Subscription Filters Choose Messages?**
+4. **What Does an SQS Subscriber Actually Receive?**
+5. **How Do SNS Retries and Dead-Letter Queues Work?**
+6. **How Do SNS, SQS, and EventBridge Differ?**
+7. **How Do You Build a Complete SNS Fanout Path?**
+8. **How Do You Design with SNS?**
 
-The lesson service could call those systems one by one, but then publishing owns every downstream endpoint, timeout, retry rule, and future subscriber. A new analytics subscriber would require a lesson service change. A slow notification endpoint would add pressure to publishing.
+## Why Does One Event Need a Fanout Service?
+<!-- section-summary: SNS removes the producer's need to know, call, retry, and reconfigure every system that cares about one publication. -->
 
-**Amazon Simple Notification Service**, usually called **SNS**, solves the fanout job. The lesson service publishes one message to a topic, and SNS delivers copies to each subscription. The publisher owns the fact. Subscribers own their own reaction.
+Imagine a learning platform in which publishing a lesson must notify email, analytics, and search indexing:
 
-## What SNS Does
-<!-- section-summary: SNS is a managed publish-subscribe service where publishers send messages to topics and subscriptions receive copies. -->
-
-SNS is AWS's managed publish-subscribe notification service. A **publisher** sends a message to a **topic**. A **subscription** connects the topic to an endpoint. SNS delivers the message to matching subscriptions.
-
-The beginner definition is: **SNS is a fanout topic service**. The producer sends one message to one topic. SNS handles the delivery attempts to subscribed endpoints. The endpoints can be SQS queues, Lambda functions, HTTP or HTTPS endpoints, email addresses, SMS targets, mobile push endpoints, and other supported destinations.
-
-For Northstar Learn, the topic can be named `lesson-publishing-notifications`. The lesson service publishes `LessonPublished`. Search, analytics, learner email, and mobile notifications each subscribe in the way that fits their own processing model.
-
-The topic creates a clear ownership split:
-
-| Piece | Job |
-|---|---|
-| Publisher | Sends a stable business notification |
-| Topic | Receives the publication and fans out copies |
-| Subscription | Defines one delivery path from the topic |
-| Endpoint | Receives the message, such as an SQS queue or Lambda function |
-| Subscriber system | Processes its copy and owns its failures |
-
-This is different from SQS. SQS gives one processing group a backlog. SNS gives many subscribers their own copy of a notification. In production, the two services are often used together as SNS-to-SQS.
-
-![The fanout view shows how one publish operation can deliver the same notification to queues, functions, webhooks, or people independently](/content-assets/articles/article-cloud-providers-aws-application-integration-sns/topic-fanout.png)
-
-*The fanout view shows how one publish operation can deliver the same notification to queues, functions, webhooks, or people independently.*
-
-
-## Topics, Publishers, and Subscriptions
-<!-- section-summary: A topic should represent a related notification stream, while subscriptions represent independent delivery paths. -->
-
-An **SNS topic** is the publication point. It has an ARN, policy, encryption settings, subscriptions, and delivery behavior. A useful topic name describes the shared business notifications, such as `lesson-publishing-notifications`, rather than one subscriber's job.
-
-A **publisher** is the app or service that calls `Publish`. In this scenario, the lesson publishing workflow publishes after the lesson record changes to `PUBLISHED`. The publisher should send stable identifiers and a small payload so subscribers can load more detail from the owning service if needed.
-
-A **subscription** is one delivery path from the topic to an endpoint. The search team may subscribe an SQS queue. The analytics team may subscribe another queue. A small notification Lambda may subscribe directly if it can handle SNS retries and failure behavior safely.
-
-Here is the message contract the topic owners might document:
-
-```json
-{
-  "eventType": "LessonPublished",
-  "schemaVersion": 1,
-  "lessonId": "lesson-1042",
-  "courseId": "course-aws-foundations",
-  "publishedAt": "2026-06-27T10:15:00Z",
-  "publishedBy": "instructor-77",
-  "correlationId": "req-9ef0d6c8"
-}
+```text
+Lesson service
+  ├── Email service
+  ├── Analytics service
+  └── Search service
 ```
 
-This payload contains enough information for subscribers to identify the lesson and connect logs. It avoids copying the full lesson body, learner lists, or private instructor details into every subscription, queue, log, and DLQ.
+The first implementation can save the lesson and call all three services. It appears simple, but the producer now knows that each consumer exists. Six months later, recommendations, audit, mobile push, and a data warehouse may also need the same fact. Every addition requires producer code or configuration changes.
 
-## Create a Topic and Subscribe Queues
-<!-- section-summary: SNS topics publish notifications, and SQS subscriptions give important consumers their own durable backlog. -->
+This is the **fanout problem**. One fact—`Lesson 123 was published`—must become several independent deliveries. Without an intermediary, the lesson service must:
 
-The command below creates the SNS topic for lesson publishing notifications:
+- Know every consumer and its location
+- Speak each consumer's delivery mechanism
+- Retry consumer failures
+- Wait for or otherwise handle slow consumers
+- Add and remove consumers from its own configuration
+- Decide which consumers should receive which messages
+
+Those are not facts the producer should necessarily own. Its domain knowledge is that a lesson was published. It should not have to know every team that cares.
+
+Insert a publish-subscribe intermediary:
+
+```text
+                    +--> Email
+Lesson service -> SNS -> Analytics
+                    +--> Search
+                    +--> Audit
+```
+
+The producer publishes once. Independently configured subscriptions determine the deliveries. This gives the system **loose coupling**: adding a subscriber does not require changing the publisher.
+
+AWS calls SNS a managed pub/sub service for decoupled applications. The first-principles value is not merely message copying. It is the transfer of recipient knowledge away from the producer.
+
+## What Are Publishers, Topics, Subscriptions, and Endpoints?
+<!-- section-summary: The publisher announces through a topic, each subscription stores one receiver's delivery policy, and an endpoint receives an independent copy. -->
+
+The basic SNS model is:
+
+```text
+Publisher -> Topic -> Subscription -> Endpoint
+```
+
+### A publisher announces the message
+
+The publisher can be Lambda, EC2, ECS, another AWS service, a laptop, or an application outside AWS. It publishes to a topic:
+
+```text
+publish(
+  topic = lesson-events,
+  message = "Lesson 123 was published"
+)
+```
+
+It does not send separate instructions to email, analytics, and search. The topic is the end of the publisher's recipient responsibility.
+
+### A topic represents a category or channel
+
+A topic can be named `lesson-events`, `order-events`, `payment-events`, or `system-alerts`. It has an ARN such as:
+
+```text
+arn:aws:sns:eu-west-1:123456789012:lesson-events
+```
+
+Think of a topic as an address for a category of publications. It is not primarily a worker backlog that applications poll later. Standard topics route and push each incoming publication to currently configured matching subscriptions.
+
+### An endpoint is the receiver
+
+SNS supports endpoint types that include SQS queues, Lambda functions, HTTP/S endpoints, email, SMS, and mobile push. Backend architectures frequently use SQS endpoints because each consumer system then receives its own durable buffer.
+
+### A subscription owns the relationship
+
+The relationship between a topic and endpoint needs its own configuration:
+
+```text
+lesson-events
+  ├── subscription A
+  |     endpoint = email queue
+  |     filter = premium lessons
+  |     raw delivery = true
+  |
+  └── subscription B
+        endpoint = analytics queue
+        filter = all lessons
+```
+
+Destination, filtering, raw delivery, delivery and retry settings, and delivery DLQ configuration belong to subscriptions. Two endpoints attached to the same topic can therefore have different interests and failure handling.
+
+The hierarchy is:
+
+```text
+Topic
+  ├── Subscription -> Endpoint
+  ├── Subscription -> Endpoint
+  └── Subscription -> Endpoint
+```
+
+### SNS creates independent copies
+
+If three queues subscribe to a topic, one publication becomes three deliveries:
+
+```text
+                SNS
+              /  |  \
+             v   v   v
+          copy copy copy
+             |   |   |
+           Email Analytics Search
+```
+
+Each subscription is evaluated independently. One can receive the message while another is filtered out or experiences a delivery failure. This is the mental model worth retaining: **SNS converts one publication into zero, one, or many independently configured deliveries.**
+
+### How Does SNS Work with SQS?
+<!-- section-summary: SNS owns fanout between systems, while each SQS queue owns buffering and competing work distribution inside one consumer system. -->
+
+SNS can invoke Lambda or an HTTP endpoint directly, but SQS adds a durable waiting place between the publication and consumer processing:
+
+```text
+                     SNS topic
+                  /      |       \
+                 v       v        v
+             Email SQS Search SQS Analytics SQS
+                 |       |        |
+               workers workers  workers
+```
+
+SNS answers: **Who should receive an independent copy?** SQS answers: **When can this consumer group process its copy?**
+
+If search is unavailable, its queue continues to accept deliveries and accumulates a backlog. Email and analytics proceed through their own queues. When search recovers, its workers catch up. This failure isolation is a major reason the `Producer -> SNS -> SQS -> Consumer` shape is common.
+
+#### Create the topic, queues, and subscriptions
+
+A small lesson system can begin with:
 
 ```bash
 aws sns create-topic \
-  --name lesson-publishing-notifications
+  --name lesson-events
+
+aws sqs create-queue \
+  --queue-name email-lessons
+
+aws sqs create-queue \
+  --queue-name analytics-lessons
 ```
 
-Example output:
-
-```json
-{
-  "TopicArn": "arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications"
-}
-```
-
-The topic ARN is the value producers use when they publish. It is also the value subscriptions and IAM policies use when they refer to this topic.
-
-For durable subscribers, create SQS queues first. The commands are the same style as the SQS article, so this article starts from two existing queues:
-
-```json
-{
-  "searchQueueArn": "arn:aws:sqs:us-east-1:123456789012:lesson-search-index-jobs",
-  "analyticsQueueArn": "arn:aws:sqs:us-east-1:123456789012:lesson-analytics-events"
-}
-```
-
-These queues give search and analytics separate backlogs. Search can be down for a deployment while analytics continues. Analytics can process in larger batches while search processes quickly. Each subscriber gets its own operations story.
-
-An SQS queue must allow the SNS topic to send messages to it. The queue policy below grants `sqs:SendMessage` only when the source ARN is the lesson topic.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowLessonPublishingTopic",
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "sns.amazonaws.com"
-      },
-      "Action": "sqs:SendMessage",
-      "Resource": "arn:aws:sqs:us-east-1:123456789012:lesson-search-index-jobs",
-      "Condition": {
-        "ArnEquals": {
-          "aws:SourceArn": "arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications"
-        }
-      }
-    }
-  ]
-}
-```
-
-`Principal` names SNS as the service allowed to send. `Action` limits the permission to sending messages. `Condition` limits the source to the expected topic, which prevents other SNS topics from writing to this queue through the same statement.
-
-The subscription command connects the topic to the search queue. `RawMessageDelivery=true` makes the SQS message body contain the original published message body instead of the larger SNS envelope.
+SNS subscriptions use the queue ARN:
 
 ```bash
 aws sns subscribe \
-  --topic-arn arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications \
+  --topic-arn arn:aws:sns:eu-west-1:123456789012:lesson-events \
   --protocol sqs \
-  --notification-endpoint arn:aws:sqs:us-east-1:123456789012:lesson-search-index-jobs \
-  --attributes RawMessageDelivery=true
+  --notification-endpoint arn:aws:sqs:eu-west-1:123456789012:email-lessons
 ```
 
-Example output:
-
-```json
-{
-  "SubscriptionArn": "arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications:4d4a8c7e-5f35-49a1-a3df-4a6c9a1d4c6b"
-}
-```
-
-The subscription ARN identifies this one delivery path. If the search team later needs a filter policy, DLQ, or raw delivery change, it updates this subscription without changing the publisher.
-
-## Publish a Lesson Notification
-<!-- section-summary: A publisher sends one message to the topic with a stable body and useful attributes for filtering. -->
-
-The lesson service publishes after it commits the lesson status as `PUBLISHED`. The command below sends the notification body and attributes. Attributes are separate from the JSON body and can drive SNS filter policies.
+The publisher can then send one message:
 
 ```bash
 aws sns publish \
-  --topic-arn arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications \
-  --message '{"eventType":"LessonPublished","schemaVersion":1,"lessonId":"lesson-1042","courseId":"course-aws-foundations","publishedAt":"2026-06-27T10:15:00Z","publishedBy":"instructor-77","correlationId":"req-9ef0d6c8"}' \
-  --message-attributes '{"eventType":{"DataType":"String","StringValue":"LessonPublished"},"courseLevel":{"DataType":"String","StringValue":"beginner"},"tenantId":{"DataType":"String","StringValue":"tenant-learning"}}'
+  --topic-arn arn:aws:sns:eu-west-1:123456789012:lesson-events \
+  --message '{
+    "event":"lesson.published",
+    "lessonId":"L123",
+    "title":"SNS from First Principles"
+  }'
 ```
 
-Example output:
+It does not name either queue. SNS discovers matching subscriptions and attempts a copy for each.
+
+#### Subscription and queue permission are separate
+
+Creating a subscription means, "SNS should deliver here." It does not automatically mean, "the queue authorizes this topic to send."
+
+The SQS resource policy must allow the SNS service to call `sqs:SendMessage` and should restrict the permitted source topic:
 
 ```json
 {
-  "MessageId": "3c2b8e9a-6b5f-5d4d-a2b7-54c0f0a8c9d1"
-}
-```
-
-`MessageId` proves SNS accepted the publish call. It does not prove every subscriber has finished processing. Each subscription has its own delivery behavior, and durable subscribers should expose their own queue metrics and DLQs.
-
-The publisher should handle publish failures as part of the lesson workflow. If the topic publish fails after the lesson record is already `PUBLISHED`, the system needs a retry path or an outbox pattern so the business fact can still reach subscribers.
-
-## Inspect Subscriber Delivery
-<!-- section-summary: Subscription and queue inspection show whether fanout is configured and whether subscribers received their copies. -->
-
-The command below lists subscriptions attached to the topic. It is a simple way to confirm that expected subscriber paths exist.
-
-```bash
-aws sns list-subscriptions-by-topic \
-  --topic-arn arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications
-```
-
-Example output:
-
-```json
-{
-  "Subscriptions": [
-    {
-      "SubscriptionArn": "arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications:4d4a8c7e-5f35-49a1-a3df-4a6c9a1d4c6b",
-      "Owner": "123456789012",
-      "Protocol": "sqs",
-      "Endpoint": "arn:aws:sqs:us-east-1:123456789012:lesson-search-index-jobs",
-      "TopicArn": "arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications"
+  "Effect": "Allow",
+  "Principal": {
+    "Service": "sns.amazonaws.com"
+  },
+  "Action": "sqs:SendMessage",
+  "Resource": "arn:aws:sqs:eu-west-1:123456789012:email-lessons",
+  "Condition": {
+    "ArnEquals": {
+      "aws:SourceArn": "arn:aws:sns:eu-west-1:123456789012:lesson-events"
     }
-  ]
+  }
 }
 ```
 
-This output proves the topic has an SQS subscription for search. If a subscriber says it receives nothing, the next checks are the subscription status, queue policy, filter policy, and the subscriber queue metrics.
+Keep the responsibilities distinct:
 
-The command below receives the search subscriber's copy from SQS:
+```text
+Subscription = configure the destination relationship.
+Queue policy = permit the selected topic to deliver.
+```
+
+#### Multiple subscriptions copy; multiple queue consumers compete
+
+Three SQS endpoints subscribed to SNS each receive their own copy. Three workers polling one of those queues normally compete to process that one queued copy.
+
+```text
+SNS subscriptions: one publication -> many copies
+SQS consumers:     one queued copy -> one processing path
+```
+
+This is why one shared queue is not a fanout design for three independent applications. The workers would divide messages instead of each application seeing every event.
+
+## How Do Subscription Filters Choose Messages?
+<!-- section-summary: Per-subscription filter policies let each receiver declare its interest before SNS attempts delivery. -->
+
+Suppose the published body describes a lesson, while message attributes classify it:
+
+```text
+Body:
+{
+  "lessonId": "L123",
+  "title": "SNS from First Principles"
+}
+
+Attributes:
+eventType = lesson.published
+level     = advanced
+audience  = pro
+```
+
+SNS message attributes support types including `String`, `String.Array`, `Number`, and `Binary`. They are metadata that can help a subscription decide whether a delivery is relevant.
+
+Without filtering, every consumer receives every message and discards irrelevant data itself:
+
+```text
+SNS -> Email consumer -> beginner? process : discard
+```
+
+With a subscription filter, the decision moves before delivery:
+
+```text
+SNS -> filter level=beginner -> Email queue
+```
+
+A filter policy can be:
+
+```json
+{
+  "level": ["beginner"]
+}
+```
+
+Filtering is configured per subscription. Analytics can have no filter and receive everything. Advanced email can match `level=advanced`. A French index can match `language=fr`.
+
+For a publication with `level=advanced` and `language=en`:
+
+```text
+Analytics, no filter       -> delivery
+Advanced email             -> delivery
+French index               -> no delivery
+```
+
+SNS can evaluate attributes or fields from a JSON message body depending on `FilterPolicyScope`. Filter policies support more than exact equality, including numeric matching, prefixes, suffixes, and `anything-but` conditions.
+
+Filtering moves routing logic out of each consumer, but the contract still needs ownership. Producers and subscribers must agree on attribute names, types, body shape, and schema evolution. A misspelled attribute can make a healthy subscription receive nothing.
+
+## What Does an SQS Subscriber Actually Receive?
+<!-- section-summary: Default SQS delivery wraps the publication in an SNS notification envelope, while raw delivery places the original payload more directly in the queue body. -->
+
+Suppose the publisher sends:
+
+```json
+{
+  "lessonId": "L123"
+}
+```
+
+With normal SNS-to-SQS delivery, the queue body contains an SNS notification envelope rather than only that object:
+
+```json
+{
+  "Type": "Notification",
+  "MessageId": "...",
+  "TopicArn": "...",
+  "Message": "{\"lessonId\":\"L123\"}",
+  "Timestamp": "..."
+}
+```
+
+The consumer parses two layers:
+
+```text
+SQS body -> SNS envelope -> Message string -> application JSON
+```
+
+The envelope carries SNS delivery metadata, which can be useful when the consumer wants topic, message, or signature context.
+
+### Raw message delivery removes the wrapper
+
+When `RawMessageDelivery` is enabled on an SQS subscription, the queue body contains the published payload more directly:
+
+```text
+Default: SQS body -> SNS envelope -> application payload
+Raw:     SQS body -----------------> application payload
+```
+
+This is often simpler for backend SQS consumers with a well-defined application envelope of their own. Raw delivery is a subscription setting, so other subscribers can retain normal SNS formatting.
+
+For SQS subscriptions with raw delivery enabled, SNS supports up to ten message attributes on the delivered message. The contract should account for that limit if attributes carry routing or processing metadata.
+
+## How Do SNS Retries and Dead-Letter Queues Work?
+<!-- section-summary: SNS retries temporary endpoint delivery failures, and subscription DLQs capture transport failures separately from downstream SQS consumer failures. -->
+
+A delivery can fail because an endpoint was deleted, permissions changed, a service was unavailable, or another endpoint-specific error occurred. SNS applies delivery retries. The policy differs by endpoint protocol: AWS-managed endpoints and HTTP/S endpoints do not necessarily use the same schedule, and HTTP/S subscriptions can support custom delivery policies.
+
+The first-principles purpose is stable: SNS attempts to recover temporary delivery failures instead of dropping a message after one unsuccessful request.
+
+### An SNS dead-letter queue belongs to one subscription
+
+Retries cannot continue forever. An SNS subscription can use an SQS queue as its DLQ:
+
+```text
+SNS topic
+   |
+subscription
+   ├── successful delivery -> endpoint
+   └── exhausted failure --> subscription DLQ
+```
+
+The DLQ is configured per subscription because failure is per destination. Email and analytics can receive a publication while search delivery fails. Only the unsuccessful subscription needs to preserve its undelivered copy.
+
+### Delivery failure and processing failure are different boundaries
+
+For `SNS -> Main SQS -> Worker`, two independent things can fail.
+
+**Boundary 1: SNS cannot deliver to the queue.** The subscription is mispermitted, the queue is unavailable, or another delivery failure occurs. Use the SNS subscription DLQ.
+
+```text
+SNS subscription --X--> Main SQS
+         |
+         +--> SNS subscription DLQ
+```
+
+**Boundary 2: The queue received the message, but the worker cannot process it.** SNS finished its responsibility successfully. Use the source queue's redrive policy and SQS DLQ.
+
+```text
+SNS -> Main SQS -> Worker fails repeatedly
+           |
+           +--> SQS processing DLQ
+```
+
+The complete path can therefore contain both:
+
+```text
+                                  processing failures
+                                        |
+SNS -> subscription -> Main SQS -> Worker
+          |                 |
+ delivery failure           +--> SQS DLQ
+          |
+          +--> SNS subscription DLQ
+```
+
+These DLQs protect different arrows and require different investigations. One asks why SNS could not put a copy into the queue. The other asks why application code could not complete work that the queue already held.
+
+### Inspect the correct responsibility boundary
+
+Use `ReceiveMessage` or queue metrics to confirm whether a copy reached SQS:
 
 ```bash
 aws sqs receive-message \
-  --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/lesson-search-index-jobs \
-  --max-number-of-messages 1 \
-  --wait-time-seconds 10 \
-  --message-attribute-names All
+  --queue-url <queue-url>
 ```
 
-Example output with raw delivery enabled:
+If the message is present, SNS delivery succeeded and the consumer path owns the next question. SNS can also publish delivery-status information to CloudWatch Logs for supported protocols such as SQS, Lambda, and HTTP.
+
+```text
+SNS metrics and delivery logs -> Did SNS deliver?
+SQS metrics and consumer logs -> Did the application process it?
+```
+
+## How Do SNS, SQS, and EventBridge Differ?
+<!-- section-summary: SQS buffers one work stream, SNS fans a publication through topic subscriptions, and EventBridge evaluates event patterns on a bus. -->
+
+SNS is not normally a durable worker queue. SQS stores messages until consumers receive and acknowledge them. A consumer can start later and process the backlog. Standard SNS topics push an incoming publication toward currently configured subscriptions; applications do not normally poll the topic for yesterday's messages.
+
+FIFO topics are a specific exception because they can optionally archive messages for up to 365 days and replay them. That refinement should not replace the base mental model of SNS as fanout.
+
+### SQS asks who will process this work
+
+```text
+Producer -> Queue -> competing workers
+```
+
+One logical processing path handles each queued copy. Messages often sound like commands: resize this image, charge this card, or generate this report.
+
+### SNS asks who needs an independent copy
+
+```text
+Publisher -> Topic -> subscriptions -> A, B, C
+```
+
+Several systems receive the same announcement. Messages often sound like facts: `OrderPlaced`, `UserRegistered`, or `LessonPublished`.
+
+### EventBridge asks which event rules match
+
+```text
+Sources -> Event bus -> rules inspect source, type, and detail -> targets
+```
+
+SNS is organized around a topic and its subscriptions, with per-subscription filters. EventBridge is organized around an event bus and pattern-matching rules across events from applications, AWS services, and SaaS sources.
+
+A practical comparison is:
+
+| Question | SQS | SNS | EventBridge |
+| --- | --- | --- | --- |
+| Primary abstraction | Queue | Topic | Event bus |
+| Main job | Buffer work | Fan out publications | Route events |
+| Consumer style | Pull or managed polling | Push to subscriptions | Rules deliver to targets |
+| One input to many systems | Not alone | Core strength | Supported through matching rules |
+| Durable worker backlog | Core strength | Not the standard topic model | Not its main job |
+| Filtering | Minimal | Per-subscription policies | Event patterns central to service |
+| Ordering option | FIFO queue | FIFO topic | Usually not the selection reason |
+
+The services compose. SNS can fan out to several SQS queues. EventBridge can route to SQS. The design remains clear when each service owns one responsibility.
+
+### When Do Standard and FIFO Topics Matter?
+<!-- section-summary: Standard topics provide high-scale, best-effort pub/sub, while FIFO topics add ordered message groups, deduplication, and optional archive and replay. -->
+
+Most introductory and general-purpose SNS fanout uses Standard topics. The model is high-scale publication, best-effort ordering, and possible duplicate delivery. Important consumers should tolerate duplicates where the protocol and side effects require it.
+
+FIFO topics add ordering, message groups, and deduplication. A common strict-order path is:
+
+```text
+SNS FIFO topic -> SQS FIFO queue
+```
+
+Under the documented conditions, this can preserve ordering and deduplication through the fanout path. FIFO topics can also deliver to Standard queues when a particular subscriber does not require those guarantees.
+
+Message groups let unrelated entity streams progress separately rather than forcing every publication through one global sequence. The group should match the entity whose events require order.
+
+FIFO topics can optionally archive messages for up to 365 days and replay them. This is a specialized capability and an exception to the normal statement that SNS is not a replayable backlog.
+
+Start from the requirement. Choose FIFO when ordered, deduplicated publication within groups is necessary. Do not choose it merely because the word "FIFO" sounds safer; ordering changes throughput and concurrency behavior, and downstream side effects should still be idempotent.
+
+## How Do You Build a Complete SNS Fanout Path?
+<!-- section-summary: A complete path combines one stable publication, per-subscription interest, authorized SQS delivery, independent buffering, consumer redrive, and separate delivery evidence. -->
+
+Use a lesson publication with this body:
 
 ```json
 {
-  "Messages": [
-    {
-      "MessageId": "b3cfb29a-24b8-4ab7-b28b-f4bba29d6f4e",
-      "ReceiptHandle": "AQEBz7...long-handle...",
-      "Body": "{\"eventType\":\"LessonPublished\",\"schemaVersion\":1,\"lessonId\":\"lesson-1042\",\"courseId\":\"course-aws-foundations\",\"publishedAt\":\"2026-06-27T10:15:00Z\",\"publishedBy\":\"instructor-77\",\"correlationId\":\"req-9ef0d6c8\"}",
-      "MessageAttributes": {
-        "eventType": {
-          "StringValue": "LessonPublished",
-          "DataType": "String"
-        },
-        "courseLevel": {
-          "StringValue": "beginner",
-          "DataType": "String"
-        }
-      }
-    }
-  ]
+  "event": "lesson.published",
+  "lessonId": "L123",
+  "title": "SNS from First Principles"
 }
 ```
 
-The queue message has its own SQS `MessageId` because the subscription delivered a copy into the queue. The body contains the original published message because raw delivery is enabled. The attributes are available for subscriber logic and debugging.
+and these attributes:
 
-## Message Attributes and Filter Policies
-<!-- section-summary: Filter policies let subscribers receive only the messages that match their declared interest. -->
-
-SNS can filter messages before delivery to a subscription. A **filter policy** is JSON on the subscription. It matches message attributes by default, and it can also filter on message body fields when configured for payload-based filtering.
-
-For example, the mobile notification subscriber may only want beginner courses. The filter policy below matches messages with `eventType=LessonPublished` and `courseLevel=beginner`.
-
-```json
-{
-  "eventType": [
-    "LessonPublished"
-  ],
-  "courseLevel": [
-    "beginner"
-  ]
-}
+```text
+level    = advanced
+language = en
 ```
 
-This JSON is subscription configuration. The publisher must send matching message attributes, or SNS will skip delivery to that subscription. Filters should stay simple because they are part of the delivery contract between publisher and subscriber.
+Configure three subscriptions:
 
-The command below applies the filter policy to one subscription:
-
-```bash
-aws sns set-subscription-attributes \
-  --subscription-arn arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications:4d4a8c7e-5f35-49a1-a3df-4a6c9a1d4c6b \
-  --attribute-name FilterPolicy \
-  --attribute-value '{"eventType":["LessonPublished"],"courseLevel":["beginner"]}'
+```text
+Analytics queue: no filter
+Email queue:     level = advanced
+French index:    language = fr
 ```
 
-This command returns no body on success. A good follow-up check is `get-subscription-attributes`, because filter mistakes are a common reason a subscriber receives no messages.
+The publisher performs one `Publish` to `lesson-events`. SNS evaluates each subscription independently. Analytics and advanced email match. French index does not. Two copies are delivered.
 
-```bash
-aws sns get-subscription-attributes \
-  --subscription-arn arn:aws:sns:us-east-1:123456789012:lesson-publishing-notifications:4d4a8c7e-5f35-49a1-a3df-4a6c9a1d4c6b \
-  --query 'Attributes.FilterPolicy'
+```text
+                    Lesson service
+                         |
+                    publish once
+                         v
+                 SNS lesson-events
+                 /       |        \
+        no filter   level=advanced  language=fr
+             |            |             X
+             v            v
+       Analytics SQS   Email SQS
+             |            |
+          workers       workers
 ```
 
-Example output:
+The queue policies authorize this exact topic to send. Each consumer system owns its queue throughput, worker count, visibility timeout, idempotency, processing DLQ, and alarms.
 
-```json
-"{\"eventType\":[\"LessonPublished\"],\"courseLevel\":[\"beginner\"]}"
+For production resilience, each subscription can also use a delivery DLQ:
+
+```text
+SNS
+ |
+subscription
+ ├── success -> Main SQS -> worker -> repeated failure -> SQS DLQ
+ └── delivery exhausted ---------------------------> SNS delivery DLQ
 ```
 
-The escaped JSON string is normal because subscription attributes are stored as string values. The important check is that the policy uses the same attribute names and values the publisher sends.
+This architecture produces several forms of independence:
 
-![The filter view shows how message attributes let each subscription receive only the notifications it cares about](/content-assets/articles/article-cloud-providers-aws-application-integration-sns/message-attributes-filter-policies.png)
+- **Publisher autonomy:** it knows `lesson-events`, not every receiver.
+- **Consumer autonomy:** a new analytics or recommendation subscription does not change the producer.
+- **Failure isolation:** one queue or worker group can fail while others continue.
+- **Independent scaling:** email can run three workers while search runs thirty and analytics one hundred.
+- **Independent filtering:** each subscription owns its interest criteria.
 
-*The filter view shows how message attributes let each subscription receive only the notifications it cares about.*
+### Follow one publication through the complete system
 
+The lesson service begins with one domain fact rather than a list of instructions to consumers:
 
-## Raw Delivery, Retries, and DLQs
-<!-- section-summary: Subscriber delivery settings decide payload shape, retry behavior, and where failed notifications go. -->
+```text
+LessonPublished
+lessonId = L123
+level = advanced
+language = en
+```
 
-Raw message delivery changes the SQS payload shape. With raw delivery enabled, the SQS body is the original SNS message body. With raw delivery disabled, the SQS body is an SNS envelope that includes fields such as `Type`, `MessageId`, `TopicArn`, `Message`, `Timestamp`, and signature metadata.
+Its IAM identity needs permission to publish to `lesson-events`; it does not need `sqs:SendMessage` permission for every subscriber queue. The successful publish response means SNS accepted the publication. It does not mean email, search, and analytics have all completed their application work.
 
-Raw delivery is convenient when the subscriber only wants the business payload. The SNS envelope is useful when the subscriber needs SNS metadata or signature fields. The choice should be documented because it changes the code a consumer writes.
+SNS enumerates the topic's subscriptions. For Analytics, no filter exists, so the publication is eligible. For Advanced Email, `level=advanced` matches. For French Search, `language=fr` does not match. A filtered-out delivery is not a failure and should not enter a DLQ; that subscription deliberately expressed no interest.
 
-SNS retries failed deliveries according to the endpoint type and delivery policy. SQS subscriptions are usually durable because SNS sends into the queue and the queue stores the message. HTTP, HTTPS, Lambda, mobile, SMS, and email endpoints have different delivery behavior and operational limits.
+For each eligible SQS subscription, SNS attempts `SendMessage` under the queue's resource policy. The queue checks that the service principal is `sns.amazonaws.com` and that the source ARN is the allowed `lesson-events` topic. This source condition prevents an unrelated topic from using the same broad service principal to place messages in the queue.
 
-Important subscribers often use SNS-to-SQS with a DLQ on the SQS queue. That gives the subscriber its own retry, backlog, and failure-review path. If search indexing fails for a bad lesson payload, search can review its queue and DLQ without blocking email or analytics.
+After both queues accept their copies, the delivery layer is complete:
 
-SNS subscriptions can also have redrive policies for supported protocols. For critical direct Lambda or HTTP subscriptions, configure failure destinations carefully and alarm on failed deliveries. A subscriber without a failure path can turn message loss into a quiet production problem.
+```text
+SNS accepted publication
+  ├── Analytics SQS accepted copy
+  ├── Email SQS accepted copy
+  └── French Search intentionally filtered out
+```
 
-## SNS, SQS, and EventBridge
-<!-- section-summary: SQS, SNS, and EventBridge solve different communication jobs even though they can all move messages. -->
+Analytics and email then proceed independently. Each queue can have several competing workers, but only one processing path should handle a given queued copy at a time. If email is slow, its backlog and oldest-message age grow while analytics continues. That delay does not cause SNS to republish to analytics or block the lesson service.
 
-SQS, SNS, and EventBridge are easy to blur together at first because all three move messages. The job is the clean way to separate them.
+### Decide whether direct delivery or a queue is appropriate
 
-| Need | Service | Northstar example |
-|---|---|---|
-| One worker group should process durable work | SQS | Transcode uploaded lesson videos |
-| Several subscribers each need a copy of a notification | SNS | Email, search, analytics, and mobile react to `LessonPublished` |
-| Events need pattern routing, archive, replay, SaaS or AWS service events, or cross-account routing | EventBridge | Route product events across application and analytics accounts |
+SNS can deliver directly to Lambda or HTTP/S, which can be useful when the receiver is fast, retry-safe, and designed for the endpoint's delivery behavior. The receiver then participates directly in the SNS delivery boundary.
 
-SNS is a strong fit for fanout notifications with direct subscriber paths. EventBridge is a strong fit when event routing rules, archives, replay, schema ownership, or cross-account delivery matter more than simple topic fanout. Many AWS systems use both: SNS for immediate fanout around a service boundary, and EventBridge for broader event routing across teams.
+Putting SQS between them changes that boundary:
 
-The key is to avoid making one service pretend to be every pattern. A queue should not act like a fanout topic. A topic should not hide a long-running ordered process. An event bus should not carry private payloads that every target and archive should never see.
+```text
+Direct:
+SNS -> receiver must accept this delivery now or rely on SNS retry
 
-## Putting It Together
-<!-- section-summary: SNS lets the lesson platform publish one fact and let independent subscribers process their own copies. -->
+Buffered:
+SNS -> SQS accepts the copy now -> receiver processes at its own rate later
+```
 
-When the lesson publishing worker finishes the video, the platform publishes `LessonPublished` to SNS. SNS fans out the message to search, analytics, email, and mobile subscribers. Each subscriber can use SQS, filters, raw delivery, retries, and DLQs according to its own processing needs.
+The queue adds its own retention, visibility timeout, worker scaling, and processing redrive. That is more infrastructure, but it gives a consumer control over backlog and recovery. The decision should follow the consumer's availability and rate requirements rather than a rule that every SNS endpoint must use SQS.
 
-That keeps the lesson service focused on the fact it owns. It publishes the lesson notification once. Subscribers process their own copies, fail independently, and scale independently. The topic contract, message attributes, subscription policies, and alarms become the shared integration surface.
+### Verify publication, delivery, and processing separately
 
-This is the concrete SNS distinction: **SNS is for fanout notification**. It is the right next step after SQS when the system changes from one worker group to many interested subscribers.
+An end-to-end symptom such as "the lesson email never arrived" spans several responsibilities. Inspect them in order:
 
-![The evidence summary shows the checks that explain whether a topic publish reached, retried, or failed a subscriber](/content-assets/articles/article-cloud-providers-aws-application-integration-sns/sns-delivery-evidence-summary.png)
+1. Confirm that the lesson service called `Publish` successfully and record the SNS message ID or correlation ID.
+2. Confirm that the email subscription exists, is confirmed where confirmation applies, and its filter matches the actual attributes or JSON body.
+3. Confirm that the queue policy permits this exact topic ARN to call `sqs:SendMessage`.
+4. Check SNS delivery status evidence and the subscription delivery DLQ for a transport failure.
+5. Check the main queue for the expected copy. Presence proves the SNS-to-SQS step worked.
+6. Inspect queue depth, message age, worker logs, visibility behavior, and the SQS processing DLQ.
+7. Confirm the downstream email provider or application side effect using the same correlation identifier.
 
-*The evidence summary shows the checks that explain whether a topic publish reached, retried, or failed a subscriber.*
+Do not use consumer logs alone to decide that publishing failed. A filter may have excluded the message, SNS may have exhausted delivery into its own subscription DLQ, the queue may contain an unprocessed backlog, or a worker may have moved the copy to its processing DLQ. The last confirmed boundary identifies the owner of the next investigation.
 
+### Treat message contracts as shared interfaces
 
-## What's Next
-<!-- section-summary: The next article moves from topic fanout to event routing with buses, rules, targets, archives, and replay. -->
+Loose deployment coupling does not mean a producer can change messages without coordination. A subscriber filter that expects a string attribute named `level` can silently stop matching if the producer renames it to `difficulty`, changes its type, or moves it into the body without updating `FilterPolicyScope`.
 
-SNS gives Northstar Learn a clean fanout topic. The next step appears when events need richer routing, cross-account delivery, archives, replay, and rules owned by different teams. That is where EventBridge enters the module.
+Likewise, a consumer configured for raw delivery expects its application payload directly, while a consumer using default delivery expects an SNS envelope whose `Message` field contains the payload string. Changing raw delivery changes the parsing contract even though the domain event did not change.
+
+Version important payloads, document attributes used by filters, and test both matching and nonmatching examples. A useful publication carries a stable event name, unique message or event ID, occurrence time, correlation ID, and a body that contains only the data subscribers are meant to receive. Consumers should remain duplicate-safe because Standard topic delivery can repeat.
+
+The publisher still owns a stable event contract. Decoupling deployment does not eliminate coordination around event meaning, schema versions, identifiers, sensitive fields, and compatibility.
+
+## How Do You Design with SNS?
+<!-- section-summary: Define the fact, its topic, every independent receiver, filtering and payload shape, buffering, permissions, and both delivery and processing failure paths. -->
+
+Reduce an SNS design to four initial questions:
+
+1. **What happened?** For example, `LessonPublished`.
+2. **Where is that category published?** For example, `lesson-events`.
+3. **Who requires an independent copy?** Email, analytics, search, or another system.
+4. **What happens when a receiver cannot keep up?** Usually, place its SQS queue between the subscription and workers.
+
+Then add the operational questions:
+
+- Which body and message attributes form the versioned contract?
+- Does each subscription filter attributes or JSON body fields?
+- Does the endpoint want the SNS envelope or raw delivery?
+- Does the endpoint authorize only the intended topic?
+- Which SNS retry and subscription DLQ preserve delivery failures?
+- Which SQS redrive policy and DLQ preserve processing failures?
+- Which metrics or logs prove publication, delivery, queueing, and processing?
+- Does ordering genuinely require an SNS FIFO and SQS FIFO path?
+
+The service hierarchy can be remembered as increasing routing responsibility:
+
+```text
+SQS:
+I have work that one processing path must eventually complete.
+
+SNS:
+Several independent systems need a copy of this publication.
+
+EventBridge:
+Many event sources need rules that decide which targets match.
+```
+
+The analogy is an announcement system. A professor announces that Lesson 42 is available. The professor does not visit every student, library, office, and analytics team. Subscribers register their interest, and each department can have its own mailbox.
+
+```text
+Professor             = publisher
+Announcement channel  = topic
+Interest relationship = subscription
+Student or mailbox    = endpoint
+Announcement          = message
+```
+
+The first-principles definition is: **SNS lets a producer announce something once while independently configured subscriptions decide whether, where, and how they receive a copy.** Topics, filters, raw delivery, retries, delivery DLQs, and SQS fanout are the machinery supporting that separation.
+
+:::expand[Why Does One Event Need a Fanout Service?]{kind="recap"}
+SNS removes the producer's need to know, call, retry, and reconfigure every system that cares about one publication.
+
+Without an intermediary, the producer knows and calls every consumer, handles their failures, and changes whenever a new receiver appears. SNS lets the producer publish the fact once while subscriptions own the receiver list.
+:::
+
+:::expand[What Are Publishers, Topics, Subscriptions, and Endpoints?]{kind="recap"}
+The publisher announces through a topic, each subscription stores one receiver's delivery policy, and an endpoint receives an independent copy.
+
+The publisher announces to a topic that represents a message category. Each subscription stores one receiver's endpoint, filter, formatting, and delivery policy. SNS evaluates those subscriptions and creates independent deliveries.
+
+SNS owns fanout between systems, while each SQS queue owns buffering and competing work distribution inside one consumer system.
+
+SNS fans one publication out to separate queues. Each SQS queue buffers one subscriber's copy and distributes it among that system's competing workers. The subscription configures delivery, while the queue policy authorizes the selected topic.
+:::
+
+:::expand[How Do Subscription Filters Choose Messages?]{kind="recap"}
+Per-subscription filter policies let each receiver declare its interest before SNS attempts delivery.
+
+Each subscription can match message attributes or JSON body fields. Filters can use exact, numeric, prefix, suffix, or exclusion conditions so irrelevant messages are not delivered to the endpoint and discarded there.
+:::
+
+:::expand[What Does an SQS Subscriber Actually Receive?]{kind="recap"}
+Default SQS delivery wraps the publication in an SNS notification envelope, while raw delivery places the original payload more directly in the queue body.
+
+Default delivery places the application message inside an SNS notification envelope in the SQS body. Raw delivery removes that wrapper and delivers the payload more directly, with a limit of ten delivered message attributes for raw SQS subscriptions.
+:::
+
+:::expand[How Do SNS Retries and Dead-Letter Queues Work?]{kind="recap"}
+SNS retries temporary endpoint delivery failures, and subscription DLQs capture transport failures separately from downstream SQS consumer failures.
+
+SNS retries temporary endpoint delivery failures. An SNS subscription DLQ captures messages that SNS could not deliver. Once SQS accepts a message, consumer failure belongs to the queue's redrive policy and SQS DLQ instead.
+:::
+
+:::expand[How Do SNS, SQS, and EventBridge Differ?]{kind="recap"}
+SQS buffers one work stream, SNS fans a publication through topic subscriptions, and EventBridge evaluates event patterns on a bus.
+
+SQS stores one work stream for competing consumers. SNS fans a topic publication to subscriptions. EventBridge applies rules to events on a bus. They are complementary and can be composed when routing, fanout, and buffering are all required.
+
+Standard topics provide high-scale, best-effort pub/sub, while FIFO topics add ordered message groups, deduplication, and optional archive and replay.
+
+Standard topics suit high-scale fanout with best-effort ordering and duplicate-safe consumers. FIFO topics add ordered message groups and deduplication, can pair with FIFO queues, and can optionally archive and replay messages for up to 365 days.
+:::
+
+:::expand[How Do You Build a Complete SNS Fanout Path?]{kind="recap"}
+A complete path combines one stable publication, per-subscription interest, authorized SQS delivery, independent buffering, consumer redrive, and separate delivery evidence.
+
+Publish one stable event, let filters select subscriptions, authorize the topic in each queue policy, buffer each copy in its own SQS queue, and give every delivery and processing boundary its own logs, metrics, retries, DLQ, and owner.
+:::
+
+:::expand[How Do You Design with SNS?]{kind="recap"}
+Define the fact, its topic, every independent receiver, filtering and payload shape, buffering, permissions, and both delivery and processing failure paths.
+
+Name the fact, topic, and independent receivers first. Then define filters, payload formatting, buffering, authorization, delivery recovery, processing recovery, and any real ordering requirement. The publisher should know what happened, not every system that cares.
+:::
 
 ## References
 
-- [What is Amazon SNS?](https://docs.aws.amazon.com/sns/latest/dg/welcome.html)
-- [Amazon SNS topics](https://docs.aws.amazon.com/sns/latest/dg/sns-create-topic.html)
-- [Amazon SNS subscriptions](https://docs.aws.amazon.com/sns/latest/dg/sns-create-subscribe-endpoint-to-topic.html)
-- [Amazon SNS message filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html)
-- [Amazon SNS raw message delivery](https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html)
-- [Amazon SNS dead-letter queues](https://docs.aws.amazon.com/sns/latest/dg/sns-dead-letter-queues.html)
+- [AWS decision guide: Choosing an application integration service](https://docs.aws.amazon.com/decision-guides/latest/application-integration-on-aws-how-to-choose/application-integration-on-aws-how-to-choose.html)
+- [AWS decision guide: Amazon SQS, SNS, or EventBridge](https://docs.aws.amazon.com/decision-guides/latest/sns-or-sqs-or-eventbridge/sns-or-sqs-or-eventbridge.html)
+- [Amazon SNS documentation: Subscribe an SQS queue](https://docs.aws.amazon.com/sns/latest/dg/subscribe-sqs-queue-to-sns-topic.html)
+- [Amazon SNS documentation: Message attributes](https://docs.aws.amazon.com/sns/latest/dg/sns-message-attributes.html)
+- [Amazon SNS documentation: Message filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html)
+- [Amazon SNS documentation: Subscription filter policies](https://docs.aws.amazon.com/sns/latest/dg/sns-subscription-filter-policies.html)
+- [Amazon SNS documentation: Raw message delivery](https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html)
+- [Amazon SNS API reference: Subscribe](https://docs.aws.amazon.com/sns/latest/api/API_Subscribe.html)
+- [Amazon SNS documentation: Delivery retries](https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html)
+- [Amazon SNS documentation: Dead-letter queues](https://docs.aws.amazon.com/sns/latest/dg/sns-dead-letter-queues.html)
+- [Amazon SNS documentation: Delivery status logging](https://docs.aws.amazon.com/sns/latest/dg/topics-attrib.html)
+- [Amazon SNS documentation: FIFO message archiving and replay](https://docs.aws.amazon.com/sns/latest/dg/fifo-message-archiving-replay.html)
+- [AWS Prescriptive Guidance: Amazon EventBridge](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-integrating-microservices/eventbridge.html)
+- [Amazon SNS documentation: FIFO topic message ordering](https://docs.aws.amazon.com/sns/latest/dg/fifo-topic-message-ordering.html)

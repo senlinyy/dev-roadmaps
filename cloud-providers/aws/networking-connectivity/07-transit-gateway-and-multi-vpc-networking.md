@@ -1,7 +1,7 @@
 ---
 title: "Transit Gateway and Multi-VPC Networking"
-description: "Connect many AWS VPCs and accounts with VPC peering, AWS Transit Gateway, shared services, segmentation, inspection paths, and operational guardrails."
-overview: "Multi-VPC networking is the work of connecting separate application, shared services, analytics, security, and on-premises networks without turning every private network into one flat space. This article explains when VPC peering is enough, why Transit Gateway is used as a regional router, and how attachments, route tables, association, propagation, return routes, inspection VPCs, and cross-account sharing fit together."
+description: "Learn how VPC peering, Transit Gateway attachments, two routing layers, association, propagation, segmentation, inspection, and cross-account ownership connect many networks."
+overview: "A packet cannot cross isolated VPCs without an explicit next hop. This article begins with direct peering, then derives Transit Gateway as a managed regional router whose attachments and route tables turn many pairwise connections into centrally governed routing domains."
 tags: ["aws", "vpc", "transit-gateway", "vpc-peering", "multi-vpc-networking"]
 order: 7
 id: article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking
@@ -20,361 +20,570 @@ aliases:
   - cloud-providers/aws/networking-connectivity/connectivity-and-hybrid-networking.md
   - cloud-providers/aws/networking-connectivity/03-connectivity-and-hybrid-networking.md
 ---
+
 ## Table of Contents
 
-1. [The Multi-VPC Scenario](#the-multi-vpc-scenario)
-2. [When VPC Peering Fits](#when-vpc-peering-fits)
-3. [Why Transit Gateway Works as the Hub](#why-transit-gateway-works-as-the-hub)
-4. [Attachments and VPC Route Tables](#attachments-and-vpc-route-tables)
-5. [Transit Gateway Route Tables](#transit-gateway-route-tables)
-6. [Routing Blast Radius and Segmentation](#routing-blast-radius-and-segmentation)
-7. [Ownership Across Accounts](#ownership-across-accounts)
-8. [Troubleshooting Multi-VPC Paths](#troubleshooting-multi-vpc-paths)
-9. [References](#references)
+1. [Why Do Separate VPCs Need an Explicit Connection?](#why-do-separate-vpcs-need-an-explicit-connection)
+2. [When Does VPC Peering Fit?](#when-does-vpc-peering-fit)
+3. [What Is a Transit Gateway Attachment?](#what-is-a-transit-gateway-attachment)
+4. [Why Are There Two Route-Table Lookups?](#why-are-there-two-route-table-lookups)
+5. [How Do Multiple TGW Route Tables Create Segmentation?](#how-do-multiple-tgw-route-tables-create-segmentation)
+6. [How Do Shared Services and Inspection Fit the Hub?](#how-do-shared-services-and-inspection-fit-the-hub)
+7. [When Should You Choose Peering or Transit Gateway?](#when-should-you-choose-peering-or-transit-gateway)
+8. [How Do You Troubleshoot a Multi-VPC Path?](#how-do-you-troubleshoot-a-multi-vpc-path)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## The Multi-VPC Scenario
-<!-- section-summary: Multi-VPC networking starts with separate networks for separate responsibilities, then adds only the private paths the business needs. -->
+The first-principles question behind multi-VPC networking is:
 
-The receipts company has grown past one VPC. The production app VPC runs the receipts API and worker services in account `app-prod`. The shared services VPC runs deployment runners, an internal package mirror, and the inventory API in account `platform-shared`. The analytics VPC receives events and report exports in account `data-prod`. The security VPC runs inspection appliances and central network tooling in account `security-prod`. An on-premises support network still hosts a few admin tools connected through VPN or Direct Connect.
+> How does an IP packet move from one isolated routing domain into another?
 
-This split is healthy. Application teams can own application subnets. Platform teams can own shared services. Data teams can handle analytics without sitting inside the production app VPC. Security teams can operate inspection tooling in a dedicated account. The hard part is the private connectivity between these networks.
+Once that is clear, peering, Transit Gateway attachments, VPC routes, TGW route-table associations, route propagation, segmentation, shared services, and return-path debugging become variations of ordinary routing.
 
-The business needs named flows instead of one flat private network. The receipts API needs `inventory.shared.internal` on TCP `443`. Deployment runners need access to app deployment endpoints. Analytics needs event ingestion while database subnet routes stay outside its table. On-premises support tools need a limited admin endpoint with narrow routes.
+The sections below answer these questions in order:
 
-Advanced multi-VPC design starts by listing those flows. For each flow, write the source VPC, destination VPC, CIDR or service name, port, DNS owner, route owner, security group owner, and return path. That list keeps the architecture grounded while the route tables get more complex.
+1. **Why Do Separate VPCs Need an Explicit Connection?**
+2. **When Does VPC Peering Fit?**
+3. **What Is a Transit Gateway Attachment?**
+4. **Why Are There Two Route-Table Lookups?**
+5. **How Do Multiple TGW Route Tables Create Segmentation?**
+6. **How Do Shared Services and Inspection Fit the Hub?**
+7. **When Should You Choose Peering or Transit Gateway?**
+8. **How Do You Troubleshoot a Multi-VPC Path?**
 
-## When VPC Peering Fits
-<!-- section-summary: VPC peering fits a small direct relationship between two non-overlapping VPCs when both sides can own routes and packet controls clearly. -->
+## Why Do Separate VPCs Need an Explicit Connection?
+<!-- section-summary: A VPC is an isolated Layer-3 network, so traffic to another VPC needs a route and an explicit inter-network next hop. -->
 
-**VPC peering** is a direct private connection between two VPCs. It works well for one clear relationship with non-overlapping CIDR ranges and owners who can coordinate both sides. The route tables, security groups, NACLs, and DNS records still decide whether application traffic succeeds.
+Begin with one VPC:
 
-For a small version of the receipts environment, the app VPC `10.20.0.0/16` might need the inventory API in the shared services VPC `10.40.0.0/16`. The app private route table sends `10.40.0.0/16` to the peering connection. The shared services route table sends `10.20.0.0/16` back to the peering connection. The inventory security group allows TCP `443` from the application security group or app CIDR.
+```text
+VPC A:    10.1.0.0/16
+Subnet A: 10.1.1.0/24
+EC2-A:    10.1.1.10
+```
 
-That design stays readable when the relationship has two VPCs and one owner conversation. The review table is short:
+When EC2-A sends a packet, the network asks:
 
-| Item | Receipts app example |
-| --- | --- |
-| Source VPC CIDR | `10.20.0.0/16` |
-| Destination VPC CIDR | `10.40.0.0/16` |
-| Source route | App private subnets route `10.40.0.0/16` to the peering connection |
-| Return route | Shared services subnets route `10.20.0.0/16` to the peering connection |
-| Packet rule | Inventory security group allows TCP `443` from the app workload |
-| DNS decision | `inventory.shared.internal` resolves to the private inventory address |
+```text
+What is the destination IP?
+        ↓
+Which route matches most specifically?
+        ↓
+Which next hop receives the packet?
+```
 
-Peering has a major boundary: transitive routing is absent. If VPC A peers with VPC B, and VPC B peers with VPC C, VPC A has no automatic path to VPC C through VPC B. This boundary keeps peering relationships explicit, but it creates a lot of one-off route work as VPC count grows.
+`10.1.2.20` matches the local `10.1.0.0/16` route. `8.8.8.8` may match a default NAT route. AWS uses most-specific, or longest-prefix, destination matching.
 
-The point where peering starts to strain is usually ownership. Ten VPCs can create many separate route updates, DNS decisions, security group requests, and return path checks. The network team may have no central place to answer "which networks can reach production?" That is the point where a hub starts to help.
+Now add VPC B:
+
+```text
+VPC B: 10.2.0.0/16
+EC2-B: 10.2.1.20
+```
+
+EC2-A sends:
+
+```text
+Source:      10.1.1.10
+Destination: 10.2.1.20
+```
+
+If VPC A has only `10.1.0.0/16 → local`, no route matches the remote VPC. Both networks being in AWS or owned by the same company creates no path. A connection object must become the next hop between the routing domains, and the destination must have a way back.
+
+The basic model remains:
+
+```text
+destination IP → route lookup → inter-network next hop
+```
+
+Transit Gateway does not replace that logic. It introduces a managed router as one possible next hop.
+
+## When Does VPC Peering Fit?
+<!-- section-summary: Peering creates a direct, non-transitive Layer-3 relationship that stays simple for a small number of VPC pairs. -->
+
+A **VPC peering connection** directly joins two VPC routing domains:
+
+```text
+VPC A ───── VPC peering ───── VPC B
+```
+
+VPC A adds:
+
+```text
+10.2.0.0/16 → pcx-123
+```
+
+VPC B adds the return route:
+
+```text
+10.1.0.0/16 → pcx-123
+```
+
+The routes create forward and reverse paths. Security groups, NACLs, DNS, and destination listeners still decide whether an application connection succeeds.
 
 ![The peering view shows the simple two-VPC case where direct routing can work without a central hub](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/one-peering-relationship.png)
 
-*The peering view shows the simple two-VPC case where direct routing can work without a central hub.*
+*A direct connection is easy to understand when two VPCs have one stable relationship and non-overlapping addresses.*
 
+Peering is deliberately **non-transitive**. If A peers with B and A peers with C, B cannot use A as a router to reach C. B and C need their own direct peering relationship.
 
-## Why Transit Gateway Works as the Hub
-<!-- section-summary: Transit Gateway gives many VPCs and hybrid links one regional routing hub with central route tables and segmentation controls. -->
+```text
+B ──peer── A ──peer── C
 
-**AWS Transit Gateway** is a regional network transit hub. VPCs, VPNs, Direct Connect gateways, and other supported attachments connect to it. Transit Gateway route tables decide which attachment can reach which destination CIDR through the hub.
+B cannot route through A to C
+```
 
-For the receipts company, Transit Gateway can connect the app VPC, shared services VPC, analytics VPC, security VPC, and on-premises connection. The goal is central routing policy with narrow route tables for approved flows. Each attachment should receive only the routes it needs.
+A complete three-VPC mesh needs three edges. The number of pairwise relationships grows approximately as:
 
-The hub gives the network team a place to review route blast radius. **Routing blast radius** means the set of networks that gain reachability when a route is added, propagated, or associated. A route to `10.40.0.0/16` in the app route table might only let the app VPC reach shared services. The same propagated route in a shared route table used by analytics and on-premises attachments could grant many more networks a path to shared services.
+```text
+n(n - 1) / 2
+```
 
-Transit Gateway design therefore needs two maps. One map shows the physical or logical attachments: app, shared services, analytics, security, and hybrid. The second map shows route table policy: which attachment uses which Transit Gateway route table, which prefixes enter each table, and which owners approve changes.
+Ten VPCs can require 45 peerings; 100 VPCs can require 4,950. Each edge also brings route updates, return routes, security review, DNS considerations, and owner coordination.
+
+Peering remains valuable when two VPCs need a direct, simple connection or the topology is small and stable. Its non-transitivity becomes an operational burden when the company is trying to construct a network of many networks.
+
+### Why Does Transit Gateway Scale Better?
+<!-- section-summary: Transit Gateway replaces many pairwise connections with one regional managed router and a roughly linear number of attachments. -->
+
+Traditional networks avoid a full mesh by introducing a router:
+
+```text
+LAN A ─┐
+LAN B ─┼→ router ←─ LAN D
+LAN C ─┘
+```
+
+AWS Transit Gateway applies the same idea:
+
+```text
+VPC A ─┐
+VPC B ─┼→ Transit Gateway ←─ shared services
+VPC C ─┘
+```
+
+**AWS Transit Gateway**, or TGW, is a managed regional Layer-3 transit router. It forwards packets between attachments according to destination IP addresses.
+
+Instead of every VPC connecting to every other VPC, each network connects to the hub:
+
+```text
+A ↔ TGW
+B ↔ TGW
+C ↔ TGW
+D ↔ TGW
+```
+
+The topology grows roughly with the number of attached networks rather than the square of that number. This is the hub-and-spoke model.
 
 ![The hub view shows how Transit Gateway reduces many separate peering relationships into shared attachments and route tables](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/transit-gateway-hub.png)
 
-*The hub view shows how Transit Gateway reduces many separate peering relationships into shared attachments and route tables.*
+*Transit Gateway centralizes the router, but its route tables still decide which spokes may reach each destination.*
 
+Being attached to one router does not mean every network must communicate. Multiple TGW route tables can create separate routing domains for production, development, shared services, inspection, egress, or hybrid connectivity.
 
-## Attachments and VPC Route Tables
-<!-- section-summary: A Transit Gateway attachment connects a VPC to the hub, while VPC subnet route tables still decide which workload traffic enters the hub. -->
+The hub is therefore both a scaling mechanism and a central Layer-3 connectivity-policy point.
 
-A **Transit Gateway VPC attachment** connects one VPC to the Transit Gateway. You select subnets in the VPC, usually one per Availability Zone, where AWS creates attachment ENIs. Many teams use dedicated small attachment subnets so the TGW connection point has clear routing and NACL behavior.
+## What Is a Transit Gateway Attachment?
+<!-- section-summary: An attachment connects one network to Transit Gateway like a router port, but routing policy still determines where its packets may go. -->
 
-The attachment alone leaves application subnet routing unchanged. Application subnet route tables still need explicit routes. For example, the app private subnet route table needs a route for `10.40.0.0/16` to the Transit Gateway before the receipts API can reach shared services.
+Think of a TGW attachment as the AWS equivalent of a router port:
 
-A Terraform attachment sketch looks like this:
-
-```hcl
-resource "aws_ec2_transit_gateway_vpc_attachment" "app" {
-  transit_gateway_id = aws_ec2_transit_gateway.core.id
-  vpc_id             = aws_vpc.app.id
-  subnet_ids         = [
-    aws_subnet.app_tgw_a.id,
-    aws_subnet.app_tgw_b.id
-  ]
-}
+```text
+VPC A → attachment A ┐
+VPC B → attachment B ├→ Transit Gateway
+VPC C → attachment C ┘
 ```
 
-This resource attaches the app VPC to the central Transit Gateway. `subnet_ids` selects the VPC subnets where TGW attachment ENIs live. These subnets should exist in the Availability Zones that the design supports, and they should have route and NACL behavior that matches the expected network path.
+The attachment says that the VPC and Transit Gateway are connected. It does not automatically create routes between every connected network.
 
-The workload route is a separate change:
+For a VPC attachment, AWS creates TGW network interfaces in the attachment subnets. You select at most one attachment subnet per Availability Zone. Enabling multiple zones gives the VPC paths into TGW from those zones. Resources in an Availability Zone without relevant attachment presence cannot use that attachment as if it had local presence there.
 
-```hcl
-resource "aws_route" "app_to_shared_services" {
-  route_table_id         = aws_route_table.app_private.id
-  destination_cidr_block = "10.40.0.0/16"
-  transit_gateway_id     = aws_ec2_transit_gateway.core.id
-}
+The useful picture is:
+
+```text
+workload subnet
+  ↓ VPC route chooses TGW
+TGW attachment ENI in the VPC
+  ↓ attachment
+Transit Gateway router
 ```
 
-This route tells app private subnets to send shared services traffic to the Transit Gateway. The shared services VPC still needs a return route to `10.20.0.0/16`. If the request reaches the inventory API and the response has no route back to the app VPC, the application still sees a timeout.
+Dedicated attachment subnets can make the connection points, NACLs, and route expectations easier to manage. Regardless of subnet layout, the VPC's workload route tables must send relevant remote destinations toward TGW.
 
-An attachment inspection command can show the current AWS state:
+An attachment is only the connection. The VPC route decides whether a source packet enters it, and the TGW route table decides which attachment receives the packet next.
 
-```bash
-aws ec2 describe-transit-gateway-vpc-attachments \
-  --filters Name=transit-gateway-id,Values=tgw-0123456789abcdef0 \
-  --region eu-west-2 \
-  --query 'TransitGatewayVpcAttachments[].{Id:TransitGatewayAttachmentId,Vpc:VpcId,State:State,Subnets:SubnetIds}'
+## Why Are There Two Route-Table Lookups?
+<!-- section-summary: The source VPC route table gets the packet to TGW, and the TGW table associated with the source attachment chooses the destination attachment. -->
+
+Transit Gateway introduces two routing layers:
+
+```text
+source resource
+  ↓ 1. source subnet's VPC route table
+Transit Gateway
+  ↓ 2. source attachment's associated TGW route table
+destination attachment and VPC
 ```
 
-```json
-[
-  {
-    "Id": "tgw-attach-0app1111111111111",
-    "Vpc": "vpc-0appreceipts",
-    "State": "available",
-    "Subnets": [
-      "subnet-0apptgwa",
-      "subnet-0apptgwb"
-    ]
-  },
-  {
-    "Id": "tgw-attach-0shared2222222222",
-    "Vpc": "vpc-0sharedservices",
-    "State": "available",
-    "Subnets": [
-      "subnet-0sharedtgwa",
-      "subnet-0sharedtgwb"
-    ]
-  }
-]
+Suppose:
+
+```text
+VPC A = 10.1.0.0/16
+VPC B = 10.2.0.0/16
 ```
 
-This output proves the VPC attachments exist and AWS considers them available. The next checks still need to prove the app subnet route table points to the TGW and the TGW route table sends traffic to the destination attachment.
+EC2-A sends to `10.2.1.20`. The source subnet table needs:
 
-## Transit Gateway Route Tables
-<!-- section-summary: Transit Gateway route tables decide which attached networks can reach which destination CIDRs through the hub. -->
-
-Transit Gateway has its own route tables, separate from VPC subnet route tables. A packet needs both layers. The source VPC route table sends traffic to the Transit Gateway. The Transit Gateway route table associated with the source attachment sends traffic to the destination attachment.
-
-Two words matter here: **association** and **propagation**. Association decides which Transit Gateway route table an attachment uses when it sends traffic into the hub. Propagation lets an attachment advertise its CIDRs into one or more Transit Gateway route tables.
-
-For the receipts scenario, the app attachment can associate with `tgw-rtb-app`. The shared services attachment can propagate `10.40.0.0/16` into `tgw-rtb-app`, or the network team can add a static route for that CIDR. The analytics attachment can associate with `tgw-rtb-analytics`, which receives only event ingestion and logging destinations.
-
-The Terraform for association and propagation can look like this:
-
-```hcl
-resource "aws_ec2_transit_gateway_route_table_association" "app" {
-  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.app.id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.app.id
-}
-
-resource "aws_ec2_transit_gateway_route_table_propagation" "shared_into_app" {
-  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.shared_services.id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.app.id
-}
+```text
+10.2.0.0/16 → tgw-123
 ```
 
-The association block says app traffic entering the hub uses the app TGW route table. The propagation block says the shared services attachment can advertise its routes into that same table. This propagation helps the app flow only when the app attachment is associated with this TGW route table.
+That gets the packet to TGW. TGW then needs its own entry:
 
-Some teams prefer static TGW routes for stricter review:
-
-```hcl
-resource "aws_ec2_transit_gateway_route" "app_to_shared_services" {
-  destination_cidr_block         = "10.40.0.0/16"
-  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.shared_services.id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.app.id
-}
+```text
+10.2.0.0/16 → attachment B
 ```
 
-This static route sends `10.40.0.0/16` traffic from the app route table to the shared services attachment. Static routes make every destination explicit. Propagation can reduce manual route entries, but it needs guardrails because a newly attached or newly expanded VPC can advertise more prefixes than reviewers expected.
+The full forward path is:
 
-A route search command checks the TGW route table that the source attachment actually uses:
-
-```bash
-aws ec2 search-transit-gateway-routes \
-  --transit-gateway-route-table-id tgw-rtb-0app \
-  --filters Name=route-search.exact-match,Values=10.40.0.0/16 \
-  --region eu-west-2
+```text
+10.1.1.10
+  ↓ VPC A route: 10.2.0.0/16 → TGW
+attachment A
+  ↓ associated TGW route table lookup
+10.2.0.0/16 → attachment B
+  ↓
+VPC B
+  ↓
+10.2.1.20
 ```
 
-```json
-{
-  "Routes": [
-    {
-      "DestinationCidrBlock": "10.40.0.0/16",
-      "Type": "static",
-      "State": "active",
-      "TransitGatewayAttachments": [
-        {
-          "TransitGatewayAttachmentId": "tgw-attach-0shared2222222222",
-          "ResourceType": "vpc",
-          "ResourceId": "vpc-0sharedservices"
-        }
-      ]
-    }
-  ],
-  "AdditionalRoutesAvailable": false
-}
+Transit Gateway does not eliminate VPC routes. Attaching a VPC while leaving its workload table as only `local` plus `0.0.0.0/0 → NAT` does not redirect remote private traffic to TGW. The source must explicitly choose the router.
+
+The return direction repeats both decisions independently:
+
+```text
+VPC B subnet route: 10.1.0.0/16 → TGW
+TGW table used by attachment B:
+10.1.0.0/16 → attachment A
 ```
 
-This output says the app TGW route table has an active route to shared services through the shared services attachment. If this output is empty, the next action is adding or fixing propagation or a static TGW route in `tgw-rtb-0app`. If the route points to the security attachment instead, the next action is validating the inspection path and return route through the security VPC.
+Reachability is bidirectional even when each routing decision is made separately. A perfect forward route with a missing return route still produces a broken application.
 
-## Routing Blast Radius and Segmentation
-<!-- section-summary: Segmentation keeps app, analytics, shared services, security, and hybrid networks from receiving broader routes than each flow needs. -->
+The route table associated with the **source attachment** controls each TGW lookup. A-to-B traffic uses A's associated TGW table. The reply uses B's associated table. Those tables can contain different routes, which enables segmentation but requires troubleshooting both directions.
 
-Transit Gateway makes it easy to connect many networks, so the route table design must keep blast radius small. Every propagated prefix and every broad static route changes who can attempt to reach a network. Security groups still matter, and routing should give each attachment only the private CIDRs required for its approved flows.
+### How Do Association and Propagation Differ?
+<!-- section-summary: Association chooses the TGW table for traffic arriving from an attachment, while propagation teaches selected tables how to reach that attachment. -->
 
-The receipts environment can use route tables by intent:
+Transit Gateway route tables separate "which policy handles my traffic" from "which tables know my destination."
 
-| Attachment | Associated TGW route table | Allowed destinations |
-| --- | --- | --- |
-| App VPC | `tgw-rtb-app` | Shared services API, inspection path, selected on-premises admin systems |
-| Shared services VPC | `tgw-rtb-shared` | App return routes, deployment targets, central logging |
-| Analytics VPC | `tgw-rtb-analytics` | Event ingestion and reporting exports |
-| Security VPC | `tgw-rtb-security` | Inspection targets and return paths |
-| VPN or Direct Connect | `tgw-rtb-hybrid` | Approved admin endpoints and shared services |
+An attachment's **association** answers:
 
-That table separates "attached to the hub" from "allowed to reach every other attachment." A new analytics attachment should receive event and reporting routes while production database subnet routes stay out of its table. A new on-premises route needs an owner to approve each app, analytics, and shared services reachability change.
+> Which TGW route table handles packets arriving from this attachment?
 
-Inspection routing adds another layer. Suppose app-to-shared-services traffic must pass through a firewall in the security VPC. The app TGW route table can send `10.40.0.0/16` to the security attachment. The security TGW route table can send inspected traffic onward to shared services. The shared services return route must send `10.20.0.0/16` back through the security attachment. Stateful firewalls need to see both directions of a conversation.
+```text
+attachment A
+  └── associated with Production-TGW-RT
+```
 
-| Flow stage | TGW route table decision | VPC route decision |
-| --- | --- | --- |
-| App to security | `tgw-rtb-app` sends `10.40.0.0/16` to the security attachment | App private route table sends `10.40.0.0/16` to TGW |
-| Security to shared services | `tgw-rtb-security` sends `10.40.0.0/16` to the shared services attachment | Firewall subnet routes traffic through the appliance path |
-| Shared services return | `tgw-rtb-shared` sends `10.20.0.0/16` to the security attachment | Shared services subnet sends `10.20.0.0/16` to TGW |
-| Security return to app | `tgw-rtb-security` sends `10.20.0.0/16` to the app attachment | Firewall return path sends traffic back through the expected interface |
+An attachment can be associated with one TGW route table at a time. The shorthand is:
 
-This is where ownership matters as much as route syntax. The network team owns TGW route tables and propagation. The application team owns app subnet route tables and app security groups. The shared services team owns the inventory listener and return routes. The security team owns firewall policy and inspection appliance health. A production change should name all owners before the route goes live.
+> Association controls traffic **from me**.
+
+This is not literally an ACL. It works as a mental model because the selected table contains the next hops available to packets entering from that attachment.
+
+**Propagation** answers:
+
+> Which TGW route tables learn how to reach this attachment's network?
+
+If VPC B `10.2.0.0/16` propagates into a table, that table learns:
+
+```text
+10.2.0.0/16 → attachment B
+```
+
+An attachment can propagate into multiple TGW route tables. The shorthand is:
+
+> Propagation controls which tables know how to get **to me**.
+
+Static routes provide a third choice: an administrator explicitly maps a destination to an attachment. A blackhole route deliberately drops traffic whose destination matches.
+
+| Concept | Question |
+|---|---|
+| Association | Which table handles traffic from this attachment? |
+| Propagation | Which tables learn how to reach this attachment? |
+| Static route | Which explicit next attachment should this destination use? |
+| Blackhole route | Which matching destinations should be dropped? |
+
+Do not infer a path merely because a destination attachment propagates into some table. The source attachment must be associated with a table that actually contains that learned or static route.
+
+## How Do Multiple TGW Route Tables Create Segmentation?
+<!-- section-summary: Different associations and propagation sets can let spokes reach shared services while omitting routes between the spokes. -->
+
+Suppose App A and App B should both reach Shared Services, but must not reach each other.
+
+Create:
+
+```text
+Spoke-RT
+Shared-RT
+```
+
+Associate both application attachments with `Spoke-RT`. Associate Shared Services with `Shared-RT`.
+
+`Spoke-RT` contains only:
+
+```text
+10.100.0.0/16 → shared attachment
+```
+
+`Shared-RT` contains:
+
+```text
+10.1.0.0/16 → App A attachment
+10.2.0.0/16 → App B attachment
+```
+
+App A can look up Shared Services and find a route. Shared Services can return to both apps. App A looking for App B finds no route in `Spoke-RT`, so the packet stops.
+
+```text
+App A ↔ Shared Services ↔ App B
+
+App A  X──────────────X App B
+```
+
+This is routing segmentation. It answers whether a packet can get there before resource firewalls and application authorization are considered.
+
+Now consider a single default table into which every attachment is associated and propagated. Production, development, and test all learn routes to one another. Adding a PCI VPC with the same defaults can suddenly give every existing attachment a route toward PCI.
+
+The set of networks that gain possible reachability from one routing change is the **routing blast radius**. Separate tables such as `Prod-RT`, `NonProd-RT`, `Shared-RT`, `Inspection-RT`, and `Egress-RT` reduce that radius.
+
+Blackhole routes can explicitly reject sensitive ranges, but segmentation should begin with the routes each domain actually needs rather than one fully connected default.
+
+Routing isolation does not replace security groups, NACLs, firewalls, identity, or application authorization. It removes unnecessary paths before those later controls must decide.
+
+## How Do Shared Services and Inspection Fit the Hub?
+<!-- section-summary: The hub centralizes common networks and can steer flows through stateful inspection or egress paths while preserving return symmetry. -->
+
+Fifty workload VPCs may all need DNS, directory services, central logging, on-premises connectivity, security inspection, or shared egress. Point-to-point connectivity repeats each relationship.
+
+Transit Gateway lets the network team reason in categories:
+
+```text
+workload VPCs
+    ↓
+Transit Gateway
+  ├─ shared services
+  ├─ security inspection
+  ├─ egress VPC
+  └─ VPN or Direct Connect to on-premises
+```
+
+This operational centralization is one of TGW's strongest benefits.
+
+Inspection follows the same route logic. If workload-to-internet traffic must cross a firewall:
+
+```text
+workload → TGW → inspection VPC → firewall
+         → TGW or egress → internet
+```
+
+TGW route tables steer the destination toward the inspection attachment. Firewall-subnet routes and the inspection table then carry it onward.
+
+Stateful appliances need the forward and return directions to traverse the expected appliance path. Transit Gateway **appliance mode** supports suitable Availability Zone affinity for VPC attachments that contain stateful network appliances.
 
 ![The inspected path shows how segmentation, shared services, inspection VPCs, and hybrid links change the packet route](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/inspected-hybrid-path.png)
 
-*The inspected path shows how segmentation, shared services, inspection VPCs, and hybrid links change the packet route.*
+*Central inspection is still a sequence of destination-based route decisions, with the added requirement that both directions preserve the stateful appliance path.*
 
+The architecture is advanced, but the first principle stays ordinary:
 
-## Ownership Across Accounts
-<!-- section-summary: AWS RAM lets a central network account share Transit Gateway access while application accounts keep ownership of their VPC attachments and subnet routes. -->
-
-Large AWS environments usually put VPCs in separate accounts. A central networking account owns the Transit Gateway. Application accounts own their VPCs, subnets, route tables, and security groups. Security accounts own inspection VPCs and appliances. Data accounts own analytics networks.
-
-**AWS Resource Access Manager**, or AWS RAM, lets the network account share the Transit Gateway with other accounts or with an AWS Organization. An application account can then create a VPC attachment to the shared Transit Gateway. The network account controls TGW route table association, propagation, and central guardrails.
-
-This split needs a clear request pattern. Each attachment request should include account ID, VPC ID, CIDR, Region, attachment subnets, required destinations, ports, DNS names, return path owner, logging expectations, and the person who approves route blast radius. Without that detail, a route change can quietly grant broader reachability than the original application request needed.
-
-A cross-account workflow can look like this:
-
-1. The app team requests a flow from `app-prod` VPC `10.20.0.0/16` to `inventory.shared.internal` on TCP `443`.
-2. The network team confirms the Transit Gateway share through AWS RAM and validates CIDR overlap.
-3. The app account creates the VPC attachment using approved attachment subnets.
-4. The network account associates the attachment with `tgw-rtb-app` and adds only the shared services route needed for the flow.
-5. The app account updates the app private subnet route table.
-6. The shared services account confirms return routes and inventory security group rules.
-7. Both teams verify DNS, route tables, Flow Logs, and application health for the named flow.
-
-The RAM share and attachment state can be inspected from the application side:
-
-```bash
-aws ram get-resource-shares \
-  --resource-owner OTHER-ACCOUNTS \
-  --region eu-west-2 \
-  --query 'resourceShares[*].{Name:name,Status:status,OwningAccount:owningAccountId}'
+```text
+destination → routing policy → next attachment
 ```
 
-```json
-[
-  {
-    "Name": "central-networking-tgw",
-    "Status": "ACTIVE",
-    "OwningAccount": "111122223333"
-  }
-]
+### How Does Ownership Work Across AWS Accounts?
+<!-- section-summary: AWS RAM lets a network account own TGW policy while application accounts own their VPCs, workload routes, and application controls. -->
+
+Large organizations place VPCs in separate AWS accounts:
+
+```text
+Network account
+  ├─ Transit Gateway
+  ├─ TGW route tables
+  ├─ Direct Connect and VPN
+  └─ firewalls
+
+Application accounts
+  └─ workload VPCs
 ```
 
-`ACTIVE` means the share exists from this account's view. The attachment still needs its own create step. The next check is the attachment state, followed by route table association and propagation in the network account.
+The network account can share Transit Gateway through **AWS Resource Access Manager**, or RAM. Application accounts attach their VPCs to the shared TGW. The TGW owner retains control of route tables, associations, and propagations; participants do not modify those central routing structures.
 
-## Troubleshooting Multi-VPC Paths
-<!-- section-summary: TGW troubleshooting checks the source VPC route, source attachment association, TGW route, destination VPC return route, and packet controls in order. -->
+This creates a clean responsibility split:
 
-A Transit Gateway timeout needs a path check in order. Start with the resolved destination IP. Then check the source subnet route table. After that, check the source attachment's TGW route table association, the route inside that TGW route table, the destination VPC route back to the source, and packet controls on both sides.
+| Workload team | Central network team |
+|---|---|
+| Owns its VPC and workload subnets | Owns TGW and its route tables |
+| Owns application security groups | Controls cross-VPC routing policy |
+| Adds required VPC routes toward TGW | Controls association and propagation |
 
-A source route table check can look like this:
+Depending on TGW configuration, cross-account attachment requests can be accepted automatically or require explicit acceptance by the owner.
 
-```bash
-aws ec2 describe-route-tables \
-  --filters Name=association.subnet-id,Values=subnet-0appprivate \
-  --region eu-west-2 \
-  --query 'RouteTables[0].Routes[*].{Destination:DestinationCidrBlock,Target:TransitGatewayId,State:State}'
+The organizational model mirrors the technical model. The workload team provides one network and states which destinations it needs. The network team decides how that attachment participates in the organization's wider routing domains.
+
+## When Should You Choose Peering or Transit Gateway?
+<!-- section-summary: Peering is excellent for a small direct relationship, while Transit Gateway fits many networks, transitive hubs, segmentation, hybrid connectivity, and centralized ownership. -->
+
+Transit Gateway is not automatically better because it is more centralized. The choice follows the topology.
+
+| Situation | VPC peering | Transit Gateway |
+|---|---:|---:|
+| Two VPCs need direct connectivity | Excellent | Often unnecessary |
+| Small, stable relationships | Excellent | Possible |
+| Many VPCs | Cumbersome | Excellent |
+| Transitive routing | No | Yes |
+| Shared-services hub | Awkward at scale | Excellent |
+| Central VPN or Direct Connect | Limited by peering semantics | Excellent |
+| Central segmentation | Distributed | Centralized |
+| Inspection and shared egress | Awkward | Natural |
+| Cross-account central ownership | Possible but distributed | Strong fit |
+
+The shorthand is:
+
+```text
+Peering: Connect these two networks.
+Transit Gateway: Build a network that connects many networks.
 ```
 
-```json
-[
-  {
-    "Destination": "10.40.0.0/16",
-    "Target": "tgw-0123456789abcdef0",
-    "State": "active"
-  },
-  {
-    "Destination": "0.0.0.0/0",
-    "Target": null,
-    "State": "active"
-  }
-]
-```
+Neither option fixes overlapping addresses. Transit Gateway does not normally route between attached VPCs with overlapping CIDRs, and peering also prohibits overlapping CIDRs. Address planning remains a prerequisite.
 
-The first row says traffic from this app subnet to shared services enters the Transit Gateway. If that row is missing, the next action belongs to the app VPC route table owner. If that row exists, continue to the source attachment association and the TGW route table used by that attachment.
+## How Do You Troubleshoot a Multi-VPC Path?
+<!-- section-summary: A reliable investigation traces the source VPC route, attachment, source-associated TGW table, destination VPC, return path, and security layers. -->
 
-Attachment association output can look like this:
+Do not treat green attachment status as proof that an application path works. Trace one exact flow and then its return.
 
-```bash
-aws ec2 describe-transit-gateway-attachments \
-  --filters Name=transit-gateway-id,Values=tgw-0123456789abcdef0 \
-  --region eu-west-2 \
-  --query 'TransitGatewayAttachments[].{Id:TransitGatewayAttachmentId,State:State,ResourceType:ResourceType,ResourceId:ResourceId,Association:Association}'
-```
+1. Write the source IP, destination IP, protocol, port, source and destination VPCs, and Availability Zones. `10.1.1.10 → 10.2.2.20:443` is actionable; "A cannot reach B" is not.
+2. Inspect the source subnet's VPC route table. Find the most-specific destination match and prove its target is TGW.
+3. Confirm the VPC attachment is active and that the relevant Availability Zone participates in the attachment.
+4. Identify the TGW route table associated with the source attachment. Do not inspect a convenient table that the packet never uses.
+5. Look up the destination in that table. Confirm the longest match points to the expected attachment rather than an inspection path, VPN, wrong VPC, or blackhole.
+6. Inspect routing inside the destination VPC so packets arriving from TGW can reach the target.
+7. Check security groups, NACLs, firewalls, host controls, and the application's listening port only after the route sequence is sound.
+8. Trace the whole return independently: destination subnet to TGW, destination attachment's associated table to the source attachment, and source VPC delivery.
+9. Test with the destination IP when practical to separate Route 53 behavior from TGW routing.
+10. After constructing the expected path, compare it with Reachability Analyzer, TGW Flow Logs, and VPC Flow Logs. Reachability Analyzer statically examines configuration, TGW Flow Logs observe transit traffic, and VPC Flow Logs observe interface-level traffic inside VPCs.
 
-```json
-[
-  {
-    "Id": "tgw-attach-0app1111111111111",
-    "State": "available",
-    "ResourceType": "vpc",
-    "ResourceId": "vpc-0appreceipts",
-    "Association": {
-      "TransitGatewayRouteTableId": "tgw-rtb-0app",
-      "State": "associated"
-    }
-  }
-]
-```
-
-This output tells you which TGW route table to inspect. Many incidents last too long because the team searches a TGW route table that has the right route while the source attachment is associated with a different table. The association field tells you the table that matters for traffic entering from the app VPC.
-
-For hybrid paths, add the customer network route. A perfect AWS route table still leaves a return-route gap when the corporate router lacks `10.20.0.0/16` or filters that prefix. If BGP carries the route, inspect advertised prefixes and route filters. If static routing carries the route, inspect the exact CIDR and next hop on both sides.
-
-A concise TGW runbook can stay tied to one flow:
-
-1. Resolve the destination name from the source workload and write down the destination IP.
-2. Check the source subnet route table for the destination CIDR.
-3. Check the source TGW attachment association.
-4. Search that associated TGW route table for the destination CIDR.
-5. Check the destination VPC subnet route table for the source return CIDR.
-6. Check security groups, NACLs, DNS, and inspection firewall state.
-7. Use VPC Flow Logs or Reachability Analyzer to compare packet evidence with the configuration review.
-
-When the issue is intermittent, check attachment state changes, route propagation timing, appliance health in inspection VPCs, BGP route advertisements, and recent Terraform or console changes. Multi-VPC failures often show up to the app as a plain timeout, so the on-call note should name the exact hop that failed and the owner who fixed it.
+Stateful inspection makes asymmetry especially important. A forward path through one firewall and a return path around it can fail even when every destination has some route.
 
 ![The routing checklist gives a multi-VPC investigation order across VPC route tables, Transit Gateway routes, security controls, DNS, and logs](/content-assets/articles/article-cloud-providers-aws-networking-connectivity-connectivity-hybrid-networking/multi-vpc-routing-checklist.png)
 
-*The routing checklist gives a multi-VPC investigation order across VPC route tables, Transit Gateway routes, security controls, DNS, and logs.*
+*Start with the source VPC and source-associated TGW table, then prove the reverse path through the destination's independently selected tables.*
 
+The entire system reduces to three questions:
+
+```text
+1. Does the source VPC send this destination to TGW?
+
+2. Does the route table associated with the source
+   attachment send it to the right next attachment?
+
+3. Can the same two-layer process happen in reverse?
+```
+
+The progression is:
+
+```text
+one VPC → one routing domain
+two VPCs → need a connection
+peering → direct point-to-point connection
+many peerings → mesh growth and no transitive routing
+Transit Gateway → central Layer-3 router
+attachments → ports into that router
+VPC routes → decide whether packets go to the router
+TGW routes → decide which attachment the router selects
+association → policy for traffic from an attachment
+propagation → tables that learn how to reach an attachment
+multiple TGW tables → segmentation
+AWS RAM → central ownership across accounts
+```
+
+The one sentence to retain is: **a VPC route table gets the packet to Transit Gateway; the route table associated with the source attachment gets the packet from Transit Gateway to its next attachment.**
+
+## Check Your Answers
+<!-- section-summary: Review the direct, hub, attachment, dual-route, segmentation, ownership, and return-path concepts. -->
+
+:::expand[Why Do Separate VPCs Need an Explicit Connection?]{kind="recap"}
+A VPC is an isolated Layer-3 network, so traffic to another VPC needs a route and an explicit inter-network next hop.
+
+Each VPC is an isolated Layer-3 routing domain. The source needs a route to an explicit inter-network next hop, the destination needs a return path, and packet security still has to permit the flow.
+:::
+
+:::expand[When Does VPC Peering Fit?]{kind="recap"}
+Peering creates a direct, non-transitive Layer-3 relationship that stays simple for a small number of VPC pairs.
+
+Each side routes the other VPC's non-overlapping CIDR to the peering connection. Peering provides the direct connection but does not create a transitive router for additional VPCs.
+
+Transit Gateway replaces many pairwise connections with one regional managed router and a roughly linear number of attachments.
+
+Each network attaches once to a managed hub rather than establishing a pairwise connection to every other network. Attachments grow roughly with the number of networks instead of the square of that number.
+:::
+
+:::expand[What Is a Transit Gateway Attachment?]{kind="recap"}
+An attachment connects one network to Transit Gateway like a router port, but routing policy still determines where its packets may go.
+
+It connects a network to the Transit Gateway like a router port. It does not grant full connectivity; VPC and TGW route tables still select the paths available through it.
+
+Not through normal VPC attachment routing. Peering also prohibits overlapping CIDRs. Multi-VPC design still needs coordinated address planning.
+:::
+
+:::expand[Why Are There Two Route-Table Lookups?]{kind="recap"}
+The source VPC route table gets the packet to TGW, and the TGW table associated with the source attachment chooses the destination attachment.
+
+The source subnet's VPC route table decides whether the packet enters TGW. The TGW route table associated with the source attachment then decides which attachment receives it.
+
+Association chooses the TGW table for traffic arriving from an attachment, while propagation teaches selected tables how to reach that attachment.
+
+Association selects the one TGW table used for traffic arriving from an attachment. Propagation teaches one or more TGW tables how to reach the attachment's network.
+:::
+
+:::expand[How Do Multiple TGW Route Tables Create Segmentation?]{kind="recap"}
+Different associations and propagation sets can let spokes reach shared services while omitting routes between the spokes.
+
+Associate both spokes with a table that has only the shared-services route. Associate shared services with a table containing return routes to both spokes. Omit spoke-to-spoke routes.
+
+It is the set of networks that gain possible reachability when a route, propagation, association, or attachment changes. One shared default table can make a new sensitive attachment visible to many existing networks.
+:::
+
+:::expand[How Do Shared Services and Inspection Fit the Hub?]{kind="recap"}
+The hub centralizes common networks and can steer flows through stateful inspection or egress paths while preserving return symmetry.
+
+The appliance tracks conversation state. Forward and return traffic must traverse the intended appliance path, which can require inspection route tables and Transit Gateway appliance mode.
+
+AWS RAM lets a network account own TGW policy while application accounts own their VPCs, workload routes, and application controls.
+
+Application accounts own VPCs, workload subnets, VPC routes, and application security groups. A central network account shares TGW and controls its route tables, associations, propagations, and cross-network policy.
+:::
+
+:::expand[When Should You Choose Peering or Transit Gateway?]{kind="recap"}
+Peering is excellent for a small direct relationship, while Transit Gateway fits many networks, transitive hubs, segmentation, hybrid connectivity, and centralized ownership.
+:::
+
+:::expand[How Do You Troubleshoot a Multi-VPC Path?]{kind="recap"}
+A reliable investigation traces the source VPC route, attachment, source-associated TGW table, destination VPC, return path, and security layers.
+
+Check the source VPC route, attachment and Availability Zone presence, source attachment's associated TGW table, destination attachment and VPC route, then repeat the entire chain for the return before moving to security and application layers.
+:::
 
 ## References
 
-- [AWS Transit Gateway documentation: What is AWS Transit Gateway?](https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html)
-- [AWS Transit Gateway documentation: Transit Gateway route tables](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html)
-- [Amazon VPC documentation: VPC peering](https://docs.aws.amazon.com/vpc/latest/peering/what-is-vpc-peering.html)
-- [AWS Resource Access Manager documentation](https://docs.aws.amazon.com/ram/latest/userguide/what-is.html)
-- [Share your transit gateway with other accounts using AWS RAM](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-transit-gateways.html#transit-gateway-sharing)
+- [Route priority](https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html) - Explains longest-prefix destination matching.
+- [How VPC peering works](https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html) - Documents point-to-point, non-transitive peering behavior.
+- [VPC peering at scale](https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/vpc-peering.html) - Compares point-to-point peering with larger network designs.
+- [How AWS Transit Gateway works](https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html) - Covers the regional router, attachments, route tables, association, propagation, blackholes, and appliance mode.
+- [Transit Gateway VPC attachments](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html) - Documents attachment subnets, Availability Zones, overlapping CIDRs, and VPC routes.
+- [Transit gateways](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-transit-gateways.html) - Explains multiple tables and segmentation.
+- [Create a VPC attachment](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-transit-gateway-vpc-attachment.html) - Documents the VPC attachment inputs.
+- [Work with Transit Gateway](https://docs.aws.amazon.com/vpc/latest/tgw/working-with-transit-gateways.html) - Covers owner and participant responsibilities for shared TGWs.
+- [Accept a shared attachment](https://docs.aws.amazon.com/vpc/latest/tgw/acccept-tgw-attach.html) - Describes manual and automatic cross-account acceptance.
+- [Reachability Analyzer](https://docs.aws.amazon.com/vpc/latest/userguide/reachability-analyzer.html) - Introduces static path analysis for VPC and TGW configurations.

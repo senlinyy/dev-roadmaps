@@ -75,7 +75,7 @@ The fourth responsibility is **model and release identity**. A model registry gi
 The fifth responsibility is **operational decision and evidence storage**. Approval records, deployment events, prediction summaries, service telemetry, and later outcomes explain production behaviour. Release systems, observability platforms, and governed warehouses are common homes for these records. The model artifact directory remains focused on file payloads.
 
 ```mermaid
-flowchart TD
+flowchart LR
     Question["Storage Question<br/>(what must this record prove?)"] --> Bytes["Artifact Bytes<br/>(preserve large immutable outputs)"]
     Question --> Dataset["Dataset Snapshot<br/>(preserve one complete data state)"]
     Question --> Experiment["Experiment Metadata<br/>(explain one training attempt)"]

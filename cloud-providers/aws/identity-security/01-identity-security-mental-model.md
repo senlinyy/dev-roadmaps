@@ -1,7 +1,7 @@
 ---
 title: "What Is AWS IAM"
-description: "Understand the AWS access model: root, users, groups, roles, policies, least privilege, MFA, and temporary credentials."
-overview: "IAM is the system AWS uses to answer who is calling, what they can do, and how long that access should last. This article builds the beginner access map before the module moves into daily access, policy design, and account guardrails."
+description: "Understand how AWS IAM uses identities, credentials, roles, policies, temporary sessions, MFA, and guardrails to decide whether an API request is allowed."
+overview: "IAM answers who is calling AWS and what that caller may do. Build the model from root and IAM users through roles, Identity Center, policy evaluation, least privilege, and MFA."
 tags: ["iam", "security", "authorization", "aws"]
 order: 1
 id: article-cloud-providers-aws-identity-security-identity-security-mental-model
@@ -20,116 +20,355 @@ aliases:
 
 ## Table of Contents
 
-1. [The Root User](#the-root-user)
-2. [IAM Users](#iam-users)
-3. [IAM Groups](#iam-groups)
-4. [The Credential Problem](#the-credential-problem)
-5. [IAM Roles](#iam-roles)
-6. [IAM Identity Center](#iam-identity-center)
-7. [The Policy Language](#the-policy-language)
-8. [Least Privilege](#least-privilege)
-9. [MFA](#mfa)
-10. [Putting It All Together](#putting-it-all-together)
-11. [What's Next](#whats-next)
+1. [How Does IAM Decide Whether AWS Should Accept a Request?](#how-does-iam-decide-whether-aws-should-accept-a-request)
+2. [How Are Identity, Credentials, and Permissions Different?](#how-are-identity-credentials-and-permissions-different)
+3. [Why Are Temporary Credentials Safer Than Long-Lived Keys?](#why-are-temporary-credentials-safer-than-long-lived-keys)
+4. [How Do IAM Roles Work?](#how-do-iam-roles-work)
+5. [How Does IAM Identity Center Give People AWS Access?](#how-does-iam-identity-center-give-people-aws-access)
+6. [How Do IAM Policies Describe Access?](#how-do-iam-policies-describe-access)
+7. [How Do Least Privilege and MFA Reduce Risk?](#how-do-least-privilege-and-mfa-reduce-risk)
+8. [How Does the Complete IAM Model Fit Together?](#how-does-the-complete-iam-model-fit-together)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-This article builds the AWS access picture in layers. First comes the account owner, then named people, then groups, then the problem with long-lived access keys. After that, roles and Identity Center give the safer daily pattern: short-lived sessions for humans, applications, and automation. Policies describe what those sessions may do, least privilege keeps the permission small, and MFA protects the sign-in path.
+## How Does IAM Decide Whether AWS Should Accept a Request?
+<!-- section-summary: IAM helps AWS evaluate the principal, action, resource, and request context before returning allow or deny. -->
 
-The example is a small team building an image upload service. Alice is the first administrator, Bob is an application developer, Carlos runs the deployment scripts, and Diana reviews security evidence. The application stores images in S3, runs thumbnail code in Lambda, and later grows into multiple accounts. The names are simple, but they match a real production question: which identity should each person or workload use, and how much access should that identity receive?
+AWS Identity and Access Management, or **IAM**, controls who is authenticated and what that identity is authorized to do with AWS resources. The definition becomes clearer when you begin with one API request.
 
-## The Root User
-<!-- section-summary: The account has one identity that owns everything, so daily AWS work needs a safer access path. -->
+Imagine an account that contains an S3 bucket, an EC2 instance, a DynamoDB table, and a Lambda function. A caller sends this request:
 
-Imagine that same tiny company opening its first AWS account. The moment that account exists, it has a **root user**. This identity has unrestricted access to everything in the account: every service, every resource, every billing configuration. A normal IAM policy cannot limit what this identity can do. It can delete infrastructure, close the account, change billing settings, and recover access after an IAM lockout.
-
-Think of it like the master key to a building. You need it to exist. You might need it in a real emergency, like when the only remaining administrators are locked out. But you do not carry a master key around for daily work. You lock it away.
-
-Only a handful of operations should require root: closing the account, changing some account-level settings, handling certain support and billing changes, and recovering from rare access failures. For literally everything else, use a different identity.
-
-Securing the root user starts with **multi-factor authentication**, usually shortened to MFA. MFA means sign-in requires a second proof beyond the password. AWS requires root MFA registration within 35 days of the first console sign-in attempt if MFA is not already enabled. The strongest option is a phishing-resistant passkey or hardware security key rather than a one-time code app on your phone. A passkey is bound to the legitimate AWS sign-in domain, so even a perfect login page clone cannot harvest it.
-
-Beyond MFA, never create access keys for the root user. An access key is a pair of secret values used by the AWS CLI, SDKs, scripts, and applications to call AWS APIs. The AWS CLI is the terminal tool for calling AWS. An SDK is a programming library that lets application code call AWS. Root access keys are the single most dangerous credential in an AWS account because they grant full API access with no natural expiration. If legacy root access keys exist, delete them.
-
-So the root user is locked away. Now your team needs access.
-
-## IAM Users
-<!-- section-summary: IAM users give named people account access, but they also create long-lived credentials that need cleanup. -->
-
-The natural first step is creating **IAM users**. Each user gets a unique identity inside one AWS account, represented by an ARN like `arn:aws:iam::123456789012:user/alice`. An ARN is AWS's full address for a cloud identity or resource, similar to a full path for infrastructure. A user can have a password for logging into the AWS Console, access keys for programmatic access through the CLI or SDK, and MFA devices bound to that identity.
-
-When your team is three people, this works. You create `alice`, `bob`, and `carlos`, give each a console password, generate access keys for local development, and attach some permissions. Simple.
-
-But here's the thing. You just created three sets of long-lived credentials that never expire unless someone manually rotates or deletes them. Those access keys can sit in `~/.aws/credentials` files on laptops, in CI/CD environment variables, maybe in a `.env` file that is one bad `.gitignore` away from GitHub. CI/CD means the automated build and deployment system. Each set of credentials is a static secret that grants access around the clock until it is explicitly revoked.
-
-We'll come back to why that is dangerous. First, deal with the more immediate headache: what happens when the team goes from 3 users to 15?
-
-## IAM Groups
-<!-- section-summary: Groups reduce repeated permission work when teams grow, while the underlying static credentials remain. -->
-
-With 3 users, you can manage permissions individually. Attach a policy to Alice, copy a similar one to Bob, make a small exception for Carlos. With 15 users, this falls apart fast.
-
-Say 8 engineers need the same permissions: read and write access to one S3 bucket, permission to deploy Lambda functions, and read access to CloudWatch logs. S3 is AWS object storage for files, images, backups, exports, and reports. Lambda runs code without you managing servers. CloudWatch collects metrics, logs, and alarms. Without groups, you attach the same set of policies to 8 individual users. When the team needs a new permission, you have to remember to update all 8. When someone joins, you have to remember which policies the others have. When someone leaves, you have to find and detach everything.
-
-**IAM groups** solve this repetition. A group is a named collection of IAM users that share the same permissions. Create a group called `Developers`, attach the policies to the group once, and add users to it. Users inherit permissions from every group they belong to.
-
-```mermaid
-graph TB
-    AdminG[Admins Group]:::security
-    DevG[Developers Group]:::compute
-    ReadG[ReadOnly Group]:::other
-
-    AdminP[AdministratorAccess<br/>Policy]:::security
-    DevP[DeveloperAccess<br/>Policy]:::compute
-    ReadP[ReadOnlyAccess<br/>Policy]:::other
-
-    AdminG --- AdminP
-    DevG --- DevP
-    ReadG --- ReadP
-
-    U1[Alice]:::other --> AdminG
-    U2[Bob]:::other --> DevG
-    U3[Carlos]:::other --> DevG
-    U4[Diana]:::other --> ReadG
-    U5[Eve]:::other --> DevG
-    U5 --> ReadG
+```text
+DeleteBucket(my-production-bucket)
 ```
 
-Notice Eve belongs to both `Developers` and `ReadOnly`. A user can be in multiple groups and receives the combined permissions. New engineer joins? Add them to the right group. Engineer leaves? Remove them from the groups.
+AWS cannot decide from the command alone. It must answer four questions:
 
-There are a few important limits. Groups cannot be nested, so you cannot put one group inside another. A group is not an identity in IAM, which means you cannot reference a group as a `Principal` in a policy. A principal is the caller a policy is talking about. Groups are only an administrative convenience for organizing user permissions. And groups do not have credentials. A group never signs in to anything. Only users do.
+```text
+WHO is making the request?
+WHAT action are they attempting?
+WHICH resource is the target?
+UNDER WHAT circumstances is the request being made?
+```
 
-Groups reduce repeated policy work, but the users still have long-lived credentials. The next problem is the credential itself.
+Nearly every AWS authorization decision can be modeled as:
 
-## The Credential Problem
-<!-- section-summary: Static access keys keep working until someone removes them, which makes leaks and offboarding hard to contain. -->
+```text
+Request = Principal + Action + Resource + Context
+```
 
-Let's go back to the growing startup. You have 15 IAM users organized into groups. Permissions are more manageable. But every one of those users may still have access keys, and those keys are a problem.
+For example:
 
-Those keys never expire. An access key created today works forever unless someone manually deactivates or deletes it. It lives outside AWS, sitting in config files on laptops, in CI/CD secrets, in shared password managers, and every copy is a potential leak. It cannot be scoped by device or intent on its own: if stolen, it works just as well for the attacker as it did for your engineer.
+```text
+Principal: Alice
+Action:    s3:GetObject
+Resource:  arn:aws:s3:::company-data/report.csv
+Context:   company network, MFA present, 10:30
+```
 
-It also creates offboarding nightmares. When someone leaves, you have to find and rotate every key they touched. Did they copy a key into a Docker image? Into a Lambda environment variable? Into a Slack message six months ago? AWS can deactivate the IAM user's active keys, but it cannot automatically erase every place those secret values were pasted.
+The **principal** is the authenticated caller. The **action** is the AWS API operation. The **resource** is the AWS object the action targets. The **context** contains request facts that policies may test, such as the network path, authentication method, session attributes, or resource tags.
 
-CloudTrail, AWS's activity record for API calls, can show that a key made a request. But if the same long-lived key was used from a laptop, a script, and a deployment job, the evidence is harder to read. Was the request the person, the script, a copied key, or an attacker?
+IAM and the applicable AWS policy mechanisms evaluate those facts and produce one of two results:
 
-Modern AWS access tries to avoid credentials that work forever. If a temporary credential leaks, the exposure is limited to the time left in that session, often minutes or hours.
+```text
+ALLOW
+```
 
-IAM roles solve this by giving callers temporary credentials instead of permanent keys.
+or:
 
-## IAM Roles
-<!-- section-summary: Roles let AWS hand out temporary credentials to people, services, applications, and other accounts. -->
+```text
+DENY
+```
 
-An **IAM role** is an identity without permanent credentials. It defines a set of permissions that can be assumed by whoever needs them: an EC2 instance, a Lambda function, a container task in ECS, a user from another AWS account, or a human through federation. EC2 provides virtual servers. ECS runs containers.
+That request model is the foundation for the rest of IAM. Users, roles, permission sets, policies, MFA, STS, and organizational guardrails all contribute information to one or more parts of the decision.
 
-When something assumes a role, AWS Security Token Service, usually shortened to STS, issues temporary credentials: an access key ID, a secret access key, and a session token. These three values grant access together, but they expire automatically after a configured duration. No permanent secret has to sit in a config file. No manual rotation is needed for the session. It just stops working.
+The sections below answer these questions in order:
 
-To understand a role, ask two policy questions.
+1. **How Does IAM Decide Whether AWS Should Accept a Request?**
+2. **How Are Identity, Credentials, and Permissions Different?**
+3. **Why Are Temporary Credentials Safer Than Long-Lived Keys?**
+4. **How Do IAM Roles Work?**
+5. **How Does IAM Identity Center Give People AWS Access?**
+6. **How Do IAM Policies Describe Access?**
+7. **How Do Least Privilege and MFA Reduce Risk?**
+8. **How Does the Complete IAM Model Fit Together?**
 
-**The trust policy** defines who can assume this role. It is a resource-based policy attached to the role itself. Without a matching trust policy, nobody can use the role, even if they have broad IAM permissions somewhere else.
+## How Are Identity, Credentials, and Permissions Different?
+<!-- section-summary: Authentication proves the caller's identity, authorization determines permitted actions, and credentials are the evidence used to authenticate. -->
 
-**The permission policies** define what the role can do once it has been assumed. These are the same identity-based policies you attach to a user, group, or role.
+IAM deals with two related but separate problems. **Authentication** asks, “Who are you?” Evidence can include a password, MFA, an access key, temporary security credentials, or a federated login.
 
-Here is a concrete example. Your application runs on EC2 and needs to read files from one S3 bucket. The old way is to generate access keys for an IAM user and store them on the instance. The modern way is to create a role.
+**Authorization** asks, “Now that AWS knows who you are, what may you do?” Alice might be allowed to read objects from bucket A and restart EC2 instances while being forbidden to delete the bucket, change IAM, or read the payroll bucket.
 
-Trust policy, telling AWS that EC2 instances can assume this role:
+Three concepts must therefore remain distinct:
+
+| Concept | Question |
+|---|---|
+| Identity | Who are you? |
+| Credential | How can you prove it? |
+| Permission | What may you do? |
+
+An access key is a credential, not a permission. An IAM user is an identity, not a permission. A role is an identity that can be assumed, not a permanent credential. These things interact during a request, but they have different jobs.
+
+### The account owns the resources
+
+AWS resources live under an AWS account:
+
+```text
+AWS account
+├── EC2 resources
+├── S3 resources
+├── Lambda resources
+└── DynamoDB resources
+```
+
+When the account is created, AWS also creates the **root user**, the original identity associated with ownership of that account.
+
+### The root user is the owner identity
+
+The root user has extremely broad control and should not be the normal identity for deployment, database work, log inspection, development, or scripts. Think of it as the owner of the building rather than an employee performing a daily job inside it.
+
+```text
+root user
+    │
+    │ used extremely rarely
+    ▼
+account-level or emergency operations
+```
+
+Some account-level operations require root credentials. That is why the root identity exists and must be recoverable. It should be strongly protected with MFA, should not have long-term root access keys, and should be kept out of everyday workflows. In an AWS Organizations environment, member-account root access can also be secured centrally, including removing root credentials from member accounts.
+
+The durable mental model is: **root is the account's master ownership identity, not the everyday administrator.** Daily people and workloads need identities with smaller, task-specific permissions.
+
+### When Do IAM Users and Groups Fit?
+<!-- section-summary: IAM users are persistent identities in one account, while groups are permission-management collections for those users. -->
+
+An **IAM user** is a persistent identity inside one AWS account. If a company has Alice, Bob, and Charlie, it can create one IAM user for each:
+
+```text
+AWS account
+├── Alice
+├── Bob
+└── Charlie
+```
+
+An IAM user can have long-lived credentials such as a console password or an access key ID and secret access key. Creating the user does not grant useful access by itself. A new IAM user has no permissions until policies grant them.
+
+Alice might receive `s3:GetObject`. Bob might receive `ec2:StartInstances` and `ec2:StopInstances`. This works for a small number of users, but assigning the same policies separately to a hundred developers becomes difficult to maintain.
+
+#### Groups reduce repeated permission work
+
+An **IAM group** is a collection used to assign permissions to IAM users. Instead of attaching the same developer policies to one hundred users, the account can attach those policies once to a `Developers` group:
+
+```text
+              Developers group
+             /        |        \
+          Alice      Bob      Charlie
+```
+
+Users in the group receive the group's permissions. A user can belong to several groups, and the effective permissions can come from each. Groups cannot contain other groups.
+
+The group is not an authenticated identity. Nobody signs in as `Developers`, and a group cannot be used as the principal in an IAM resource policy. It has no password, access key, or role session. Its purpose is to organize permissions for IAM users.
+
+```text
+IAM user  → persistent identity
+IAM group → permission-management collection for users
+```
+
+IAM users and groups remain useful in specific cases, but a persistent user can also create persistent credential risk. That is why modern AWS guidance prefers federation and temporary credentials for workforce access where possible, and reserves IAM users for cases that the federated model does not support.
+
+## Why Are Temporary Credentials Safer Than Long-Lived Keys?
+<!-- section-summary: Temporary credentials expire automatically, reducing the storage, rotation, offboarding, and compromise risks created by permanent access keys. -->
+
+Suppose an application must upload files to S3. One design creates an IAM user named `uploader-app`, generates a long-lived access key, and stores it on the server:
+
+```text
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+The request can work, but the application now owns a permanent secret. The team must answer a long list of operational questions:
+
+- Where is the key stored?
+- How is it distributed?
+- Who can read it?
+- How often is it rotated?
+- What if somebody copies it?
+- What happens when an employee leaves?
+- What if the key is committed to a public repository?
+- What if the application prints it in a log?
+
+If a long-lived key is stolen, it may remain usable until somebody detects the compromise and deactivates or deletes it. Every copy of the value becomes another place that must be found and cleaned up.
+
+The safer credential is often one that the team never needs to store permanently. **AWS Security Token Service**, or **STS**, issues temporary credentials that behave like AWS API credentials but expire automatically.
+
+```text
+trusted identity
+      │
+      │ requests temporary access
+      ▼
+     STS
+      │
+      │ issues temporary credentials
+      ▼
+AWS API requests
+```
+
+A credential valid for one hour becomes invalid when the session expires. A stolen temporary credential is still a security incident, but the time in which it can be used is bounded. Temporary sessions also reduce manual rotation work because AWS issues and expires the credentials as part of the access flow.
+
+AWS recommends temporary credentials for both humans and workloads wherever the access pattern supports them. IAM roles are the primary identity mechanism that uses this temporary-credential model.
+
+## How Do IAM Roles Work?
+<!-- section-summary: An IAM role separates who may assume an identity from what the resulting temporary role session may do. -->
+
+An **IAM role** is an identity with permissions and no permanent credentials attached to it. An authorized principal assumes the role, and STS issues temporary credentials for a role session.
+
+Imagine a rack of temporary badges:
+
+```text
+permanent identity: Alice
+available role:     ProductionReadOnly
+```
+
+Alice first authenticates as herself. She then assumes the role:
+
+```text
+Alice
+   │
+   │ AssumeRole
+   ▼
+ProductionReadOnly role session
+   │
+   │ temporary credentials
+   ▼
+read production resources
+```
+
+Alice has not become a permanent user named `ProductionReadOnly`. She operates as that role for one temporary session. When the session expires, its credentials become invalid.
+
+### A role answers two policy questions
+
+Every role has two sides:
+
+```text
+WHO may become this role?
+WHAT may the role do after it is assumed?
+```
+
+The role's **trust policy** answers the first question. It identifies principals trusted to assume the role. The trusted principal could be Alice, an AWS service such as EC2, an approved principal in another account, or another supported identity.
+
+The role's **permissions policies** answer the second question. Once a principal has assumed `ProductionReadOnly`, the resulting session might be allowed to perform `s3:GetObject`, `dynamodb:GetItem`, and `cloudwatch:GetMetricData` on specified resources.
+
+```text
+trust policy
+  → who can enter the role
+
+permissions policy
+  → what the role session can do after entry
+```
+
+A caller can have permission to request `AssumeRole`, but the role must also trust that caller. Likewise, a correct trust relationship only permits entry; it does not by itself grant access to S3, DynamoDB, or CloudWatch after entry.
+
+### Workloads should normally use roles
+
+Software running on EC2 may need `s3:GetObject`. Embedding an IAM user's permanent key on the server creates a secret to store and rotate. Attaching an application role creates a different path:
+
+```text
+EC2 instance
+      │
+      │ receives AppRole credentials
+      ▼
+temporary role credentials
+      │
+      ▼
+     S3
+```
+
+AWS can make temporary credentials available to the compute environment, and AWS SDKs can discover and refresh them automatically. Lambda functions use execution roles for the same reason. Container workloads can also receive workload-specific roles through their AWS runtime integration.
+
+The rule is simple:
+
+```text
+code needs AWS access
+        │
+        ▼
+usually choose a role,
+not an IAM user with a permanent key
+```
+
+### Roles support cross-account access
+
+Suppose a company separates development and production accounts. It does not need to create permanent users and keys for each developer in both accounts. A centrally authenticated developer can assume a role in production:
+
+```text
+developer
+   │
+   │ authenticates centrally
+   ▼
+approved identity
+   │
+   │ AssumeRole
+   ▼
+ProductionReadOnly role in production account
+```
+
+The production role's trust policy identifies the approved caller. Its permissions limit the session to production reads. STS supplies temporary credentials. Roles therefore provide delegated cross-account access without sharing one account's permanent credentials with another.
+
+![The request gate shows how a caller enters a trusted role, receives temporary credentials, and then faces normal policy evaluation for each AWS API request](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-request-gate.png)
+
+*A role's trust policy controls entry, while its permissions control the actions available after entry.*
+
+## How Does IAM Identity Center Give People AWS Access?
+<!-- section-summary: IAM Identity Center connects a workforce identity source to permission sets, IAM roles, and temporary AWS account sessions. -->
+
+Roles solve temporary access for workloads and cross-account delegation. A company with 2,000 employees and 50 AWS accounts still needs a manageable workforce sign-in system. Creating 50 separate copies of Alice, Bob, and Charlie as IAM users would multiply onboarding, credential, and offboarding work.
+
+**AWS IAM Identity Center** centralizes workforce access to AWS accounts and applications. It can maintain users itself or integrate with an external identity provider or directory.
+
+```text
+company identity source
+├── Developers
+└── Finance
+       │
+       ▼
+IAM Identity Center
+       │
+       ▼
+assigned AWS accounts and access levels
+```
+
+Alice authenticates through the company identity system. Identity Center knows which accounts and access assignments belong to her. She may receive Developer access in the development account and ReadOnly access in production.
+
+### Permission sets become account roles
+
+A **permission set** is a centrally managed description of the access someone should receive in an AWS account. A `ReadOnly` permission set may allow resource inspection without modifications. A `DatabaseAdmin` permission set may contain permissions for RDS, DynamoDB, and Aurora operations.
+
+Identity Center provisions corresponding IAM roles into the assigned AWS accounts. An authorized user reaches the role through the AWS access portal or CLI and receives a temporary session:
+
+```text
+Alice
+  │
+  │ authenticates
+  ▼
+Identity Center
+  │
+  │ selects account + permission set
+  ▼
+IAM role in target account
+  │
+  │ STS temporary credentials
+  ▼
+AWS API requests
+```
+
+The permission set and IAM role are related but not identical. The permission set is the centralized template and assignment. Identity Center uses it to create and manage the role that exists in the target account. The user ultimately operates through a temporary role session.
+
+The useful simplification is: **Identity Center manages workforce access; IAM roles represent the AWS permissions workers temporarily receive.** IAM Identity Center sits above IAM for human access, while IAM roles and policies still enforce the permissions underneath.
+
+## How Do IAM Policies Describe Access?
+<!-- section-summary: IAM JSON policies describe effects, actions, resources, principals, and conditions from either the identity or resource side of an access relationship. -->
+
+Identities answer who can make a request. **Policies** describe what those identities or sessions may do. A simple IAM policy is a JSON document:
 
 ```json
 {
@@ -137,337 +376,363 @@ Trust policy, telling AWS that EC2 instances can assume this role:
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": {
-        "Service": "ec2.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::company-reports/*"
     }
   ]
 }
 ```
 
-The trust policy is the entry rule for the role. `Principal` names the trusted caller, and in this case the trusted caller is the EC2 service. `Action` is `sts:AssumeRole` because the caller is asking AWS STS for a temporary role session. This policy does not grant S3 access by itself. It only says EC2 is allowed to enter the role.
+Read the statement as: allow the holder of this permission to perform the S3 `GetObject` API action on objects under the `company-reports` bucket.
 
-Permission policy, granting the role access to a specific S3 bucket:
+The core vocabulary is small:
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::my-data-bucket",
-        "arn:aws:s3:::my-data-bucket/*"
-      ]
-    }
-  ]
-}
+| Policy element | Meaning |
+|---|---|
+| `Effect` | Whether the statement allows or denies |
+| `Action` | Which AWS API operation or operations |
+| `Resource` | Which AWS resource or resource set |
+| `Principal` | Which caller, where that element is supported |
+| `Condition` | Which request facts must be true |
+
+An action such as `s3:GetObject` names an API operation. A resource ARN such as `arn:aws:s3:::financial-data/*` narrows that operation to objects in a defined location. A condition can require MFA, a specific VPC endpoint, a source network, or a resource tag such as `Environment=Development`.
+
+IAM is therefore more expressive than an `admin` or `non-admin` switch. A policy can narrow the action, target, circumstances, and sometimes the principal.
+
+### Identity and resource policies describe opposite sides
+
+Suppose Alice needs to read one S3 bucket:
+
+```text
+Alice ─────→ S3 bucket
 ```
 
-The permission policy answers the second question: what can the role session do after EC2 enters the role? `Action` names the S3 API permissions. `Resource` names the bucket and object paths. The bucket ARN without a suffix allows `ListBucket` on the bucket itself. The ARN with `/*` allows `GetObject` on the objects inside. Omitting either one is a common reason for staring at `AccessDenied` even when the policy looks close.
+An **identity-based policy** starts from Alice: “Alice may read bucket X.” It attaches to a user, group, or role.
 
-You attach this role to the EC2 instance through an **instance profile**, which is the wrapper EC2 uses to place an IAM role on an instance. The AWS SDK running on that instance automatically fetches temporary credentials from the instance metadata service, uses them to call S3, and refreshes them before they expire. No keys in config files. No secrets to rotate. No credentials that outlast the runtime that needed them.
+A **resource-based policy** starts from the bucket: “Bucket X accepts reads from Alice.” It attaches to the resource and names an allowed principal where the service supports that model.
 
-Roles show up everywhere in AWS. Lambda execution roles give functions permission to call other services. ECS task roles give each container task its own AWS identity. Cross-account roles let Account A assume a role in Account B without sharing credentials between accounts. Service-linked roles are roles AWS services create and manage so the service can operate in your account.
+```text
+identity-based policy
+Alice → can access bucket X
 
-Roles solve credential problems for services and automation. But what about your 15 engineers who still have IAM users with passwords and access keys? Can humans get the same temporary credential model?
-
-Yes. IAM Identity Center gives humans the same temporary-credential model.
-
-## IAM Identity Center
-<!-- section-summary: Identity Center replaces daily IAM users with workforce sign-in and temporary account sessions. -->
-
-Let's revisit the startup scenario. You have 15 engineers with IAM users. Three have left. You are not sure all their keys are rotated. Someone committed a key to GitHub last month. Every new hire needs an IAM user created, credentials generated, MFA configured, and the right groups attached. Every departure means chasing down access keys across tools and accounts.
-
-**IAM Identity Center** eliminates most of that. It replaces daily IAM users with federated access: engineers sign in through a central identity source, and Identity Center issues temporary credentials for each AWS account and permission set they are allowed to use. An identity source is the directory of people and groups AWS trusts for workforce sign-in. It can be Identity Center's built-in directory, Okta, Microsoft Entra ID, Active Directory, or another supported identity provider.
-
-Here is what the flow looks like:
-
-```mermaid
-graph LR
-    Dev[Engineer]:::other
-    IdP[Identity Provider<br/>Okta / Entra ID / Built-in]:::security
-    IDC[IAM Identity Center]:::security
-    STS[AWS STS]:::security
-    DevAcct[Dev Account<br/>Temp Credentials]:::compute
-    Prod[Prod Account<br/>Temp Credentials]:::compute
-
-    Dev -->|SSO Login| IdP
-    IdP -->|SAML / OIDC| IDC
-    IDC -->|AssumeRole| STS
-    STS --> DevAcct
-    STS --> Prod
+resource-based policy
+bucket X → accepts principal Alice
 ```
 
-The engineer authenticates once against the identity provider. From there, Identity Center handles which AWS accounts the engineer can access, which permission sets they can use, and how long each session lasts.
+An IAM role's trust policy is an important resource-based policy: the role names the principals it trusts to assume it. AWS evaluates applicable identity-based and resource-based permissions together, with additional rules for same-account and cross-account requests.
 
-This changes every problem from the IAM user model. Onboarding means adding the person to the right group and account assignment. Offboarding means disabling or deleting the person in the identity source, and they cannot start new AWS sessions. Credential leaks shrink because there are no long-lived AWS access keys for normal human work. Audit is cleaner because CloudTrail records which role session was used and which human identity started it.
+### How Does AWS Reach an Allow or Deny Decision?
+<!-- section-summary: Requests begin implicitly denied, require a sufficient allow, and remain denied whenever an applicable explicit deny or guardrail blocks them. -->
 
-For the CLI, engineers run `aws sso login`, authenticate in their browser, and the AWS CLI receives temporary credentials through the configured profile. No access keys need to sit in `~/.aws/credentials`.
+IAM begins from denial:
 
-So when should you still use IAM users? Only for narrow cases where federation is not possible: a legacy third-party tool that only supports static access keys, or a break-glass emergency procedure where the normal identity system may be unavailable. These should be rare, scoped, documented, and reviewed.
-
-Now we have covered who can access AWS: root users, IAM users, groups, roles, and Identity Center identities. But how do we express what they are allowed to do?
-
-AWS uses policies to express those permissions.
-
-## The Policy Language
-<!-- section-summary: Policies are JSON rules that say which caller can take which action on which resource under which conditions. -->
-
-We have been saying "attach a policy" and "grant permissions" without looking closely at what a policy actually is. Let's fix that.
-
-Every permission in AWS is expressed as a **JSON policy document**. A policy is a set of rules that say: allow or deny these API actions on these resources, under these conditions.
-
-Here is a minimal policy that lets someone list objects in one S3 bucket:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::my-app-uploads"
-    }
-  ]
-}
+```text
+no permission → denied
 ```
 
-A policy contains one or more statements. Each statement has a few important fields:
+You do not normally need to write a deny for every unmentioned action. If no applicable policy grants the request, the result is an **implicit deny**.
 
-| Element | What it controls | Example |
-|---|---|---|
-| **Effect** | Whether this statement allows or denies | `"Effect": "Allow"` |
-| **Action** | Which API calls | `"Action": ["s3:GetObject", "s3:PutObject"]` |
-| **Resource** | Which AWS resources, usually by ARN | `"Resource": "arn:aws:s3:::my-bucket/*"` |
-| **Condition** | Which request facts must be true | `"Condition": {"IpAddress": {"aws:SourceIp": "10.0.0.0/8"}}` |
-| **Principal** | Who the policy applies to, used in resource-based policies | `"Principal": {"Service": "lambda.amazonaws.com"}` |
+The simplified evaluation model is:
 
-Notice the `Version` field. It is normally `"2012-10-17"`. It names the policy language version, not the date you wrote the policy. Using an older version string changes how some policy features work, so use the current policy language version unless AWS documentation tells you otherwise.
-
-Policy documents appear in several places with different names. **Identity-based policies** attach to users, groups, or roles. They say what that identity is allowed to do. **Resource-based policies** attach directly to resources, like an S3 bucket policy or SQS queue policy, and say which principals can use that resource. SQS is AWS's managed queue service for passing messages between systems. The trust policy on an IAM role is also a resource-based policy, because it controls who can assume that role.
-
-**Permission boundaries** set a maximum on what identity-based policies can grant. A boundary only limits permissions that another policy grants. **Service control policies**, or SCPs, apply through AWS Organizations, AWS's service for grouping multiple AWS accounts under central management. SCPs set maximum permissions across member accounts or account groups. Even if an IAM policy says allow, an SCP deny still wins.
-
-Here is the critical rule: **an explicit Deny always wins**. If any applicable policy says deny, access is denied. Ten other allow statements cannot override that deny. If there is no matching allow, access is denied by default. Guardrails use that rule to block dangerous actions without needing to know every permission granted below them.
-
-So now you know how permissions are expressed. Policies define what is allowed. But how do you decide how much permission to grant?
-
-To answer that, use least privilege.
-
-![The request gate shows how AWS checks the caller, action, resource, context, and policy result before allowing an API call](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-request-gate.png)
-
-*The request gate shows how AWS checks the caller, action, resource, context, and policy result before allowing an API call.*
-
-
-## Least Privilege
-<!-- section-summary: Least privilege starts broad only when needed, then narrows access to the actions and resources actually used. -->
-
-"Give each identity only the permissions it needs" is the short version of least privilege. In practice, least privilege takes work because on day one you often do not know exactly what a new workload needs.
-
-A practical way to get there is to narrow access in stages.
-
-**Phase 1: Use a broad but temporary starting point.** When a new Lambda function needs S3 access in a development account, you might use read access to S3 so the team can prove the workflow. That read access is broader than the final policy should be, but it gets the first version moving in a low-risk place.
-
-**Phase 2: Monitor actual usage.** CloudTrail records API calls. After the function has been running through normal workflows for a few weeks, you have data on which S3 actions it really uses and which buckets it touches.
-
-**Phase 3: Generate a scoped policy.** IAM Access Analyzer can review CloudTrail activity and generate a policy template based on the actions the identity actually used. Access Analyzer is AWS tooling for analyzing policies and access paths. Review still matters, but the reviewer now has evidence instead of guesses.
-
-The review step is where teams keep the generated policy from becoming a rubber stamp. A generated draft might show `s3:PutObject` because the Lambda function wrote uploads during the observation window, but a human still checks the bucket ARN, object prefix, KMS key path, and whether the action happened in development or production. For a sensitive workflow, the team can test the narrowed policy in a development account, run the normal upload path, and then check CloudTrail again before moving the policy to production.
-
-**Phase 4: Review and maintain.** Use IAM last accessed information to spot permissions that have not been used. If a role has had `dynamodb:DeleteTable` for six months and never used it, remove it. DynamoDB is AWS's managed table-like database. Permissions drift over time, so schedule reviews.
-
-Here is what this progression looks like in policy form:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "BroadStartingPoint",
-      "Effect": "Allow",
-      "Action": "s3:*",
-      "Resource": "*"
-    }
-  ]
-}
+```text
+                  request
+                     │
+                     ▼
+          applicable explicit Deny?
+             ┌───────┴───────┐
+            yes              no
+             │                │
+           DENY       sufficient applicable Allow?
+                           ┌───┴───┐
+                          yes      no
+                           │        │
+                         ALLOW     DENY
 ```
 
-After running real workflows and using Access Analyzer as evidence, the policy should move toward something like this:
+An applicable explicit deny overrides an allow. Suppose policy A allows `s3:*`, while policy B denies `s3:DeleteBucket`. Reads and writes may still be allowed, but `DeleteBucket` remains denied because the explicit deny wins.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ScopedToActualUsage",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::my-app-uploads",
-        "arn:aws:s3:::my-app-uploads/*"
-      ]
-    }
-  ]
-}
+```text
+GetObject    → potentially allowed
+PutObject    → potentially allowed
+DeleteBucket → denied
 ```
 
-The broad policy grants S3 actions across every bucket in the account. The scoped policy grants three actions on one bucket. If the broad credential leaks, an attacker may reach all S3 data in the account. If the scoped credential leaks, they can affect one upload bucket.
+#### Other policies can act as ceilings
 
-**Conditions** let you narrow things further. You can require that actions work only from specific IP ranges, from a private network path, or when MFA is present:
+Real environments may evaluate several policy types:
+
+```text
+identity policies
+resource policies
+permissions boundaries
+session policies
+AWS Organizations service control policies
+AWS Organizations resource control policies
+```
+
+Some policy mechanisms grant permissions. Others define the maximum permissions that can survive evaluation. A permissions boundary can cap what an IAM user or role may receive. An Organizations service control policy can set an outer guardrail for member accounts. Session policies can further restrict a particular temporary session.
+
+This explains why seeing `AdministratorAccess` attached to an identity does not prove that every request will succeed. An explicit deny or another limiting policy can still block the operation. Debugging IAM requires identifying all policy layers relevant to the request, not only the most obvious identity policy.
+
+## How Do Least Privilege and MFA Reduce Risk?
+<!-- section-summary: Least privilege narrows actions, resources, context, and time, while MFA strengthens the proof used to start a human session. -->
+
+If Alice only needs to read one report, the easiest policy might allow every action on every resource:
 
 ```json
 {
   "Effect": "Allow",
-  "Action": "s3:DeleteObject",
-  "Resource": "arn:aws:s3:::my-app-uploads/*",
-  "Condition": {
-    "IpAddress": {
-      "aws:SourceIp": "10.0.0.0/8"
-    },
-    "Bool": {
-      "aws:MultiFactorAuthPresent": "true"
-    }
-  }
+  "Action": "*",
+  "Resource": "*"
 }
 ```
 
-This says: you can delete objects only if the request comes from the `10.x.x.x` internal network and the caller authenticated with MFA. Even if an access key leaks, an attacker outside that network or without MFA cannot use this statement for deletes.
+That would solve the immediate access problem while also allowing unrelated database deletion, IAM changes, EC2 termination, network changes, and reads from other buckets.
 
-Add MFA so a stolen password is not enough to use the account.
+The **principle of least privilege** grants only the permissions required for the intended task. It can narrow four dimensions:
 
-## MFA
-<!-- section-summary: MFA gives human sign-in a second proof, so a stolen password is not enough by itself. -->
+```text
+             broad                         narrow
 
-Everything covered so far reduces risk. Temporary credentials limit how long a stolen session works. Least privilege limits what a compromised identity can do. SCPs limit what entire accounts can do. But none of that helps enough if an attacker has your password and there is no second proof protecting sign-in.
-
-**Multi-factor authentication** requires a second verification step beyond a password. Even if every other defense fails and an attacker gets the password, MFA can still stop the sign-in.
-
-The strongest MFA option is a passkey or hardware security key using FIDO2. These are phishing-resistant because the authenticator is bound to the legitimate AWS sign-in domain. An attacker can build a convincing AWS login clone, but the passkey will not respond because the domain does not match. A step down in security, but still much better than password-only, is a virtual authenticator app such as Google Authenticator or Authy, which generates time-based one-time codes. These are free and easy to set up, but they can be phished in real time if an attacker proxies the login flow.
-
-For the root user, MFA is mandatory. AWS requires it within 35 days of the first console sign-in attempt if it is not already enabled.
-
-For IAM users, you can enforce MFA through policy. Here is a pattern that denies all actions except MFA self-setup when MFA is not active:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyAllExceptMFASetupWithoutMFA",
-      "Effect": "Deny",
-      "NotAction": [
-        "iam:CreateVirtualMFADevice",
-        "iam:EnableMFADevice",
-        "iam:ListMFADevices",
-        "iam:GetUser",
-        "sts:GetSessionToken"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "BoolIfExists": {
-          "aws:MultiFactorAuthPresent": "false"
-        }
-      }
-    }
-  ]
-}
+Actions      s3:*            →             s3:GetObject
+Resources    *               →             one bucket or prefix
+Context      anywhere        →             approved request context
+Time         permanent       →             temporary session
 ```
 
-This forces users to configure MFA before they can do anything else. When they sign in without MFA, the only actions available are the ones needed to set up MFA. Once MFA is active, the condition no longer matches, the deny does not apply, and their normal permissions can take effect.
+Policies narrow actions, resources, and conditions. Roles and STS narrow time because their credentials expire.
 
-The important field is `NotAction`. This deny applies to every action except the small list needed for MFA setup and session creation. `BoolIfExists` checks the MFA context on the request and treats missing MFA context as a match for the deny. The review question for this policy is practical: can a new user still enroll MFA, and can a user without MFA do anything beyond that setup path?
+Least privilege is blast-radius reduction. If application A has `Action: *` and `Resource: *`, a stolen credential gives an attacker enormous capability. If application B can only perform `s3:GetObject` under `arn:aws:s3:::public-product-images/*`, the compromise is still serious, but the possible actions and resources are much smaller.
 
-## Putting It All Together
-<!-- section-summary: The full IAM model locks root away, replaces static secrets with sessions, and uses policies to control each request. -->
+Least privilege does not prevent every credential compromise. It limits what can happen if one occurs.
 
-Let's go back to the startup, but now with IAM set up properly.
+### MFA strengthens authentication
 
-```mermaid
-graph TB
-    Org[AWS Organizations]:::security
-    SCP[Service Control Policies<br/>Account guardrails]:::security
+If Alice signs in with only a password, a stolen password may be enough for an attacker to authenticate as Alice. **Multi-factor authentication**, or **MFA**, adds another factor such as a security key or authenticator:
 
-    MgmtAcct[Management Account<br/>Root locked away + MFA]:::compute
-    ProdAcct[Production Account]:::compute
-    DevAcct[Development Account]:::compute
-
-    IDC[IAM Identity Center<br/>Engineers sign in here]:::security
-    IdP[Identity Provider<br/>Company directory]:::other
-
-    LambdaRole[Lambda Execution Role<br/>Scoped to one bucket]:::security
-    EC2Role[EC2 Instance Profile<br/>Scoped to one table]:::security
-    CrossRole[Cross-Account Role<br/>CI/CD deploys to prod]:::security
-
-    IdP --> IDC
-    Org --> SCP
-    SCP --> MgmtAcct
-    SCP --> ProdAcct
-    SCP --> DevAcct
-
-    IDC -->|Temp credentials| ProdAcct
-    IDC -->|Temp credentials| DevAcct
-
-    ProdAcct --> LambdaRole
-    ProdAcct --> EC2Role
-    DevAcct --> CrossRole
+```text
+password + security key or authenticator
 ```
 
-The diagram connects the pieces in the order we introduced them.
+AWS recommends MFA, especially for root and IAM users, and recommends phishing-resistant methods where possible.
 
-**The root user** is locked away with MFA and no access keys. It exists for ownership and rare recovery, not daily work.
+MFA primarily strengthens authentication. It does not grant S3 access or any other permission. Policies still decide what Alice may do.
 
-**IAM users and groups** explain the first access model. Users give named identities. Groups reduce repeated policy work. But both still leave you with long-lived human credentials if you use them as the normal daily path.
+```text
+MFA
+Are you really Alice?
 
-**IAM roles** handle service-to-service access and delegated sessions. Lambda, EC2, ECS, deployment workflows, and cross-account access all use temporary credentials that expire automatically.
+IAM authorization
+May Alice delete this bucket?
+```
 
-**IAM Identity Center** handles normal human access. Engineers sign in through the workforce directory, choose assigned accounts and permission sets, and receive temporary role sessions. Offboarding is a directory change instead of a credential hunt.
+Policies can connect the two by using MFA presence as a condition. In that case, a statement may permit a sensitive action only when the request context proves that the session used MFA.
 
-**Policies** express what each identity can do. AWS evaluates one request at a time: principal, action, resource, and context. Explicit deny wins. Missing allow fails by default.
+![The summary connects protected root access, temporary human and workload sessions, policy evaluation, MFA, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/identity-security-summary.png)
 
-**Least privilege and MFA** keep the blast radius small. Least privilege narrows what a session can do. MFA makes it harder for someone else to start the session. Temporary credentials limit how long the session survives.
+*MFA strengthens the start of the session, while policies and temporary credentials control its scope and duration.*
 
-Compare this to the original pile of IAM users with long-lived keys. The improved model changes daily operations. Onboarding takes minutes instead of a manual IAM checklist. Offboarding stops new access from one directory change. Incident response goes from "find every copy of the leaked key" to "the session expired and the role has one narrow policy."
+## How Does the Complete IAM Model Fit Together?
+<!-- section-summary: Humans and workloads authenticate through different paths, receive temporary role sessions, and submit requests that AWS evaluates against policies and guardrails. -->
 
-IAM is the access foundation that keeps AWS manageable after more people, workloads, accounts, and automation start using it.
+A modern human access path can be followed from authentication to authorization:
 
-![The summary connects root protection, human access, workload roles, policy decisions, MFA, and least privilege into one IAM review path](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/identity-security-summary.png)
+```text
+Alice
+  │
+  │ password + MFA or corporate authentication
+  ▼
+corporate identity provider
+  │
+  ▼
+IAM Identity Center
+  │
+  │ assigned account + permission set
+  ▼
+IAM role in target account
+  │
+  │ STS temporary credentials
+  ▼
+AWS API request
+  │
+  │ Principal + Action + Resource + Context
+  ▼
+policy evaluation
+  ├── ALLOW
+  └── DENY
+```
 
-*The summary connects root protection, human access, workload roles, policy decisions, MFA, and least privilege into one IAM review path.*
+A workload takes a shorter path:
 
-![The foundation summary keeps the core IAM ideas together: protected root access, human sessions, workload roles, policies, MFA, and least privilege](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-access-foundation-summary.png)
+```text
+Lambda function or EC2 application
+      │
+      │ associated IAM role
+      ▼
+temporary role credentials
+      │
+      ▼
+AWS API request
+      │
+      ▼
+policy evaluation
+      ├── ALLOW
+      └── DENY
+```
 
-*The foundation summary keeps the core IAM ideas together: protected root access, human sessions, workload roles, policies, MFA, and least privilege.*
+Root remains outside normal paths:
 
+```text
+root user
+   │
+   │ strong protection + MFA
+   ▼
+rare account-level or emergency operation
+```
 
+### An online shop example
 
-## What's Next
-<!-- section-summary: The next article turns the model into daily access flows for engineers, applications, containers, and pipelines. -->
+Suppose one AWS account contains an S3 bucket named `product-images`, a DynamoDB Orders table, a Lambda function named `checkout-service`, and two humans: Alice the developer and Bob in finance.
 
-You now understand the identity types, policy language, and security principles that make IAM work. But understanding the concepts and using them day to day are different things.
+The checkout function needs to write orders. It does not need to delete the Orders table, change IAM, terminate EC2 instances, or read unrelated S3 buckets. The function therefore uses a `CheckoutRole` that allows `dynamodb:PutItem` on the Orders table. Lambda receives temporary role credentials for that execution environment.
 
-The next article gets practical. It follows people, local CLI sessions, applications, containers, and CI/CD workflows as they receive AWS access without permanent keys.
+Alice signs in to the company identity system with MFA. Identity Center assigns her a Developer permission set in the development account and a ReadOnly permission set in production. When she selects an account, she receives a temporary role session. Bob receives a Finance role appropriate to his work. The root credentials remain protected for rare account operations.
 
----
+The checkout request becomes:
 
-**References**
+```text
+Principal: CheckoutRole session
+Action:    dynamodb:PutItem
+Resource:  Orders table
+Context:   current temporary role session
+```
 
-- [AWS security credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/security-creds.html) - Explains root users, IAM users, federated principals, long-term credentials, and temporary credentials.
-- [Root user best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html) - Documents root credential guidance, root access key guidance, and central root access management for member accounts.
-- [Multi-factor authentication for AWS account root user](https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-mfa-for-root.html) - Documents root MFA registration requirements and root MFA options.
-- [IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html) - Defines IAM users, user credentials, user ARNs, and AWS guidance to prefer federation for human access.
-- [IAM user groups](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_groups.html) - Documents how IAM groups organize IAM users and permissions.
-- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html) - Explains roles, temporary credentials, trust policies, service roles, and cross-account delegation.
-- [What is IAM Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html) - Describes centralized workforce access, permission assignments across accounts, and temporary AWS account sessions.
-- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) - Covers federation, temporary credentials, MFA, least privilege, Access Analyzer, access-key exceptions, and permissions guardrails.
-- [Policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html) - Documents how AWS evaluates policies and how explicit denies override allows.
-- [IAM Access Analyzer policy generation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-generation.html) - Describes generating policies from CloudTrail activity and key limitations.
+If the applicable policies permit the request, AWS returns `ALLOW`. If the application attempts `dynamodb:DeleteTable` and no policy grants it, the request remains implicitly denied.
+
+### Put each IAM feature into one box
+
+IAM feels complicated when users, groups, roles, permission sets, access keys, MFA, STS, Identity Center, service control policies, resource policies, and trust policies are memorized separately. They become easier to place in four boxes:
+
+| Question | IAM concepts |
+|---|---|
+| Who are you? | root, IAM user, federated user, role session |
+| How do you prove it? | password, MFA, access key, STS temporary credentials, identity-provider login |
+| What may you do? | IAM policies, resource policies, permission sets |
+| What limits access? | explicit deny, boundaries, SCPs, session policies, conditions |
+
+Three comparisons resolve common confusion.
+
+**IAM user versus IAM role:** a user is a persistent identity that may have persistent credentials. A role is an assumable identity whose sessions use temporary credentials. A user says, “I am Alice.” A role session says, “For this session, I am operating as ProductionReadOnly.” Roles fit workloads, cross-account access, federated humans, and temporary privilege.
+
+**IAM group versus IAM role:** a group collects IAM users so their permissions are easier to manage. A role is an identity that trusted principals can assume. You do not assume a group, and a role is not a folder containing users.
+
+**Identity Center versus IAM:** Identity Center manages workforce sign-in and account assignments. It uses permission sets to provision roles. IAM roles and policies still enforce the resulting AWS access. Identity Center often sits above IAM rather than replacing it.
+
+![The IAM foundation keeps protected root access, workforce sessions, workload roles, policy decisions, MFA, and least privilege in one model](/content-assets/articles/article-cloud-providers-aws-identity-security-identity-security-mental-model/iam-access-foundation-summary.png)
+
+*Each IAM feature contributes to identity, proof, permission, or limitation for an AWS request.*
+
+The complete subject can be retained as ten rules:
+
+1. Every AWS operation is fundamentally an API request.
+2. IAM helps AWS decide whether that request should be allowed.
+3. Authentication establishes the principal; authorization establishes what the principal may do.
+4. The root user is the account's highly privileged ownership identity and should be used rarely.
+5. IAM users are persistent identities and can have long-term credentials, so modern designs use them sparingly.
+6. IAM groups organize permissions for IAM users and are not identities that can sign in.
+7. IAM roles are assumable identities whose sessions receive temporary STS credentials.
+8. Humans should normally use federation and Identity Center, while AWS workloads should normally use roles.
+9. Policies evaluate principals, actions, resources, and conditions; requests start denied, and explicit deny overrides allow.
+10. Least privilege minimizes actions, resources, context, and access duration.
+
+All ten rules lead back to the same decision:
+
+```text
+Who are you?
+     +
+What are you trying to do?
+     +
+To which resource?
+     +
+Under which conditions?
+     │
+     ▼
+evaluate applicable policies
+     │
+     ▼
+   ALLOW or DENY
+```
+
+## Check Your Answers
+
+:::expand[How Does IAM Decide Whether AWS Should Accept a Request?]{kind="recap"}
+IAM helps AWS evaluate the principal, action, resource, and request context before returning allow or deny.
+
+IAM helps evaluate the principal, action, resource, and request context against applicable policies. The result is either allow or deny.
+:::
+
+:::expand[How Are Identity, Credentials, and Permissions Different?]{kind="recap"}
+Authentication proves the caller's identity, authorization determines permitted actions, and credentials are the evidence used to authenticate.
+
+An identity is who the caller is, a credential proves that identity, and a permission describes what the authenticated caller may do. Root is the account's ownership identity and should stay outside daily work.
+
+IAM users are persistent identities in one account, while groups are permission-management collections for those users.
+
+An IAM user is a persistent identity in one account and may have long-lived credentials. An IAM group collects users for permission management but cannot authenticate or act as a policy principal.
+:::
+
+:::expand[Why Are Temporary Credentials Safer Than Long-Lived Keys?]{kind="recap"}
+Temporary credentials expire automatically, reducing the storage, rotation, offboarding, and compromise risks created by permanent access keys.
+
+Temporary STS credentials expire automatically, which limits their useful lifetime and removes much of the storage and rotation burden created by permanent keys.
+:::
+
+:::expand[How Do IAM Roles Work?]{kind="recap"}
+An IAM role separates who may assume an identity from what the resulting temporary role session may do.
+
+A role has no permanent credentials. Its trust policy says who may assume it, its permissions say what the role session may do, and STS supplies temporary credentials for the session.
+:::
+
+:::expand[How Does IAM Identity Center Give People AWS Access?]{kind="recap"}
+IAM Identity Center connects a workforce identity source to permission sets, IAM roles, and temporary AWS account sessions.
+
+Identity Center connects a workforce directory to account assignments and permission sets. Those permission sets provision IAM roles that users access through temporary sessions.
+:::
+
+:::expand[How Do IAM Policies Describe Access?]{kind="recap"}
+IAM JSON policies describe effects, actions, resources, principals, and conditions from either the identity or resource side of an access relationship.
+
+Policies use effects, actions, resources, principals where applicable, and conditions. Identity-based policies start from the caller, while resource-based policies start from the target resource.
+
+Requests begin implicitly denied, require a sufficient allow, and remain denied whenever an applicable explicit deny or guardrail blocks them.
+
+A request begins implicitly denied, needs a sufficient applicable allow, and stays denied if any applicable explicit deny or limiting guardrail blocks it.
+:::
+
+:::expand[How Do Least Privilege and MFA Reduce Risk?]{kind="recap"}
+Least privilege narrows actions, resources, context, and time, while MFA strengthens the proof used to start a human session.
+
+Least privilege narrows actions, resources, context, and time to reduce compromise blast radius. MFA strengthens authentication by requiring another proof before a human session begins.
+:::
+
+:::expand[How Does the Complete IAM Model Fit Together?]{kind="recap"}
+Humans and workloads authenticate through different paths, receive temporary role sessions, and submit requests that AWS evaluates against policies and guardrails.
+
+Humans authenticate through a workforce system and workloads use service integrations; both commonly receive temporary role sessions. Every API request then supplies a principal, action, resource, and context for policy evaluation.
+:::
+
+## References
+
+- [What is IAM?](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction.html)
+- [Root user best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html)
+- [IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html)
+- [IAM user groups](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_groups.html)
+- [Temporary security credentials in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp.html)
+- [IAM roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html)
+- [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+- [Create an IAM user](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users_create.html)
+- [What is IAM Identity Center?](https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html)
+- [Manage AWS accounts with permission sets](https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html)
+- [Identity-based and resource-based policies](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_identity-vs-resource.html)
+- [Policy evaluation logic](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html)
+- [How AWS evaluates allow and deny](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic_policy-eval-denyallow.html)

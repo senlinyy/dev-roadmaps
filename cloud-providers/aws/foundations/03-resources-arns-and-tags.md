@@ -1,7 +1,7 @@
 ---
 title: "Resources, ARNs, and Tags"
-description: "Exact AWS resource identity, ARN variations, naming, and tags for safer production changes."
-overview: "AWS work gets safer when every alert, policy, ticket, and change request points to the same exact resource. This article teaches friendly names, service IDs, ARNs, tags, cost allocation, naming standards, IaC ownership metadata, and a practical pre-change checklist."
+description: "Understand AWS resources, service IDs, ARNs, tags, and Infrastructure as Code identities as separate parts of one resource model."
+overview: "A resource is the AWS object, an ARN identifies it precisely, and tags add your organization's meaning. Learn how those layers support permissions, cost allocation, inventory, Infrastructure as Code, and safer production changes."
 tags: ["aws", "foundations", "resources", "arns", "tags", "cost-allocation"]
 order: 3
 id: article-cloud-providers-aws-foundations-resources-arns-tags
@@ -13,415 +13,685 @@ aliases:
 
 ## Table of Contents
 
-1. [Start With the Exact Thing](#start-with-the-exact-thing)
-2. [Friendly Names and Service IDs](#friendly-names-and-service-ids)
-3. [ARNs in Policies and Logs](#arns-in-policies-and-logs)
-4. [Tags for Ownership and Cost](#tags-for-ownership-and-cost)
-5. [Naming and IaC Metadata](#naming-and-iac-metadata)
-6. [Inventory and Search During Incidents](#inventory-and-search-during-incidents)
-7. [A Pre-Change Checklist](#a-pre-change-checklist)
-8. [References](#references)
+1. [What Is an AWS Resource?](#what-is-an-aws-resource)
+2. [Why Can One Resource Have Several Identifiers?](#why-can-one-resource-have-several-identifiers)
+3. [How Does an ARN Identify One AWS Resource?](#how-does-an-arn-identify-one-aws-resource)
+4. [How Do ARNs Define Permission Scope and Connect Evidence?](#how-do-arns-define-permission-scope-and-connect-evidence)
+5. [What Meaning Do Tags Add to a Resource?](#what-meaning-do-tags-add-to-a-resource)
+6. [How Should a Team Design Its Tagging Rules?](#how-should-a-team-design-its-tagging-rules)
+7. [How Does Infrastructure as Code Add Another Identity?](#how-does-infrastructure-as-code-add-another-identity)
+8. [How Do You Find and Verify the Exact Resource?](#how-do-you-find-and-verify-the-exact-resource)
+9. [Check Your Answers](#check-your-answers)
+10. [References](#references)
 
-## Start With the Exact Thing
-<!-- section-summary: Production work needs exact resource identity so people change the intended object. -->
+## What Is an AWS Resource?
+<!-- section-summary: A resource is the actual AWS object, with its own identity, configuration, state, lifecycle, permissions, and relationships. -->
 
-Picture a CloudWatch alarm firing for high database CPU. The alarm title says `prod-photos-db`, and the on-call engineer knows the `northstar-photos` service is important. That name helps, while the exact AWS object still needs proof.
+AWS is a large collection of service APIs. When an application, command-line tool, console, or Infrastructure as Code system calls those APIs, it creates, reads, changes, and deletes **resources**.
 
-The team may have a development database, a staging database, a production writer, a production read replica, and an old migration database with similar names. Those resources may live in different accounts, Regions, VPCs, or subnet groups. A production change needs the exact object before anyone changes capacity, parameters, policies, or application configuration.
+Each service exposes its own resource types:
 
-AWS gives a resource several kinds of identity. A **friendly name** helps humans read dashboards and tickets. A **service ID** gives an API a concrete target inside a scope. An **Amazon Resource Name**, usually called an **ARN**, gives AWS services a structured address for policies, logs, and events. **Tags** add business context such as service, environment, owner, and cost center. **Infrastructure as Code metadata** points people to the system that should manage the desired configuration.
+```text
+EC2    → instance
+S3     → bucket
+IAM    → role
+RDS    → database
+Lambda → function
+VPC    → subnet
+KMS    → key
+SQS    → queue
+```
 
-We will focus on safe identification before any production change. Full IAM policy engineering and cost governance belong in later articles. The example follows one production service, `northstar-photos`, and one alert about `prod-photos-db`. The goal is to help a beginner connect an alert, AWS CLI output, IAM policy, CloudTrail event, tags, and IaC owner back to the same resource.
+A resource is an AWS entity with some combination of identity, configuration, state, lifecycle, permissions, and relationships. Consider one EC2 instance:
 
-| Identity layer | What it helps with | Example |
+```text
+identity       i-0ab123...
+configuration  t3.medium, AMI, security groups
+state          running
+lifecycle      create → stop → start → terminate
+permissions    IAM and EC2 authorization
+relationships  subnet, VPC, EBS volumes, IAM role
+```
+
+The EC2 instance is the thing that exists. Its instance type and security groups describe its configuration. `running` describes its current state. Its lifecycle includes actions that create, stop, start, and terminate it. Policies decide who can perform those actions. Its subnet, storage volumes, and IAM role connect it to other resources.
+
+The same model applies to a Lambda function, an S3 bucket, or an RDS database even though the exact configuration, lifecycle, and relationships differ. The central rule is: **the resource is the actual AWS object. Names, IDs, ARNs, tags, and code addresses are information used to identify, describe, authorize, classify, or manage that object.**
+
+The sections below answer these questions in order:
+
+1. **What Is an AWS Resource?**
+2. **Why Can One Resource Have Several Identifiers?**
+3. **How Does an ARN Identify One AWS Resource?**
+4. **How Do ARNs Define Permission Scope and Connect Evidence?**
+5. **What Meaning Do Tags Add to a Resource?**
+6. **How Should a Team Design Its Tagging Rules?**
+7. **How Does Infrastructure as Code Add Another Identity?**
+8. **How Do You Find and Verify the Exact Resource?**
+
+The simplest summary is:
+
+```text
+Resource → what actual thing exists?
+ARN      → exactly which AWS thing is it?
+Tag      → what does the thing mean to our organization?
+```
+
+## Why Can One Resource Have Several Identifiers?
+<!-- section-summary: Friendly names, service IDs, ARNs, IaC addresses, and tags identify or describe a resource for different audiences and must not be treated as interchangeable. -->
+
+Imagine one EC2 instance used by a production payments API. A human, the EC2 API, IAM, Terraform, and the finance team may refer to it in different ways:
+
+```text
+Human label
+payments-api-prod-a
+
+EC2 instance ID
+i-0f123456789abcde0
+
+ARN
+arn:aws:ec2:eu-west-2:123456789012:instance/i-0f123456789abcde0
+
+Infrastructure as Code address
+aws_instance.payments_api
+
+Tags
+Application = payments
+Environment = production
+Owner       = payments-platform
+```
+
+These values are not interchangeable names. Each one answers a different question.
+
+| Identity or metadata | Main audience | Question it answers |
 |---|---|---|
-| **Friendly name** | Human reading and searching | `prod-photos-db` |
-| **Service ID** | Exact API target in a service scope | `db-ABCDEFGHIJKLMNOP` or `i-0abc1234def567890` |
-| **ARN** | Policy, event, and log resource address | `arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db` |
-| **Tags** | Business, owner, cost, and data context | `Service=northstar-photos`, `Environment=prod` |
-| **IaC metadata** | Desired configuration owner | `module.photos.aws_db_instance.main` |
+| Friendly name | Humans | What should we call it? |
+| Service ID | AWS service and API | Which object inside this service? |
+| ARN | AWS authorization and cross-service references | Exactly which AWS resource? |
+| IaC address | Terraform, CloudFormation, CDK, or another deployment tool | Which declaration manages it? |
+| Tags | Humans, automation, billing, and IAM | What does it belong to? |
 
-Each identity layer has a different job. Names help humans talk. IDs help APIs target one object. ARNs help AWS services describe the object in policies and events. Tags help teams find ownership and cost. IaC metadata helps people make changes in the right place.
+### Friendly names depend on the service
 
-The previous article showed how account, Region, AZ, VPC, and subnet scope place a workload. This article zooms into the resources inside that placement map.
+Humans prefer `production-payments-api` to `i-05bc7c89d3c09a183`, so AWS services usually expose some human-readable label. The meaning of “name” is not consistent across every service.
 
-## Friendly Names and Service IDs
-<!-- section-summary: Friendly names help humans, while service IDs and resource IDs help AWS APIs target concrete resources. -->
+An IAM user has a friendly name that is part of the IAM user identity. An EC2 instance works differently: the value displayed by the console in the **Name** column is generally a tag with key `Name`. An S3 bucket name is more fundamental to the bucket's service identity.
 
-A **friendly name** is the name your team chooses, such as `prod-photos-web`, `prod-photos-worker`, or `prod-photos-db`. A good name helps in dashboards, tickets, alarms, console search, and conversations during incidents. Production names should be boring and predictable because people read them under pressure.
+There is no universal AWS rule that every resource has one identically behaving name. Every service defines its own identity model. Some rely strongly on customer-chosen names, some generate IDs, and some use both.
 
-A useful resource name usually carries the environment, service, and component. `prod-photos-db` tells a reader that this is the production database for the `northstar-photos` service. A name like `main-db` leaves too much out because every environment can have a main database. A name like `prod-eu-west-2-photos-db-blue-migration-final-2026` tries to carry too many decisions and often turns stale after the next migration.
+### Service IDs give APIs an exact target
 
-Many AWS services also create **service IDs** or **resource IDs**. EC2 instances have IDs such as `i-0abc1234def567890`. Security groups have IDs such as `sg-0123456789abcdef0`. VPCs, subnets, route tables, and network interfaces have their own IDs. RDS has DB instance identifiers and deeper resource IDs. These IDs matter because names can change, collide within certain scopes, or get reused after deletion, while an ID usually points to one concrete object in the right account and Region.
+Many services generate machine-oriented identifiers:
 
-For an incident, collect identity before making the change:
-
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier prod-photos-db \
-  --region eu-west-2 \
-  --query 'DBInstances[].{Arn:DBInstanceArn,Identifier:DBInstanceIdentifier,ResourceId:DbiResourceId,Status:DBInstanceStatus,Engine:Engine,Endpoint:Endpoint.Address,MultiAZ:MultiAZ}'
+```text
+EC2 instance    i-0abc...
+VPC             vpc-0123...
+subnet          subnet-0456...
+security group  sg-0789...
+snapshot        snap-0123...
 ```
 
-Example output:
+Two teams might both call an instance `web-server`. EC2 still needs to distinguish the exact objects, so it uses instance IDs. The friendly name says, “This is our web server.” The instance ID says, “This exact EC2 object.”
 
-```json
-[
-  {
-    "Arn": "arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db",
-    "Identifier": "prod-photos-db",
-    "ResourceId": "db-ABCDEFGHIJKLMNOP",
-    "Status": "available",
-    "Engine": "postgres",
-    "Endpoint": "prod-photos-db.abc123.eu-west-2.rds.amazonaws.com",
-    "MultiAZ": true
-  }
-]
+During an incident, the team can gradually replace ambiguity with scope:
+
+```text
+production API server
+        ↓
+Account: 123456789012
+Region:  eu-west-2
+EC2 ID:  i-0123456789abcdef0
 ```
 
-The **Identifier** field is the friendly database identifier the team uses in alarms and tickets. The **ResourceId** field is the RDS resource ID that AWS can use internally and in some service outputs. The **Arn** field is the structured resource address that appears in policies, CloudTrail, tagging APIs, and many integrations. The **Status**, **Engine**, **Endpoint**, and **MultiAZ** fields add enough operational context for a beginner to confirm that the alert points at the expected production database.
+The service ID is precise within the expected service and scope. AWS still needs a way to express the service, partition, Region, account, resource type, and resource together. That is the job of the ARN.
 
-This output should move into the ticket or incident notes. A note that says "CPU is high on `prod-photos-db`, ARN `arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db`, endpoint `prod-photos-db.abc123.eu-west-2.rds.amazonaws.com`" gives the next responder a real target. The friendly name starts the conversation, and the ARN and endpoint prove the target.
+## How Does an ARN Identify One AWS Resource?
+<!-- section-summary: An Amazon Resource Name is a fully qualified AWS address whose partition, service, Region, account, and resource fields remove ambiguity. -->
 
-Names also need lifecycle discipline. If the team replaces `prod-photos-db` during a migration, the change notes should say whether the old database remains for rollback, whether the friendly name moved, and which endpoint the app uses now. Stale names create confusion when a dashboard points to the old database and the app talks to the new one.
+**ARN** stands for **Amazon Resource Name**. The general form is:
 
-Once the team has the name and IDs, the next layer is the ARN because policies, logs, events, and cross-service integrations often use that form.
-
-## ARNs in Policies and Logs
-<!-- section-summary: ARNs are structured AWS resource addresses used by policies, events, logs, and many cross-service references. -->
-
-An **Amazon Resource Name**, or **ARN**, is a structured address for an AWS resource. AWS uses ARNs when a policy, event, log entry, or API response needs to name a resource precisely. A typical ARN carries the partition, service namespace, Region, account ID, and a service-specific resource part.
-
-The general shape looks like this:
-
-```console
+```text
 arn:partition:service:region:account-id:resource
 ```
 
-The **partition** is usually `aws`; AWS GovCloud and AWS China use different partitions. The **service** is the service namespace, such as `rds`, `ecs`, `s3`, `iam`, or `lambda`. The **region** and **account-id** fields appear for many regional resources. The **resource** part belongs to the service, and that is where many beginner policy mistakes happen.
+An EC2 instance ARN can be read field by field:
 
-These four ARNs all point to different kinds of AWS objects:
-
-```console
-arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db
-arn:aws:ecs:eu-west-2:123456789012:service/prod-photos/photos-web
-arn:aws:s3:::prod-photos-uploads
-arn:aws:iam::123456789012:role/service/prod-photos-task-role
+```text
+arn:aws:ec2:eu-west-2:123456789012:instance/i-0123456789abcdef0
+    │   │       │          │              │
+    │   │       │          │              └─ resource-specific portion
+    │   │       │          └──────────────── account
+    │   │       └─────────────────────────── Region
+    │   └─────────────────────────────────── service
+    └─────────────────────────────────────── partition
 ```
 
-The RDS and ECS ARNs include a Region and account ID because they refer to regional resources inside an account. The S3 bucket ARN has an empty Region and account field in this form because S3 bucket ARN syntax is different. The IAM role ARN has an empty Region field because IAM identities are global within an account. This is why beginners should copy the documented ARN pattern for the service they are working with instead of reshaping an ARN by memory.
+The service ID `i-0123456789abcdef0` identifies the EC2 object in its service context. The ARN qualifies that identity with the AWS partition, EC2 service, `eu-west-2` Region, `123456789012` account, and EC2 resource type.
 
-S3 is a useful first policy example because the bucket ARN and object ARN are different. The bucket itself uses one ARN, and objects under a prefix use another ARN pattern.
+A useful analogy is the difference between `database` and `database.prod.example.com`. The short name is meaningful in a local conversation. The qualified name supplies the context needed to distinguish it from other databases. An ARN performs a similar qualification job for AWS resources.
+
+### Resource portions vary by service
+
+ARNs do not share one universal suffix grammar. Compare these examples:
+
+```text
+arn:aws:iam::123456789012:role/payments-api
+
+arn:aws:lambda:eu-west-2:123456789012:function:payments-api
+
+arn:aws:s3:::my-company-bucket
+
+arn:aws:ec2:eu-west-2:123456789012:vpc/vpc-1234
+```
+
+The IAM role uses `role/name`; the Lambda function uses `function:name`; the VPC uses `vpc/id`; and the S3 bucket ARN leaves the Region and account fields empty in this form. AWS supports broad resource patterns such as `resource-id`, `resource-type/resource-id`, and `resource-type:resource-id`, while each service defines its exact syntax.
+
+For that reason, learn to read the stable fields—partition, service, Region, account, and resource-specific part—but consult the service's authorization reference when exact ARN construction matters. Guessing from another service's format can produce a policy that names the wrong resource or never matches the intended request.
+
+![The ARN anatomy view separates partition, service, Region, account, and resource-specific identity](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/arn-anatomy.png)
+
+*The stable ARN fields provide context, while the final resource syntax belongs to the individual AWS service.*
+
+## How Do ARNs Define Permission Scope and Connect Evidence?
+<!-- section-summary: IAM uses ARN patterns to identify resource scope, while logs, audit events, findings, and deployment systems use ARNs to correlate the same object. -->
+
+Authorization requires more precision than a sentence such as “Allow Alice to delete backups.” AWS must know which identity, action, service, account, Region, and backup resources the statement describes.
+
+IAM policies turn the human intention into a machine-evaluable statement. A simple S3 statement can allow one action on a defined resource set:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ListTheBucket",
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::prod-photos-uploads"
-    },
-    {
-      "Sid": "ReadAndWriteProfileImageObjects",
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": "arn:aws:s3:::prod-photos-uploads/profiles/*"
-    }
-  ]
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::company-reports/*"
 }
 ```
 
-The first statement allows `s3:ListBucket` on the bucket ARN. That action checks the bucket-level resource. The second statement allows `s3:GetObject` and `s3:PutObject` only for objects under `profiles/`. The `*` means objects below that prefix, such as `profiles/2026/06/avatar-123.jpg`. If the app needs object access and the policy only names the bucket ARN, the request can fail with `AccessDenied`.
+The `Action` names the S3 operation. The `Resource` names the objects to which the statement applies. This creates a direct chain:
 
-ARNs also show up during troubleshooting. CloudTrail events, EventBridge events, AWS Config items, resource tagging results, and many service logs include ARNs. A useful habit is to copy the ARN from the event and compare it with the ARN in the IAM policy, Terraform plan, dashboard, or ticket. A different account ID, Region, path, bucket name, or resource suffix can explain why the team is looking at the wrong thing.
+```text
+resource exists
+      ↓
+resource needs an identity
+      ↓
+ARN identifies it
+      ↓
+policy can authorize an action on it
+```
 
-ARNs identify the exact AWS object. The next layer, tags, explains who owns the object and why it exists.
+Some AWS actions do not support resource-level permission and therefore require a wildcard resource. When a service does support resource-level permissions, the ARN allows the policy to narrow the statement to the intended object or resource set.
 
-![The ARN anatomy view separates partition, service, Region, account, and resource so policy examples feel less like a single unreadable string](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/arn-anatomy.png)
+### A wildcard describes a set
 
-*The ARN anatomy view separates partition, service, Region, account, and resource so policy examples feel less like a single unreadable string.*
+The resource pattern `arn:aws:s3:::company-data/*` does not identify one S3 object. It can match every object under that bucket:
 
+```text
+company-data/a.txt
+company-data/reports/july.csv
+company-data/images/logo.png
+...
+```
 
-## Tags for Ownership and Cost
-<!-- section-summary: Tags attach owner, environment, service, cost, and data context to resources. -->
+Similarly, `arn:aws:iam::123456789012:role/*` can match roles in that account. IAM commonly compares the requested resource ARN with the policy's ARN pattern. A `*` can expand the set dramatically, which is why apparently small wildcard changes can create much broader permissions.
 
-A **tag** is a key-value label on an AWS resource. Common tag keys include `Environment`, `Service`, `Owner`, `CostCenter`, `DataClass`, and `ManagedBy`. Tags help teams answer practical questions such as who owns this load balancer, which application pays for this NAT Gateway, whether this bucket stores customer data, and which system should manage the resource.
+### ARNs connect evidence across systems
 
-For cost reporting, AWS can use activated **cost allocation tags**. After activation in the billing area, costs can be grouped by those tag keys in billing reports and tools such as Cost Explorer. This only helps if the organization keeps tag keys and values consistent. `Service=northstar-photos`, `service=Photos`, and `App=photo-service` can split one workload into several reporting buckets.
+“Lambda is failing” provides almost no scope. `payments-authorizer` is better, but several environments may reuse that name. The ARN removes the ambiguity:
 
-A small baseline tag set for the `northstar-photos` service may look like this:
+```text
+arn:aws:lambda:eu-west-2:123456789012:function:payments-authorizer
+```
 
-| Tag key | Why it exists | Example value |
-|---|---|---|
-| `Environment` | Separates prod, staging, dev, and sandbox | `prod` |
-| `Service` | Connects resources to an application or platform service | `northstar-photos` |
-| `Owner` | Gives the responsible team or group | `commerce-platform` |
-| `CostCenter` | Supports finance allocation | `cc-4100` |
-| `DataClass` | Signals sensitivity and retention expectations | `customer-data` |
-| `ManagedBy` | Warns people which system owns changes | `terraform` |
+It identifies the service, Region, account, and function together. The same ARN may appear in:
 
-Tags solve two everyday production problems. The first is ownership. A database, load balancer, NAT Gateway, or queue can outlive the person who created it, so the tag should point to a team or service rather than a single individual. The second is cost. A monthly bill line for NAT Gateway data processing means more when tags connect that spend to `Service=northstar-photos` and `Environment=prod`.
+- IAM policies;
+- CloudTrail events;
+- AWS Config records;
+- deployment output;
+- AWS Resource Explorer;
+- monitoring systems;
+- security findings;
+- automation scripts; and
+- incident tickets.
 
-Infrastructure code should make tags part of the resource definition instead of a console afterthought:
+That makes the ARN a useful correlation key. CloudTrail records can include resource ARNs, owning account IDs, and resource types. Some events record a resource name or service ID instead, so an investigation should not assume that every CloudTrail event contains a perfect ARN. When it is present, however, the ARN helps join the policy, change event, configuration record, finding, and deployed resource.
+
+The exact identity now has a technical purpose. The next problem is organizational meaning: AWS can identify the object without knowing why the company created it.
+
+## What Meaning Do Tags Add to a Resource?
+<!-- section-summary: Tags attach organization-specific ownership, environment, cost, purpose, and classification to a resource without changing its identity. -->
+
+Suppose AWS knows the exact EC2 instance ARN. It can identify the object, but it does not automatically know why the instance exists, who owns it, whether it is production, which team pays for it, whether automation may stop it, or which data classification applies.
+
+Those are organizational facts. **Tags** attach that meaning as key-value metadata:
+
+```text
+Environment = production
+Application = payments
+Owner       = payments-platform
+CostCenter  = FIN-042
+ManagedBy   = terraform
+```
+
+AWS stores the strings but does not assign custom business meaning to them. `Environment=production` does not automatically mean “never stop this resource.” A policy, cost report, inventory system, or automation rule must interpret the value.
+
+### Identity and classification remain separate
+
+The most useful distinction is:
+
+```text
+ARN → identity
+tag → classification
+```
+
+An EC2 instance may begin with `Environment=staging` and later be reclassified as `Environment=production`. The tag changes while the resource remains the same instance with the same identity. This is desirable because identity should not change every time purpose, owner, or environment metadata changes.
+
+```text
+identity ≠ purpose
+identity ≠ ownership
+identity ≠ environment
+```
+
+### Tags overlay the business model
+
+AWS sees resources grouped by service: EC2 instances, Lambda functions, RDS databases, S3 buckets, queues, topics, and load balancers. The organization sees applications and business capabilities such as Payments, Checkout, Search, Analytics, and Internal Tools.
+
+Tags overlay the second model on the first:
+
+```text
+AWS service view
+
+EC2      Lambda      RDS      S3
+ │          │         │        │
+ └──────────┴─────────┴────────┘
+                    │
+                  tags
+                    │
+                    ▼
+organization view
+
+Application = Payments
+Environment = production
+Owner       = payments-platform
+```
+
+At scale, this turns a pile of service resources into a queryable organizational inventory.
+
+### Ownership tags route questions
+
+An `Owner=payments-platform` tag can answer “Who owns this bucket?” during an incident. Stable organizational values are better than personal values such as `Team=Bob`, because people change roles and leave the organization.
+
+Useful ownership dimensions can be separated:
+
+```text
+Application      = payments
+Owner            = payments-platform
+TechnicalContact = payments-oncall
+CostCenter       = CC-1042
+```
+
+Each value has a consumer: application grouping, responsible team, incident routing, or financial allocation.
+
+### Cost tags translate the bill
+
+AWS may report spend under EC2, RDS, S3, and Lambda. Finance may need to see the cost of Payments, Search, Data Platform, or a particular customer. Applying `Application=Payments` across those services allows supported cost-allocation tools to group costs around the application rather than around the AWS service boundary.
+
+```text
+ARN asks: Which thing incurred the cost?
+Tag asks: Whose cost should this be?
+```
+
+### Tags can control access
+
+AWS IAM supports attribute-based access control, or **ABAC**. A principal may carry `Project=Apollo`, and resources may carry the same project tag. Policies can compare the principal attribute with the resource attribute:
+
+```text
+principal.Project == resource.Project
+```
+
+This differs from maintaining a long list of individual ARNs for every role. A role-based policy might say that members of role X may use 437 named resources. An attribute-based policy can say that people may operate resources whose Project tag matches their own Project attribute.
+
+Once tags participate in authorization, tagging quality becomes a security concern as well as an inventory and cost concern.
+
+### Tags are visible metadata, not secret storage
+
+Do not place database passwords, customer identifiers, secret tokens, or other sensitive values in tags. Tags are available through many resource and inventory APIs. Treat them as broadly visible operational metadata.
+
+## How Should a Team Design Its Tagging Rules?
+<!-- section-summary: A tag schema needs consistent keys and values, clear consumers, stable ownership terms, and governance that prevents free-form drift. -->
+
+Names and tags should complement one another. Trying to encode every fact in one resource name produces values such as:
+
+```text
+prod-eu-west-2-payments-team7-costcenter487-pci-primary-api-v3
+```
+
+The name becomes difficult to read, and several embedded facts become stale when the owner, version, or role changes. A cleaner design uses a readable name and structured tags:
+
+```text
+Name = payments-api
+
+Environment = production
+Application = payments
+Owner       = payments-platform
+CostCenter  = 487
+Compliance  = pci
+ManagedBy   = terraform
+```
+
+The name supports human recognition. The ARN supplies exact identity. Tags carry structured, changeable dimensions.
+
+### Add information AWS cannot infer
+
+A `Region=eu-west-2` tag may help a specific external reporting system, but AWS already knows the Region from the resource scope and many ARNs. Before making a tag mandatory, ask whether it adds organizational information or only duplicates a fact AWS already stores.
+
+High-value tags often describe facts AWS cannot infer:
+
+```text
+Application
+Environment
+Owner
+CostCenter
+Criticality
+DataClassification
+ManagedBy
+Repository
+```
+
+Tags such as `AWSService=EC2` or `Region=eu-west-2` may be unnecessary unless an identified consumer requires them.
+
+### Give every required tag a consumer
+
+A practical baseline can include:
+
+```text
+Application
+Environment
+Owner
+CostCenter
+ManagedBy
+Criticality
+DataClassification
+```
+
+Additional keys such as `Repository`, `BusinessUnit`, `Customer`, `Project`, `ExpiresAt`, `BackupPolicy`, `PatchGroup`, and `Compliance` should be added when something actually uses them.
+
+Each mandatory tag needs a reason:
+
+```text
+Owner             → incident routing
+CostCenter        → financial allocation
+Environment       → automation and safety
+DataClassification→ security controls
+ManagedBy         → prevents unmanaged manual changes
+```
+
+If nobody queries, validates, bills against, authorizes with, or automates from a tag, reconsider whether it needs to be required.
+
+### Treat tags like a schema
+
+Tags are technically flexible strings, but operations should treat them more like database columns. These values fragment one environment into several spellings:
+
+```text
+Environment = prod
+Environment = production
+environment = Prod
+Env         = live
+stage       = PROD
+```
+
+A consistent schema uses one key and one allowed value, such as `Environment=production`. Tag keys and values are case-sensitive, so capitalization changes can break inventory queries, cost grouping, or access rules.
+
+Governance should define allowed keys, allowed values, capitalization, ownership, which resource types require a tag, and how exceptions work. Without that structure, tags eventually become free-form comments and lose their value as a queryable schema.
+
+## How Does Infrastructure as Code Add Another Identity?
+<!-- section-summary: Infrastructure as Code uses a logical address that manages an AWS resource but remains separate from its service ID, ARN, and deployed tags. -->
+
+Infrastructure as Code, or **IaC**, adds another namespace. Terraform might declare:
 
 ```hcl
-tags = {
-  Environment = "prod"
-  Service     = "northstar-photos"
-  Owner       = "commerce-platform"
-  CostCenter  = "cc-4100"
-  DataClass   = "customer-data"
-  ManagedBy   = "terraform"
+resource "aws_instance" "payments_api" {
+  # configuration omitted
 }
 ```
 
-This block is intentionally small. Each key holds business metadata rather than deep service configuration. `Environment` tells operators whether the resource handles production traffic. `Service` and `Owner` route questions to the right team. `CostCenter` helps finance reports. `DataClass` helps security and retention reviews. `ManagedBy` tells humans to update Terraform instead of hand-editing the live resource.
+Terraform knows this logical object as `aws_instance.payments_api`. AWS may know the deployed instance as `i-0123456789abcdef0` and by its full ARN.
 
-Tags have practical limits. Some resources support different creation-time tagging paths depending on the service and tool. Some AWS costs remain shared or untagged, such as certain support charges or data transfer views. Tag values can drift if people edit resources manually. A good cost review includes an "untagged" or "missing required tag" view so the team can fix metadata instead of pretending the report is complete.
-
-To search for tagged resources across supported services, use the Resource Groups Tagging API:
-
-```bash
-aws resourcegroupstaggingapi get-resources \
-  --region eu-west-2 \
-  --tag-filters Key=Service,Values=northstar-photos Key=Environment,Values=prod \
-  --query 'ResourceTagMappingList[].{ARN:ResourceARN,Tags:Tags}'
+```text
+IaC logical identity
+       │
+       │ creates and manages
+       ▼
+AWS physical resource
+       ├── service ID
+       ├── ARN
+       └── tags
 ```
 
-Example output:
+These identities can change independently. Renaming the logical Terraform declaration does not necessarily rename the AWS object. Deleting and recreating the instance produces a new `i-...` service ID even if the logical idea remains `payments_api` in the infrastructure code.
 
-```json
-[
-  {
-    "ARN": "arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db",
-    "Tags": [
-      { "Key": "Environment", "Value": "prod" },
-      { "Key": "Service", "Value": "northstar-photos" },
-      { "Key": "Owner", "Value": "commerce-platform" },
-      { "Key": "ManagedBy", "Value": "terraform" }
-    ]
-  },
-  {
-    "ARN": "arn:aws:elasticloadbalancing:eu-west-2:123456789012:loadbalancer/app/prod-photos-alb/50dc6c495c0c9188",
-    "Tags": [
-      { "Key": "Environment", "Value": "prod" },
-      { "Key": "Service", "Value": "northstar-photos" },
-      { "Key": "Owner", "Value": "commerce-platform" }
-    ]
-  }
-]
+This explains a common IaC surprise: the code can preserve the same conceptual component while AWS replaces the physical resource underneath it. Conversely, the physical resource can remain unchanged while its code address or module structure is reorganized.
+
+### Code metadata is not automatically deployed metadata
+
+The Terraform repository may already contain useful context:
+
+```text
+resource name: payments_api
+folder: /services/payments
+repository: payments-infrastructure
+module: compute
 ```
 
-The **tag-filters** ask for resources that belong to the `northstar-photos` service in `prod`. The **ARN** field gives the exact resource address. The **Tags** list shows the business metadata attached to each resource. This is a helpful incident or cost-review inventory. The larger source of truth should still live in IaC, an asset inventory, or a configuration management system.
+Those facts help a developer reading the source. AWS does not automatically know them. If an operator looking only at the deployed instance needs to know which repository manages it, copy that relationship into visible resource metadata:
 
-Tags tell people who owns a resource. Naming and IaC metadata tell people where the desired configuration should live.
-
-## Naming and IaC Metadata
-<!-- section-summary: Names and IaC metadata make resources readable while pointing production changes to the owning system. -->
-
-A naming standard should be simple enough that people can guess it. For many resources, `{environment}-{service}-{component}` works well: `prod-photos-web`, `prod-photos-worker`, `prod-photos-db`, and `prod-photos-alb`. Short, consistent names help humans search and talk during incidents.
-
-Some services need extra naming care because scope differs. S3 bucket names are globally unique, so a company may include an organization prefix and Region, such as `acme-prod-photos-uploads-eu-west-2`. Regional resources, such as many ECS services or RDS instances, often use shorter names because the account and Region already provide scope.
-
-Names should complement the source of truth. **Infrastructure as Code**, often shortened to **IaC**, stores the desired configuration for resources through tools such as Terraform, CloudFormation, or AWS CDK. The `ManagedBy` tag, stack name, Terraform resource address, and deployment pipeline should help people find the code that owns the resource.
-
-A practical Terraform pattern is to define common tags once and pass them into resources or modules:
-
-```hcl
-locals {
-  common_tags = {
-    Environment = var.environment
-    Service     = "northstar-photos"
-    Owner       = "commerce-platform"
-    CostCenter  = "cc-4100"
-    ManagedBy   = "terraform"
-  }
-}
-
-resource "aws_cloudwatch_log_group" "web" {
-  name              = "/aws/ecs/photos/web"
-  retention_in_days = 30
-  tags              = local.common_tags
-}
+```text
+ManagedBy  = terraform
+Repository = payments-infrastructure
 ```
 
-The **locals** block gives the module one shared tag map. The log group then reuses `local.common_tags` instead of repeating each tag by hand. This keeps reviews simple because a missing or inconsistent tag appears in a normal code diff.
+Metadata that stays only in IaC helps people navigating the code. Metadata applied as resource tags helps people navigating the deployed system. Both layers are useful, and neither automatically replaces the other.
 
-The **name** field also carries useful identity. `/aws/ecs/photos/web` tells a reader that this log group belongs to the ECS web component for the `northstar-photos` service. The **retention_in_days** field shows that logs have a defined retention period instead of growing forever. The example stays focused on ownership and metadata, while a later Terraform article can handle complete module design.
+### Tags support cross-service inventory
 
-When a console user sees `ManagedBy=terraform`, the normal path is to update Terraform and run the pipeline. An emergency manual change may still happen during an incident, but the follow-up should bring IaC back into sync. Otherwise the next deployment may undo the emergency fix or preserve an undocumented drift.
+During an incident, a responder may need every production resource for Checkout. A query for `Application=Checkout` and `Environment=production` can locate supported resources across service boundaries: load balancers, ECS services, Lambda functions, databases, queues, topics, and buckets.
 
-Now the identity pieces are in place. The incident workflow can connect alert, command output, tags, CloudTrail, and IaC state to the same production object.
+AWS Resource Explorer can search indexed resources using metadata such as names, tags, and IDs across Regions. With disciplined metadata, the cloud becomes a queryable inventory. Without it, the responder faces a collection of unrelated service objects and must reconstruct ownership manually.
 
-## Inventory and Search During Incidents
-<!-- section-summary: Resource identity lets responders connect alerts, tags, CloudTrail events, and IaC state to one production object. -->
+## How Do You Find and Verify the Exact Resource?
+<!-- section-summary: Incident response moves from a business symptom to a tagged resource population, then to one exact service ID or ARN and its management, audit, relationship, and recovery context. -->
 
-Return to the alert for high CPU on `prod-photos-db`. A responder should collect the account, Region, database ARN, endpoint, status, and tags before changing capacity or parameters. This gives the team a shared target and prevents the common wrong-resource mistake.
+A useful incident investigation increases the resolution of the problem step by step:
 
-```bash
-aws sts get-caller-identity --profile prod
+```text
+business symptom
+      ↓
+application
+      ↓
+resource group
+      ↓
+exact resource
+      ↓
+ARN or service ID
+      ↓
+CloudTrail, metrics, logs, and configuration
 ```
 
-Example output:
+For a payments failure, the path might be:
 
-```json
-{
-  "Account": "123456789012",
-  "Arn": "arn:aws:sts::123456789012:assumed-role/ProdOperator/senlin"
-}
+```text
+"payments is failing"
+        ↓
+Application=Payments
+Environment=production
+        ↓
+Lambda function named payments-authorizer
+        ↓
+arn:aws:lambda:eu-west-2:123456789012:function:payments-authorizer
+        ↓
+CloudTrail / CloudWatch / AWS Config
 ```
 
-The **Account** field confirms the account that receives the next commands. The **Arn** field confirms the active role. If the role or account differs from the incident target, the responder should fix credentials before touching the database.
+Tags are effective for finding the population: “Which resources belong to Payments?” The ARN is effective for pinning down the individual: “Which exact function received this policy change?” CloudTrail can then help answer who performed the change, through which API, and when.
 
-Next, capture the database identity:
+The progression removes ambiguity:
 
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier prod-photos-db \
-  --profile prod \
-  --region eu-west-2 \
-  --query 'DBInstances[].{Arn:DBInstanceArn,Identifier:DBInstanceIdentifier,Status:DBInstanceStatus,Endpoint:Endpoint.Address,Class:DBInstanceClass,Storage:AllocatedStorage}'
+```text
+payments
+   ↓
+production payments
+   ↓
+payments Lambda function
+   ↓
+specific function
+   ↓
+exact ARN
 ```
 
-Example output:
+![The evidence chain shows how an alert becomes a verified resource by connecting tags, ARN, audit evidence, and IaC owner](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resource-evidence-chain.png)
 
-```json
-[
-  {
-    "Arn": "arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db",
-    "Identifier": "prod-photos-db",
-    "Status": "available",
-    "Endpoint": "prod-photos-db.abc123.eu-west-2.rds.amazonaws.com",
-    "Class": "db.m7g.large",
-    "Storage": 200
-  }
-]
+*Tags find the relevant set, while the ARN identifies the exact object across operational systems.*
+
+### Verify the target before changing it
+
+A strong pre-change check follows directly from the identity model:
+
+1. **Identity:** Have you identified the exact resource by an authoritative service ID or ARN rather than only a display name?
+2. **Scope:** Are you in the correct AWS account, Region, service, and environment?
+3. **Purpose:** What do the `Application`, `Environment`, `Owner`, and `Criticality` tags say?
+4. **Ownership:** Which stable team is responsible for the resource, and where is that ownership recorded?
+5. **Management:** Does Terraform, CloudFormation, CDK, another deployment system, or a manual process own the desired state? Would a manual change be reverted?
+6. **Relationships:** Which resources depend on this object, and which objects does it depend on?
+7. **Authorization:** Does the policy name the intended ARN or resource set? Does any wildcard expand further than necessary?
+8. **Auditability:** Will CloudTrail or relevant service telemetry identify the change afterward?
+9. **Recovery:** Can the prior configuration or data be restored if the change fails?
+10. **Metadata:** If the resource is replaced, will the replacement preserve required tags, monitoring, ownership, and cost attribution?
+
+The checklist reduces to one question: **Do I know what this resource is, what it belongs to, how it is managed, and what will happen if I change it?**
+
+A company-employee analogy captures the separation:
+
+```text
+Person
+  → actual resource
+
+Employee ID
+  → service-generated resource ID
+
+Full corporate directory identity
+  → ARN
+
+Preferred display name
+  → friendly name
+
+Department, cost center, and manager
+  → tags
+
+HR system record
+  → IaC and state relationship
 ```
 
-The **Arn** connects the live database to policies, tags, CloudTrail, and IaC. The **Status** field shows whether the database is available. The **Class** and **Storage** fields give enough context for a first capacity conversation without turning the article into an RDS tuning guide.
+Moving a person from Sales to Engineering changes the department classification without creating a new human. In the same way, changing `Owner=payments` to `Owner=platform` changes organizational metadata without changing the resource identity.
 
-Then read the tags for the same ARN:
+The complete model is:
 
-```bash
-aws rds list-tags-for-resource \
-  --resource-name arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db \
-  --profile prod \
-  --region eu-west-2
+```text
+                    your organization
+                           │
+                         tags
+           Owner=Payments, Env=production
+                           │
+                           ▼
+                    AWS resource
+                    EC2 instance
+                           │
+             ┌─────────────┼─────────────┐
+             ▼             ▼             ▼
+       friendly name   service ID       ARN
+       payments-api    i-01234...      arn:aws:...
+             │             │             │
+             ▼             ▼             ▼
+          humans       service API   IAM, logs, APIs,
+                                      and tooling
+                           ▲
+                           │ managed through
+                           │
+                    IaC logical address
+                 aws_instance.payments_api
 ```
 
-Example output:
+![The summary gives the exact identity, ownership, management, policy, relationship, audit, and recovery facts to verify before a resource change](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resource-identity-summary.png)
 
-```json
-{
-  "TagList": [
-    { "Key": "Environment", "Value": "prod" },
-    { "Key": "Service", "Value": "northstar-photos" },
-    { "Key": "Owner", "Value": "commerce-platform" },
-    { "Key": "ManagedBy", "Value": "terraform" }
-  ]
-}
-```
+*Safe change starts by connecting the human name, exact AWS identity, organizational tags, and owning deployment system.*
 
-The **Environment** and **Service** tags confirm that this resource belongs to the production `northstar-photos` workload. The **Owner** tag points to the responsible team. The **ManagedBy** tag warns responders that a lasting change should go through Terraform.
+The four durable sentences are:
 
-After identity and ownership are clear, the team can connect runtime symptoms to control-plane changes. CloudTrail can show whether someone modified the database, changed a security group, updated parameters, or ran a deployment around the time CPU rose.
+- A resource is the actual AWS object.
+- A friendly name or service ID identifies it in a human or service-specific context.
+- An ARN gives AWS a precise, fully qualified reference for authorization and correlation.
+- Tags add ownership, environment, cost, purpose, and security classification without becoming the resource identity.
 
-```bash
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=ResourceName,AttributeValue=prod-photos-db \
-  --start-time 2026-06-24T09:30:00Z \
-  --end-time 2026-06-24T10:30:00Z \
-  --profile prod \
-  --region eu-west-2
-```
+Once those boundaries are clear, AWS inventory, IAM, cost allocation, Infrastructure as Code, and incident response fit into one resource model.
 
-Example output:
+## Check Your Answers
 
-```json
-{
-  "Events": [
-    {
-      "EventId": "1a2b3c4d-example",
-      "EventName": "ModifyDBInstance",
-      "EventTime": "2026-06-24T09:58:12Z",
-      "Username": "ProdDeployRole",
-      "Resources": [
-        {
-          "ResourceName": "prod-photos-db",
-          "ResourceType": "AWS::RDS::DBInstance"
-        }
-      ]
-    }
-  ]
-}
-```
+:::expand[What Is an AWS Resource?]{kind="recap"}
+A resource is the actual AWS object, with its own identity, configuration, state, lifecycle, permissions, and relationships.
 
-The **EventName** field names the API action. The **EventTime** field lets responders compare the change with the alarm timeline. The **Username** field points to the role or user behind the action. The **Resources** field confirms that the event refers to the same database identifier from the alert.
+A resource is the actual AWS object created and managed through a service API. It has identity, configuration, state, lifecycle, permissions, and relationships.
+:::
 
-Finally, connect the live resource to IaC. The exact command depends on Terraform, CloudFormation, CDK, or another tool, but the habit stays the same. Find the state address or stack, compare the live ARN with the expected resource, and make durable changes through the owning pipeline when time allows.
+:::expand[Why Can One Resource Have Several Identifiers?]{kind="recap"}
+Friendly names, service IDs, ARNs, IaC addresses, and tags identify or describe a resource for different audiences and must not be treated as interchangeable.
 
-The incident workflow is now connected: account, Region, friendly name, ARN, tags, CloudTrail event, and IaC owner all point to the same object.
+Friendly names help humans, service IDs target objects inside one service, ARNs provide qualified AWS identity, IaC addresses name declarations in code, and tags describe organizational meaning.
+:::
 
-![The evidence chain shows how an alert becomes a verified resource by connecting name, ARN, tags, CloudTrail, and IaC owner](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resource-evidence-chain.png)
+:::expand[How Does an ARN Identify One AWS Resource?]{kind="recap"}
+An Amazon Resource Name is a fully qualified AWS address whose partition, service, Region, account, and resource fields remove ambiguity.
 
-*The evidence chain shows how an alert becomes a verified resource by connecting name, ARN, tags, CloudTrail, and IaC owner.*
+An ARN combines partition, service, Region, account, and a service-specific resource portion. Its exact suffix varies by service, so read the common fields and use the service reference for precise syntax.
+:::
 
+:::expand[How Do ARNs Define Permission Scope and Connect Evidence?]{kind="recap"}
+IAM uses ARN patterns to identify resource scope, while logs, audit events, findings, and deployment systems use ARNs to correlate the same object.
 
-## A Pre-Change Checklist
-<!-- section-summary: A short identity check before changing AWS resources prevents wrong-account and wrong-resource incidents. -->
+IAM compares requested resources with ARN expressions to determine which objects a statement covers. The same ARN can correlate policies, CloudTrail, Config, deployments, findings, monitoring, and tickets.
+:::
 
-Before changing a production resource, confirm five fields: account, Region, resource type, exact ID or ARN, and owner tag. This check is small enough to fit into an incident note, deployment ticket, or pull request description.
+:::expand[What Meaning Do Tags Add to a Resource?]{kind="recap"}
+Tags attach organization-specific ownership, environment, cost, purpose, and classification to a resource without changing its identity.
 
-```bash
-aws resourcegroupstaggingapi get-resources \
-  --tag-filters Key=Service,Values=northstar-photos Key=Environment,Values=prod \
-  --region eu-west-2 \
-  --profile prod \
-  --query 'ResourceTagMappingList[].ResourceARN'
-```
+Tags attach your organization's environment, application, owner, cost, management, and classification metadata. They can support inventory, cost allocation, automation, and attribute-based access control without replacing identity.
+:::
 
-Example output:
+:::expand[How Should a Team Design Its Tagging Rules?]{kind="recap"}
+A tag schema needs consistent keys and values, clear consumers, stable ownership terms, and governance that prevents free-form drift.
 
-```json
-[
-  "arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db",
-  "arn:aws:ecs:eu-west-2:123456789012:service/prod-photos/photos-web",
-  "arn:aws:elasticloadbalancing:eu-west-2:123456789012:loadbalancer/app/prod-photos-alb/50dc6c495c0c9188"
-]
-```
+Use consistent case-sensitive keys and allowed values, prefer stable organizational concepts, avoid secrets, and require only tags with an identified operational, financial, automation, or security consumer.
+:::
 
-The output gives a quick ARN inventory for the `northstar-photos` workload in `prod`. It helps a responder confirm whether the alert, ticket, dashboard, and CLI are talking about the same set of resources. A full asset management program adds ownership workflows, validation, history, and reporting around this kind of lookup.
+:::expand[How Does Infrastructure as Code Add Another Identity?]{kind="recap"}
+Infrastructure as Code uses a logical address that manages an AWS resource but remains separate from its service ID, ARN, and deployed tags.
 
-For production changes, put a short checklist in the ticket:
+IaC gives a resource a logical code address that creates or manages a physical AWS object. That address remains separate from the object's service ID, ARN, and deployed tags.
+:::
 
-| Field | Example |
-|---|---|
-| Account | `prod`, account `123456789012` |
-| Region | `eu-west-2` |
-| Resource type | RDS DB instance |
-| Exact identifier | `prod-photos-db` |
-| ARN | `arn:aws:rds:eu-west-2:123456789012:db:prod-photos-db` |
-| Owner tags | `Service=northstar-photos`, `Owner=commerce-platform` |
-| IaC owner | `module.photos.aws_db_instance.main` |
-| Rollback target | Previous parameter group, previous task definition revision, snapshot ID, or prior config value |
+:::expand[How Do You Find and Verify the Exact Resource?]{kind="recap"}
+Incident response moves from a business symptom to a tagged resource population, then to one exact service ID or ARN and its management, audit, relationship, and recovery context.
 
-The rollback target belongs beside the identity fields because rollback also needs an exact object. If the team changes a task definition, record the previous revision ARN. If the team changes a Lambda alias, record the previous version. If the team changes an RDS parameter group, record the previous parameter group and whether the database needs a reboot. A vague rollback note gives the on-call person too little to use during pressure.
-
-Resource identity is ordinary production discipline. The team can move faster when names, IDs, ARNs, tags, and IaC metadata all agree because the target stays clear across alerts, tickets, policies, logs, dashboards, and code review.
-
-![The summary gives the production facts a reviewer should see before approving a resource change](/content-assets/articles/article-cloud-providers-aws-foundations-resources-arns-tags/resource-identity-summary.png)
-
-*The summary gives the production facts a reviewer should see before approving a resource change.*
-
+Move from the business symptom to tagged resources, then to one exact ARN or service ID. Before changing it, confirm scope, purpose, owner, management system, relationships, policy scope, audit evidence, and recovery path.
+:::
 
 ## References
 
+- [Resource Explorer terms and concepts](https://docs.aws.amazon.com/resource-explorer/latest/userguide/getting-started-terms-and-concepts.html)
+- [IAM users and friendly names](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html)
 - [Identify AWS resources with ARNs](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference-arns.html)
-- [IAM identifiers](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html)
-- [Organizing costs with cost allocation tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html)
-- [Tag your Amazon EC2 resources](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html)
+- [IAM JSON policy element: Resource](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_resource.html)
+- [CloudTrail Resource type](https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_Resource.html)
 - [Tagging AWS resources](https://docs.aws.amazon.com/tag-editor/latest/userguide/tagging.html)
-- [Using the Resource Groups Tagging API](https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/overview.html)
-- [AWS CloudTrail event reference](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference.html)
+- [Tagging best practices and strategies](https://docs.aws.amazon.com/tag-editor/latest/userguide/best-practices-and-strats.html)
+- [IAM policy variables and tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_variables.html)
+- [Tag Amazon EC2 resources](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html)
+- [What is AWS Resource Explorer?](https://docs.aws.amazon.com/resource-explorer/latest/userguide/welcome.html)
+- [CloudTrail record contents](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html)

@@ -1,329 +1,357 @@
 ---
 title: "Ingress"
-description: "Route HTTP and HTTPS traffic from outside the cluster to internal Kubernetes Services."
-overview: "Ingress gives HTTP workloads a shared outside entry point. It connects public hostnames and URL paths to internal Services while an Ingress controller does the real proxy or load balancer work."
+description: "Understand how a public HTTP request crosses DNS, TLS, an Ingress controller, and a private Service before reaching a Pod."
+overview: "Ingress describes how public HTTP and HTTPS hostnames and paths should reach internal Services. Begin with a browser outside the cluster, then separate the stored rule from the controller and follow one request through every boundary."
 tags: ["ingress", "http", "tls", "routing"]
 order: 3
 id: article-containers-orchestration-kubernetes-networking-ingress
 ---
+
 ## Table of Contents
 
-1. [Ingress Handles External HTTP](#ingress-handles-external-http)
-2. [Service First, Ingress Second](#service-first-ingress-second)
-3. [Ingress Object, IngressClass, and Controller](#ingress-object-ingressclass-and-controller)
-4. [Hosts, Paths, and Backend Services](#hosts-paths-and-backend-services)
-5. [TLS at the Edge](#tls-at-the-edge)
-6. [DNS and the Controller Address](#dns-and-the-controller-address)
-7. [Rollout Checks for a New Ingress](#rollout-checks-for-a-new-ingress)
-8. [Debugging by Following the Request](#debugging-by-following-the-request)
-9. [Production Ownership and Tradeoffs](#production-ownership-and-tradeoffs)
-10. [What's Next](#whats-next)
-11. [References](#references)
+1. [Why does the browser need an edge route?](#why-does-the-browser-need-an-edge-route)
+2. [What are the Ingress object and Ingress controller?](#what-are-the-ingress-object-and-ingress-controller)
+3. [How does one HTTPS request reach a Service?](#how-does-one-https-request-reach-a-service)
+4. [How do host, path, and TLS rules divide a website?](#how-do-host-path-and-tls-rules-divide-a-website)
+5. [How do you create and prove a route before moving users?](#how-do-you-create-and-prove-a-route-before-moving-users)
+6. [What does each failure symptom tell you?](#what-does-each-failure-symptom-tell-you)
+7. [When does Gateway API fit better?](#when-does-gateway-api-fit-better)
+8. [Check Your Answers](#check-your-answers)
+9. [References](#references)
 
-## Ingress Handles External HTTP
-<!-- section-summary: Ingress is the Kubernetes API object that describes how outside HTTP or HTTPS traffic should reach Services inside the cluster. -->
+The API works from another Pod inside the cluster:
 
-Many Kubernetes applications serve HTTP traffic from outside the cluster. A browser knows a public hostname such as `shop.devpolaris.example`, while the application Pods live behind internal Services and changing Pod IPs.
+```text
+http://api-service:8080
+```
 
-**Ingress** is the Kubernetes API object that describes the HTTP route from that public hostname and path to an internal Service. The route only works when an Ingress controller is running, watching the right class, exposing an address, and able to reach the backend Service.
+The same name is useless to a customer opening a browser at home. Their computer uses public DNS and internet routes, while the Service name and ClusterIP exist only inside the cluster. The customer knows a public URL instead:
 
-The example is a checkout web app behind `https://shop.devpolaris.example/checkout`. The Service, Ingress object, controller, host and path rules, TLS, DNS, rollout checks, and debugging evidence connect in the same order a request travels.
+```text
+https://shop.example.com/api
+```
 
-Picture a customer opening the checkout page. The browser sends a request to `https://shop.devpolaris.example/checkout`. That request starts outside the cluster, uses a public hostname, uses HTTPS, and carries a URL path that should reach the checkout web app running inside Kubernetes.
+Something at the edge of the cluster must receive that outside connection, prove the site's TLS identity, read the HTTP hostname and path, and forward the request to the private Service.
 
-The checkout web app Pods already live inside the cluster. They have Pod IPs, labels, readiness probes, and a Deployment that keeps the right number of replicas running. The browser only needs a hostname and a path; Kubernetes keeps the Pod IPs behind the Service.
+**Ingress is the Kubernetes API that describes that HTTP or HTTPS routing rule.** An Ingress controller is the active software that turns the stored rule into a real proxy or load-balancer configuration.
 
-**Ingress** is the Kubernetes resource that describes that outside HTTP entry rule. The official Kubernetes [Ingress documentation](https://kubernetes.io/docs/concepts/services-networking/ingress/) describes Ingress as an API object for managing external access to Services, usually HTTP. In practical terms, an Ingress says: when a request reaches this hostname and this path, send it to this Service.
+For a global commerce site, DNS publishes the edge address, TLS proves the site's identity and encrypts the connection, and the HTTP hostname and path choose the internal Service. These are separate decisions along one customer request, and the Ingress controller must implement all three correctly while API traffic continues.
 
-There are a few concepts connected together here. A **Service** gives the Pods a stable internal address. An **Ingress rule** maps a public host and path to that Service. An **Ingress controller** is the running software that reads the rule and configures a proxy or load balancer. **DNS** points the public hostname at the controller's address. **TLS** gives the browser a trusted HTTPS connection.
+We will follow `https://shop.example.com/api` from the browser to a ready API Pod. Along that path, we need to answer seven questions:
 
-![Ingress request path showing browser, DNS, Ingress controller, Ingress rule, checkout-web Service, and ready Pods](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-request-path.png)
+1. **Why does the browser need an edge route?**
+2. **What are the Ingress object and Ingress controller?**
+3. **How does one HTTPS request reach a Service?**
+4. **How do host, path, and TLS rules divide a website?**
+5. **How do you create and prove a route before moving users?**
+6. **What does each failure symptom tell you?**
+7. **When does Gateway API fit better?**
 
-*Ingress is the route description, and the controller makes that route real by accepting traffic for the hostname and forwarding it to the Service.*
+## Why does the browser need an edge route?
+<!-- section-summary: A Service gives the application a stable cluster-network identity; Ingress adds a public HTTP-aware entrance for outside callers. -->
 
-The Service comes first because it owns Pod selection and stable backend naming. Then the Ingress object, the controller that makes it real, the hostname and path rules, TLS, DNS, rollout checks, and debugging fill in the outside HTTP entry. Each part answers one question in the request: where did the client enter, which rule matched, which Service received it, and which Pods handled it?
+The API Service solves the problem inside Kubernetes. Pods can be replaced while callers keep using `api-service:8080`. Its ClusterIP belongs to a virtual network understood by the cluster.
 
-## Service First, Ingress Second
-<!-- section-summary: A Service gives the application a stable internal target, and Ingress places an HTTP entry rule in front of that target. -->
+A browser outside the cluster lacks two things. First, its routing table stops before the private Service network. Second, even if several web applications share one public IP and port `443`, the destination IP and port leave the intended application ambiguous.
 
-A **Service** is Kubernetes' stable internal address for a group of Pods. The Kubernetes [Service documentation](https://kubernetes.io/docs/concepts/services-networking/service/) explains that a Service exposes an application running on a set of Pods and gives clients a stable way to reach them. For the checkout web app, the Service can be named `checkout-web` in the `checkout` namespace.
+The useful information is in the URL. For these three requests, the public IP may be identical:
 
-The Service uses a selector to find Pods with the right labels. It exposes one port that other cluster workloads can call, and it sends traffic to the container port where the app listens. This keeps callers away from changing Pod IPs. A Deployment can replace Pods during a rollout, and the Service name stays the same.
+| Incoming HTTP request | Kubernetes backend |
+|---|---|
+| `shop.example.com/api` | `api-service` Service |
+| `shop.example.com/` | `frontend-service` Service |
+| `admin.example.com/` | `admin-service` Service |
+
+An HTTP-aware edge can inspect the hostname and path after the connection is established. The decision it needs is:
+
+Each rule maps an HTTP hostname and URL path to a Kubernetes Service and Service port.
+
+Ingress records that mapping. The Service still answers “Which ready Pods provide the API?” Ingress answers “Which public HTTP requests belong to the API?” Keeping those jobs separate lets Pods roll without changing the public URL and lets routes change without exposing Pod addresses.
+
+A LoadBalancer Service can give one Service an outside address, which is useful for some TCP, UDP, or simple single-service cases. Ingress adds a shared HTTP layer: many Services can use one public address and certificate strategy while hostnames and paths direct each request.
+
+That public path is assembled by several systems. A DNS provider publishes the hostname. A load balancer or proxy accepts connections on ports `80` and `443`. The TLS endpoint presents the certificate. The Ingress controller programs HTTP routes. Services and EndpointSlices lead from each route to ready Pods. Ingress owns the HTTP routing description, while the other systems retain their own responsibilities.
+
+This is why “expose the app” is not one switch. The Deployment creates application processes. The ClusterIP Service gives them a stable internal front door. Ingress describes which public HTTP identity should lead to that Service. The controller supplies or configures the edge data plane, while public DNS makes users find it. Omitting any link leaves the others valid but incomplete.
+
+The abstraction also lets several applications share the same public address and port. TCP reaches `203.0.113.42:443`, but that tuple alone does not distinguish the shop API from the admin site. TLS SNI and the later HTTP `Host` and path carry the application identity needed for the edge to choose a route.
+
+## What are the Ingress object and Ingress controller?
+<!-- section-summary: The Ingress object stores the desired HTTP rule, while the controller owns a real proxy or load balancer and continually applies those rules. -->
+
+An Ingress object is a statement stored in the Kubernetes API. It can say “send `/api` to `api-service`.” Opening port `443` and carrying packets require an active data plane.
+
+The **Ingress controller** performs the active work. It watches Ingress objects, decides which ones belong to it, translates their rules into the configuration understood by its proxy or load balancer, and keeps reconciling changes.
+
+The distinction is similar to an architect's plan and the building crew. The Ingress is the approved plan showing where the public doorway should lead. The controller and its data plane construct and operate the actual doorway. A valid plan can exist while no crew is present.
+
+This is why the API server can accept an Ingress while the site remains unreachable. It proved only that the desired object was valid. If its `ingressClassName` points to a missing controller, no data plane claims it and the address can remain empty.
+
+An **IngressClass** connects a friendly class name to a controller implementation. A cluster might use `public` for an internet-facing controller and `internal` for a company-network controller. The Ingress chooses one:
 
 ```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: checkout-web
-  namespace: checkout
 spec:
-  type: ClusterIP
-  selector:
-    app: checkout-web
-  ports:
-    - name: http
-      port: 80
-      targetPort: 3000
+  ingressClassName: public
 ```
 
-The Service fields set the backend contract:
+The `public` IngressClass then identifies the controller expected to reconcile it. This avoids two controllers treating the same route as their own instruction.
 
-- `type: ClusterIP` keeps the checkout web app private to the cluster.
-- `selector.app: checkout-web` chooses the Pods behind the Service.
-- `ports[].name: http` gives the Ingress a stable Service port name to reference.
-- `ports[].port: 80` is the port the Ingress controller calls on the Service.
-- `ports[].targetPort: 3000` forwards traffic to the application container port.
+The controller also needs a real backend. Ingress sends to a Service, while the Deployment's Pods sit behind that Service. If `api-service` has zero ready EndpointSlice addresses, the public rule can be correct and still have nowhere healthy to send traffic.
 
-`type: ClusterIP` means the Service is reachable inside the cluster. That is usually the right first exposure level for an app behind Ingress. The Service keeps the backend private, and the Ingress controller acts as the shared edge that outside clients use.
+The two prerequisite stories are therefore:
 
-The internal Service check should pass before the platform team adds any outside route. This check creates a temporary curl Pod in the checkout namespace and calls the Service DNS name. A healthy JSON response tells us that cluster DNS, Service selection, backend endpoints, and the app health endpoint line up.
+The Ingress controller claims the Ingress and programs the edge. Behind that edge, the Service and its ready EndpointSlices lead to the responding application. These are connected control loops, so an accepted Ingress can still lead to an empty backend set.
 
-```bash
-kubectl -n checkout run netcheck --rm -it --restart=Never --image=curlimages/curl -- \
-  curl -sS http://checkout-web.checkout/healthz
+Only when both stories work can the edge connect a browser to the application.
+
+The concrete data plane depends on the controller. One implementation may configure NGINX, Envoy, or HAProxy running inside the cluster. Another may configure a provider-managed layer-seven load balancer. In every case, the Ingress object remains stored desired state, the controller performs reconciliation, and the resulting proxy or load balancer receives the real request.
+
+Read creation as a reconciliation sequence:
+
+```text
+API stores Ingress
+      ↓
+controller for ingressClassName observes it
+      ↓
+controller resolves TLS and Service references
+      ↓
+controller programs proxy or load balancer
+      ↓
+edge address becomes available
+      ↓
+DNS can direct users to that address
 ```
 
-Expected output can be a small health payload:
+An accepted YAML document proves only the first transition. A missing controller, wrong class, absent TLS Secret, empty Service backend, or unconfigured public DNS can stop a later transition. Those are separate owners and therefore require separate evidence.
 
-```bash
-{"status":"ok","service":"checkout-web"}
+## How does one HTTPS request reach a Service?
+<!-- section-summary: DNS finds the edge, TLS proves and protects the hostname, HTTP reveals the route, and the Service supplies a ready backend. -->
+
+Return to the customer's URL:
+
+```text
+https://shop.example.com/api
 ```
 
-That internal check protects the rollout. Ingress builds on top of the Service, so a broken selector, a wrong `targetPort`, or missing ready Pods will still break the request after the edge route looks perfect. The clean flow is Service first, then Ingress.
+The browser and edge use that information in stages. Each stage consumes one part and creates the condition needed for the next.
 
-## Ingress Object, IngressClass, and Controller
-<!-- section-summary: The Ingress object stores the desired HTTP rule, while an Ingress controller watches that object and configures real traffic handling. -->
+### 1. DNS finds the public edge
 
-The **Ingress object** is the YAML resource stored in the Kubernetes API. It contains the host, path, TLS, and backend Service references. Kubernetes accepts the object as desired configuration, the same way it stores a Deployment or Service.
+The browser asks public DNS for `shop.example.com`. The answer is the address or load-balancer name used by the Ingress data plane. DNS maps the hostname to the shared entrance; the later HTTP routing stage interprets `/api`.
 
-The **Ingress controller** is the running component that turns that desired configuration into real network behavior. The official Kubernetes [Ingress controllers page](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) lists many implementations, including HAProxy, Traefik, Kong, Cilium, cloud provider controllers, and Envoy-based options. Each controller watches Ingress objects and configures its own proxy, gateway, or load balancer.
+If the name returns `NXDOMAIN`, the request ended at public DNS before reaching Kubernetes. Repair belongs in the public DNS record rather than the Service selector.
 
-This split is the first big production lesson. Creating an Ingress object only records the route. Traffic starts working when a controller is installed, watches the matching Ingress, exposes an address, and can reach the backend Service. A cluster can store a valid Ingress YAML file while no outside request succeeds, because the controller piece is missing or pointed at a different class.
+### 2. TLS proves the site's identity
 
-**IngressClass** connects an Ingress to the controller that should handle it. In a small cluster, there may be one class named `public`. In a larger company, there might be a public internet controller, an internal-only controller, and a special controller for partner traffic. The class keeps each route on the intended edge.
+The browser connects to port `443` and includes `shop.example.com` during the TLS handshake. The edge chooses a certificate for that hostname. The browser checks that the certificate is trusted and covers the name, then encryption begins.
 
-`kubectl get ingressclass` might show a `public` class for internet traffic and an `internal` class for private traffic. For the DevPolaris checkout web app, outside users need the public edge, so the Ingress will use `ingressClassName: public`. A different internal admin API might use `ingressClassName: internal` and a private load balancer address. Same Kubernetes API shape, different controller ownership.
+This happens before the edge can read the encrypted HTTP path. A certificate warning means some TLS endpoint answered while `/api` routing still awaits a trusted connection. The relevant evidence is the hostname, certificate, Secret, and controller's TLS configuration.
 
-One more important detail belongs here. Kubernetes says the Ingress API is stable and frozen, while [Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) is the recommended successor for newer, richer traffic management. Many production clusters still use Ingress every day, and new platform designs should know where Ingress fits and where Gateway API may be a stronger long-term platform choice.
+### 3. HTTP reveals the routing decision
 
-There is also a 2026 controller footnote that matters for real production work. The Kubernetes project announced that the community-maintained `kubernetes/ingress-nginx` controller was retired in March 2026 in its [Ingress NGINX retirement announcement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/). That retirement applies to that controller project; the Ingress API itself remains supported and frozen. For new production work, the platform team should choose a maintained Ingress controller or a Gateway API implementation.
+Inside the protected connection, the browser sends an HTTP request containing the hostname and `/api` path. The edge compares those values with the configuration produced from Ingress rules.
 
-## Hosts, Paths, and Backend Services
-<!-- section-summary: Ingress rules match HTTP hostnames and paths, then forward matching requests to named Service ports. -->
+A rule for `shop.example.com` and `/api` yields `api-service:8080`. The Service then supplies ready endpoints. Depending on the controller, the proxy may use the Service address or consume EndpointSlice information directly, but the Kubernetes backend contract remains the Service and port.
 
-The first useful route has a concrete traffic story. The DevPolaris web app calls `https://shop.devpolaris.example/checkout`, and that path should reach the `checkout-web` Service in the `checkout` namespace. The Ingress lives in the same namespace as the backend Service, so the backend reference can use the local Service name.
+Notice which information becomes available when. Public DNS can route only by the queried hostname and returns an edge address; it never sees `/api`. During TLS, the edge uses the SNI hostname to choose a certificate before it can read encrypted HTTP content. After decryption, the HTTP hostname and path become available for Ingress matching. Mixing these stages leads to errors such as expecting a DNS record to choose an application path or expecting an HTTP rule to repair a certificate mismatch.
 
-The route has to match the browser request. The public host is `shop.devpolaris.example`, the public path family is `/checkout`, and the backend Service contract is `checkout-web:http`. Those three names are the review anchor before any controller-specific details enter the file.
+![A browser request is separated into public DNS, TLS hostname verification, Ingress host and path matching, the API Service, and one ready Pod](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-request-path.png)
 
-The beginner version is one route object: class, host, path, and backend Service.
+*The same URL carries several decisions, and each layer proves a different part before the request can continue.*
+
+The return response follows the established path back. An application-generated response therefore proves more than a successful DNS query: the request crossed the edge, matched a route, reached a backend, and entered application code.
+
+## How do host, path, and TLS rules divide a website?
+<!-- section-summary: Hostname chooses the site, path chooses the part of that site, and the TLS host must match the identity protected before HTTP routing begins. -->
+
+Suppose the API and frontend share `shop.example.com`. The hostname chooses the shop site, while the path divides that site between applications.
+
+The useful rule requires both parts to match. A request that matches only the hostname or only the path belongs to a different routing decision.
+
+Path type controls how much URL space an application owns. A `Prefix` rule for `/api` includes `/api`, `/api/orders`, and other paths beneath that path component. An `Exact` rule owns only `/api`.
+
+Several paths can match one request, so precedence matters. Kubernetes chooses the longest matching path. When an `Exact` rule and a `Prefix` rule have the same path length, `Exact` wins. A more specific `/api` rule therefore takes priority over a broad `/` fallback.
+
+That choice is an application boundary. Use `Prefix` when one application owns a route family. Use `Exact` when one handler should receive one precise URL.
+
+TLS identity and HTTP routing should agree. If the Ingress rule accepts `shop.example.com` but the TLS Secret contains a certificate only for `admin.example.com`, the browser stops with a certificate warning before the `/api` rule can help. The matching hostname appears in two stages for two different reasons: TLS protects identity first; HTTP selects the application second.
+
+The following Ingress expresses the decisions after we understand them:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: checkout-web
-  namespace: checkout
+  name: shop
 spec:
   ingressClassName: public
+  tls:
+    - hosts:
+        - shop.example.com
+        - admin.example.com
+      secretName: example-tls
   rules:
-    - host: shop.devpolaris.example
+    - host: shop.example.com
       http:
         paths:
-          - path: /checkout
+          - path: /api
             pathType: Prefix
             backend:
               service:
-                name: checkout-web
+                name: api-service
                 port:
-                  name: http
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+    - host: admin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-service
+                port:
+                  number: 80
 ```
 
-The Ingress fields divide the route into plain pieces:
+The standard fields describe class, TLS identity, host, path, and Service. Controller-specific annotations can add rewrites, redirects, authentication, or timeouts. Those annotations are implementation contracts. Every one must be inventoried and retested if the controller changes.
 
-- `ingressClassName: public` chooses the controller that should handle this route.
-- `rules[].host: shop.devpolaris.example` matches the HTTP Host header.
-- `paths[].path: /checkout` matches the API path family.
-- `pathType: Prefix` lets `/checkout`, `/checkout/review`, and deeper paths match.
-- `backend.service.name: checkout-web` points to the internal Service.
-- `backend.service.port.name: http` points to the named Service port.
+The `tls.secretName` field points to an existing Kubernetes Secret containing `tls.crt` and `tls.key`. Another component or operator must create and renew that Secret; certificate issuance remains a separate workflow. `cert-manager` is one common automation for producing and renewing such a Secret. Public DNS has the same ownership boundary: the Ingress controller may publish an address in status, while a DNS operator or automation still has to map the public hostname to that address.
 
-The `host` field matches the HTTP host that the browser sends. The `path` field matches the URL path. The backend points to the Service and a Service port. In this example, the backend uses the port name `http`, which matches the `checkout-web` Service manifest.
+Ingress deliberately keeps a Service between the route and the Pods. Pod addresses change during rescheduling and rollout, while the Service provides a stable backend name and continuously updated ready endpoint set. The Ingress decides which application should receive the request; the Service data plane decides which current replica should handle the connection.
 
-A named Service port is a useful contract. The application team can change the container from port `3000` to port `8080` by updating the Service `targetPort`, while the Ingress keeps pointing at the Service port named `http`. The edge route stays tied to the Service contract instead of a container detail.
+## How do you create and prove a route before moving users?
+<!-- section-summary: Establish the private backend, apply the route, wait for the controller's address, and test the candidate edge with the real hostname before changing DNS. -->
 
-`pathType` decides how path matching works. `Exact` matches one complete path. `Prefix` matches by path segments. `ImplementationSpecific` lets the controller decide the behavior. The official Ingress docs describe these path types, and a beginner-friendly default is to choose `Prefix` for route families such as `/checkout`, `/checkout/review`, and `/checkout/confirm`.
+The safest rollout starts before the Ingress. First prove that `api-service` has ready endpoints and responds from inside the cluster. An empty backend remains empty after a public route is added.
 
-| Request path | Rule path | `pathType` | Result |
-|---|---|---|---|
-| `/checkout` | `/checkout` | `Prefix` | Matches the checkout web app |
-| `/checkout/review` | `/checkout` | `Prefix` | Matches the checkout web app |
-| `/checkout-history` | `/checkout` | `Prefix` | No match as the same path segment |
-| `/checkout` | `/checkout` | `Exact` | Matches the checkout web app |
-| `/checkout/review` | `/checkout` | `Exact` | No match |
-
-The path contract should match the application contract. If the public route is `/checkout`, the backend application should also serve routes under `/checkout`. Some controllers can rewrite paths with annotations, such as stripping `/checkout` before the request reaches the app. That can help with older apps, but it also adds controller-specific behavior that has to be tested during every migration.
-
-**Annotations** are key-value metadata on a Kubernetes object. Controllers often consume them as extra instructions. The Ingress API gives the shared fields, and controller annotations add implementation details. The Kubernetes Ingress docs note that controllers frequently use annotations for extra behavior, and those annotations belong to the controller's own documentation.
-
-A legacy rewrite is a good side scenario. Maybe a profile service serves `/` inside the container, while the public route must be `/profile` because all APIs share `shop.devpolaris.example`. A rewrite annotation can strip `/profile` before the request reaches the service. The production check should record the public path, the path the backend receives, and a `curl --resolve` test that proves the route still behaves the same after a controller upgrade.
-
-A warehouse webhook gives another path choice. If an inventory partner calls exactly `/webhooks/inventory`, an `Exact` path can keep that endpoint separate from `/webhooks/inventory/debug` or `/webhooks/inventory/test`. The checkout web app still uses `Prefix` because it owns a whole route family, while the webhook route might use `Exact` because the partner contract names one endpoint.
-
-## TLS at the Edge
-<!-- section-summary: TLS lets the Ingress edge serve HTTPS for a hostname, usually by reading a certificate and private key from a Kubernetes Secret. -->
-
-**TLS termination** means the edge accepts HTTPS, presents a certificate, decrypts the request, and then forwards the request toward the backend. In an Ingress setup, that edge is usually the Ingress controller or a cloud load balancer connected to it.
-
-For the browser, the certificate must match the hostname. A request to `shop.devpolaris.example` needs a certificate whose DNS names include `shop.devpolaris.example`. That matching name tells the browser that the HTTPS connection is meant for the API hostname.
-
-Kubernetes stores the certificate and private key in a TLS Secret. The Ingress `tls` block names the host and the Secret. The Secret must be in the same namespace as the Ingress. The Kubernetes API reference for [Ingress TLS](https://kubernetes.io/docs/reference/kubernetes-api/networking/ingress-v1/) also points out that Ingress TLS uses port 443 and can use SNI so different hosts can share the same TLS port when the controller supports it. **SNI**, or Server Name Indication, is the TLS handshake field where the client tells the edge which hostname it wants before HTTP routing starts.
-
-The TLS addition is small. It belongs under the same `spec` as the route:
-
-```yaml
-tls:
-  - hosts:
-      - shop.devpolaris.example
-    secretName: shop-devpolaris-example-tls
-```
-
-This tells the controller to serve HTTPS for `shop.devpolaris.example` using the certificate material in `shop-devpolaris-example-tls`. The route rule still decides which Service receives `/checkout`.
-
-In real clusters, teams often use **cert-manager** to create and renew that Secret. cert-manager's [Ingress usage documentation](https://cert-manager.io/docs/usage/ingress/) explains that annotating an Ingress can let ingress-shim create a Certificate resource for the `tls.secretName`. The issuer might use Let's Encrypt for a public domain, or a company certificate authority for internal hosts.
-
-```yaml
-metadata:
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-```
-
-cert-manager owns that annotation, chooses the named issuer, creates a Certificate resource, and keeps the Secret renewed if the issuer flow succeeds.
-
-The important troubleshooting habit is to separate certificate readiness from backend readiness. A certificate error points to DNS, issuer, Secret, hostname, or controller TLS configuration. A `502` after a clean TLS handshake points farther inside the request path. The browser reports both as a broken API, but Kubernetes gives you different places to check.
-
-## DNS and the Controller Address
-<!-- section-summary: DNS sends the public hostname to the address exposed by the Ingress controller, and Ingress status shows what address the controller reports. -->
-
-DNS is the bridge between the public hostname and the Ingress controller. A user types or the checkout app calls `shop.devpolaris.example`. DNS resolves that name to an IP address or cloud load balancer name. That target belongs to the controller's public entry point.
-
-The Ingress object can show a reported address after the controller accepts it. In a cloud cluster, that address might come from a managed load balancer. In a local lab, the address might come from minikube tunnel, kind port mapping, or MetalLB. The exact source depends on the controller and environment, but the check is the same: `kubectl -n checkout get ingress checkout-web` should show an `ADDRESS`, and DNS should eventually point `shop.devpolaris.example` at that address. During a rollout, DNS may still point at the old edge, or it may still be cached by clients.
-
-The command output should show the controller address and the route summary:
+After applying the Ingress, inspect whether the expected controller claimed it and associated it with an address:
 
 ```bash
-kubectl -n checkout get ingress checkout-web
+kubectl get svc api-service
+kubectl get endpointslices
+kubectl describe ingress shop
+kubectl get ingress shop
 ```
+
+`describe` combines the intended rules, backend resolution, and controller events. An address proves that a data plane has been associated with the route. TLS and HTTP behavior require their own request-level tests.
+
+Suppose the candidate address is `203.0.113.42`. Test it without changing public DNS:
 
 ```bash
-NAME           CLASS    HOSTS                    ADDRESS        PORTS     AGE
-checkout-web   public   shop.devpolaris.example   203.0.113.20   80, 443   6m
+curl --resolve shop.example.com:443:203.0.113.42 \
+  https://shop.example.com/api
 ```
 
-A useful pre-DNS test is `curl --resolve`. It tells curl to use a specific IP address for a hostname, while still sending the correct Host header and validating the hostname path through TLS when certificates are ready. This lets the team test the new controller address before changing public DNS.
+`--resolve` makes the connection go to the candidate address while keeping the real hostname. TLS sees `shop.example.com`, and the HTTP rule sees the same hostname. Calling `https://203.0.113.42/` would test a different certificate and route decision.
 
-```bash
-curl --resolve shop.devpolaris.example:443:203.0.113.20 \
-  https://shop.devpolaris.example/checkout
-```
+This test separates route proof from user migration. A successful response proves that the candidate address accepts the real TLS name, matches the intended host and path, reaches `api-service`, and obtains an application response. Public DNS can remain on the old edge until that chain is healthy. When DNS is finally changed, the new variable under test is discovery rather than the entire route at once.
 
-![Ingress rollout evidence chain showing TLS Secret, Ingress ADDRESS, DNS record, curl --resolve preflight, and HTTPS 200](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-tls-dns-rollout.png)
+Keep the old path available during verification where the rollout permits it. If the candidate fails before DNS changes, users remain on the existing edge and the team can inspect controller events, certificates, Services, and endpoints without converting diagnosis into a public outage.
 
-*A safe Ingress rollout proves the certificate, reported address, DNS target, and hostname request before relying on live public DNS.*
+![An Ingress rollout has a desired-state track for Service, Ingress, and controller reconciliation plus a user-traffic track for DNS, TLS, route, and application evidence](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-tls-dns-rollout.png)
 
-This check follows the same shape as a real browser request. It uses the public hostname, the public path, the controller address, TLS, the Ingress rule, the Service, and the Pods. That makes it much stronger than only curling a Pod IP or only reading the YAML.
+*The stored route and the working user path are separate claims; prove both before moving public DNS.*
 
-## Rollout Checks for a New Ingress
-<!-- section-summary: A safe Ingress rollout checks the internal Service, controller class, Ingress status, certificate readiness, and real HTTP response. -->
+## What does each failure symptom tell you?
+<!-- section-summary: The response tells you how far the request travelled, so diagnosis should begin at the first unproven responsibility rather than editing every object. -->
 
-An Ingress rollout has several layers, so the checks move from inside to outside. The backend Service comes first because the edge route depends on it. The sequence then moves through the class and controller, the Ingress object and its address, TLS readiness, and a real request through the hostname.
+“Ingress is broken” hides the path. A precise symptom tells us which layers probably completed.
 
-The first check asks whether the Service has ready backends. An **EndpointSlice** is Kubernetes' modern record of the network endpoints behind a Service. The official [EndpointSlices documentation](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) explains that EndpointSlices track backend endpoint IP addresses and help Services scale to many backends. Empty endpoints usually mean the Service selector finds zero Pods, the Pods are still unready, or the app containers are failing readiness probes.
+An unresolved hostname places the failure in public DNS, before the edge. A certificate warning shows that a TLS endpoint answered with the wrong identity. A controller-branded default `404` usually means DNS and TLS worked while every host-and-path rule rejected the request. An upstream `503` usually means a route matched while the Service or endpoints were unusable. An application-branded `500` shows that most of the network path succeeded and application logs become relevant.
 
-The rollout checks work well as a short evidence table:
-
-| Layer | Command | Healthy signal |
+| Symptom | Last likely success | Next evidence |
 |---|---|---|
-| Backend endpoints | `kubectl -n checkout get endpointslice -l kubernetes.io/service-name=checkout-web` | EndpointSlice lists ready Pod IPs and the expected port |
-| Controller class | `kubectl get ingressclass public` | The `public` class points to the expected controller |
-| Controller Pods | `kubectl -n edge-system get pods -l app=public-ingress-controller` | Controller Pods are ready |
-| Ingress rule | `kubectl -n checkout describe ingress checkout-web` | Rules, backend, TLS Secret, address, and events match the expected route |
-| Certificate | `kubectl -n checkout get certificate` and `kubectl -n checkout get secret shop-devpolaris-example-tls` | Certificate is ready and the TLS Secret exists |
-| Real request | `curl --resolve shop.devpolaris.example:443:203.0.113.20 https://shop.devpolaris.example/checkout` | The public hostname and path return the expected application response |
+| `NXDOMAIN` | Nothing reached the edge | Public DNS record and controller address |
+| Connection timeout | The caller obtained an address, but received no useful response | Public load balancer, firewall rules, listener, controller, and return path |
+| Connection refused | The address was reachable enough to reject TCP | Expected address and port, listener state, and controller data plane |
+| Certificate warning | A TLS endpoint answered | Hostname, certificate, Secret, listener configuration |
+| TLS handshake error | TCP reached a TLS endpoint | Certificate chain, SNI hostname, protocol support, and TLS configuration |
+| Controller default `404` | DNS, TCP, TLS, and edge HTTP response | Host and path matching |
+| Controller `502` or `503` | A route likely selected a backend | Service port, EndpointSlices, policy, upstream health |
+| Application-shaped `404` | The request probably entered application code | Application route and the path forwarded by the edge |
+| Application-shaped `500` | Request entered the application | Application logs and dependencies |
+| One replica fails intermittently | The route and Service work for at least one backend | Readiness, image version, listener, and logs for every endpoint |
+| HTTP-to-HTTPS redirect loop | Both edge and application are attempting scheme redirects | Forwarded-protocol headers and redirect ownership |
 
-A failure at the real request step means the team can walk back through the table instead of guessing.
+Identify who produced the response. An application `404` proves a different path from the controller's default `404`. Response headers, bodies, edge access logs, and application logs establish the producer.
 
-## Debugging by Following the Request
-<!-- section-summary: Ingress debugging should map each symptom to DNS, TLS, controller routing, Service endpoints, NetworkPolicy, or application behavior. -->
+The distinction prevents backward debugging. A controller-branded `404` means an HTTP edge answered, so replacing application Pods is unlikely to correct a hostname mismatch. An application-branded `500` means the route reached application code, so changing public DNS cannot repair its failed database call. Preserve every completed layer as evidence and begin with the next unproven responsibility.
 
-Ingress failures can all look the same from the user's chair. The web app spins, the browser shows a network error, or the API returns a status code. Inside the cluster, those symptoms come from different layers. The fastest path is to follow the request in order.
+Use the objects behind the route to confirm that interpretation rather than stopping at the status code:
 
-The first layer is DNS when the client cannot connect to the expected address. `dig` or `nslookup` should show the hostname pointing at the controller's load balancer or IP. A wrong DNS answer can send the request to an old edge, a different cluster, or an address with no route at all.
+```bash
+kubectl get ingress
+kubectl describe ingress shop
+kubectl get svc api-service
+kubectl get endpointslices
+kubectl get pods
+```
 
-The next layer is TLS. A certificate name mismatch usually means the Secret contains the wrong certificate, the Ingress `tls.hosts` entry differs from the browser hostname, or DNS sends traffic to a different controller with a different default certificate. `openssl s_client -connect shop.devpolaris.example:443 -servername shop.devpolaris.example` can show the certificate that the edge presents.
+For an intermittent failure, call each current endpoint directly and compare the outlier with the healthy replicas. For a redirect loop, compare the edge's redirect behavior with the application's handling of forwarded headers. Both cases occur after the request has already crossed several earlier layers.
 
-After TLS, the next question is whether the controller matched the rule. A `404` from the controller often means the host or path missed every Ingress rule. The request may use `shop.devpolaris.example`, while the Ingress says `api.internal.devpolaris.example`. The request may use `/checkout`, while the Ingress uses `Exact` on `/checkout`.
+![An Ingress fault-isolation path marks the last successful evidence across public DNS, TLS, host and path match, Service endpoints, policy, and application response](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-debugging-summary.png)
 
-A **NetworkPolicy** is a Kubernetes resource that controls allowed traffic to and from Pods when the cluster's network plugin enforces it. The official [Network Policies documentation](https://kubernetes.io/docs/concepts/services-networking/network-policies/) describes rules for ingress traffic into Pods and egress traffic leaving Pods. In our request path, a NetworkPolicy can allow the public controller Pods to reach `checkout-web` while still blocking unrelated namespaces.
+*The strongest next question is “Which component produced the last good evidence?”*
 
-Backend errors move the investigation behind the rule. A `502` or `503` often means the controller matched the route but could not reach a healthy backend. The Service might have no endpoints, the Service port might point to the wrong target port, the Pods might be failing readiness, or a NetworkPolicy might block traffic from the controller namespace to the app namespace.
+## When does Gateway API fit better?
+<!-- section-summary: Ingress remains suitable for straightforward routes, while Gateway API is designed for separate infrastructure and route owners plus richer portable traffic rules. -->
 
-Application errors are the last layer. A clean `500` from the checkout web app means the edge path reached the app and the app handled the request badly. At that point, controller logs may show a successful upstream response, while application logs show the real failure.
+Ingress remains useful. A maintained controller and a small set of understood host, path, and TLS rules can be a clear production design. The Kubernetes Ingress API is stable and remains supported.
 
-This table maps the user-visible symptom to the layer that deserves attention next. The point is to keep each clue tied to one part of the request path instead of changing DNS, TLS, Service selectors, and application code all at once.
+The friction appears when a route needs decisions outside the portable Ingress fields. Suppose the platform team owns one listener and certificate, while five application teams independently own routes. Or the application team needs a standard header match for test traffic and a 90/10 split between Services. Ingress deployments commonly solve these with shared object ownership, controller-specific annotations, or custom resources.
 
-| Symptom | Likely layer | Useful check |
-|---|---|---|
-| Hostname resolves to the wrong place | DNS | Compare DNS answer with Ingress `ADDRESS` |
-| Browser reports certificate mismatch | TLS | Inspect the certificate and Ingress `tls.hosts` |
-| Controller returns `404` | Host or path rule | Check `host`, `path`, and `pathType` |
-| Controller returns `502` or `503` | Backend routing | Check Service port, EndpointSlices, Pods, NetworkPolicy, and controller logs |
-| App returns `500` | Application | Check app logs, traces, and upstream dependencies |
+Gateway API separates the shared listener from application Routes and provides standard forms for more traffic behavior. That makes the ownership and portability problem visible instead of hiding it in one object or annotation collection.
 
-![Ingress debugging summary mapping wrong DNS, TLS mismatch, route 404, backend 502 or 503, and app 500 to the next layer to inspect](/content-assets/articles/article-containers-orchestration-kubernetes-networking-ingress/ingress-debugging-summary.png)
+Gateway API v1.6 is the current release line in the source material, and the current installation guide uses the v1.6.1 bundle. GatewayClass, Gateway, HTTPRoute, and ReferenceGrant are available through the Standard channel. TCPRoute and UDPRoute also joined the Standard installation in v1.6, so the model now covers more than HTTP without forcing those protocols through Ingress.
 
-*The user sees one broken request, but DNS, TLS, route matching, backend reachability, and application errors each leave different evidence.*
+Choose Ingress when its compact model and maintained implementation already meet the requirement. Choose Gateway API when separate owners, richer standard routing, or a broader protocol family solves a problem you actually have. More resources are worthwhile only when they represent real decisions.
 
-This style of debugging keeps the layers separate. It also gives a plain incident timeline: DNS was correct, TLS was correct, the controller matched the rule, the Service had no ready endpoints, and the Deployment rollout caused the endpoints to disappear. That evidence gives the team a concrete fix instead of a vague "Ingress is broken" report.
+The deeper model remains stable across both APIs: the public hostname and path are durable application identities, while the controller, Service endpoints, and Pods are replaceable implementation locations. Edge routing progressively translates the public identity into one current application endpoint.
 
-## Production Ownership and Tradeoffs
-<!-- section-summary: Ingress works well when teams agree who owns the shared controller, route contracts, TLS, annotations, DNS, and migration path. -->
+## Check Your Answers
+<!-- section-summary: Reconstruct Ingress from the outside browser, active controller, URL decisions, private Service, and evidence at each boundary. -->
 
-Ingress is a shared edge, so ownership has to be clear. The platform team usually owns the controller installation, controller upgrades, cloud load balancer settings, default certificates, controller logs, shared security policy, and DNS handoff. Application teams usually own their Ingress rules, Services, readiness probes, application paths, and tests for public routes.
+:::expand[Why does the browser need an edge route?]{kind="recap"}
+The Service name and ClusterIP belong to the cluster network, while the browser starts outside it. Several web applications may also share one public address, so an HTTP-aware edge must use hostname and path to select the private Service.
+:::
 
-During changes, this ownership split tells each team which object to review. If the checkout team changes `/checkout` to `/checkout-v2`, they own the client contract and the Ingress path update. If the platform team changes from one controller to another, they own annotation compatibility, timeout behavior, allowed body size, logging format, and migration checks.
+:::expand[What are the Ingress object and Ingress controller?]{kind="recap"}
+The Ingress object stores desired host, path, TLS, and Service mappings. The controller watches the chosen IngressClass and configures a real proxy or load balancer. Traffic begins only after that controller creates a working data plane.
+:::
 
-Annotations deserve special attention. They are how many controllers expose features beyond the standard Ingress fields, such as request timeouts, path rewrites, request body limits, rate limiting, authentication, or custom headers. Those settings can be necessary, but they are tied to the selected controller. A production review should list every annotation, why it exists, which controller supports it, and what test proves it still works.
+:::expand[How does one HTTPS request reach a Service?]{kind="recap"}
+Public DNS leads the browser to the edge. TLS proves the hostname and protects the connection. The edge then reads the HTTP hostname and path, selects the Service and port, and forwards to a ready endpoint.
+:::
 
-The controller migration workflow should be concrete. Export every Ingress, list every annotation, group annotations by feature, find the equivalent in the new controller or Gateway API, and write one request test for every host and path. During the cutover, `curl --resolve` can send traffic to the new controller address before DNS moves. After the cutover, controller logs and application logs should show the same status codes, response headers, and backend routes that the old controller produced.
+:::expand[How do host, path, and TLS rules divide a website?]{kind="recap"}
+The hostname chooses the site, the path chooses the application area within that site, and path type controls how much URL space belongs to the rule. TLS must first present a certificate valid for the same public identity.
+:::
 
-Security also lives across several layers. TLS protects the client-to-edge connection. NetworkPolicy can restrict which Pods the controller may reach. The app still needs authentication and authorization for user actions. Ingress routing gets the HTTP request to the right Service; user permission checks stay inside the application and its identity system.
+:::expand[How do you create and prove a route before moving users?]{kind="recap"}
+Prove the Service backend, apply the Ingress, inspect controller events and address, then test the candidate address with the real hostname. Move public DNS only after TLS, routing, backend response, and monitoring are healthy while the previous edge remains available.
+:::
 
-The production review for the DevPolaris checkout route can use a simple checklist. Each row names one owner-facing question, and together the rows describe the whole path from public hostname to ready Pods.
+:::expand[What does each failure symptom tell you?]{kind="recap"}
+An unresolved name fails before the edge, a certificate error fails during TLS, an edge default 404 points to matching, an upstream error points to Service reachability, and an application response proves the request travelled further. Confirm which component produced the evidence.
+:::
 
-| Area | Question to answer |
-|---|---|
-| Controller | Which IngressClass owns this route, and who operates that controller? |
-| DNS | Which record points `shop.devpolaris.example` to the controller address? |
-| TLS | Which Secret contains the certificate, and how does it renew? |
-| Route | Which host and path are public API contracts? |
-| Backend | Which Service port receives the request, and which Pods are ready? |
-| Policy | Which NetworkPolicies allow controller-to-backend traffic? |
-| Observability | Which logs, metrics, and alerts show edge errors and backend errors separately? |
-| Migration | Which annotations or behaviors would change under another controller or Gateway API? |
-
-This is also where Gateway API enters the conversation. The Kubernetes project recommends Gateway API as the successor to Ingress for newer traffic management needs. Ingress remains common and stable, and Gateway API gives platform teams a richer model for listeners, routes, cross-namespace attachment, and shared gateway ownership. The next article can build on this Ingress path and show how Gateway API separates those responsibilities more explicitly.
-
-## What's Next
-
-Ingress gives Kubernetes HTTP workloads a practical public entry point. It maps a hostname and path to a Service, and the Ingress controller turns that rule into real edge behavior. After that request path is clear, Gateway API is the next step because it expands the same idea into a more expressive platform model for modern traffic routing.
+:::expand[When does Gateway API fit better?]{kind="recap"}
+Ingress fits straightforward HTTP routes owned and supported through a maintained controller. Gateway API fits when platform listeners and application routes need separate ownership or when richer portable matching and traffic splitting replace controller-specific extensions.
+:::
 
 ## References
 
-- [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - The official Kubernetes concept page for Ingress resources, host/path routing, TLS, and the frozen API status.
-- [Ingress Controllers](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) - The official list and explanation of controllers that implement Ingress behavior.
-- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - The official Kubernetes explanation of Services as stable access points for Pods.
-- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - The official explanation of how Kubernetes tracks Service backends at scale.
-- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) - The official Kubernetes concept page for pod traffic rules.
-- [Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) - The official Kubernetes successor model for richer traffic routing.
-- [Ingress NGINX Retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) - The Kubernetes project announcement for the community `kubernetes/ingress-nginx` controller retirement.
-- [cert-manager Ingress usage](https://cert-manager.io/docs/usage/ingress/) - cert-manager's official guide for creating certificates from annotated Ingress resources.
+- [Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) - Official HTTP and HTTPS routing, controller, path, TLS, and frozen-API behavior.
+- [Ingress Controllers](https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/) - Official explanation of implementations that fulfil Ingress resources.
+- [Service](https://kubernetes.io/docs/concepts/services-networking/service/) - Official stable Service contract in front of changing Pods.
+- [EndpointSlices](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) - Official backend endpoint records.
+- [Gateway API](https://kubernetes.io/docs/concepts/services-networking/gateway/) - Official role-oriented shared routing model.
+- [Install Gateway API](https://gateway-api.sigs.k8s.io/guides/getting-started/introduction/) - Official current bundle and Standard versus Experimental channel installation guidance.
+- [Ingress NGINX Retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) - Kubernetes announcement covering the community controller's March 2026 retirement.

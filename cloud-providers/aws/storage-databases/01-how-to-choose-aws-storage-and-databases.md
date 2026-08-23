@@ -1,7 +1,7 @@
 ---
 title: "How To Choose AWS Storage and Databases"
-description: "Choose between S3, EBS, EFS, FSx, RDS, Aurora, DynamoDB, and data movement tools by looking at how the data is read, changed, shared, protected, and moved."
-overview: "AWS has many storage and database services because production data has many shapes. This article builds a practical selection path around files, relational records, key-value items, disks, shared filesystems, and migration flows."
+description: "Choose among S3, EBS, EFS, FSx, RDS, Aurora, and DynamoDB by starting with the data interface, access patterns, guarantees, movement, and recovery needs."
+overview: "AWS has many data services because blocks, shared files, objects, relational records, and key-based items require different interfaces. This article builds a first-principles selection method before the service names."
 tags: ["aws", "storage", "databases", "s3", "rds", "aurora", "dynamodb"]
 order: 1
 id: article-cloud-providers-aws-storage-databases-storage-database-mental-model
@@ -15,159 +15,404 @@ aliases:
   - cloud-providers/aws/storage-databases/choosing-the-right-data-service.md
   - cloud-providers/aws/storage-databases/how-to-choose-aws-storage-and-databases.md
 ---
+
 ## Table of Contents
 
-1. [Start With the Shape of the Data](#start-with-the-shape-of-the-data)
-2. [Rows That Need Transactions](#rows-that-need-transactions)
-3. [Files That Need Object Storage](#files-that-need-object-storage)
-4. [One Server Disk](#one-server-disk)
-5. [Shared Files](#shared-files)
-6. [Key Lookups at High Scale](#key-lookups-at-high-scale)
-7. [Movement and Recovery](#movement-and-recovery)
-8. [A Practical Decision Checklist](#a-practical-decision-checklist)
-9. [References](#references)
+1. [What Does the Application Think the Data Is?](#what-does-the-application-think-the-data-is)
+2. [What Is the Difference Between Storage and a Database?](#what-is-the-difference-between-storage-and-a-database)
+3. [When Should You Choose S3?](#when-should-you-choose-s3)
+4. [When Should You Choose EBS or Instance Store?](#when-should-you-choose-ebs-or-instance-store)
+5. [When Should You Choose EFS or FSx?](#when-should-you-choose-efs-or-fsx)
+6. [When Should You Choose DynamoDB?](#when-should-you-choose-dynamodb)
+7. [How Do Movement, Availability, and Recovery Change the Design?](#how-do-movement-availability-and-recovery-change-the-design)
+8. [What Decision Process Should You Use?](#what-decision-process-should-you-use)
+9. [Check Your Understanding](#check-your-understanding)
+10. [References](#references)
 
-## Start With the Shape of the Data
-<!-- section-summary: AWS storage choices start with what the application needs the data to do during normal work. -->
+The sections below answer these questions in order:
 
-Imagine a small online store called Maple Market. A customer checks out, uploads a return photo, and later asks support to find the order. The app has several kinds of data before AWS service names enter the conversation.
+1. **What Does the Application Think the Data Is?**
+2. **What Is the Difference Between Storage and a Database?**
+3. **When Should You Choose S3?**
+4. **When Should You Choose EBS or Instance Store?**
+5. **When Should You Choose EFS or FSx?**
+6. **When Should You Choose DynamoDB?**
+7. **How Do Movement, Availability, and Recovery Change the Design?**
+8. **What Decision Process Should You Use?**
 
-The order rows need transactions because payment, inventory, and order status must agree. The return photo is a whole file that the app stores and retrieves by name. A search server may need a local disk for an index. A group of web servers may need shared files. A shopping cart may need fast key lookups. A migration needs a safe copy plan.
+## What Does the Application Think the Data Is?
+<!-- section-summary: The first storage decision is the data interface the application expects: block, file, object, relational row, or key-based item. -->
 
-AWS has many storage and database services because production data behaves in different ways. Start with the behavior, then choose the service.
+AWS storage becomes confusing when service names come first: S3, EBS, EFS, FSx, RDS, Aurora, and DynamoDB sound like a list to memorize. Start instead with a more basic question:
 
-A useful first pass is to write three operations in plain language. "Customer uploads a return photo." "Customer places an order." "Support opens an order history." Each operation tells you how the data is addressed, changed, shared, and recovered. The AWS service name comes after that behavior is clear.
+> **Which operations must the application perform on this data?**
 
-We will name services only enough to place each job in the right family. The later articles go deeper into bucket policies, database creation choices, DynamoDB keys, and migration runbooks.
+Different access interfaces create different engineering systems:
 
-| Job the application needs | Data shape | AWS service family that usually fits | Simple Maple Market example |
-| --- | --- | --- | --- |
-| Save related business records that must agree | Rows and transactions | RDS or Aurora | Checkout writes an order, payment, and inventory reservation together |
-| Store and retrieve whole files | Objects | S3 | Customer uploads a return photo and support opens it later |
-| Give one server a normal disk | Block storage | EBS | Search node stores a local index directory |
-| Let many clients use normal file paths | Shared filesystem | EFS or FSx | Legacy web servers share `/mnt/uploads` during migration |
-| Read and update by a known key at high scale | Key-value or document item | DynamoDB | Cart service loads the active cart by customer ID |
-| Copy data safely between places | Movement workflow | DataSync, DMS, Transfer Family, or S3 tools | Old product photos and orders move into AWS before cutover |
+```text
+data
+├── store bytes
+│   ├── block device  → EBS
+│   ├── filesystem    → EFS or FSx
+│   └── object API    → S3
+└── manage structured state
+    ├── relational rows and queries → RDS or Aurora
+    └── key-addressed items         → DynamoDB
+```
+
+Ask what the application believes the data *is*:
+
+| Application interface | Example | Natural AWS family |
+|---|---|---|
+| Blocks on a disk | `/dev/xvdf` | EBS |
+| Files and directories | `/shared/reports/a.pdf` | EFS or FSx |
+| Objects identified by keys | `images/cat.jpg` | S3 |
+| Rows with relationships | customers, orders, payments | RDS or Aurora |
+| Items found mainly through known keys | user ID to user profile | DynamoDB |
+
+The contents do not decide the interface by themselves. A photo-sharing application can put image bytes in S3, photo ownership and caption rows in a database, and temporary image-processing scratch data on an EBS volume or ephemeral disk.
+
+```text
+database row
+├── photo_id
+├── user_id
+├── caption
+└── s3_key ─────> S3 object containing the image bytes
+```
+
+One application normally uses several data technologies. The goal is not to discover one universal store. It is to place each data shape behind the interface and guarantees it needs.
 
 ![The data-shape map links rows, objects, disks, shared files, key-value access, and movement jobs to the AWS services that usually fit them](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/data-shape-service-map.png)
 
-*The data-shape map links rows, objects, disks, shared files, key-value access, and movement jobs to the AWS services that usually fit them.*
+*Begin with blocks, files, objects, relations, or keys; the AWS service family follows from that interface.*
 
+## What Is the Difference Between Storage and a Database?
+<!-- section-summary: Storage preserves bytes, while databases add query, transaction, constraint, indexing, and concurrency abstractions for application state. -->
 
-## Rows That Need Transactions
-<!-- section-summary: Each AWS data service maps to a data shape, so naming the shape helps narrow the service choice. -->
+Suppose Alice has £100, Bob has £50, and an application transfers £20. Alice must become £80 at the same logical moment Bob becomes £70. If the system updates Alice and crashes before updating Bob, money disappears.
 
-Some data is made of related rows that must change together. In Maple Market, an order insert, payment authorization, inventory reservation, and ledger entry may need to succeed or fail as one unit. That is a **transaction**.
+Databases exist partly to help applications treat related state changes as one logical transaction. Storage services such as S3 and EBS fundamentally preserve bytes. A database builds higher-level concepts on storage:
 
-Relational databases fit this shape. Amazon RDS runs familiar engines such as PostgreSQL, MySQL, MariaDB, SQL Server, and Oracle. Amazon Aurora is AWS's cloud-designed relational database engine with MySQL-compatible and PostgreSQL-compatible options.
+- rows or items;
+- indexes and query execution;
+- transactions;
+- constraints;
+- concurrency control.
 
-A small checkout query might join tables:
+The first branch is therefore:
 
-```sql
-select o.id, o.status, p.status as payment_status, sum(oi.quantity) as items
-from orders o
-join payments p on p.order_id = o.id
-join order_items oi on oi.order_id = o.id
-where o.id = 'ord_123'
-group by o.id, o.status, p.status;
+```text
+Do I mainly need a place to put and retrieve bytes?
+        └── storage
+
+Do I need the system to understand, query, and safely change structured state?
+        └── database
 ```
 
-Choose a relational database when the application needs constraints, joins, flexible SQL queries, transactions, and mature reporting patterns. The team still owns schema design, indexes, query performance, migrations, and credentials.
+This is not a claim that storage lacks durability or that databases do not store bytes internally. It identifies the interface the application receives. An object store does not perform a relational join between an order and payment table, and a block device does not understand that two sectors represent one business transaction.
 
-The boundary around a relational database usually includes a private VPC endpoint, security groups, a credential path, backup retention, and a migration process. In production, "we use RDS" is only the start. A reviewable design says which app role connects, which subnet group hosts the database, how credentials are stored, which restore window the business needs, and how schema changes ship safely.
+### When Should You Choose RDS or Aurora?
+<!-- section-summary: Relational databases fit entities with relationships, flexible SQL queries, constraints, and multi-row business transactions. -->
 
-## Files That Need Object Storage
-<!-- section-summary: Object storage fits whole files and blobs that applications store, retrieve, protect, and expire through an API. -->
+Relational thinking is natural when the domain contains customers, orders, order items, products, and payments connected through one-to-many and many-to-one relationships. The application may need joins, uniqueness or foreign-key constraints, reporting queries, and transactions spanning several rows.
 
-A return photo has a different shape from an order row. The app usually saves the whole file, stores metadata about it, and retrieves it later by key. The unit of work is the object key and the complete object body. This points to **object storage**.
+```sql
+SELECT customers.name,
+       SUM(order_items.quantity * products.price)
+FROM customers
+JOIN orders ...
+JOIN order_items ...
+JOIN products ...
+GROUP BY customers.name;
+```
 
-Amazon S3 stores objects in buckets. An object has bytes, a key, metadata, tags, and permissions. Maple Market might store return photos under keys like `returns/2026/06/ord_123/photo-1.jpg` and keep the order row in a relational database with the S3 key.
+**Amazon RDS** is AWS’s managed relational database service for familiar engines. AWS manages much of the infrastructure and administration around supported engines, while the customer still designs schemas, indexes, queries, connection behavior, credentials, and safe migrations.
 
-S3 is also common for logs, exports, backups, analytics files, data lake tables, static assets, and partner file drops. It has versioning, lifecycle rules, replication, encryption options, event notifications, and access policies. Choose it when the data is file-shaped and API access is natural.
+**Amazon Aurora** remains relational. It provides MySQL-compatible and PostgreSQL-compatible editions on an AWS-designed distributed storage architecture. Its storage replicates across three Availability Zones and grows automatically.
 
-S3 design starts with ownership and prefixes. A customer upload bucket may separate `tmp/`, `returns/`, and `processed/` prefixes because each prefix has different lifecycle and processing rules. The database should keep the business relationship, such as which order owns which object key. S3 holds the bytes and object metadata; the application still owns the workflow state.
+Think of the choice this way:
 
-## One Server Disk
-<!-- section-summary: Block storage fits one compute placement that needs a durable disk with normal operating system behavior. -->
+```text
+Need SQL, joins, relational constraints,
+flexible queries, or multi-row transactions?
+        ↓
+RDS or Aurora
+```
 
-Some workloads expect a disk attached to one machine. A search index, a database engine you manage yourself, or a legacy app might write to a mounted filesystem and use normal operating system paths.
+Then ask which compatible engine and operating architecture fit. “Aurora is for big databases” is too vague. A better question is whether the application wants a MySQL- or PostgreSQL-compatible relational model and whether Aurora’s AWS-native architecture is preferable to a conventional RDS engine for the workload.
 
-Amazon EBS provides block volumes for EC2 instances. The operating system sees the volume like a disk. You format it, mount it, and put files on it. EBS volumes live in one Availability Zone, so the EC2 instance and volume need compatible placement.
+## When Should You Choose S3?
+<!-- section-summary: S3 fits whole objects addressed by bucket and key rather than mutable disk blocks or relational queries. -->
 
-Choose EBS when one compute placement needs durable block storage with configurable size and performance. Plan snapshots, encryption, monitoring, and restore tests because the disk often sits directly on a request path.
+Applications usually handle a photograph as a whole object: put `vacation.jpg`, get it, or delete it. They do not normally modify arbitrary byte ranges in place as if the image were a mounted disk.
 
-EBS decisions include volume type, size, IOPS, throughput, encryption, snapshot policy, and instance placement. A search index disk may be safe to rebuild from S3 exports. A self-managed database disk may need a strict snapshot and restore plan. The service can look the same while the recovery requirement is very different.
+An S3 object combines:
 
-## Shared Files
-<!-- section-summary: Shared filesystem storage fits workloads where multiple compute resources need normal file paths at the same time. -->
+```text
+bucket + key + data + metadata
+```
 
-Some apps need shared files because their code expects normal file paths. A content management system may have multiple web servers reading and writing uploaded files. A data science team may run jobs that expect a shared POSIX filesystem. A Windows application may expect SMB shares.
+For example, bucket `company-assets` can contain key `users/42/avatar.jpg`, binary image data, and metadata such as `content-type=image/jpeg`.
 
-Amazon EFS provides managed NFS file storage for Linux clients and many AWS compute services. Amazon FSx provides managed filesystems for specific ecosystems, including Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
+**Amazon S3** is object storage. It is a natural home for images, videos, PDFs, assets, logs, backups, datasets, archives, and data-lake files. Standard multi-AZ S3 storage classes are designed for extremely high durability, including the familiar eleven-nines durability design target.
 
-Choose shared filesystems when multiple clients need normal file operations, locks, directory structures, and mounted paths. Review network access, mount targets, security groups, POSIX or Windows permissions, backups, and performance mode. Shared files solve a real need, but they also create shared operational responsibility.
+Storing a 500 MB video in a relational database is technically possible, but the application may gain little from making database pages, transaction logs, indexes, query machinery, and replication manage a blob it only retrieves whole. A common split stores the business facts and S3 key in the database, while S3 stores the bytes.
 
-This is the place where many migrations pause. A legacy app may expect `/mnt/uploads` or `\\fileserver\reports`, and rewriting it to object storage might take months. EFS or FSx can be a practical bridge, as long as the team documents mount paths, identity, backup, and performance limits instead of treating the filesystem as magic shared state.
+S3’s API is not a mounted filesystem or block device. Choose it when bucket-and-key object operations fit the application rather than expecting POSIX file behavior.
 
-## Key Lookups at High Scale
-<!-- section-summary: Key-value and document-shaped access fits workloads that know their read and write paths before table design starts. -->
+## When Should You Choose EBS or Instance Store?
+<!-- section-summary: EBS provides persistent block storage for an EC2 placement, while instance store provides disposable local block storage. -->
 
-A shopping cart or session record may need fast lookup by customer ID. The app knows the access path: get cart by customer, update item quantity, expire old carts. It does not need joins across many tables for the hot path.
+Some software expects an ordinary disk. Linux sees a device such as `/dev/nvme1n1`, places an `ext4` or XFS filesystem on it, mounts it at `/data`, and performs arbitrary block reads and writes.
 
-Amazon DynamoDB fits known key-based access patterns at high scale. You design the table around partition keys, optional sort keys, and indexes that match exact reads and writes. The design work happens before creating the table because DynamoDB performs best when the app asks questions the table was built to answer.
+**Amazon EBS** provides persistent block volumes for EC2. The operating system understands the files and directories; EBS sees addressed blocks.
 
-Choose DynamoDB when the access patterns are predictable, low-latency key lookups matter, and the data does not need relational joins. Plan conditional writes for duplicate requests, TTL for expiry, point-in-time recovery, streams for events, and hot-key monitoring.
+```text
+EC2
+  ↓ block I/O
+EBS volume
+  ↓
+filesystem managed by the OS
+  ↓
+application files
+```
 
-DynamoDB is especially strong for data that the app reads by known keys: cart by customer, session by token, idempotency record by request ID, feature state by tenant. It is a poor fit for a team that wants to ask arbitrary joins later without designing indexes. Write the access patterns before creating the table, because key design is the product design for this kind of data.
+EBS fits EC2 boot volumes, self-managed database disks, application data volumes, and low-latency stateful server workloads. Its volume lifecycle can be independent from the instance depending on deletion settings. EBS snapshots capture point-in-time backups that can produce new volumes.
 
-## Movement and Recovery
-<!-- section-summary: Production storage choices need a plan for recovery copies, migration paths, and downstream data use from the start. -->
+**EC2 instance store** is local ephemeral block storage. Its selection question is simple:
 
-A storage choice is incomplete without movement and recovery. Maple Market may import old product photos, migrate an old database, receive nightly partner files, export order data to analytics, and restore a deleted object or table after a mistake.
+```text
+Can the data be lost with the host and recreated?
+├── yes → instance store may fit scratch data, caches, or temporary processing
+└── no  → use persistent storage and a tested recovery design
+```
 
-For files, AWS DataSync can move file data between on-premises storage and AWS storage services. AWS Transfer Family can receive SFTP, FTPS, or FTP partner uploads into S3 or EFS. For databases, AWS Database Migration Service can help with full loads and change data capture for supported sources and targets. For large S3 object sets, S3 Batch Operations can apply changes at scale.
+Do not confuse low latency with durability. A very fast temporary device is still the wrong only copy of business-critical data.
 
-Recovery needs concrete tests. RDS backups and point-in-time restore are useful only if the team has practiced restoring to a new instance. S3 versioning helps only if lifecycle rules keep the needed versions. DynamoDB point-in-time recovery helps only if the table restore process is part of the runbook.
+## When Should You Choose EFS or FSx?
+<!-- section-summary: Shared filesystems let several clients see one mounted namespace, with EFS for general elastic NFS use and FSx for specific filesystem ecosystems. -->
 
-Movement also has security work. Temporary migration roles, firewall openings, database users, S3 staging buckets, and transfer agents should have removal dates. A migration that succeeds and leaves powerful temporary access behind has created a new production risk.
+Three EC2 instances each attached to an independent EBS disk have three filesystems, not one shared directory. If every application expects `/shared/customer-files/` to show the same contents, the design needs a shared filesystem.
+
+```text
+EC2 A ─┐
+EC2 B ─┼──> shared filesystem namespace
+EC2 C ─┘
+```
+
+**Amazon EFS** provides elastic shared file storage with concurrent NFS access for Linux clients. The practical distinction is:
+
+```text
+one machine needs a persistent disk → EBS
+many machines need the same filesystem → EFS
+```
+
+The **Amazon FSx** family fits specialized or familiar filesystem requirements. Its services include FSx for Windows File Server, Lustre, NetApp ONTAP, and OpenZFS.
+
+```text
+Need shared files?
+├── general elastic NFS-style filesystem → EFS
+└── particular filesystem or feature set → FSx
+```
+
+Mounted file paths, directory semantics, locks, client identities, and filesystem-specific behavior are reasons to choose file storage instead of pretending S3 is a drop-in filesystem.
+
+## When Should You Choose DynamoDB?
+<!-- section-summary: DynamoDB fits known key-based access patterns that need predictable low-latency performance and large or variable scale. -->
+
+Some applications know their hot questions in advance: given a user ID, get the profile; given a shopping-cart ID, get the cart; given a device ID, update device state; given a session token, retrieve the session.
+
+**Amazon DynamoDB** is a managed NoSQL database supporting key-value and document models with single-digit millisecond performance design at scale.
+
+```text
+partition or composite key
+          ↓
+       DynamoDB
+          ↓
+         item
+```
+
+A user item might be identified by `PK = USER#81723` and contain a name, plan, and country. The important point is that the application knows how it will find the data.
+
+Do not use rules such as “structured data means RDS” because DynamoDB items are structured. “Transactions mean RDS” is also incomplete because DynamoDB supports ACID transactions. The stronger distinction is the access model.
+
+Relational thinking says: customers have orders, orders contain products, and the application needs flexible relationships and queries. That points toward RDS or Aurora.
+
+Access-pattern thinking says: given `customerId`, fetch a profile; given `customerId + orderId`, fetch an order; these paths are known ahead of time and must perform at large scale. That points toward DynamoDB.
+
+The schema design is therefore tightly coupled to the planned reads and writes. A system that expects arbitrary future joins without deliberately designed keys and indexes is not using DynamoDB’s natural model.
+
+### How Should You Compare Performance and Cost?
+<!-- section-summary: Choose the data abstraction first, then optimize latency, throughput, capacity, availability, durability, and cost within that family. -->
+
+“Which service is fastest?” has no universal answer. A block device, object store, shared filesystem, relational database, and key-value database expose different operations. Comparing them without a workload is like comparing a forklift, motorcycle, and elevator.
+
+EBS can provide excellent block-device latency. DynamoDB can provide excellent key lookup latency. S3 can hold extraordinary amounts of object data. EFS can give many clients one namespace. None replaces the others because their APIs and guarantees differ.
+
+Choose the abstraction first:
+
+```text
+block, file, object, relational row, or key-based item?
+```
+
+Then optimize the qualities that matter inside that model:
+
+```text
+latency, throughput, availability, durability,
+capacity, access frequency, and cost
+```
+
+Starting from a price or scale headline can select a service whose interface forces the application into awkward or unsafe behavior.
+
+## How Do Movement, Availability, and Recovery Change the Design?
+<!-- section-summary: Primary storage selection, migration transport, infrastructure availability, backups, and recovery targets solve different problems. -->
+
+After choosing the primary store, ask how data reaches it and how it returns after failure. These are separate problems.
+
+**AWS DataSync** moves file and object data among on-premises systems, other clouds, and AWS storage such as S3, EFS, and FSx. The target services say where data lives; DataSync is a transport mechanism for large storage datasets.
+
+**AWS Database Migration Service (DMS)** moves database data while preserving database-oriented migration behavior. A common pattern performs an initial copy from an old database and then applies ongoing changes while the source still serves traffic, reducing final cutover downtime.
+
+Movement is not recovery, and replication is not backup. Imagine a primary database and a perfectly current replica. If a user accidentally runs `DELETE FROM customers`, replication quickly repeats the unwanted deletion. Replication protected against one infrastructure copy failing; it did not preserve the prior correct state.
+
+> **Replication protects availability against infrastructure failure. Backups protect recoverability from unwanted state.**
+
+Define two objectives:
+
+- **Recovery Point Objective (RPO):** how much recent data can the business afford to lose—24 hours, one hour, five minutes, or effectively none?
+- **Recovery Time Objective (RTO):** how long can the system remain unavailable—eight hours, one hour, five minutes, or seconds?
+
+Those answers determine the required combination of replication, snapshots, continuous backups, cross-Region copies, failover, retention, and restore testing. RDS supports automated backups and point-in-time recovery within configured retention. AWS Backup can centrally automate policies for supported services including EBS, RDS, DynamoDB, EFS, and S3. S3 also offers versioning, Object Lock, and replication mechanisms.
+
+A backup job reporting success is not proof that recovery works. Restore into an isolated location, validate application-readable data, and measure the actual recovery time.
 
 ![The access/change/recovery map shows why the right storage choice depends on who reads it, how it changes, and how it must recover](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/access-change-recovery-map.png)
 
-*The access/change/recovery map shows why the right storage choice depends on who reads it, how it changes, and how it must recover.*
+*Where data lives, how it moves, how it stays available, and how an earlier correct state is restored are separate design questions.*
 
+## What Decision Process Should You Use?
+<!-- section-summary: A repeatable decision tree selects the interface first and then adds operational requirements for protection, scale, migration, and ownership. -->
 
-## A Practical Decision Checklist
-<!-- section-summary: A short checklist turns a vague service choice into a reviewable production decision. -->
+Use this first pass:
 
-Use this checklist before picking a service:
+```text
+Need SQL, joins, constraints, or flexible relational queries?
+└── RDS or Aurora
 
-- What shape is the data: rows, object files, one disk, shared files, key-value items, or migration stream?
-- Who reads it, who writes it, and from which network path?
-- Does the app update small fields, whole objects, mounted files, or known keys?
-- Does it need transactions, joins, locks, versioning, or conditional writes?
-- What is the recovery target after delete, corruption, bad deploy, or Region issue?
-- How will data move into AWS, around AWS, and out to analytics or partners?
-- Which team owns schema, bucket policy, filesystem permissions, backups, and cost review?
+Need known key-based item lookups at very large or variable scale?
+└── DynamoDB
 
-The right answer can include more than one service. Maple Market can use RDS for orders, S3 for return photos, EBS for a search node, EFS for shared uploads, DynamoDB for carts, and DataSync or DMS for migration. The key is to split data by behavior and give each piece an owner, access path, and recovery plan.
+Mainly need to store bytes?
+├── object API with bucket and key        → S3
+├── one EC2 server expects persistent disk → EBS
+└── multiple clients expect shared files
+    ├── general NFS-style filesystem      → EFS
+    └── specialized filesystem            → FSx
+```
 
-A short design note can make this concrete:
+Then ask the second-order questions: required availability and durability, response latency and throughput, scaling pattern, access frequency, cost, backup and restore, migration path, and the consequence of losing the data.
 
-| Data | Service | Access path | Recovery plan |
-| --- | --- | --- | --- |
-| Orders and payments | RDS or Aurora | Private app security group to database security group | PITR restore drill and tested migrations |
-| Return photos | S3 | App role and presigned uploads to controlled prefixes | Versioning, lifecycle, and object restore check |
-| Active carts | DynamoDB | App role keyed by customer ID | PITR enabled and duplicate-write tests |
-| Legacy shared reports | FSx or EFS | Approved client security groups and filesystem permissions | Backup restore into a test mount |
+| Question | Service or mechanism to consider |
+|---|---|
+| SQL, joins, constraints, or relational querying? | RDS or Aurora |
+| Known item/key lookups at high scale? | DynamoDB |
+| Whole images, logs, videos, backups, or datasets? | S3 |
+| One EC2 machine expects a persistent disk? | EBS |
+| Several clients need one directory tree? | EFS or FSx |
+| Disposable local scratch data? | EC2 instance store |
+| Move large file or object datasets? | DataSync |
+| Migrate database data and ongoing changes? | DMS |
+| Centralize supported backup policies? | AWS Backup |
 
-![The summary turns the article into a storage selection checklist for production review](/content-assets/articles/article-cloud-providers-aws-storage-databases-storage-database-mental-model/storage-selection-summary.png)
+One final question belongs above every row: **What happens when this data disappears?** If the business stops, availability, backup, restore drills, and disaster recovery are part of the primary design, not future enhancements.
 
-*The summary turns the article into a storage selection checklist for production review.*
+The shortest memory aid is:
 
+```text
+disk      → EBS
+files     → EFS or FSx
+objects   → S3
+relations → RDS or Aurora
+keys      → DynamoDB
+
+DataSync  → move storage datasets
+DMS       → move databases
+AWS Backup→ coordinate protection
+```
+
+Choose the interface and guarantees the application needs, not the service name with the strongest marketing headline.
+
+## Check Your Understanding
+
+:::expand[What Does the Application Think the Data Is?]{kind="recap"}
+The first storage decision is the data interface the application expects: block, file, object, relational row, or key-based item.
+
+Blocks, files, objects, relational rows, and key-addressed items require different APIs and guarantees. Naming the interface first narrows the service family before secondary performance and cost choices.
+
+DataSync transports file and object datasets among storage systems. DMS handles database-oriented migration, including supported initial loads and ongoing changes from active sources.
+:::
+
+:::expand[What Is the Difference Between Storage and a Database?]{kind="recap"}
+Storage preserves bytes, while databases add query, transaction, constraint, indexing, and concurrency abstractions for application state.
+
+It provides application-level abstractions such as rows or items, queries, indexes, constraints, transactions, and concurrency control for structured state.
+
+Relational databases fit entities with relationships, flexible SQL queries, constraints, and multi-row business transactions.
+
+They fit domains with related entities, SQL, joins, constraints, flexible queries, and business changes that need relational transactions. Aurora remains a MySQL- or PostgreSQL-compatible relational database.
+:::
+
+:::expand[When Should You Choose S3?]{kind="recap"}
+S3 fits whole objects addressed by bucket and key rather than mutable disk blocks or relational queries.
+
+S3 stores the object bytes efficiently by bucket and key. The database stores business relationships and searchable metadata such as owner, caption, and the object key.
+:::
+
+:::expand[When Should You Choose EBS or Instance Store?]{kind="recap"}
+EBS provides persistent block storage for an EC2 placement, while instance store provides disposable local block storage.
+
+EBS is persistent block storage with configurable lifecycle and snapshots. Instance store is local ephemeral block storage suited only to data that can disappear with the host and be recreated.
+:::
+
+:::expand[When Should You Choose EFS or FSx?]{kind="recap"}
+Shared filesystems let several clients see one mounted namespace, with EFS for general elastic NFS use and FSx for specific filesystem ecosystems.
+
+EBS gives one compute placement a disk. EFS gives multiple clients concurrent access to one NFS-style filesystem namespace. FSx covers specific filesystem ecosystems and features.
+:::
+
+:::expand[When Should You Choose DynamoDB?]{kind="recap"}
+DynamoDB fits known key-based access patterns that need predictable low-latency performance and large or variable scale.
+
+RDS or Aurora fit relationships and flexible querying. DynamoDB fits preplanned key-based reads and writes at predictable low latency and high scale. Both can store structured data and support transactions.
+
+Choose the data abstraction first, then optimize latency, throughput, capacity, availability, durability, and cost within that family.
+
+The services perform fundamentally different operations. First choose block, file, object, relation, or key/item semantics; then compare latency, throughput, availability, durability, capacity, and cost within the suitable family.
+
+RPO asks how much recent data loss is tolerable. RTO asks how long the system may remain unavailable. Together they shape backup frequency, replication, failover, retention, and restore testing.
+:::
+
+:::expand[How Do Movement, Availability, and Recovery Change the Design?]{kind="recap"}
+Primary storage selection, migration transport, infrastructure availability, backups, and recovery targets solve different problems.
+
+Replication copies current state, including accidental deletion or corruption. A backup preserves recoverable earlier state. Replication primarily improves availability; backup and restore protect recoverability.
+:::
+
+:::expand[What Decision Process Should You Use?]{kind="recap"}
+A repeatable decision tree selects the interface first and then adds operational requirements for protection, scale, migration, and ownership.
+:::
 
 ## References
 
-- [Amazon S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)
-- [Amazon RDS documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
-- [Amazon DynamoDB documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html)
-- [AWS Database Migration Service documentation](https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html)
+- [What is Amazon RDS?](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Welcome.html)
+- [What is Amazon Aurora?](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/CHAP_AuroraOverview.html)
+- [What is Amazon S3?](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html)
+- [Data protection in Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html)
+- [Amazon EBS persistent block storage](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/storage_ebs.html)
+- [Creating and managing Amazon EFS](https://docs.aws.amazon.com/efs/latest/ug/creating-using.html)
+- [Amazon FSx documentation](https://docs.aws.amazon.com/fsx/)
+- [Amazon DynamoDB overview](https://docs.aws.amazon.com/whitepapers/latest/choosing-an-aws-nosql-database/amazon-dynamodb.html)
+- [What is AWS DataSync?](https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html)
+- [What is AWS DMS?](https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html)
+- [RDS automated backups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)
+- [What is AWS Backup?](https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html)
